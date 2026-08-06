@@ -28,7 +28,6 @@ import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  closeTalkRealtimeRelaySessionsForConnection,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
@@ -38,6 +37,7 @@ import {
   stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
+import { cleanupTalkConnection } from "./talk-session-registry.js";
 
 const activeRelaySessions = new Map<string, string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -168,8 +168,7 @@ describe("talk realtime gateway relay", () => {
         throw new Error("provider close failed");
       });
 
-      expect(() => closeTalkRealtimeRelaySessionsForConnection("conn-owner")).not.toThrow();
-      closeTalkRealtimeRelaySessionsForConnection("conn-owner");
+      expect(() => cleanupTalkConnection("conn-owner", logGateway)).not.toThrow();
       await Promise.resolve();
       await Promise.resolve();
 
@@ -252,7 +251,7 @@ describe("talk realtime gateway relay", () => {
         relaySessionId: unrelated.relaySessionId,
         connId: "conn-other",
       });
-      closeTalkRealtimeRelaySessionsForConnection("conn-other");
+      cleanupTalkConnection("conn-other", logGateway);
       expect(bridgeCloses[2]).toHaveBeenCalledOnce();
     } finally {
       clientVoiceSessionTesting.reset();

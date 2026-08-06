@@ -68,6 +68,42 @@ describe("oversized multimodal chat history", () => {
   });
 });
 
+describe("private transcript metadata projection", () => {
+  it("keeps visible text while omitting oversized upstream prompt metadata", () => {
+    const message = {
+      role: "user",
+      content: "Keep this visible user message.",
+      __openclaw: {
+        id: "message-1",
+        mirrorIdentity: "turn-1:prompt",
+        upstreamUserText: "private decorated prompt ".repeat(12_000),
+      },
+    };
+    const projected = projectChatDisplayMessages([message]);
+    const websocket = replaceOversizedChatHistoryMessages({
+      messages: projected,
+      maxSingleMessageBytes: CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+    }).messages;
+    const sse = buildSessionHistorySnapshot({ rawMessages: [message], limit: 5 }).history.messages;
+
+    for (const messages of [websocket, sse]) {
+      expect(messages).toEqual([
+        {
+          role: "user",
+          content: "Keep this visible user message.",
+          __openclaw: {
+            id: "message-1",
+            mirrorIdentity: "turn-1:prompt",
+          },
+        },
+      ]);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThan(
+        CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+      );
+    }
+  });
+});
+
 describe("chat display message-tool projection", () => {
   it("mirrors an automatic-mode send confirmed for the current source", () => {
     const sourceReply = "Visible reply delivered to Slack.";

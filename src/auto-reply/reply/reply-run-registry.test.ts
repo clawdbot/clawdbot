@@ -107,6 +107,22 @@ describe("reply run registry", () => {
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
+  it("matches streaming owners only to their immutable originating leaf", () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      isStreaming: () => true,
+      queueMessage: async () => {},
+    });
+
+    expect(replyRunRegistry.isStreamingFromOriginatingLeaf("agent:main:main", "leaf-a")).toBe(true);
+    expect(replyRunRegistry.isStreamingFromOriginatingLeaf("agent:main:main", "leaf-b")).toBe(
+      false,
+    );
+  });
+
   it("records reply-operation progress without claiming embedded-run activity", () => {
     const operation = createTestReplyOperation({
       sessionKey: "agent:main:telegram:direct:chat-1",

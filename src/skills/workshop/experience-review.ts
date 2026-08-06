@@ -9,7 +9,9 @@ import { autoApplySkillProposal } from "./auto-apply.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   buildSkillExperienceReviewPrompt,
+  countSkillModelIterations,
   formatSkillExperienceReviewTranscript,
+  selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
@@ -18,6 +20,8 @@ const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_RETRY_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_TIMEOUT_MS = 120_000;
 const EXPERIENCE_REVIEW_MAX_PENDING = 32;
+const EXPERIENCE_REVIEW_MAX_SHALLOW_SESSIONS = 256;
+const EXPERIENCE_REVIEW_MAX_SHALLOW_MESSAGES = 40;
 const EXPERIENCE_REVIEW_SESSION_SEGMENT = "skill-workshop-review";
 const EXPERIENCE_REVIEW_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
 const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set([
@@ -134,30 +138,6 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
     .some((segment) => EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS.has(segment));
 }
 
-function currentTurnMessages(messages: readonly unknown[]): readonly unknown[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (
-      message &&
-      typeof message === "object" &&
-      !Array.isArray(message) &&
-      (message as { role?: unknown }).role === "user"
-    ) {
-      return messages.slice(index);
-    }
-  }
-  return messages;
-}
-
-function countModelIterations(messages: readonly unknown[]): number {
-  return messages.reduce<number>((count, message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return count;
-    }
-    return count + ((message as { role?: unknown }).role === "assistant" ? 1 : 0);
-  }, 0);
-}
-
 export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
   config: OpenClawConfig,
@@ -226,6 +206,20 @@ export async function prepareSkillExperienceReviewCandidate(
 
 export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSchedulerDeps) {
   const pendingBySession = new Map<string, PendingExperienceReview>();
+  // Shallow turns (quick corrections, short answers) never clear the per-turn depth bar
+  // alone; their iterations and messages accumulate per session until enough unreviewed
+  // work exists. CLI events carry only the current turn, so the accumulated messages are
+  // the sole record of the earlier corrections that qualify the eventual review.
+  const shallowBySession = new Map<
+    string,
+    {
+      senderScope: string;
+      iterations: number;
+      messages: unknown[];
+      aborted: boolean;
+      lastRunId?: string;
+    }
+  >();
   let reviewInFlight = false;
   const setTimer = deps.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = deps.clearTimer ?? clearTimeout;
@@ -312,6 +306,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           clearTimer(existing.timer);
         }
         pendingBySession.delete(sessionKey);
+        shallowBySession.delete(sessionKey);
         return;
       }
       // Quiet time follows all later foreground work in the session. Candidate
@@ -320,6 +315,9 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
       if (errored) {
+        // The provider/prompt-error exclusion covers the whole segment: shallow
+        // evidence accumulated before the error must not seed a later review.
+        shallowBySession.delete(sessionKey);
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
@@ -336,17 +334,92 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
 
-      const turnMessages = currentTurnMessages(params.event.messages);
+      const turnMessages = selectCurrentSkillTurnMessages(params.event.messages);
       // Native harnesses can report exact provider iterations even when their
       // transcript projection has a different assistant-message cardinality.
       const reportedModelIterations = params.ctx.modelIterations;
       const modelIterations =
         reportedModelIterations === undefined
-          ? countModelIterations(turnMessages)
+          ? countSkillModelIterations(turnMessages)
           : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
             ? reportedModelIterations
             : 0;
+      let reviewIterations = modelIterations;
+      let reviewMessages = turnMessages;
+      let reviewAborted = !params.event.success;
       if (modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+        shallowBySession.delete(sessionKey);
+      } else {
+        if (modelIterations < 1) {
+          // Zero is the no-provider-work contract; it neither accumulates nor
+          // clears prior shallow work.
+          log.debug(`experience review skipped: reason=no-model-iterations session=${sessionKey}`);
+          return;
+        }
+        // Group sessions share one session key across senders with distinct tool
+        // policies, and the eventual review submits the whole accumulated transcript
+        // to the resolved provider under the resolved auth identity. A change in
+        // either restarts accumulation so no participant's turns are reviewed under
+        // another participant's authorization or disclosed to a different provider.
+        const senderIdentity = [
+          params.ctx.senderId ?? "",
+          params.ctx.senderUsername ?? "",
+          params.ctx.senderName ?? "",
+          params.ctx.senderE164 ?? "",
+        ];
+        if (params.ctx.chatType === "group" && senderIdentity.every((field) => !field)) {
+          // Group turns without any sender identity cannot be scoped to one
+          // participant; fail closed instead of blending transcripts.
+          log.debug(
+            `experience review skipped: reason=ambiguous-group-sender session=${sessionKey}`,
+          );
+          return;
+        }
+        const senderScope = JSON.stringify([
+          ...senderIdentity,
+          params.ctx.modelProviderId ?? "",
+          params.ctx.modelId ?? "",
+          params.ctx.authProfileId ?? "",
+        ]);
+        let accumulator = shallowBySession.get(sessionKey);
+        if (accumulator && accumulator.senderScope !== senderScope) {
+          accumulator = undefined;
+          shallowBySession.delete(sessionKey);
+        }
+        if (!accumulator) {
+          if (shallowBySession.size >= EXPERIENCE_REVIEW_MAX_SHALLOW_SESSIONS) {
+            const oldestKey = shallowBySession.keys().next().value;
+            if (oldestKey !== undefined) {
+              shallowBySession.delete(oldestKey);
+            }
+          }
+          accumulator = { senderScope, iterations: 0, messages: [], aborted: false };
+          shallowBySession.set(sessionKey, accumulator);
+        }
+        const runId = params.ctx.runId?.trim();
+        if (runId && accumulator.lastRunId === runId) {
+          // A duplicate terminal report for the same run carries no new work.
+          log.debug(`experience review skipped: reason=duplicate-run-report session=${sessionKey}`);
+          return;
+        }
+        accumulator.lastRunId = runId;
+        accumulator.iterations += modelIterations;
+        accumulator.aborted = accumulator.aborted || !params.event.success;
+        accumulator.messages = [...accumulator.messages, ...turnMessages].slice(
+          -EXPERIENCE_REVIEW_MAX_SHALLOW_MESSAGES,
+        );
+        if (accumulator.iterations < EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+          log.debug(
+            `experience review deferred: reason=below-depth-bar iterations=${modelIterations} accumulated=${accumulator.iterations} session=${sessionKey}`,
+          );
+          return;
+        }
+        shallowBySession.delete(sessionKey);
+        reviewIterations = accumulator.iterations;
+        reviewMessages = accumulator.messages;
+        reviewAborted = accumulator.aborted;
+      }
+      {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
           const oldest = pendingBySession.entries().next().value as
             | [string, PendingExperienceReview]
@@ -387,20 +460,16 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             senderIsOwner: params.ctx.senderIsOwner,
           },
           ...(params.config ? { config: params.config } : {}),
-          transcript: formatSkillExperienceReviewTranscript(turnMessages),
-          modelIterations,
-          turnAborted: !params.event.success,
+          transcript: formatSkillExperienceReviewTranscript(reviewMessages),
+          modelIterations: reviewIterations,
+          turnAborted: reviewAborted,
         };
         const pending = existing ?? { candidate, generation: 0 };
         pending.candidate = candidate;
         pendingBySession.set(sessionKey, pending);
         arm(sessionKey, pending, EXPERIENCE_REVIEW_IDLE_MS);
         log.debug(
-          `experience review scheduled: session=${sessionKey} iterations=${modelIterations} aborted=${!params.event.success}`,
-        );
-      } else {
-        log.debug(
-          `experience review skipped: reason=below-depth-bar iterations=${modelIterations} session=${sessionKey}`,
+          `experience review scheduled: session=${sessionKey} iterations=${reviewIterations} aborted=${reviewAborted}`,
         );
       }
     },
@@ -411,6 +480,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         }
       }
       pendingBySession.clear();
+      shallowBySession.clear();
     },
   };
 }
@@ -442,8 +512,19 @@ async function runSkillExperienceReviewInner(
   }
 
   const sessionId = randomUUID();
-  const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+  const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
+    remaining: 1,
+    patchProposalIds: new Set(),
+    readSkillHashes: new Map(),
+  };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
+  const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
+  const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
+    config: candidate.config,
+    agentId: candidate.ctx.agentId,
+  }).map((skill) =>
+    skill.description ? { name: skill.name, description: skill.description } : { name: skill.name },
+  );
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({
     sessionId,
@@ -472,7 +553,7 @@ async function runSkillExperienceReviewInner(
     agentHarnessRuntimeOverride: "openclaw",
     workspaceDir,
     ...(candidate.config ? { config: candidate.config } : {}),
-    prompt: buildSkillExperienceReviewPrompt(candidate),
+    prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
     provider: modelProviderId,
     model: modelId,
     modelSelectionLocked: true,
@@ -486,6 +567,7 @@ async function runSkillExperienceReviewInner(
     disableMessageTool: true,
     disableTrajectory: true,
     skillWorkshopProposalOnly: true,
+    skillWorkshopUpdateProposals: true,
     skillWorkshopAutonomousCapture: true,
     skillWorkshopProposalMutationBudget: proposalMutationBudget,
     skillWorkshopOrigin: {
@@ -522,6 +604,18 @@ async function runSkillExperienceReviewInner(
       proposal.record.status !== "pending" ||
       proposal.record.autonomousCapture !== true
     ) {
+      continue;
+    }
+    // Patch proposals auto-apply: the service composed them by replacing only the span
+    // the reviewer quoted from the live body (or appending), so untouched content
+    // survives by construction. Full-body update proposals stay pending for review.
+    if (
+      proposal.record.kind === "update" &&
+      proposalMutationBudget.patchProposalIds?.has(proposalId) !== true
+    ) {
+      log.info(
+        `skill experience review left full-body update proposal ${proposalId} pending for operator review`,
+      );
       continue;
     }
     await autoApplySkillProposal({

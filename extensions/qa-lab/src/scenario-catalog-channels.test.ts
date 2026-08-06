@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
+  readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
@@ -20,6 +21,15 @@ function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
 
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
+
+  it("classifies every current module flow intrinsically", () => {
+    const moduleFlows = readQaScenarioPack().scenarios.filter(
+      (scenario) => scenario.execution.flowKind === "module",
+    );
+
+    expect(moduleFlows).toHaveLength(143);
+    expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
+  });
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
@@ -83,16 +93,19 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"call":"runAgentPrompt"');
   });
 
-  it("marks live transport modules as live-driver-only", () => {
+  it("preserves module flow identity without mutating the driver contract", () => {
     for (const scenarioId of [
       "matrix-approval-exec-metadata-single-event",
       "matrix-mxid-prefixed-command-block",
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
     ]) {
-      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
-        "live",
-      );
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      expect(scenario.execution.flowKind, scenarioId).toBe("module");
+      expect(
+        readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver,
+        scenarioId,
+      ).toBeUndefined();
     }
   });
 
@@ -170,6 +183,8 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("task.deliveryStatus === 'delivered'");
     expect(flow).toContain("readSettledTerminalTask('restart')");
     expect(flow).toContain("readSettledTerminalTask('empty')");
+    expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
+    expect(flow).not.toContain("interrupted by a gateway restart");
     expect(flow).toContain("verdicts.length === 5");
     expect(flow).not.toContain('"call":"sleep"');
   });

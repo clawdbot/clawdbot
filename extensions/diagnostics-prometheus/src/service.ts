@@ -1001,9 +1001,34 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
   };
 }
 
+type PrometheusExporterHealthUpdate = {
+  signal: "metrics";
+  transport: "prometheus-scrape";
+  status: "started" | "dropped";
+  reason?: "configured";
+};
+type TrustedExporterDiagnosticsBridge = {
+  emit: (event: {
+    type: "telemetry.exporter";
+    exporter: "diagnostics-prometheus";
+    signal: "metrics";
+    status: "started" | "dropped";
+    reason?: "configured";
+  }) => void;
+  reportExporterHealth?: (update: PrometheusExporterHealthUpdate) => void;
+};
+
 export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
+  let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
+  const reportExporterHealth = (update: PrometheusExporterHealthUpdate) => {
+    try {
+      internalDiagnostics?.reportExporterHealth?.(update);
+    } catch {
+      // Exporter health must never affect the exporter lifecycle.
+    }
+  };
 
   const service = {
     id: "diagnostics-prometheus",
@@ -1022,7 +1047,14 @@ export function createDiagnosticsPrometheusExporter() {
           );
         }
       });
-      ctx.internalDiagnostics?.emit({
+      internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;
+      reportExporterHealth({
+        signal: "metrics",
+        transport: "prometheus-scrape",
+        status: "started",
+        reason: "configured",
+      });
+      internalDiagnostics.emit({
         type: "telemetry.exporter",
         exporter: "diagnostics-prometheus",
         signal: "metrics",
@@ -1033,6 +1065,18 @@ export function createDiagnosticsPrometheusExporter() {
     stop() {
       unsubscribe?.();
       unsubscribe = undefined;
+      reportExporterHealth({
+        signal: "metrics",
+        transport: "prometheus-scrape",
+        status: "dropped",
+      });
+      internalDiagnostics?.emit({
+        type: "telemetry.exporter",
+        exporter: "diagnostics-prometheus",
+        signal: "metrics",
+        status: "dropped",
+      });
+      internalDiagnostics = undefined;
       store.reset();
     },
   } satisfies OpenClawPluginService;

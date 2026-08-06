@@ -30,6 +30,7 @@ import {
   extractChangelogReleaseSections,
   extractChangelogSection,
   formatShippedBaselineExclusions,
+  parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesSectionForTag,
   releaseNotesVersionForTag,
@@ -751,35 +752,12 @@ function candidateContributionRecordPullRequests(
     Number(match.groups.number),
   );
   const rows = new Set(rowNumbers);
-  if (rows.size !== rowNumbers.length) {
-    const seen = new Set();
-    const duplicates = rowNumbers.filter((number) => {
-      if (seen.has(number)) {
-        return true;
-      }
-      seen.add(number);
-      return false;
-    });
-    throw new Error(
-      `${label} contains duplicate contribution record PR rows: ${[...new Set(duplicates)]
-        .map((number) => `#${number}`)
-        .join(", ")}`,
-    );
-  }
+  const provenance = parseContributionRecordProvenance(record);
   if (!requireExactProvenance) {
     return rows;
   }
-  const provenance = record.match(
-    /^This audited record covers the complete \S+\.\.[0-9a-f]{40} history: (?<count>[0-9]+) merged PRs?\./mu,
-  );
-  if (!provenance?.groups?.count) {
+  if (!provenance || !/^[0-9a-f]{40}$/u.test(provenance.target)) {
     throw new Error(`${label} is missing exact complete contribution record provenance`);
-  }
-  const declaredCount = Number(provenance.groups.count);
-  if (rows.size !== declaredCount) {
-    throw new Error(
-      `${label} contribution record declares ${declaredCount} PRs but contains ${rows.size}`,
-    );
   }
   return rows;
 }
@@ -884,12 +862,10 @@ export function validateCandidateChangelogProvenance({
     section,
     `CHANGELOG.md ## ${sectionVersion}`,
   );
-  const provenance = record.match(
-    /^This audited record covers the complete (?<base>\S+)\.\.(?<target>[0-9a-f]{40}) history:/mu,
-  );
-  const base = provenance?.groups?.base;
-  const recordedTarget = provenance?.groups?.target;
-  if (!base || !recordedTarget) {
+  const provenance = parseContributionRecordProvenance(record);
+  const base = provenance?.base;
+  const recordedTarget = provenance?.target;
+  if (!base || !recordedTarget || !/^[0-9a-f]{40}$/u.test(recordedTarget)) {
     throw new Error(
       `CHANGELOG.md ## ${sectionVersion} is missing exact complete contribution record provenance`,
     );
