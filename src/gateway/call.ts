@@ -2,7 +2,6 @@
 // Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
-import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
@@ -45,6 +44,7 @@ import {
 } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
+  projectGatewayConnectionDetailsForDiagnostics,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
@@ -247,6 +247,7 @@ export function formatGatewayTransportErrorJson(value: unknown): GatewayTranspor
   if (!isGatewayTransportError(value)) {
     return null;
   }
+  const connectionDetails = projectGatewayConnectionDetailsForDiagnostics(value.connectionDetails);
   return {
     ok: false,
     error: {
@@ -258,13 +259,11 @@ export function formatGatewayTransportErrorJson(value: unknown): GatewayTranspor
       ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
     },
     gateway: {
-      url: redactSensitiveUrlLikeString(value.connectionDetails.url),
-      urlSource: value.connectionDetails.urlSource,
-      ...(value.connectionDetails.bindDetail
-        ? { bindDetail: value.connectionDetails.bindDetail }
-        : {}),
-      ...(value.connectionDetails.remoteFallbackNote
-        ? { remoteFallbackNote: value.connectionDetails.remoteFallbackNote }
+      url: connectionDetails.url,
+      urlSource: connectionDetails.urlSource,
+      ...(connectionDetails.bindDetail ? { bindDetail: connectionDetails.bindDetail } : {}),
+      ...(connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: connectionDetails.remoteFallbackNote }
         : {}),
     },
   };
