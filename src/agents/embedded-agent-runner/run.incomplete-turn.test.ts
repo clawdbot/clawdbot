@@ -4860,8 +4860,9 @@ describe("resolveEmbeddedRunTerminal auth incomplete-turn gating", () => {
     if (result.action !== "complete") {
       throw new Error("Expected terminal resolution to complete");
     }
-    expect(result.result.payloads?.[0]?.text).toBe(
-      "Authentication failed for model openai/gpt-4.1. Please check your API key or switch to a different model.",
+    const text = result.result.payloads?.[0]?.text;
+    expect(text).toMatch(
+      /^Couldn't sign in to openai\. Your saved login looks expired or no longer works\. Run `openclaw/,
     );
   });
 
@@ -4892,7 +4893,7 @@ describe("resolveEmbeddedRunTerminal auth incomplete-turn gating", () => {
     }
     const text = result.result.payloads?.[0]?.text;
     expect(text).toContain("some tool actions may have already been executed");
-    expect(text).not.toContain("Authentication failed");
+    expect(text).not.toContain("Couldn't sign in");
   });
 });
 

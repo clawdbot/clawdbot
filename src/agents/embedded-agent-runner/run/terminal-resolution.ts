@@ -292,6 +292,8 @@ export async function resolveEmbeddedRunTerminal(input: {
         assistantProfileFailureReason: input.assistantProfileFailureReason,
         provider: input.provider,
         modelId: input.modelId,
+        config: input.runParams.config,
+        workspaceDir: input.runParams.workspaceDir,
       });
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&

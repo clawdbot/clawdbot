@@ -8,6 +8,7 @@ import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
@@ -17,6 +18,7 @@ import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
+import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
@@ -225,21 +227,31 @@ export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean 
 
 /**
  * Builds a specific auth-failure message when the assistant profile failed due
- * to an authentication error. Non-auth failures fall through to the generic
- * incomplete-turn warning.
+ * to an authentication error. Uses provider-aware recovery hints (OAuth, CLI
+ * login, env var) instead of API-key-only advice. Non-auth failures fall
+ * through to the generic incomplete-turn warning.
  */
 function resolveAuthFailurePayloadText(params: {
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   provider: string;
-  modelId: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
 }): string | undefined {
-  if (
-    params.assistantProfileFailureReason !== "auth" &&
-    params.assistantProfileFailureReason !== "auth_permanent"
-  ) {
+  const { assistantProfileFailureReason: reason, provider } = params;
+  if (reason !== "auth" && reason !== "auth_permanent") {
     return undefined;
   }
-  return `Authentication failed for model ${params.provider}/${params.modelId}. Please check your API key or switch to a different model.`;
+  const description =
+    reason === "auth_permanent"
+      ? `${provider} isn't accepting your saved login.`
+      : `Couldn't sign in to ${provider}. Your saved login looks expired or no longer works.`;
+  const hint = buildProviderAuthRecoveryHint({
+    provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+  });
+  return `${description} ${hint}`;
 }
 
 /**
@@ -257,6 +269,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   provider?: string;
   modelId?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
 }): string | null {
   // Prefer the current attempt's terminal message. The session fallback can
   // still point at the pre-tool turn after a post-tool answer completes. (#80918)
@@ -333,14 +347,14 @@ export function resolveIncompleteTurnPayloadText(params: {
     !hasPotentialSideEffects &&
     (params.assistantProfileFailureReason === "auth" ||
       params.assistantProfileFailureReason === "auth_permanent") &&
-    params.provider &&
-    params.modelId
+    params.provider
   ) {
     return (
       resolveAuthFailurePayloadText({
         assistantProfileFailureReason: params.assistantProfileFailureReason,
         provider: params.provider,
-        modelId: params.modelId,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
       }) ?? baseText
     );
   }
