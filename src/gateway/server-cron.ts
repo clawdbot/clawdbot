@@ -1154,6 +1154,10 @@ export function buildGatewayCronService(params: {
         }),
       );
     },
+    updateWatcherState: async (job, patch) =>
+      await runWithGatewayIndependentRootWorkAdmission(
+        async () => await cron.update(job.id, { state: patch }),
+      ),
     logger: cronLogger,
   });
   const updateCron = cron.update.bind(cron);
