@@ -58,6 +58,128 @@ function writeFrozenScenarioContract(root: string, scenarios: string[]): string 
   return assertionsFile;
 }
 
+function writeIsolatedDockerAllHarness(root: string): string {
+  const scriptsDir = path.join(root, "scripts");
+  const libDir = path.join(scriptsDir, "lib");
+  mkdirSync(libDir, { recursive: true });
+  copyFileSync("package.json", path.join(root, "package.json"));
+  copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
+  for (const fileName of ["docker-e2e-plan.mjs", "docker-e2e-scenarios.mjs", "sleep.mjs"]) {
+    copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
+  }
+  return path.join(scriptsDir, "test-docker-all.mjs");
+}
+
+function createFrozenBundledPluginSweepFixture(packagedPluginIds: string[]) {
+  const root = tempDirs.make("openclaw-docker-bundled-inventory-");
+  const targetRoot = path.join(root, "frozen release target");
+  const observationsPath = path.join(root, "lane-observations.jsonl");
+  const fakePnpmPath = path.join(root, "fake pnpm");
+  const packageTgz = path.join(root, "frozen package.tgz");
+
+  mkdirSync(targetRoot, { recursive: true });
+  writeFileSync(
+    path.join(targetRoot, "package.json"),
+    JSON.stringify({
+      files: ["dist/", "!dist/extensions/external-plugin/**"],
+      name: "openclaw",
+      scripts: {
+        "test:docker:bundled-plugin-install-uninstall": "old frozen wrapper",
+        "test:docker:plugin-binding-command-escape": "unrelated frozen wrapper",
+      },
+      version: "2026.7.1",
+    }),
+  );
+  for (const id of ["present-plugin", "missing-plugin", "external-plugin", "qa-lab", "acpx"]) {
+    const pluginRoot = path.join(targetRoot, "extensions", id);
+    mkdirSync(pluginRoot, { recursive: true });
+    writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), JSON.stringify({ id }));
+  }
+  const supportRoot = path.join(targetRoot, "extensions", "runtime-support");
+  mkdirSync(supportRoot, { recursive: true });
+  writeFileSync(
+    path.join(supportRoot, "package.json"),
+    JSON.stringify({ name: "@openclaw/runtime-support" }),
+  );
+  writeFileSync(path.join(supportRoot, "index.ts"), "export {};\n");
+  writeFileSync(packageTgz, "frozen package fixture");
+  writeFileSync(
+    fakePnpmPath,
+    [
+      "#!/usr/bin/env node",
+      'const fs = require("node:fs");',
+      'const lane = process.env.OPENCLAW_DOCKER_ALL_LANE_NAME ?? "";',
+      "const sweepIds = process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS ?? null;",
+      `fs.appendFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({ lane, sweepIds }) + "\\n");`,
+      'if (!lane.startsWith("bundled-plugin-install-uninstall-")) process.exit(0);',
+      `const packagedIds = new Set(${JSON.stringify(packagedPluginIds)});`,
+      'const expected = (sweepIds ?? "").split(/[,\\s]+/u).filter(Boolean);',
+      "for (const id of expected) {",
+      "  if (!packagedIds.has(id)) {",
+      "    console.error(`missing expected bundled plugin: ${id}`);",
+      "    process.exit(23);",
+      "  }",
+      "}",
+    ].join("\n"),
+  );
+  chmodSync(fakePnpmPath, 0o755);
+
+  return {
+    observationsPath,
+    packageTgz,
+    fakePnpmPath,
+    root,
+    targetRoot,
+  };
+}
+
+function runFrozenBundledPluginSweepFixture(
+  fixture: ReturnType<typeof createFrozenBundledPluginSweepFixture>,
+  options: {
+    args?: string[];
+    env?: NodeJS.ProcessEnv;
+    lanes?: string;
+    schedulerPath?: string;
+  } = {},
+) {
+  return spawnSync(
+    process.execPath,
+    [options.schedulerPath ?? path.resolve("scripts/test-docker-all.mjs"), ...(options.args ?? [])],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "present-plugin",
+        OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: undefined,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packageTgz,
+        OPENCLAW_DOCKER_ALL_BUILD: "0",
+        OPENCLAW_DOCKER_ALL_LANES:
+          options.lanes ?? "bundled-plugin-install-uninstall-0,plugin-binding-command-escape",
+        OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "logs"),
+        OPENCLAW_DOCKER_ALL_PARALLELISM: "1",
+        OPENCLAW_DOCKER_ALL_PNPM_COMMAND: fixture.fakePnpmPath,
+        OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+        OPENCLAW_DOCKER_ALL_START_STAGGER_MS: "0",
+        OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS: "0",
+        OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: "1",
+        OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+        OPENCLAW_DOCKER_E2E_REPO_ROOT: fixture.targetRoot,
+        OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0",
+        OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "present-plugin",
+        ...options.env,
+      },
+    },
+  );
+}
+
+function readFrozenBundledPluginSweepObservations(observationsPath: string) {
+  return readFileSync(observationsPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { lane: string; sweepIds: string | null });
+}
+
 function expectDeclaredDispatchInputs(command: string): void {
   const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW, "utf8")) as {
     on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
@@ -165,32 +287,144 @@ describe("scripts/test-docker-all scheduler", () => {
 
   it("plans from an isolated release harness without installed dependencies", () => {
     const root = tempDirs.make("openclaw-docker-plan-isolated-harness-");
-    const scriptsDir = path.join(root, "scripts");
-    const libDir = path.join(scriptsDir, "lib");
-    mkdirSync(libDir, { recursive: true });
-    copyFileSync("package.json", path.join(root, "package.json"));
-    copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
-    for (const fileName of ["docker-e2e-plan.mjs", "docker-e2e-scenarios.mjs", "sleep.mjs"]) {
-      copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
-    }
+    const schedulerPath = writeIsolatedDockerAllHarness(root);
 
-    const result = spawnSync(
-      process.execPath,
-      [path.join(scriptsDir, "test-docker-all.mjs"), "--plan-json"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
-          OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
-          OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
-        },
+    const result = spawnSync(process.execPath, [schedulerPath, "--plan-json"], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
+        OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+        OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
       },
-    );
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ profile: "release-path" });
+  });
+
+  it("rejects a frozen package that silently omits an expected bundled plugin", () => {
+    const fixture = createFrozenBundledPluginSweepFixture(["present-plugin"]);
+
+    const result = runFrozenBundledPluginSweepFixture(fixture);
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(
+      readFileSync(
+        path.join(fixture.root, "logs", "bundled-plugin-install-uninstall-0.log"),
+        "utf8",
+      ),
+    ).toContain("missing expected bundled plugin: missing-plugin");
+    expect(readFrozenBundledPluginSweepObservations(fixture.observationsPath)).toContainEqual({
+      lane: "bundled-plugin-install-uninstall-0",
+      sweepIds: "missing-plugin,present-plugin",
+    });
+  });
+
+  it.each([
+    { label: "an unset", value: undefined },
+    { label: "an undefined sentinel", value: "undefined" },
+    { label: "a null sentinel", value: "null" },
+    { label: "an empty token list", value: "  ,  \t  " },
+  ])("derives the complete frozen-target plugin inventory for $label override", ({ value }) => {
+    const fixture = createFrozenBundledPluginSweepFixture(["missing-plugin", "present-plugin"]);
+
+    const result = runFrozenBundledPluginSweepFixture(fixture, {
+      env: { OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: value },
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(readFrozenBundledPluginSweepObservations(fixture.observationsPath)).toEqual([
+      {
+        lane: "bundled-plugin-install-uninstall-0",
+        sweepIds: "missing-plugin,present-plugin",
+      },
+      {
+        lane: "plugin-binding-command-escape",
+        sweepIds: null,
+      },
+    ]);
+  });
+
+  it("preserves an explicitly selected frozen bundled-plugin sweep", () => {
+    const fixture = createFrozenBundledPluginSweepFixture(["present-plugin"]);
+
+    const result = runFrozenBundledPluginSweepFixture(fixture, {
+      env: { OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: "present-plugin" },
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(readFrozenBundledPluginSweepObservations(fixture.observationsPath)).toEqual([
+      {
+        lane: "bundled-plugin-install-uninstall-0",
+        sweepIds: "present-plugin",
+      },
+      {
+        lane: "plugin-binding-command-escape",
+        sweepIds: null,
+      },
+    ]);
+  });
+
+  it.each([
+    { label: "an unset", value: undefined },
+    { label: "an explicit", value: "present-plugin" },
+    { label: "an undefined sentinel", value: "undefined" },
+    { label: "a null sentinel", value: "null" },
+    { label: "an empty token list", value: "  ,  \t  " },
+  ])("does not leak $label sweep override into unrelated lanes", ({ value }) => {
+    const fixture = createFrozenBundledPluginSweepFixture([]);
+    rmSync(path.join(fixture.targetRoot, "extensions"), { recursive: true });
+
+    const result = runFrozenBundledPluginSweepFixture(fixture, {
+      env: { OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: value },
+      lanes: "plugin-binding-command-escape",
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(readFrozenBundledPluginSweepObservations(fixture.observationsPath)).toEqual([
+      { lane: "plugin-binding-command-escape", sweepIds: null },
+    ]);
+  });
+
+  it("does not inspect frozen bundled-plugin manifests during dry runs", () => {
+    const fixture = createFrozenBundledPluginSweepFixture([]);
+    rmSync(path.join(fixture.targetRoot, "extensions"), { recursive: true });
+
+    const result = runFrozenBundledPluginSweepFixture(fixture, {
+      env: { OPENCLAW_DOCKER_ALL_DRY_RUN: "1" },
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain("Dry run complete");
+    expect(existsSync(fixture.observationsPath)).toBe(false);
+  });
+
+  it("fails closed when the frozen target has no packaged bundled-plugin manifests", () => {
+    const fixture = createFrozenBundledPluginSweepFixture([]);
+    for (const id of ["missing-plugin", "present-plugin"]) {
+      rmSync(path.join(fixture.targetRoot, "extensions", id), { recursive: true });
+    }
+
+    const result = runFrozenBundledPluginSweepFixture(fixture);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("frozen target has no packaged bundled plugin manifests");
+    expect(existsSync(fixture.observationsPath)).toBe(false);
+  });
+
+  it("fails closed when a trusted harness cannot load its bundled-plugin inventory owner", () => {
+    const fixture = createFrozenBundledPluginSweepFixture(["missing-plugin", "present-plugin"]);
+    const harnessRoot = tempDirs.make("openclaw-docker-sweep-harness-without-inventory-");
+
+    const result = runFrozenBundledPluginSweepFixture(fixture, {
+      schedulerPath: writeIsolatedDockerAllHarness(harnessRoot),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("bundled-plugin-build-entries.mjs");
+    expect(existsSync(fixture.observationsPath)).toBe(false);
   });
 
   it("rejects loose numeric runner env vars without a stack trace", () => {

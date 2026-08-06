@@ -1027,6 +1027,9 @@ function laneEnv(poolLane, baseEnv, logDir, cacheKey) {
   };
   const name = poolLane.name;
   env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
+  if (poolLane.bundledPluginSweepIds !== undefined) {
+    env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS = poolLane.bundledPluginSweepIds;
+  }
   const image = e2eImageForLane(poolLane, baseEnv);
   if (image) {
     env.OPENCLAW_DOCKER_E2E_IMAGE = image;
@@ -1634,6 +1637,48 @@ async function main() {
     throw new Error(
       `resolved zero runnable Docker lanes; frozen target does not support: ${omittedUnsupportedLanes.join(", ")}`,
     );
+  }
+
+  const bundledPluginSweepLanes = scheduledLanes.filter(({ name }) =>
+    name.startsWith("bundled-plugin-install-uninstall-"),
+  );
+  const configuredSweepIds = baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS;
+  delete baseEnv.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS;
+  if (bundledPluginSweepLanes.length > 0) {
+    const configuredIds = (configuredSweepIds ?? "").split(/[,\s]+/u).filter(Boolean);
+    let sweepIds =
+      configuredIds.length > 0 &&
+      configuredSweepIds?.trim() !== "undefined" &&
+      configuredSweepIds?.trim() !== "null"
+        ? configuredSweepIds
+        : undefined;
+
+    if (sweepIds === undefined) {
+      const { listBundledPluginPackArtifacts } =
+        await import("./lib/bundled-plugin-build-entries.mjs");
+      const artifacts = listBundledPluginPackArtifacts({
+        cwd: ROOT_DIR,
+        env: {
+          ...baseEnv,
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
+          OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: undefined,
+        },
+      });
+      const expectedIds = artifacts.flatMap((artifact) => {
+        const match = /^dist\/extensions\/([^/]+)\/openclaw\.plugin\.json$/u.exec(artifact);
+        return match?.[1] ? [match[1]] : [];
+      });
+      if (expectedIds.length === 0) {
+        throw new Error("frozen target has no packaged bundled plugin manifests to verify");
+      }
+      sweepIds = expectedIds.join(",");
+    }
+
+    // Old target wrappers inspect only installed package contents, so the trusted
+    // scheduler must carry frozen-source expectations into every sweep shard.
+    for (const poolLane of bundledPluginSweepLanes) {
+      poolLane.bundledPluginSweepIds = sweepIds;
+    }
   }
 
   await runPhase(
