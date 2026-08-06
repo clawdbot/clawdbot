@@ -145,6 +145,13 @@ function resolveHighWaterBytes(
   }
   try {
     const parsed = parseByteSize(normalized, { defaultUnit: "b" });
+    // A non-positive target is not a usable stop condition: cleanup would evict
+    // every unprotected session and prune its extracted archives before the loop
+    // could reach it. Fall back to the documented default like any other
+    // unusable explicit value.
+    if (parsed <= 0) {
+      return computeDefault();
+    }
     return Math.min(parsed, maxDiskBytes);
   } catch {
     return computeDefault();
