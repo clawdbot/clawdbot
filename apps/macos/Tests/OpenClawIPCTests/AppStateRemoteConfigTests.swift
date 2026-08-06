@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawDiscovery
 import Testing
 @testable import OpenClaw
 
@@ -670,6 +671,57 @@ struct AppStateRemoteConfigTests {
         #expect(routeIdentity != "remote:id:gateway-a")
         #expect(!OnboardingSystemAgentResumeStore.isPending(for: routeIdentity))
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "remote:id:gateway-a"))
+    }
+
+    @Test
+    func `config watcher mode exit retires discovered direct before next selection`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+
+        for destination in [AppState.ConnectionMode.local, .unconfigured] {
+            let trustedURL = "wss://trusted-gateway.example.ts.net"
+            let state = AppState(preview: true)
+            state._testApplyConfigOverrides([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": ["transport": "direct", "url": trustedURL],
+                ],
+            ])
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "tailscale-serve|trusted-gateway.example.ts.net",
+                routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: state.connectionMode,
+                    remoteTransport: state.remoteTransport,
+                    remoteURL: state.remoteUrl,
+                    remoteTarget: state.remoteTarget))
+
+            state._testApplyConfigOverrides([
+                "gateway": [
+                    "mode": destination.rawValue,
+                    "remote": ["transport": "direct", "url": trustedURL],
+                ],
+            ])
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: GatewayDiscoveryModel.DiscoveredGateway(
+                    displayName: "Nearby gateway",
+                    serviceHost: "nearby-gateway.local",
+                    servicePort: 18789,
+                    lanHost: nil,
+                    tailnetDns: nil,
+                    sshPort: 22,
+                    gatewayPort: 18789,
+                    gatewayDirectReachable: true,
+                    stableID: "bonjour|nearby-gateway",
+                    debugID: "nearby-gateway",
+                    isLocal: false),
+                currentRouteIsDiscoveryOwned: GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(
+                    state: state),
+                state: state)
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+        }
     }
 
     @Test

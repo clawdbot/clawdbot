@@ -894,11 +894,6 @@ extension AppState {
         }
 
         self.isApplyingGatewayConfig = true
-        self.applyGatewayConfigMode(
-            desiredMode,
-            hasRemoteUrl: hasRemoteUrl,
-            forcing: forcedFields.contains(.mode))
-
         let shouldApplyTransport = forcedFields.contains(.remoteTransport) ||
             !self.dirtyGatewayConfigFields.contains(.remoteTransport)
         if shouldApplyTransport, remoteTransport != self.remoteTransport {
@@ -950,6 +945,12 @@ extension AppState {
                 self.remoteIdentity = configuredIdentity
             }
         }
+        // Apply mode last so a Remote exit retires authority against the final incoming route.
+        // Applying it first lets later transport fields recreate Direct without its owner receipt.
+        self.applyGatewayConfigMode(
+            desiredMode,
+            hasRemoteUrl: hasRemoteUrl,
+            forcing: forcedFields.contains(.mode))
         self.isApplyingGatewayConfig = false
     }
 
