@@ -681,10 +681,7 @@ export async function refreshCostUsageCacheForAgent(
         await refreshCostUsageCacheForAgentOwned(params, databasePath, leaseOwner),
     );
   } catch (error) {
-    if (
-      error instanceof OpenClawStateLeaseError &&
-      error.code === "OPENCLAW_STATE_LEASE_TIMEOUT"
-    ) {
+    if (error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_TIMEOUT") {
       return "busy";
     }
     throw error;
