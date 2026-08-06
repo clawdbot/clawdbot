@@ -446,7 +446,6 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
-  ["gateway.restore.status", "restore", "operator.read", "2026.7"],
   ["gateway.suspend.status", "suspend", "operator.read", "2026.7"],
   // Resume is the safety escape hatch and must not sit behind write-rate limiting.
   ["gateway.suspend.resume", "suspend", "operator.admin", "2026.7"],
@@ -628,6 +627,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { controlPlaneWrite: true },
   ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
+  // Additive restored-admission status appends so older advertised method indices stay stable.
+  ["gateway.restore.status", "restore", "operator.read", "2026.7"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

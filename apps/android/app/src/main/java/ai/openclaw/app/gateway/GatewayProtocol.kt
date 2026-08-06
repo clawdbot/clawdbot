@@ -673,7 +673,6 @@ enum class GatewayMethod(
   ControlUiSessionPullRequestsSubscribe("controlUi.sessionPullRequests.subscribe"),
   ControlUiSessionPreview("controlUi.sessionPreview"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
-  GatewayRestoreStatus("gateway.restore.status"),
   GatewaySuspendStatus("gateway.suspend.status"),
   GatewaySuspendResume("gateway.suspend.resume"),
   ChatToolTitles("chat.toolTitles"),
@@ -755,6 +754,7 @@ enum class GatewayMethod(
   ToolsGithubAuthorizeCancel("tools.github.authorize.cancel"),
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
+  GatewayRestoreStatus("gateway.restore.status"),
 }
 
 enum class GatewayEvent(

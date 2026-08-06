@@ -6,6 +6,11 @@ import { z } from "zod";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
@@ -214,6 +219,11 @@ export async function restoreAcceptedRecoveryPoint(
   assertNoRequiredObligations(verified.manifest);
   await writeJournalRecord(journalPath, "intent", request);
 
+  const restoredComponents: Array<{
+    component: RecoveryPointManifest["components"][number];
+    path: string;
+  }> = [];
+  const restoredAgentComponents: Array<{ agentId: string; path: string }> = [];
   const componentReceipts: Array<z.infer<typeof componentReceiptSchema>> = [];
   try {
     for (const [index, component] of verified.manifest.components.entries()) {
@@ -224,12 +234,34 @@ export async function restoreAcceptedRecoveryPoint(
       if (artifactSha256 !== component.artifactSha256) {
         throw new Error(`Restored component digest mismatch: ${component.id}`);
       }
+      restoredComponents.push({ component, path: targetPath });
+      if (component.kind === "sqlite-agent") {
+        restoredAgentComponents.push({ agentId: component.agentId, path: targetPath });
+      }
+    }
+    for (const component of restoredAgentComponents) {
+      for (const entry of listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      })) {
+        if (entry.agentId === component.agentId && entry.path !== component.path) {
+          unregisterOpenClawAgentDatabase({
+            agentId: entry.agentId,
+            path: entry.path,
+            env,
+          });
+        }
+      }
+      registerOpenClawAgentDatabase({ agentId: component.agentId, path: component.path, env });
+    }
+    for (const restored of restoredComponents) {
+      const artifactSha256 = await sha256File(restored.path);
       componentReceipts.push({
-        componentId: component.id,
+        componentId: restored.component.id,
         artifactSha256,
         targetIdentity: sha256Hex(
           stableStringify({
-            componentId: component.id,
+            componentId: restored.component.id,
             destinationRuntimeGeneration: request.destinationRuntimeGeneration,
             artifactSha256,
           }),

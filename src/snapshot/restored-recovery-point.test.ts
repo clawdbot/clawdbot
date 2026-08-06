@@ -81,6 +81,35 @@ describe("restored recovery-point admission", () => {
     });
   });
 
+  it("re-registers restored agent databases for the destination runtime", async () => {
+    const fixture = await createFixture({ relocatedAgent: true });
+    await restoreAcceptedRecoveryPoint(fixture.request, fixture.destinationEnv);
+    process.env.OPENCLAW_STATE_DIR = fixture.destinationEnv.OPENCLAW_STATE_DIR;
+
+    const next = await captureFinalRecoveryPoint({
+      version: FINAL_RECOVERY_POINT_REQUEST_VERSION,
+      runtimeLineage: "runtime/tenant-7",
+      handoffId: "handoff-8",
+      sourceGeneration: "generation-8",
+      capturedAt: "2026-07-22T19:00:00.000Z",
+      repositoryPath: path.join(fixture.tempDir, "next-recovery-points"),
+      ownerInventory: { ...sourceOwnerInventory(), sourceRuntimeGeneration: "generation-8" },
+      closure: {
+        gateway: "cleanly-stopped",
+        authoritativeWriters: "stopped",
+        evidenceId: "supervisor-stop-8",
+      },
+    });
+
+    expect(next.components.map((component) => component.componentId)).toEqual([
+      "sqlite/global",
+      "sqlite/agent/main",
+    ]);
+    await expect(
+      fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main", env: fixture.destinationEnv })),
+    ).resolves.toBe(undefined);
+  });
+
   it("quarantines changed accepted bytes before mutating destination state", async () => {
     const fixture = await createFixture();
     await fs.appendFile(
@@ -275,12 +304,14 @@ function replaceJournalPayload(databasePath: string, recordType: string, payload
   }
 }
 
-async function createFixture() {
+async function createFixture(options: { relocatedAgent?: boolean } = {}) {
   const tempDir = tempDirs.make("openclaw-restored-recovery-point-");
   const sourceStateDir = path.join(tempDir, "source-state");
   process.env.OPENCLAW_STATE_DIR = sourceStateDir;
   const globalPath = resolveOpenClawStateSqlitePath();
-  const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  const agentPath = options.relocatedAgent
+    ? path.join(tempDir, "relocated", "openclaw-main.sqlite")
+    : resolveOpenClawAgentSqlitePath({ agentId: "main" });
   await fs.mkdir(path.dirname(globalPath), { recursive: true });
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
   createDatabase(globalPath, "global");
@@ -308,7 +339,7 @@ async function createFixture() {
     acceptanceSetId: final.acceptanceSetId,
     ownerInventory: sourceOwnerInventory(),
   });
-  return { destinationEnv, final, request };
+  return { destinationEnv, final, request, tempDir };
 }
 
 function baseRestoreRequest(
