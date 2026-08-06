@@ -422,6 +422,13 @@ async function runSkillExperienceReviewInner(
   const sessionId = randomUUID();
   const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
+  const { listWritableWorkspaceSkillSummaries } = await import("./service.js");
+  const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
+    config: candidate.config,
+    agentId: candidate.ctx.agentId,
+  }).map((skill) =>
+    skill.description ? { name: skill.name, description: skill.description } : { name: skill.name },
+  );
   const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
   await runEmbeddedAgent({
     sessionId,
@@ -450,7 +457,7 @@ async function runSkillExperienceReviewInner(
     agentHarnessRuntimeOverride: "openclaw",
     workspaceDir,
     ...(candidate.config ? { config: candidate.config } : {}),
-    prompt: buildSkillExperienceReviewPrompt(candidate),
+    prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
     provider: modelProviderId,
     model: modelId,
     modelSelectionLocked: true,

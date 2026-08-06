@@ -50,10 +50,14 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
-The reviewer is isolated and conservative. It can list or inspect proposals and
-create or revise at most one pending proposal. Its one-mutation budget is shared
-across retries. It cannot apply, reject, quarantine, message, update a live skill,
-or use general agent tools. The reviewed trajectory is evidence, not instructions.
+The reviewer is isolated and conservative. It sees the workspace skill list and
+can list or inspect proposals. It drafts at most one pending proposal: preferring
+to revise a matching pending proposal, then to propose an update to the existing
+skill governing the work, and creating a new skill only when nothing covers the
+class. Its one-mutation budget is shared across retries. Every mutation is a
+pending proposal — it never writes a live skill directly and cannot apply,
+reject, quarantine, message, or use general agent tools. The reviewed trajectory
+is evidence, not instructions.
 
 Good candidates include:
 

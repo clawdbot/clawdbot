@@ -61,7 +61,7 @@ const SKILL_WORKSHOP_ACTIONS = [
   "reject",
   "quarantine",
 ] as const;
-const SKILL_WORKSHOP_PROPOSAL_ACTIONS = ["create", "revise", "list", "inspect"] as const;
+const SKILL_WORKSHOP_PROPOSAL_ACTIONS = ["create", "update", "revise", "list", "inspect"] as const;
 const SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS = [
   ...SKILL_WORKSHOP_PROPOSAL_ACTIONS,
   "complete",
@@ -97,7 +97,7 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
     {
       action: stringEnum(proposalOnly ? proposalActions : SKILL_WORKSHOP_ACTIONS, {
         description: proposalOnly
-          ? `create = new skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Live-skill updates and lifecycle actions are unavailable.`
+          ? `create = new skill; update = pending update proposal targeting an existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
           : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
@@ -128,9 +128,8 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       description: Type.Optional(
         Type.String({
           maxLength: 160,
-          description: proposalOnly
-            ? "Skill description for create/revise; max 160 bytes."
-            : "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
+          description:
+            "Skill description for create/update/revise; max 160 bytes. On update, concise text shortens the proposal listing entry.",
         }),
       ),
       skill_name: Type.Optional(
@@ -138,9 +137,8 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       ),
       proposal_content: Type.Optional(
         Type.String({
-          description: proposalOnly
-            ? "Complete final skill body for action=create, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body, or preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes."
-            : "Complete final skill body for action=create or action=update, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+          description:
+            "Complete final skill body for action=create or action=update, or when action=revise changes the body. Must be the full skill content ready to become the active SKILL.md — not a plan, diff, change description, or implementation notes. On revise, omit this field to preserve the current body. On update/revise, preserve all existing content except changes the user explicitly requested. Proposal frontmatter is added automatically. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
         }),
       ),
       support_files: Type.Optional(
@@ -206,7 +204,7 @@ function buildSkillWorkshopToolDescription(
     return `Create/update/revise/list/inspect/evaluate/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
-  return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+  return `Inspect reusable-procedure skill proposals and draft pending create, update, or revise proposals.${completion} Nothing writes a live skill directly; lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
