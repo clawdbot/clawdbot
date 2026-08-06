@@ -16,6 +16,19 @@ import {
 } from "./native-command-reply.js";
 import type { DiscordConfig } from "./native-command.types.js";
 
+function resolveDiscordChatTypeLabel(channel?: { type?: number } | null): string | undefined {
+  if (!channel) {
+    return undefined;
+  }
+  if (channel.type === 1) {
+    return "dm";
+  }
+  if (channel.type === 3) {
+    return "group";
+  }
+  return "channel";
+}
+
 type ResolveDirectStatusReplyForSession = typeof resolveDirectStatusReplyForSession;
 
 export async function maybeDeliverDiscordDirectStatus(params: {
@@ -43,6 +56,7 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   if (params.suppressReplies || params.commandName !== "status") {
     return null;
   }
+  const interactionChannel = params.interaction.channel;
   const statusReply = await params.resolveDirectStatusReplyForSession({
     cfg: params.cfg,
     sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
@@ -52,6 +66,9 @@ export async function maybeDeliverDiscordDirectStatus(params: {
     isAuthorizedSender: params.isAuthorizedSender,
     isGroup: params.isGroup,
     defaultGroupActivation: params.defaultGroupActivation,
+    targetChannelId: interactionChannel?.id ?? null,
+    targetGuildId: params.interaction.guild?.id ?? null,
+    chatType: resolveDiscordChatTypeLabel(interactionChannel),
   });
   if (statusReply && hasRenderableReplyPayload(statusReply)) {
     await deliverDiscordInteractionReply({

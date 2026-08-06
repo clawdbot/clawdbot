@@ -37,6 +37,12 @@ export type ResolveDirectStatusReplyForSessionParams = {
   isGroup: boolean;
   /** Channel default activation mode used by the status renderer for groups. */
   defaultGroupActivation: () => "always" | "mention";
+  /** Live channel/DM id from the calling interaction, used for channel model matching. */
+  targetChannelId?: string | null;
+  /** Live guild/server id from the calling interaction, used for channel model matching. */
+  targetGuildId?: string | null;
+  /** Live chat type from the calling interaction ("dm", "group", "channel"). */
+  chatType?: string | null;
 };
 
 /**
@@ -89,16 +95,23 @@ export async function resolveDirectStatusReplyForSession(
     deliveryChannel && deliveryChannel === normalizeMessageChannel(params.channel)
       ? sessionDeliveryOrigin(statusEntry)
       : undefined;
+  // Live conversation facts from the caller supplement persisted session data
+  // so a first-time /status with an exact channel or DM modelByChannel key can
+  // match without a pre-existing persisted entry.
+  const liveGroupId = params.targetGuildId ?? statusEntry?.groupId;
+  const liveChatType = params.chatType ?? statusEntry?.chatType;
+  const liveChannelId = params.targetChannelId;
   const channelModelOverride = canApplyChannelModel
     ? resolveChannelModelOverride({
         cfg: statusCfg,
         channel: params.channel,
-        groupId: statusEntry?.groupId,
-        groupChatType: statusEntry?.chatType,
+        groupId: liveGroupId,
+        groupChatType: liveChatType,
         groupChannel: statusEntry?.groupChannel,
         groupSubject: statusEntry?.subject,
         parentSessionKey: statusEntry?.parentSessionKey,
         directUserIds: [
+          liveChannelId,
           deliveryOrigin?.nativeDirectUserId,
           deliveryOrigin?.from,
           deliveryOrigin?.to,
@@ -120,12 +133,22 @@ export async function resolveDirectStatusReplyForSession(
     : null;
   const effectiveProvider = resolvedChannelModel?.ref.provider ?? statusModel.provider;
   const effectiveModel = resolvedChannelModel?.ref.model ?? statusModel.model;
+  // Cached last-run fields are not user selection; a default cache must not
+  // block a resolved channel model override. Only non-default cached values
+  // represent a prior explicit choice that should outrank the channel default.
+  const cachedProvider = statusEntry?.modelProvider?.trim();
+  const cachedModel = statusEntry?.model?.trim();
+  const cachedDiffersFromDefault =
+    (cachedProvider && cachedProvider !== defaultProvider) ||
+    (cachedModel && cachedModel !== defaultModel);
   const selectedProvider =
     statusEntry?.providerOverride?.trim() ||
-    statusEntry?.modelProvider?.trim() ||
+    (cachedDiffersFromDefault ? cachedProvider : undefined) ||
     effectiveProvider;
   const selectedModel =
-    statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || effectiveModel;
+    statusEntry?.modelOverride?.trim() ||
+    (cachedDiffersFromDefault ? cachedModel : undefined) ||
+    effectiveModel;
   const modelState = await createModelSelectionState({
     cfg: statusCfg,
     agentId: statusAgentId,

@@ -388,4 +388,147 @@ describe("resolveDirectStatusReplyForSession", () => {
     expect(statusCall.provider).toBe("openai");
     expect(statusCall.model).toBe("gpt-5.4");
   });
+
+  it("uses live conversation facts for channel model matching via groupId", async () => {
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    resolveDefaultModel.mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+    });
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: { defaults: { reasoningDefault: "off" } },
+        channels: {
+          modelByChannel: {
+            discord: {
+              "guild-123": "google/gemini-flash-3",
+              "*": "anthropic/claude-fable-5",
+            },
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: { sessionId: "sess-main" },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+      targetGuildId: "guild-123",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    // Live guild id matched the specific guild key in the config.
+    expect(statusCall.provider).toBe("google");
+    expect(statusCall.model).toBe("gemini-flash-3");
+  });
+
+  it("lets channel model override cached last-run default fields", async () => {
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    resolveDefaultModel.mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+    });
+    // Cached fields match the default — they are not a real user choice.
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: { defaults: { reasoningDefault: "off" } },
+        channels: {
+          modelByChannel: {
+            discord: { "*": "anthropic/claude-fable-5" },
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    // Channel model wins over cached defaults.
+    expect(statusCall.provider).toBe("anthropic");
+    expect(statusCall.model).toBe("claude-fable-5");
+  });
+
+  it("preserves cached non-default model over channel override", async () => {
+    resolveDefaultModelForAgent.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    resolveDefaultModel.mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+    });
+    // Cached fields differ from the default — a real prior user choice.
+    loadSessionEntry.mockReturnValue({
+      cfg: {
+        agents: { defaults: { reasoningDefault: "off" } },
+        channels: {
+          modelByChannel: {
+            discord: { "*": "anthropic/claude-fable-5" },
+          },
+        },
+      },
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        modelProvider: "google",
+        model: "gemini-flash-3",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+
+    await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "discord",
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      isGroup: true,
+      defaultGroupActivation: () => "always",
+    });
+
+    const statusCall = requireBuildStatusReplyParams(0) as {
+      provider?: string;
+      model?: string;
+    };
+    // Cached non-default wins over channel model.
+    expect(statusCall.provider).toBe("google");
+    expect(statusCall.model).toBe("gemini-flash-3");
+  });
 });
