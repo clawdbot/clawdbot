@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramMiniAppLaunchTickets } from "./launch-ticket.js";
 
 type OpenClawPluginHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 
@@ -55,7 +56,7 @@ async function createRoute(): Promise<OpenClawPluginHttpRouteParams> {
       route = params;
     },
   });
-  registerTelegramMiniAppRoutes(api);
+  registerTelegramMiniAppRoutes(api, createTelegramMiniAppLaunchTickets());
   if (!route) {
     throw new Error("expected miniapp route registration");
   }
