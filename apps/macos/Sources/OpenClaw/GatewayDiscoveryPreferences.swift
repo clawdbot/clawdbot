@@ -87,10 +87,8 @@ enum GatewayDiscoveryPreferences {
             return (currentRoot, false)
         }
         if connectionMode == .remote {
-            guard let preferredStableID = self.preferredStableID(),
-                  self.preferredRouteBinding() == nil
-            else {
-                // Active Direct without an unbound discovery receipt is operator-owned.
+            guard let preferredStableID = self.preferredStableID() else {
+                // Active Direct without a discovery receipt is operator-owned.
                 return (currentRoot, false)
             }
             if self.isVerifiedTailscaleServeRoute(
@@ -98,6 +96,15 @@ enum GatewayDiscoveryPreferences {
                 root: currentRoot)
             {
                 return (currentRoot, false)
+            }
+            if let storedBinding = self.preferredRouteBinding() {
+                let currentBinding = self.routeBinding(
+                    connectionMode: .remote,
+                    remoteTransport: .direct,
+                    remoteURL: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "",
+                    remoteTarget: "")
+                // A mismatched binding proves the route was edited after discovery selected it.
+                guard storedBinding == currentBinding else { return (currentRoot, false) }
             }
         }
 

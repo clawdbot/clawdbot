@@ -206,13 +206,45 @@ struct AppStateRemoteConfigTests {
                 ],
             ],
         ]
-        GatewayDiscoveryPreferences.setPreferredStableID("tailscale-serve|\(tailnetHost)")
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "tailscale-serve|\(tailnetHost)",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://\(tailnetHost)",
+                remoteTarget: ""))
 
         let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
 
         #expect(!migration.changed)
         #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
         #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "wss://\(tailnetHost)")
+    }
+
+    @Test
+    func `active bound non serve discovery route is retired`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let directURL = "ws://192.168.1.42:18789"
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": ["transport": "direct", "url": directURL],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "bonjour|nearby-gateway",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: directURL,
+                remoteTarget: ""))
+
+        let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
+
+        #expect(migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "ws://127.0.0.1:18789")
     }
 
     @Test
@@ -310,6 +342,35 @@ struct AppStateRemoteConfigTests {
             ],
         ]
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
+
+        let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
+
+        #expect(!migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) ==
+            "wss://manual-gateway.example.test")
+    }
+
+    @Test
+    func `active direct route with a mismatched binding remains operator owned`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://manual-gateway.example.test",
+                ],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "bonjour|old-gateway",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://old-gateway.example.test",
+                remoteTarget: ""))
 
         let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
 
