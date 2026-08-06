@@ -51,6 +51,18 @@ function extraBootstrapMatchOptions() {
     nocase: extraBootstrapNocase(),
     nocaseMagicOnly: true,
     platform: process.platform,
+    // Mirror Node fs.glob's createMatcher, which sets optimizationLevel: 2. That
+    // level normalizes globstar-plus-parent-traversal patterns (`*/**/../b`) so
+    // the walk matcher agrees with fs.glob instead of matching nothing. Inherited
+    // by extraBootstrapMagicOptions() via its spread on purpose: it keeps the
+    // routing gate and the matcher aligned (gate-neutral — hasMagic classification
+    // is identical with or without the flag). Accepted residual: a bare
+    // single-portion parent traversal like `**/../AGENTS.md` is still not fully
+    // reproduced (fs.glob's walker navigates the `..` up a level, which this
+    // matcher-only normalization does not replicate). Left as-is on purpose: real
+    // extra-bootstrap patterns do not use `..`, and a `..` that escapes the root
+    // is already rejected by the upstream security gate.
+    optimizationLevel: 2,
   };
 }
 

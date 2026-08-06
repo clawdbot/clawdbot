@@ -95,6 +95,25 @@ describe("resolveExtraBootstrapPatternPaths platform case parity", () => {
     expect(literalSegment).toStrictEqual([]);
     expect(magicSegment).toStrictEqual(["AGENTS.md"]);
   });
+
+  it("matches Node fs.glob for optimized globstar parent traversal", async () => {
+    // Regression: without optimizationLevel: 2 (which Node fs.glob's createMatcher
+    // sets) the walk matcher classifies `*/**/../b/AGENTS.md` such that it matches
+    // nothing, while real fs.glob returns `a/x/b/AGENTS.md`. Mirroring the option
+    // realigns the matcher with fs.glob so a configured bootstrap file is not
+    // silently dropped.
+    const workspaceDir = await createWorkspaceDir("optimized-parent");
+    await fs.mkdir(path.join(workspaceDir, "a", "x", "b"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "a", "x", "b", "AGENTS.md"), "agents", "utf-8");
+
+    const pattern = "*/**/../b/AGENTS.md";
+    const matches = (
+      await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+    ).toSorted();
+
+    expect(matches).toStrictEqual(["a/x/b/AGENTS.md"]);
+    expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+  });
 });
 
 describe("resolveExtraBootstrapPatternPaths symlink descent parity", () => {
