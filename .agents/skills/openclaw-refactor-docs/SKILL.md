@@ -53,7 +53,7 @@ Prefer this split:
 
 ### 1. Load the doc standard
 
-Read `.agents/skills/technical-documentation/SKILL.md` first. Apply its page-type, style,
+Read `../technical-documentation/SKILL.md` first. Apply its page-type, style,
 examples, navigation, and verification guidance throughout the refactor.
 
 Run `pnpm docs:list` when available, then read only the target page and the
