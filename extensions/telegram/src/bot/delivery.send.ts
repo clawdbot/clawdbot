@@ -164,8 +164,9 @@ export async function sendTelegramText(
       runtime.log?.("telegram sendRichMessage rendered empty; falling back to plain text");
       return await sendPlainFallback();
     }
+    let res: Message;
     try {
-      const res = await sendTelegramWithThreadFallback({
+      res = await sendTelegramWithThreadFallback({
         operation: "sendRichMessage",
         runtime,
         requestParams: toTelegramRichMessageContextParams(baseParams),
@@ -178,9 +179,6 @@ export async function sendTelegramText(
             ...effectiveParams,
           }),
       });
-      const messageId = await acceptProviderMessage(res);
-      runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${messageId}`);
-      return messageId;
     } catch (err) {
       const fallbackPlan = buildTelegramPlainFallbackPlan({
         plainText: richPlan.plainText || fallbackText,
@@ -193,6 +191,9 @@ export async function sendTelegramText(
       }
       return await sendPlainFallback(fallbackPlan.plainText);
     }
+    const messageId = await acceptProviderMessage(res);
+    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${messageId}`);
+    return messageId;
   }
 
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.

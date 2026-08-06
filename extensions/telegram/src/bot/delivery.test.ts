@@ -1937,6 +1937,32 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
   });
 
+  it("does not plain-fallback after Telegram accepts a rich message in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage });
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 31,
+      message_thread_id: 43,
+      chat: { id: "123", type: "supergroup" },
+    });
+    Object.assign(bot.api.raw, { sendRichMessage });
+
+    let observed: unknown;
+    try {
+      await sendTelegramText(bot, "123", "Rich reply", runtime, {
+        richMessages: true,
+        thread: { id: 42, scope: "forum" },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    expect(sendRichMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("falls back to plain text when a rich message is rejected for empty rich content", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
