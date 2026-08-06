@@ -223,6 +223,21 @@ enum OpenClawConfigFile {
         let browser = root["browser"] as? [String: Any]
         return browser?["enabled"] as? Bool ?? defaultValue
     }
+
+    /// Beta macOS builds wrote this retired key after core moved it to SQLite.
+    /// Repair only that app-owned shape before local Gateway validation can reject it.
+    static func migrateRetiredAppMetadataForGatewayStart() -> Bool {
+        self.withFileLock {
+            let root = self.loadDict()
+            guard let meta = root["meta"] as? [String: Any],
+                  meta.keys.contains("lastTouchedAt")
+            else {
+                return true
+            }
+            self.logger.notice("removing retired app-written config metadata before Gateway start")
+            return self.saveDict(root)
+        }
+    }
 }
 
 extension OpenClawConfigFile {

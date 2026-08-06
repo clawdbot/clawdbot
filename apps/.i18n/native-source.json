@@ -33123,7 +33123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 569,
+      "line": 578,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "not linked",
       "surface": "apple",
@@ -33131,7 +33131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 582,
+      "line": 591,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "unknown error",
       "surface": "apple",
