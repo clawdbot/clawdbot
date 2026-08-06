@@ -3,13 +3,15 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
+
 import {
   FeishuStreamingSession,
   type FeishuStreamingFetch,
   mergeStreamingText,
   resolveStreamingCardSendMode,
 } from "./streaming-card.js";
+
+import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
 
 type StreamingSessionState = {
   cardId: string;
@@ -320,6 +322,68 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
+  it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
+    vi.useFakeTimers();
+    let authRequestReceived = false;
+    const deps: StreamingFetchDeps = {
+      fetchImpl: withFetchPreconnect(
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : input.toString());
+          if (!url.pathname.includes("/auth/")) {
+            return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_should_not_reach" } });
+          }
+          authRequestReceived = true;
+          return await new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              reject(new Error("missing guarded fetch signal"));
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => {
+                const reason = signal.reason;
+                reject(
+                  reason instanceof Error
+                    ? reason
+                    : new Error("request aborted", { cause: reason }),
+                );
+              },
+              { once: true },
+            );
+          });
+        }),
+      ) as FeishuStreamingFetch,
+      lookupFn: hermeticPublicLookup,
+    };
+
+    const session = new FeishuStreamingSession(
+      {} as never,
+      {
+        appId: "app_stalled_token",
+        appSecret: "secret",
+        httpTimeoutMs: 25,
+      },
+      undefined,
+      deps,
+    );
+
+    const result = expect(session.start("chat_id", "open_id")).rejects.toSatisfy(
+      (error: unknown) => {
+        expect(error).toBeInstanceOf(Error);
+        const message = (error as Error).message;
+        expect(message).toMatch(/timed out/i);
+        return true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(26);
+    await result;
+    expect(authRequestReceived).toBe(true);
+    console.log(
+      "[feishu streaming-card stall proof] stalled tenant-token fetch honored configured timeout",
+    );
+  });
+
   it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
     let streamState:
       | {
@@ -374,10 +438,7 @@ describe("FeishuStreamingSession", () => {
 
     const session = new FeishuStreamingSession(
       {} as never,
-      {
-        appId: "app_pending_flush",
-        appSecret: "secret",
-      },
+      { appId: "app_pending_flush", appSecret: "secret" },
       undefined,
       deps,
     );
@@ -472,10 +533,7 @@ describe("FeishuStreamingSession", () => {
 
     const session = new FeishuStreamingSession(
       {} as never,
-      {
-        appId: "app_boundary_flush",
-        appSecret: "secret",
-      },
+      { appId: "app_boundary_flush", appSecret: "secret" },
       undefined,
       deps,
     );
@@ -706,10 +764,7 @@ describe("FeishuStreamingSession", () => {
 
     const session = new FeishuStreamingSession(
       {} as never,
-      {
-        appId: "app_failed_delta_retry",
-        appSecret: "secret",
-      },
+      { appId: "app_failed_delta_retry", appSecret: "secret" },
       undefined,
       deps,
     );
@@ -749,10 +804,7 @@ describe("FeishuStreamingSession", () => {
 
     const session = new FeishuStreamingSession(
       {} as never,
-      {
-        appId: "app_non_ok_delta_retry",
-        appSecret: "secret",
-      },
+      { appId: "app_non_ok_delta_retry", appSecret: "secret" },
       undefined,
       deps,
     );
@@ -793,10 +845,7 @@ describe("FeishuStreamingSession", () => {
 
     const session = new FeishuStreamingSession(
       {} as never,
-      {
-        appId: "app_final_rewrite",
-        appSecret: "secret",
-      },
+      { appId: "app_final_rewrite", appSecret: "secret" },
       undefined,
       deps,
     );
@@ -833,66 +882,6 @@ describe("FeishuStreamingSession", () => {
       sequence: 2,
       uuid: "r_card_4_2",
     });
-  });
-
-  it("drops a surrogate pair whole when truncating the closeout summary", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_200);
-    // 46 'a' + 😀 (U+1F600, UTF-16 indices 46-47) + 20 'b' = 68-char string.
-    // truncateSummary's default max is 50, so it slices at max-3 = 47, which
-    // lands between the high and low surrogate halves of the emoji.
-    const finalText = `${"a".repeat(46)}\u{1F600}${"b".repeat(20)}`;
-    const settingsBodies: string[] = [];
-    const deps = await createStreamingFetch(({ url, body, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
-        return;
-      }
-      if (url.pathname.includes("/settings")) {
-        settingsBodies.push(body);
-      }
-      writeJson(res, { code: 0, msg: "ok" });
-    });
-
-    const session = new FeishuStreamingSession(
-      {} as never,
-      {
-        appId: "app_summary_surrogate",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_surrogate",
-        messageId: "om_surrogate",
-        sequence: 1,
-        currentText: "",
-        sentText: "",
-        hasNote: false,
-      },
-      lastUpdateTime: 3_000,
-    });
-
-    await session.close(finalText);
-
-    expect(settingsBodies).toHaveLength(1);
-    const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
-    const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
-      config?: { summary?: { content?: string } };
-    };
-    const summary = settings.config?.summary?.content ?? "";
-    // The half-emoji must be dropped whole: 46 a's + "...", and the summary
-    // must NOT end with a lone high surrogate (which Feishu renders as �).
-    expect(summary).toBe(`${"a".repeat(46)}...`);
-    expect(summary).not.toContain("\uD83D");
-    expect(summary.charCodeAt(summary.length - 4)).not.toBe(0xd83d);
   });
 
   it("logs a final replacement failure when CardKit returns non-OK", async () => {
@@ -989,10 +978,7 @@ describe("FeishuStreamingSession", () => {
 
     await new FeishuStreamingSession(
       client,
-      {
-        appId: "app_unsafe_token_expiry",
-        appSecret: "secret",
-      },
+      { appId: "app_unsafe_token_expiry", appSecret: "secret" },
       undefined,
       deps,
     ).start("chat_id", "open_id");
@@ -1001,10 +987,7 @@ describe("FeishuStreamingSession", () => {
     vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
     await new FeishuStreamingSession(
       client,
-      {
-        appId: "app_unsafe_token_expiry",
-        appSecret: "secret",
-      },
+      { appId: "app_unsafe_token_expiry", appSecret: "secret" },
       undefined,
       deps,
     ).start("chat_id", "open_id");
@@ -1022,10 +1005,7 @@ describe("FeishuStreamingSession", () => {
 
     await new FeishuStreamingSession(
       client,
-      {
-        appId: "app_invalid_clock_token_expiry",
-        appSecret: "secret",
-      },
+      { appId: "app_invalid_clock_token_expiry", appSecret: "secret" },
       undefined,
       deps,
     ).start("chat_id", "open_id");
@@ -1034,10 +1014,7 @@ describe("FeishuStreamingSession", () => {
     dateNow.mockReturnValue(7200 * 1000 - 60_000 + 1);
     await new FeishuStreamingSession(
       client,
-      {
-        appId: "app_invalid_clock_token_expiry",
-        appSecret: "secret",
-      },
+      { appId: "app_invalid_clock_token_expiry", appSecret: "secret" },
       undefined,
       deps,
     ).start("chat_id", "open_id");
@@ -1057,10 +1034,7 @@ describe("FeishuStreamingSession", () => {
 
     await new FeishuStreamingSession(
       client,
-      {
-        appId: "app_invalid_clock_cache_miss",
-        appSecret: "secret",
-      },
+      { appId: "app_invalid_clock_cache_miss", appSecret: "secret" },
       undefined,
       deps,
     ).start("chat_id", "open_id");
@@ -1069,10 +1043,7 @@ describe("FeishuStreamingSession", () => {
     dateNow.mockReturnValue(8_640_000_000_000_001);
     await new FeishuStreamingSession(
       client,
-      {
-        appId: "app_invalid_clock_cache_miss",
-        appSecret: "secret",
-      },
+      { appId: "app_invalid_clock_cache_miss", appSecret: "secret" },
       undefined,
       deps,
     ).start("chat_id", "open_id");

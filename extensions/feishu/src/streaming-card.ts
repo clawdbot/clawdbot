@@ -10,13 +10,19 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
-type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
+type Credentials = {
+  appId: string;
+  appSecret: string;
+  domain?: FeishuDomain;
+  httpTimeoutMs?: number;
+};
 type CardState = {
   cardId: string;
   messageId: string;
@@ -104,12 +110,19 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
   return ["open.feishu.cn"];
 }
 
+function cancelUnreadResponseBody(response: Response): void {
+  if (!response.bodyUsed) {
+    void response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function assertSuccessfulCardKitResponse(
   response: Response,
   auditContext: string,
   action: string,
 ): Promise<void> {
   if (!response.ok) {
+    cancelUnreadResponseBody(response);
     throw new Error(`${action} failed with HTTP ${response.status}`);
   }
   const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
@@ -140,6 +153,7 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
     lookupFn: deps?.lookupFn,
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
+    timeoutMs: creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
   });
   let data: {
     code: number;
@@ -149,6 +163,7 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
   };
   try {
     if (!response.ok) {
+      cancelUnreadResponseBody(response);
       throw new Error(`Token request failed with HTTP ${response.status}`);
     }
     data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
@@ -170,9 +185,6 @@ function truncateSummary(text: string, max = 50): string {
     return "";
   }
   const clean = text.replace(/\n/g, " ").trim();
-  // Slice on a code-point boundary so a surrogate pair (emoji / astral char)
-  // straddling the limit is dropped whole, instead of leaving a lone surrogate
-  // half that Feishu renders as the replacement char.
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
 }
 
@@ -320,6 +332,7 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
+      timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
     });
     let createData: {
       code: number;
@@ -328,6 +341,7 @@ export class FeishuStreamingSession {
     };
     try {
       if (!createRes.ok) {
+        cancelUnreadResponseBody(createRes);
         throw new Error(`Create card request failed with HTTP ${createRes.status}`);
       }
       createData = await readFeishuJsonResponse(createRes, "feishu.streaming-card.create");
@@ -434,6 +448,7 @@ export class FeishuStreamingSession {
         lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.update",
+        timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
       });
       try {
         await assertSuccessfulCardKitResponse(
@@ -483,6 +498,7 @@ export class FeishuStreamingSession {
         lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.replace",
+        timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
       });
       try {
         await assertSuccessfulCardKitResponse(
@@ -595,6 +611,7 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.note-update",
+      timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
     })
       .then(async ({ response, release }) => {
         try {
@@ -672,6 +689,7 @@ export class FeishuStreamingSession {
       lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
+      timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
     })
       .then(async ({ response, release }) => {
         try {
