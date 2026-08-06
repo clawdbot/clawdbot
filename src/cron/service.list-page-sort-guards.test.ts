@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import { listPage } from "./service/ops-read.js";
+import { list, listPage } from "./service/ops-read.js";
 import type { CronJob } from "./types.js";
 
 function createBaseJob(overrides?: Partial<CronJob>): CronJob {
@@ -85,6 +85,62 @@ describe("cron listPage sort guards", () => {
       expect(secondPage.snapshotRevision).toBe(firstPage.snapshotRevision);
     },
   );
+
+  it("keeps unscheduled jobs after scheduled jobs in the unpaginated list", async () => {
+    const jobs = [
+      createBaseJob({ id: "paused-z", enabled: false, state: {} }),
+      createBaseJob({ id: "later", state: { nextRunAtMs: 200 } }),
+      createBaseJob({ id: "paused-a", enabled: false, state: {} }),
+      createBaseJob({ id: "earlier", state: { nextRunAtMs: 100 } }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const unpaginated = await list(state, { includeDisabled: true });
+    const page = await listPage(state, { enabled: "all", sortBy: "nextRunAtMs" });
+
+    expect(unpaginated.map((job) => job.id)).toEqual(["earlier", "later", "paused-a", "paused-z"]);
+    expect(unpaginated.map((job) => job.id)).toEqual(page.jobs.map((job) => job.id));
+  });
+
+  it("applies the same stable id tiebreaker to unpaginated cron jobs", async () => {
+    const nextRunAtMs = Date.parse("2026-02-27T15:30:00.000Z");
+    const jobs = [
+      createBaseJob({ id: "scheduled-z", state: { nextRunAtMs } }),
+      createBaseJob({ id: "scheduled-a", state: { nextRunAtMs } }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const unpaginated = await list(state);
+
+    expect(unpaginated.map((job) => job.id)).toEqual(["scheduled-a", "scheduled-z"]);
+  });
+
+  it("matches the operator-visible display name when filtering cron jobs", async () => {
+    const job = createBaseJob({
+      id: "report-job",
+      name: "internal-report-name",
+      displayName: "Daily summary",
+    });
+    const state = createMockCronStateForJobs({ jobs: [job] });
+
+    const page = await listPage(state, { query: "Daily summary" });
+
+    expect(page.jobs.map((entry) => entry.id)).toEqual(["report-job"]);
+  });
+
+  it("preserves phrase searches across existing cron job fields", async () => {
+    const job = createBaseJob({
+      id: "report-job",
+      name: "Daily report",
+      description: "Quarterly summary",
+      displayName: "Executive overview",
+    });
+    const state = createMockCronStateForJobs({ jobs: [job] });
+
+    const page = await listPage(state, { query: "report Quarterly" });
+
+    expect(page.jobs.map((entry) => entry.id)).toEqual(["report-job"]);
+  });
 
   it("normalizes requested agent ids before filtering", async () => {
     const jobs = [

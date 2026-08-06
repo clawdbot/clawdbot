@@ -330,10 +330,12 @@ enum CLIInstaller {
             await statusHandler("Install failed: installer resource is missing. Reinstall OpenClaw.")
             return false
         }
+        let appVersion = GatewayEnvironment.appVersionString()
         let cmd = self.installScriptCommand(
             target: target,
             prefix: prefix,
-            scriptPath: installerURL.path)
+            scriptPath: installerURL.path,
+            compatibleWith: target.requiresExactVersion ? nil : appVersion)
         let response = await ShellExecutor.runDetailed(
             command: cmd,
             cwd: nil,
@@ -343,8 +345,20 @@ enum CLIInstaller {
         if response.success {
             let expectedVersion = target.requiresExactVersion ? GatewayEnvironment.appVersionString() : nil
             let managedStatus = await self.managedStatus(expectedVersion: expectedVersion)
-            guard managedStatus.isReady else {
+            guard case let .ready(_, verifiedVersion) = managedStatus else {
                 await statusHandler("Install failed: \(managedStatus.message)")
+                return false
+            }
+            if case let .channel(channel) = target,
+               let appVersion,
+               !self.channelInstallIsCompatible(
+                   installedVersion: verifiedVersion,
+                   appVersion: appVersion)
+            {
+                await statusHandler(
+                    "Install failed: \(channel.label) resolved to Gateway \(verifiedVersion), " +
+                        "which is older than this app (\(appVersion)). Choose a newer CLI channel " +
+                        "or retry after the channel is updated.")
                 return false
             }
             let parsed = self.parseInstallEvents(response.stdout)
@@ -368,6 +382,45 @@ enum CLIInstaller {
         return false
     }
 
+    static func channelInstallIsCompatible(
+        installedVersion: String,
+        appVersion: String) -> Bool
+    {
+        guard let installed = Semver.parse(installedVersion),
+              let app = Semver.parse(appVersion)
+        else {
+            return false
+        }
+        if installed != app { return installed > app }
+
+        // The CLI's future-config guard permits all same-base stable/correction families.
+        // For prerelease app builds, only an older prerelease would block the service write.
+        guard let appPrerelease = self.prereleaseTail(appVersion),
+              !self.isCorrectionPrerelease(appPrerelease)
+        else {
+            return true
+        }
+        guard let installedPrerelease = self.prereleaseTail(installedVersion),
+              !self.isCorrectionPrerelease(installedPrerelease)
+        else {
+            return true
+        }
+        return installedPrerelease.compare(appPrerelease, options: .numeric) != .orderedAscending
+    }
+
+    private static func prereleaseTail(_ version: String) -> String? {
+        let withoutBuild = version
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        guard let separator = withoutBuild.firstIndex(of: "-") else { return nil }
+        let tail = String(withoutBuild[withoutBuild.index(after: separator)...])
+        return tail.isEmpty ? nil : tail
+    }
+
+    private static func isCorrectionPrerelease(_ prerelease: String) -> Bool {
+        !prerelease.isEmpty && prerelease.allSatisfy(\.isNumber)
+    }
+
     static func installWatchdogTimeout(for target: InstallTarget) -> TimeInterval {
         // Dev installs clone/fetch source, install dependencies, and build the UI
         // plus CLI. Keep that workflow bounded without killing healthy cold builds.
@@ -380,7 +433,12 @@ enum CLIInstaller {
             .path
     }
 
-    static func installScriptCommand(target: InstallTarget, prefix: String, scriptPath: String) -> [String] {
+    static func installScriptCommand(
+        target: InstallTarget,
+        prefix: String,
+        scriptPath: String,
+        compatibleWith appVersion: String? = nil) -> [String]
+    {
         var command = [
             "/bin/bash",
             scriptPath,
@@ -391,6 +449,9 @@ enum CLIInstaller {
             "--version",
             target.selector,
         ]
+        if let appVersion, !target.requiresExactVersion {
+            command.append(contentsOf: ["--compatible-with", appVersion])
+        }
         if target == .channel(.dev) {
             command.append(contentsOf: [
                 "--install-method",

@@ -1,5 +1,5 @@
 // Commander registration for channel discovery, setup, status, auth, and diagnostics commands.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
@@ -221,7 +221,11 @@ export async function registerChannelsCli(
     .argument("<entries...>", "Entries to resolve (names or ids)")
     .option("--channel <name>", `Channel (${channelNames})`)
     .option("--account <id>", "Account id (accountId)")
-    .option("--kind <kind>", "Target kind (auto|user|group)", "auto")
+    .addOption(
+      new Option("--kind <kind>", "Target kind (auto|user|group|channel)")
+        .choices(["auto", "user", "group", "channel"])
+        .default("auto"),
+    )
     .option("--json", "Output JSON", false)
     .action(async (entries, opts) => {
       await runChannelsCommand(async () => {
@@ -230,7 +234,7 @@ export async function registerChannelsCli(
           {
             channel: opts.channel as string | undefined,
             account: opts.account as string | undefined,
-            kind: opts.kind as "auto" | "user" | "group",
+            kind: opts.kind as "auto" | "user" | "group" | "channel",
             json: Boolean(opts.json),
             entries: Array.isArray(entries) ? entries : [String(entries)],
           },

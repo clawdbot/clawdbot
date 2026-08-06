@@ -207,9 +207,13 @@ export function validateQaRuntimePairSummary(summary, options = {}) {
     failed: 0,
     skipped,
   };
+  const requiredCountKeys = ["total", "passed", "failed"];
+  const skippedCountMatches =
+    summary.counts?.skipped === skipped || (skipped === 0 && summary.counts?.skipped === undefined);
   if (
     !isRecord(summary.counts) ||
-    Object.entries(expectedCounts).some(([key, value]) => summary.counts[key] !== value)
+    requiredCountKeys.some((key) => summary.counts[key] !== expectedCounts[key]) ||
+    !skippedCountMatches
   ) {
     throw new Error("runtime-pair summary counts do not match validated scenario evidence");
   }

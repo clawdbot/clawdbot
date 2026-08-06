@@ -1,4 +1,5 @@
 // Metadata-only operator audit queries over the canonical shared SQLite ledger.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -6,6 +7,7 @@ import {
   type AuditEvent,
   validateAuditActivityListParams,
   validateAuditListParams,
+  validateAuditRunInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
 import type {
@@ -13,13 +15,14 @@ import type {
   AuditEventRecord,
   ToolActionAuditEventRecord,
 } from "../../audit/audit-event-types.js";
+import { inspectExecutionIdentityRun } from "../../audit/execution-identity-context.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
 
-function parseAuditCursor(cursor: string | undefined): number | undefined | null {
+function parsePositiveCursor(cursor: string | undefined): number | undefined | null {
   if (cursor === undefined) {
     return undefined;
   }
@@ -30,6 +33,10 @@ function parseAuditCursor(cursor: string | undefined): number | undefined | null
   const parsed = Number(trimmed);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
+
+const parseAuditCursor = parsePositiveCursor;
+const parseDecisionCursor = parsePositiveCursor;
+const parseExecutionCursor = parsePositiveCursor;
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(
@@ -90,13 +97,16 @@ export const auditHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const agentId = normalizeOptionalString(params.agentId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const runId = normalizeOptionalString(params.runId);
     const page = listAuditEvents({
       limit: Math.min(params.limit ?? DEFAULT_AUDIT_LIST_LIMIT, MAX_AUDIT_LIST_LIMIT),
       ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
       filters: {
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runId ? { runId } : {}),
         ...(params.kind ? { kind: params.kind } : {}),
         ...(params.status ? { status: params.status } : {}),
         ...(params.after !== undefined ? { after: params.after } : {}),
@@ -128,14 +138,17 @@ export const auditHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const agentId = normalizeOptionalString(params.agentId);
+    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const runId = normalizeOptionalString(params.runId);
     const page = listAuditEvents({
       limit: Math.min(params.limit ?? DEFAULT_AUDIT_LIST_LIMIT, MAX_AUDIT_LIST_LIMIT),
       ...(parsed.cursor !== undefined ? { cursor: parsed.cursor } : {}),
       filters: {
         includeMessages: true,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.runId ? { runId: params.runId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runId ? { runId } : {}),
         ...(params.kind ? { kind: params.kind } : {}),
         ...(params.status ? { status: params.status } : {}),
         ...(params.direction ? { direction: params.direction } : {}),
@@ -149,6 +162,42 @@ export const auditHandlers: GatewayRequestHandlers = {
       ...(page.nextCursor !== undefined ? { nextCursor: String(page.nextCursor) } : {}),
     });
   },
+  "audit.run.inspect": ({ params, respond }) => {
+    if (!assertValidParams(params, validateAuditRunInspectParams, "audit.run.inspect", respond)) {
+      return;
+    }
+    const decisionOffset = parseDecisionCursor(params.decisionCursor);
+    const executionOffset =
+      typeof params.runId === "string" ? parseExecutionCursor(params.executionCursor) : undefined;
+    if (decisionOffset === null || executionOffset === null) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid audit.run.inspect cursor"),
+      );
+      return;
+    }
+    respond(
+      true,
+      inspectExecutionIdentityRun({
+        ...(typeof params.runId === "string"
+          ? {
+              runId: params.runId,
+              ...(executionOffset !== undefined ? { executionOffset } : {}),
+              executionLimit: params.executionLimit ?? 50,
+            }
+          : { executionId: params.executionId! }),
+        ...(decisionOffset !== undefined ? { decisionOffset } : {}),
+        decisionLimit: params.decisionLimit ?? 50,
+      }),
+    );
+  },
 };
 
-export const testApi = { mapAuditActivityEvent, mapLegacyAuditEvent, parseAuditCursor };
+export const testApi = {
+  mapAuditActivityEvent,
+  mapLegacyAuditEvent,
+  parseAuditCursor,
+  parseDecisionCursor,
+  parseExecutionCursor,
+};

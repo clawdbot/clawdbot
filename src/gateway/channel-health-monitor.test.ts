@@ -17,6 +17,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    recoverAutostartSuppression: vi.fn(async () => false),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -283,7 +284,12 @@ describe("channel-health-monitor", () => {
 
   it("treats crash-loop suppressed accounts as expected stopped", async () => {
     let suppressed = true;
+    let allowRecovery = false;
     const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    const recoverAutostartSuppression = vi.fn(async () => {
+      suppressed = !allowRecovery;
+      return allowRecovery;
+    });
     const manager = createSnapshotManager(
       {
         discord: {
@@ -292,6 +298,7 @@ describe("channel-health-monitor", () => {
       },
       {
         getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
+        recoverAutostartSuppression,
       },
     );
     const monitor = startDefaultMonitor(manager, {
@@ -305,9 +312,10 @@ describe("channel-health-monitor", () => {
     expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
 
-    suppressed = false;
+    allowRecovery = true;
     await vi.advanceTimersByTimeAsync(101);
 
+    expect(recoverAutostartSuppression).toHaveBeenCalled();
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     monitor.stop();
@@ -361,6 +369,18 @@ describe("channel-health-monitor", () => {
           terminalDisconnect: true,
         },
       },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("does not restart a channel with blocked lifecycle", async () => {
+    const manager = createSlackSnapshotManager({
+      running: true,
+      connected: true,
+      enabled: true,
+      configured: true,
+      lifecycle: "blocked",
+      lastError: "Slack identity unavailable",
     });
     await expectNoRestart(manager);
   });
@@ -449,11 +469,12 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("restarts a stuck channel (running but not connected)", async () => {
+  it("restarts a starting channel that stays disconnected past connect grace", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
         default: disconnectedAccount(now - 300_000, {
+          lifecycle: "starting",
           linked: true,
         }),
       },
@@ -500,6 +521,7 @@ describe("channel-health-monitor", () => {
           connected: false,
           enabled: true,
           configured: true,
+          lifecycle: "starting",
           lastStartAt: now - 5_000,
         },
       },

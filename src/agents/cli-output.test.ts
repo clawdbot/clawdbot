@@ -1,6 +1,6 @@
 /** Tests CLI JSON/JSONL output parsing, streamed deltas, and error extraction. */
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -46,6 +46,34 @@ const OPENAI_COMPATIBLE_CLI_USAGE_CASES = [
       prompt_tokens_details: { cached_tokens: 4 },
     },
     normalized: { input: 15, output: 7, cacheRead: 4, cacheWrite: undefined, total: 26 },
+  },
+  {
+    name: "flat Codex cached input is included in input_tokens",
+    raw: {
+      input_tokens: 15,
+      output_tokens: 4,
+      cached_input_tokens: 6,
+    },
+    normalized: { input: 9, output: 4, cacheRead: 6, cacheWrite: undefined, total: undefined },
+  },
+  {
+    name: "flat Codex input includes both cached reads and cache writes",
+    raw: {
+      input_tokens: 100,
+      output_tokens: 10,
+      cached_input_tokens: 40,
+      cache_write_input_tokens: 60,
+    },
+    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
+  },
+  {
+    name: "nested Codex input includes both cached reads and cache writes",
+    raw: {
+      input_tokens: 100,
+      output_tokens: 10,
+      input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
+    },
+    normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
   },
 ] as const;
 
@@ -1331,6 +1359,23 @@ describe("parseCliOutput", () => {
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  function createClaudeTaggedReasoningHarness() {
+    const assistant: Array<{ text: string; delta: string }> = [];
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => assistant.push(delta),
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+    return { assistant, parser, thinking };
+  }
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name while incrementally streaming CLI JSONL",
     ({ raw, normalized }) => {
@@ -2009,6 +2054,243 @@ describe("createCliJsonlStreamingParser", () => {
       sessionId: "session-diverged",
       usage: undefined,
     });
+  });
+
+  it("promotes complete leading tagged Claude reasoning and keeps only the answer visible", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      [
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: {
+              type: "text_delta",
+              text: "<thinking>Private analysis.</thinking>Visible answer.",
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-tagged",
+          result: "<thinking>Private analysis.</thinking>Visible answer.",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      {
+        text: "Private analysis.",
+        delta: "Private analysis.",
+        isReasoningSnapshot: true,
+      },
+    ]);
+    expect(assistant).toEqual([
+      {
+        text: "Visible answer.",
+        delta: "Visible answer.",
+        sessionId: undefined,
+        usage: undefined,
+      },
+    ]);
+    expect(parser.getOutput()).toEqual({
+      text: "Visible answer.",
+      sessionId: "session-tagged",
+      usage: undefined,
+    });
+  });
+
+  it("holds chunk-split tagged reasoning until its close tag is complete", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+    const pushText = (text: string) =>
+      parser.push(
+        `${JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text },
+          },
+        })}\n`,
+      );
+
+    pushText("<thi");
+    pushText("nking>Private ");
+    expect(assistant).toEqual([]);
+    expect(thinking).toEqual([]);
+    pushText("analysis.</think");
+    expect(assistant).toEqual([]);
+    expect(thinking).toEqual([]);
+    pushText("ing>Visible answer.");
+    parser.finish();
+
+    expect(thinking.at(-1)?.text).toBe("Private analysis.");
+    expect(assistant.at(-1)?.text).toBe("Visible answer.");
+    expect(parser.getOutput()?.text).toBe("Visible answer.");
+  });
+
+  it("streams rejected angle prefixes while valid split reasoning stays buffered", () => {
+    const visible = createClaudeTaggedReasoningHarness();
+    const mixed = createClaudeTaggedReasoningHarness();
+    const tagged = createClaudeTaggedReasoningHarness();
+    const pushText = (parser: ReturnType<typeof createCliJsonlStreamingParser>, text: string) =>
+      parser.push(
+        `${JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text },
+          },
+        })}\n`,
+      );
+
+    pushText(visible.parser, "<div>Visible prefix <thi");
+    expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
+    expect(visible.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
+
+    pushText(mixed.parser, "<div>Visible prefix ");
+    pushText(mixed.parser, "<thi");
+    expect(mixed.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
+    expect(mixed.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
+
+    pushText(tagged.parser, "<thi");
+    pushText(tagged.parser, "nking>Private analysis.");
+    expect(tagged.assistant).toEqual([]);
+    expect(tagged.thinking).toEqual([]);
+    pushText(tagged.parser, "</thinking>Visible answer.");
+    expect(tagged.thinking.at(-1)?.text).toBe("Private analysis.");
+    expect(tagged.assistant.at(-1)?.text).toBe("Visible answer.");
+  });
+
+  it("promotes consecutive leading blocks but preserves later literal tags", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      `${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: {
+            type: "text_delta",
+            text: [
+              "<think>First.</think>",
+              "<reasoning>Second.</reasoning>",
+              "Answer with <think>literal</think> markup.",
+            ].join("\n"),
+          },
+        },
+      })}\n`,
+    );
+    parser.finish();
+
+    expect(thinking.map((entry) => entry.text)).toEqual(["First.Second."]);
+    expect(assistant.at(-1)?.text).toBe("\nAnswer with <think>literal</think> markup.");
+    expect(parser.getOutput()?.text).toBe("Answer with <think>literal</think> markup.");
+  });
+
+  it("prefers native Claude thinking over a mirrored leading tagged block", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Native analysis." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 1,
+            delta: {
+              type: "text_delta",
+              text: "<thinking>Native analysis.</thinking>Visible answer.",
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "<thinking>Native analysis.</thinking>Visible answer.",
+        }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "Native analysis.", delta: "Native analysis.", isReasoningSnapshot: true },
+    ]);
+    expect(assistant.at(-1)?.text).toBe("Visible answer.");
+    expect(parser.getOutput()?.text).toBe("Visible answer.");
+  });
+
+  it.each([
+    {
+      name: "fenced code example",
+      text: "```xml\n<thinking>literal example</thinking>\n```",
+    },
+    { name: "incomplete leading tag", text: "<thinking>unfinished visible text" },
+    { name: "malformed leading tag", text: "<thinking broken visible text" },
+  ])("preserves $name on the visible path", ({ text }) => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+
+    parser.push(
+      `${JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text },
+        },
+      })}\n`,
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([]);
+    expect(assistant.map((entry) => entry.delta).join("")).toBe(text);
+    expect(parser.getOutput()?.text).toBe(text);
+  });
+
+  it("resets tagged reasoning across Claude tool-round assistant messages", () => {
+    const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
+    const textEvent = (text: string) =>
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text },
+        },
+      });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        textEvent("<think>First thought.</think>Before tool."),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
+        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
+        textEvent("<reasoning>Second thought.</reasoning>Final answer."),
+        JSON.stringify({ type: "result", result: "Final answer." }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking.map((entry) => entry.text)).toEqual(["First thought.", "Second thought."]);
+    expect(assistant.at(-1)?.text).toBe("Before tool.\n\nFinal answer.");
+    expect(parser.getOutput()?.text).toBe("Before tool.\n\nFinal answer.");
   });
 
   it("streams thinking deltas, skips signature deltas, and dedupes the snapshot", () => {
@@ -2785,6 +3067,46 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
+  it("lets plugin parsers own their frames before lazily parsing fallback JSON", () => {
+    const parseSpy = vi.spyOn(JSON, "parse");
+    const parseCountsAtPluginEntry: number[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "acme", output: "jsonl" },
+      providerId: "acme-cli",
+      parseJsonlEvent: (line) => {
+        parseCountsAtPluginEntry.push(parseSpy.mock.calls.length);
+        if (line === "plain provider frame") {
+          return { kind: "text", text: "plain" };
+        }
+        if (line.includes('"item.completed"')) {
+          return null;
+        }
+        const event = JSON.parse(line) as { text: string };
+        return { kind: "text", text: event.text };
+      },
+      onAssistantDelta: () => {},
+    });
+
+    try {
+      parser.push("plain provider frame\n");
+      expect(parseSpy).not.toHaveBeenCalled();
+
+      parser.push(`${JSON.stringify({ text: " provider JSON" })}\n`);
+      expect(parseSpy).toHaveBeenCalledTimes(1);
+
+      parser.push(
+        `${JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "fallback" },
+        })}\n`,
+      );
+      expect(parseCountsAtPluginEntry).toEqual([0, 0, 1]);
+      expect(parseSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
   it("turns plugin-owned JSONL parser exceptions into bounded provider errors", () => {
     let calls = 0;
     const parser = createCliJsonlStreamingParser({
@@ -3099,6 +3421,346 @@ describe("createCliJsonlStreamingParser", () => {
     expect(results).toEqual([
       { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
     ]);
+  });
+
+  it("frames coalesced Claude image and PDF lines before omitting retained binary bytes", () => {
+    const results: CliToolResultDelta[] = [];
+    const pluginLines: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      parseJsonlEvent: (line) => {
+        pluginLines.push(line);
+        return null;
+      },
+      onAssistantDelta: () => {},
+      onToolResult: (result) => results.push(result),
+    });
+    const base64 = "a".repeat(4_300_000);
+    const rawLines: string[] = [];
+    for (const [type, mediaType] of [
+      ["image", "image/png"],
+      ["document", "application/pdf"],
+    ] as const) {
+      rawLines.push(
+        JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: `read-${type}`,
+                is_error: type === "document",
+                content: [
+                  { type: "text", text: `Read ${type}` },
+                  {
+                    type,
+                    title: `${type} attachment`,
+                    source: { type: "base64", media_type: mediaType, data: base64 },
+                  },
+                  {
+                    type: "image",
+                    source: { type: "url", url: "https://example.test/keep.png" },
+                  },
+                  {
+                    type: "document",
+                    source: { type: "text", media_type: "text/plain", data: "keep text" },
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+    }
+    const resultLine = JSON.stringify({ type: "result", result: "both attachments read" });
+    parser.push(`${[...rawLines, resultLine].join("\n")}\n`);
+    parser.finish();
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutput()?.text).toBe("both attachments read");
+    expect(results).toHaveLength(2);
+    expect(pluginLines).toEqual([...rawLines, resultLine]);
+    for (const [index, type, mediaType] of [
+      [0, "image", "image/png"],
+      [1, "document", "application/pdf"],
+    ] as const) {
+      expect(results[index]).toEqual({
+        toolCallId: `read-${type}`,
+        name: "",
+        isError: type === "document",
+        result: [
+          { type: "text", text: `Read ${type}` },
+          {
+            type,
+            title: `${type} attachment`,
+            source: { type: "base64", media_type: mediaType },
+            omitted: true,
+            bytes: 3_225_000,
+          },
+          { type: "image", source: { type: "url", url: "https://example.test/keep.png" } },
+          {
+            type: "document",
+            source: { type: "text", media_type: "text/plain", data: "keep text" },
+          },
+        ],
+      });
+    }
+  });
+
+  it.each([
+    { name: "echoed media bytes", padded: false },
+    { name: "surrounding raw whitespace", padded: true },
+  ])("counts $name claimed by Claude plugin parsers before dispatch", ({ padded }) => {
+    const pluginLines: string[] = [];
+    const assistantDeltas: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      parseJsonlEvent: (line) => {
+        pluginLines.push(line);
+        return { kind: "text", text: "claimed" };
+      },
+      onAssistantDelta: (delta) => assistantDeltas.push(delta.delta),
+    });
+    const semanticLine = JSON.stringify({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "claimed-image",
+            content: [
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/png",
+                  data: padded ? "YQ==" : "a".repeat(4_300_000),
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const rawLine = padded ? `${" ".repeat(4_300_000)}${semanticLine}` : semanticLine;
+
+    parser.push(`${rawLine}\n${rawLine}\n`);
+
+    expect(pluginLines).toEqual([semanticLine, semanticLine]);
+    expect(assistantDeltas).toEqual(["claimed"]);
+    expect(parser.getErrorText()).toContain("JSONL output exceeded");
+  });
+
+  it("counts actual blank Claude frames without invoking hooks or inventing a finish frame", () => {
+    const parseJsonlEvent = vi.fn(() => null);
+    const createParser = () =>
+      createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        parseJsonlEvent,
+        onAssistantDelta: () => {},
+      });
+    const completeParser = createParser();
+    completeParser.push("\r\n".repeat(20_000));
+    completeParser.finish();
+
+    expect(completeParser.getErrorText()).toBeNull();
+    expect(parseJsonlEvent).not.toHaveBeenCalled();
+
+    const overflowParser = createParser();
+    overflowParser.push("\n".repeat(20_001));
+
+    expect(overflowParser.getErrorText()).toContain("exceeded 20000 lines");
+    expect(parseJsonlEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "whitespace-only records",
+      createLine: () => " ".repeat(4_300_000),
+    },
+    {
+      name: "padding around valid JSON",
+      createLine: () => `${" ".repeat(4_300_000)}{}`,
+    },
+    {
+      name: "formatting inside a compacted media record",
+      createLine: () =>
+        JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "padded-image",
+                content: [
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: "YQ==" },
+                  },
+                ],
+              },
+            ],
+          },
+        }).replace('"message":', `"message":${" ".repeat(4_300_000)}`),
+    },
+  ])("charges $name against the Claude raw-output budget", ({ createLine }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    const line = createLine();
+
+    parser.push(`${line}\n${line}\n`);
+
+    expect(parser.getErrorText()).toContain("JSONL output exceeded 8388608 characters");
+  });
+
+  it("normalizes empty Claude image data without treating zero omitted bytes as unchanged", () => {
+    const results: CliToolResultDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+      onToolResult: (result) => results.push(result),
+    });
+
+    parser.push(
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "empty-image",
+              content: [
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: "" },
+                },
+              ],
+            },
+          ],
+        },
+      })}\n`,
+    );
+
+    expect(results[0]?.result).toEqual([
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png" },
+        omitted: true,
+        bytes: 0,
+      },
+    ]);
+  });
+
+  it("still enforces raw Claude line and retained-text limits", () => {
+    const createParser = () =>
+      createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        onAssistantDelta: () => {},
+      });
+    const oversizedLineParser = createParser();
+    oversizedLineParser.push(
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "oversized-image",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: "a".repeat(8 * 1024 * 1024),
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      })}\n`,
+    );
+    expect(oversizedLineParser.getErrorText()).toContain("JSONL line exceeded");
+
+    const growingPartialLineParser = createParser();
+    growingPartialLineParser.push("a".repeat(4_300_000));
+    expect(growingPartialLineParser.getErrorText()).toBeNull();
+    growingPartialLineParser.push("a".repeat(4_300_000));
+    expect(growingPartialLineParser.getErrorText()).toContain("JSONL line exceeded");
+
+    const oversizedTextParser = createParser();
+    for (const toolCallId of ["first", "second"]) {
+      oversizedTextParser.push(
+        `${JSON.stringify({
+          type: "user",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolCallId,
+                content: [{ type: "text", text: "a".repeat(4_300_000) }],
+              },
+            ],
+          },
+        })}\n`,
+      );
+    }
+    expect(oversizedTextParser.getErrorText()).toContain("JSONL output exceeded");
+
+    const excessiveLinesParser = createParser();
+    excessiveLinesParser.push("{}\n".repeat(20_001));
+    expect(excessiveLinesParser.getErrorText()).toContain("exceeded 20000 lines");
+  });
+
+  it.each([
+    { providerId: "codex-cli", jsonlDialect: undefined },
+    { providerId: "pi-cli", jsonlDialect: undefined },
+    { providerId: "google-gemini-cli", jsonlDialect: "gemini-stream-json" as const },
+  ])("preserves $providerId binary tool payloads byte-for-byte", ({ providerId, jsonlDialect }) => {
+    const observedLines: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: providerId, output: "jsonl", ...(jsonlDialect ? { jsonlDialect } : {}) },
+      providerId,
+      parseJsonlEvent: (line) => {
+        observedLines.push(line);
+        return null;
+      },
+      onAssistantDelta: () => {},
+    });
+    const rawLine = JSON.stringify({
+      type: "user",
+      item: {
+        type: "mcp_tool_call",
+        result: { content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }] },
+      },
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "keep-binary",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    parser.push(`\n \t\r\n${rawLine}\n`);
+
+    expect(observedLines).toEqual([rawLine]);
   });
 
   it("reassembles streamed tool args from input_json_delta chunks", () => {

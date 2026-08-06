@@ -5,6 +5,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  isMessageOnlyCodexSourceReply,
+  isSystemAgentOnlyCodexDynamicToolAllowlist,
+  shouldDisableCodexToolSearchForModel,
+} from "./dynamic-tool-profile.js";
+import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
@@ -15,6 +20,7 @@ export function buildDeveloperInstructions(
 ): string {
   const deferredToolNames = new Set<string>();
   let hasSkillWorkshop = false;
+  let hasSessionsSpawn = false;
   let hasSessionsYield = false;
   let hasSeenDirectNamespace = false;
   let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
@@ -32,6 +38,7 @@ export function buildDeveloperInstructions(
         deferredToolNames.add(name);
       }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
+      hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
       messageToolAvailable ||= name === "message";
     }
@@ -40,6 +47,12 @@ export function buildDeveloperInstructions(
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
   }).join("\n");
+  const nativeDelegationAvailable =
+    params.disableTools !== true &&
+    params.delegationCapability !== "report_only" &&
+    !isMessageOnlyCodexSourceReply(params) &&
+    !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
+    !shouldDisableCodexToolSearchForModel(params.modelId);
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     deferredToolNames.size > 0
@@ -51,8 +64,10 @@ export function buildDeveloperInstructions(
     // Codex defers native collab tools behind tool_search on search-capable
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
-    "Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
-    hasSessionsYield
+    nativeDelegationAvailable
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred: when \`spawn_agent\` is not directly listed, load it with \`tool_search\` before spawning.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`." : ""}`
+      : undefined,
+    hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
       : undefined,
     buildVisibleReplyInstruction(params, messageToolAvailable),
@@ -70,7 +85,7 @@ function buildVisibleReplyInstruction(
     return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. If `final` is omitted, OpenClaw continues and resolves the latest omitted source reply only when the turn ends successfully. Do not repeat visible message content in your final answer.";
   }
   if (messageToolAvailable) {
-    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";
+    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` for supported non-text actions in the current conversation, such as reacting to its current message. Reserve other `message` actions for explicit out-of-band sends or media/file delivery. Reactions are not delivered automatically.";
   }
   return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
 }

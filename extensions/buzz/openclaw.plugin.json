@@ -6,6 +6,12 @@
     "onStartup": false
   },
   "channels": ["buzz"],
+  "qaRunners": [
+    {
+      "commandName": "buzz",
+      "description": "Run the Buzz live QA lane against a dedicated relay room"
+    }
+  ],
   "channelConfigs": {
     "buzz": {
       "label": "Buzz",

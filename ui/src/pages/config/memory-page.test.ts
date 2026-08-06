@@ -1,240 +1,29 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationNavigationOptions,
-} from "../../app/context.ts";
 import { setPluginEnabled, type PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { configRouteData, type ConfigRouteData } from "./route-data.ts";
+import {
+  activeEngine,
+  createMemoryTestAddon as addon,
+  createMemoryTestDeferred as deferred,
+  createMemoryTestEngine as engine,
+  addonStatus,
+  addonSwitch,
+  createMemoryPage as createPage,
+  memoryRoute,
+  memoryTabRoute,
+  selectEngine,
+  toggleAddon,
+} from "./memory-page.test-support.ts";
+import type { ConfigRouteData } from "./route-data.ts";
 import "./memory-page.ts";
 
 vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/plugins/index.ts")>();
   return { ...actual, setPluginEnabled: vi.fn() };
 });
-
-type MemoryPageElement = HTMLElement & {
-  configObject: Record<string, unknown>;
-  routeData: ConfigRouteData | null;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
-};
-
-function memoryRoute(url: string): ConfigRouteData {
-  const parsed = new URL(url, "https://control.test");
-  return configRouteData({
-    pathname: parsed.pathname,
-    search: parsed.search,
-    hash: parsed.hash,
-  });
-}
-
-function memoryTabRoute(tab: "overview" | "memories" | "dreams" | "settings") {
-  return memoryRoute(`/settings/memory${tab === "overview" ? "" : `/${tab}`}`);
-}
-
-function engine(id: string, enabled: boolean, name = id): PluginCatalogItem {
-  return {
-    id,
-    name,
-    installed: true,
-    enabled,
-    state: enabled ? "enabled" : "disabled",
-    kind: ["memory"],
-  } as unknown as PluginCatalogItem;
-}
-
-function addon(id: string, enabled: boolean): PluginCatalogItem {
-  return {
-    id,
-    name: id,
-    installed: true,
-    enabled,
-    state: enabled ? "enabled" : "disabled",
-  } as unknown as PluginCatalogItem;
-}
-
-function createPage(params: {
-  configObject: Record<string, unknown>;
-  /** Resolves one `plugins.list` call; the default answers every call with `catalog`. */
-  listCatalog?: (
-    call: number,
-  ) => Promise<{ plugins: readonly PluginCatalogItem[]; mutationAllowed?: boolean }>;
-  catalog?: readonly PluginCatalogItem[];
-  mutationAllowed?: boolean;
-  patchForm?: (path: Array<string | number>, value: unknown) => void;
-  waitForPendingWrites?: () => Promise<void>;
-  setEnabled?: (pluginId: string, enabled: boolean) => Promise<unknown>;
-  refresh?: () => Promise<void>;
-  navigate?: (routeId: string, options?: ApplicationNavigationOptions) => void;
-  replace?: (routeId: string, options?: ApplicationNavigationOptions) => void;
-  routeData?: ConfigRouteData;
-  basePath?: string;
-  agents?: Array<{ id: string; name?: string }>;
-  memoryStatus?: (agentId: string, probe: boolean) => Promise<unknown>;
-  processInstanceIds?: Array<string | undefined>;
-  scopes?: string[];
-  lookupSchemaPath?: (call: number) => Promise<unknown>;
-}) {
-  let listCalls = 0;
-  let schemaLookups = 0;
-  let systemInfoCalls = 0;
-  const request = vi.fn((method: string, payload?: { agentId?: string; probe?: boolean }) => {
-    if (method === "plugins.list") {
-      const call = listCalls++;
-      const result: Promise<{ plugins: readonly PluginCatalogItem[]; mutationAllowed?: boolean }> =
-        params.listCatalog
-          ? params.listCatalog(call)
-          : Promise.resolve({ plugins: params.catalog ?? [] });
-      return result.then((catalog) => ({
-        ...catalog,
-        diagnostics: [],
-        mutationAllowed: catalog.mutationAllowed ?? params.mutationAllowed ?? true,
-      }));
-    }
-    if (method === "doctor.memory.status") {
-      return params.memoryStatus
-        ? params.memoryStatus(payload?.agentId ?? "main", payload?.probe === true)
-        : Promise.resolve({
-            agentId: payload?.agentId ?? "main",
-            provider: "none",
-            embedding: { ok: false, checked: false },
-          });
-    }
-    if (method === "system.info") {
-      const ids = params.processInstanceIds ?? [];
-      const processInstanceId = ids[Math.min(systemInfoCalls++, ids.length - 1)];
-      return Promise.resolve({ processInstanceId });
-    }
-    return Promise.resolve({});
-  });
-  vi.mocked(setPluginEnabled).mockImplementation(
-    (_client, pluginId, enabled) =>
-      (params.setEnabled
-        ? params.setEnabled(pluginId, enabled)
-        : Promise.resolve({})) as ReturnType<typeof setPluginEnabled>,
-  );
-  const gatewayListeners = new Set<() => void>();
-  const runtimeListeners = new Set<() => void>();
-  const gateway = {
-    snapshot: {
-      client: { request },
-      phase: "connected",
-      hello: {
-        auth: { role: "operator", scopes: params.scopes },
-        features: { methods: params.processInstanceIds ? ["system.info"] : [] },
-      },
-    },
-    subscribe: (notify: () => void) => {
-      gatewayListeners.add(notify);
-      return () => gatewayListeners.delete(notify);
-    },
-  };
-  const element = document.createElement("openclaw-memory-settings") as MemoryPageElement;
-  element.configObject = params.configObject;
-  element.routeData = params.routeData ?? memoryTabRoute("settings");
-  const runtimeConfig = {
-    state: {
-      client: {},
-      connected: true,
-      configSaving: false,
-      configApplying: false,
-      configForm: params.configObject,
-      configSnapshot: null,
-    },
-    subscribe: (notify: () => void) => {
-      runtimeListeners.add(notify);
-      return () => runtimeListeners.delete(notify);
-    },
-    lookupSchemaPath: vi.fn(() =>
-      params.lookupSchemaPath
-        ? params.lookupSchemaPath(schemaLookups++)
-        : Promise.resolve({ type: "object" }),
-    ),
-    patchForm: params.patchForm ?? vi.fn(),
-    removeFormValue: vi.fn(),
-    waitForPendingWrites: params.waitForPendingWrites ?? (() => Promise.resolve()),
-    refresh: vi.fn(params.refresh ?? (() => Promise.resolve())),
-    ensureLoaded: () => Promise.resolve(),
-  };
-  const context = {
-    basePath: params.basePath ?? "",
-    gateway,
-    runtimeConfig,
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: params.agents?.[0]?.id ?? "main",
-          agents: params.agents ?? [{ id: "main" }],
-        },
-        agentsLoading: false,
-      },
-      subscribe: () => () => undefined,
-      ensureList: () => Promise.resolve(),
-    },
-    navigate: params.navigate ?? vi.fn(),
-    replace: params.replace ?? vi.fn(),
-  } as unknown as ApplicationContext;
-  (element as unknown as { context: ApplicationContext }).context = context;
-  const contextProvider = new ContextProvider(element, {
-    context: applicationContext,
-    initialValue: context,
-  });
-  contextProvider.setValue(context);
-  const setPhase = (phase: string) => {
-    gateway.snapshot = { ...gateway.snapshot, phase };
-    runtimeConfig.state = { ...runtimeConfig.state, connected: phase === "connected" };
-    for (const notify of gatewayListeners) {
-      notify();
-    }
-    for (const notify of runtimeListeners) {
-      notify();
-    }
-  };
-  return {
-    element,
-    request,
-    setPhase,
-    refresh: runtimeConfig.refresh,
-    lookupSchemaPath: runtimeConfig.lookupSchemaPath,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-
-function addonStatus(element: HTMLElement, label: string): string | null {
-  const row = [...element.querySelectorAll(".settings-row")].find((entry) =>
-    entry.textContent?.includes(label),
-  );
-  return row?.querySelector(".settings-status")?.textContent?.trim() ?? null;
-}
-
-function addonSwitch(element: HTMLElement, label: string) {
-  const row = [...element.querySelectorAll(".settings-row--toggle")].find((entry) =>
-    entry.textContent?.includes(label),
-  );
-  return row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch") ?? null;
-}
-
-function toggleAddon(element: HTMLElement, label: string, checked: boolean) {
-  const control = addonSwitch(element, label);
-  if (!control) {
-    throw new Error(`Missing add-on toggle: ${label}`);
-  }
-  control.checked = checked;
-  control.dispatchEvent(new Event("change", { bubbles: true }));
-}
 
 /** Which tab body is actually mounted, rather than what the tab strip claims. */
 function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | "settings" | null {
@@ -267,18 +56,6 @@ function dispatchTabShow(element: HTMLElement, tab: string) {
       bubbles: true,
     }),
   );
-}
-
-function activeEngine(element: HTMLElement): string | null {
-  return (
-    element.querySelector("wa-radio.settings-segmented__btn--active")?.getAttribute("value") ?? null
-  );
-}
-
-function selectEngine(element: HTMLElement, value: string) {
-  const group = element.querySelector("wa-radio-group") as HTMLElement & { value?: string };
-  group.value = value;
-  group.dispatchEvent(new Event("change"));
 }
 
 describe("MemorySettingsPage engine slot", () => {
@@ -440,7 +217,7 @@ describe("MemorySettingsPage catalog state", () => {
     document.body.append(element);
     try {
       await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
-      expect(element.textContent).not.toContain("Disabled");
+      expect(addonStatus(element, "Active memory")).not.toBe("Disabled");
     } finally {
       element.remove();
     }
@@ -623,6 +400,7 @@ describe("MemorySettingsPage catalog state", () => {
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
 
       setPhase("disconnected");
       setPhase("connected");
@@ -644,7 +422,7 @@ describe("MemorySettingsPage catalog state", () => {
     }
   });
 
-  it("reconciles the catalog without reporting a rejected toggle when config refresh fails", async () => {
+  it("keeps a committed add-on change successful while making its failed refresh visible", async () => {
     const refresh = vi.fn(() => Promise.reject(new Error("config refresh failed")));
     const initial = [addon("active-memory", true), addon("memory-wiki", false)];
     const updated = [addon("active-memory", false), addon("memory-wiki", false)];
@@ -658,9 +436,10 @@ describe("MemorySettingsPage catalog state", () => {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
 
+      await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(element.textContent).toContain("config refresh failed"));
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
-      expect(refresh).toHaveBeenCalledOnce();
-      expect(element.textContent).not.toContain("config refresh failed");
+      expect(element.textContent).toContain("Needs attention");
       expect(element.textContent).not.toContain("Could not update Active memory");
     } finally {
       element.remove();

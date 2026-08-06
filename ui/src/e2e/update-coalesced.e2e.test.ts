@@ -72,6 +72,54 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
     }
   });
 
+  it("shows package update failure status after the Update click", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-package-status");
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "update.run": {
+          ok: false,
+          result: { reason: "global-install-failed", status: "error" },
+        },
+      },
+    });
+
+    try {
+      expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "stable",
+          currentVersion: "1.0.0",
+          latestVersion: "2.0.0",
+        },
+      });
+
+      await page.getByRole("button", { name: /Update Gateway/ }).click();
+      await page
+        .getByText(
+          "Update error: global-install-failed. The global package install did not verify on disk. Retry or reinstall from the CLI.",
+          { exact: true },
+        )
+        .waitFor();
+
+      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      expect(await page.getByRole("button", { name: /Update Gateway/ }).isEnabled()).toBe(true);
+      expect(pageErrors).toEqual([]);
+      await page.screenshot({ path: path.join(artifactDir, "package-update-failure.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows coalesced restart feedback after the Update click", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-coalesced");
     const context = await browser.newContext({

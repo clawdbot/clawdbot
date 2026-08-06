@@ -15,6 +15,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { listAgentIds, resolveAgentConfig } from "../agent-scope.js";
+import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
@@ -29,13 +30,12 @@ import {
   callInProcessGatewayToolWithCreation,
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
-import { reserveVisibleChildSlot } from "./sessions-spawn-visible-admission.js";
 
 export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+        "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -161,16 +161,6 @@ export async function maybeSpawnVisibleSession(params: {
   }
 
   const cfg = params.options?.config ?? getRuntimeConfig();
-  if (
-    (params.options?.inheritedToolAllowlist?.length ?? 0) > 0 ||
-    (params.options?.inheritedToolDenylist?.length ?? 0) > 0
-  ) {
-    return {
-      status: "forbidden",
-      error:
-        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
-    };
-  }
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: params.options?.agentSessionKey,
@@ -266,13 +256,17 @@ export async function maybeSpawnVisibleSession(params: {
     };
   }
 
-  const reservation = reserveVisibleChildSlot({
+  const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
-    maxChildren,
-    countActiveRuns: (sessionKey) =>
-      (params.options?.countActiveRuns ?? countActiveRunsForSession)(sessionKey, {
-        collect: false,
-      }),
+    resolveAdmission: (pendingChildren) => {
+      const activeChildren =
+        (params.options?.countActiveRuns ?? countActiveRunsForSession)(requesterKey, {
+          collect: false,
+        }) + pendingChildren;
+      return activeChildren >= maxChildren
+        ? { ok: false as const, activeChildren }
+        : { ok: true as const };
+    },
   });
   if (!reservation.ok) {
     return {
@@ -288,6 +282,12 @@ export async function maybeSpawnVisibleSession(params: {
         callInProcessGatewayToolWithCreation(method, requestParams, {
           via: "spawn",
           actor: { type: "agent", id: requesterKey },
+          completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+          inheritedToolPolicy: {
+            version: 1,
+            allow: [...(params.options?.inheritedToolAllowlist ?? [])],
+            deny: [...(params.options?.inheritedToolDenylist ?? [])],
+          },
         }));
     const response = await createGatewayCall<{
       key?: string;

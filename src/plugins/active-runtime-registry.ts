@@ -2,15 +2,7 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import {
-  collectLivePluginRegistries,
-  getActivePluginChannelRegistry,
-  getActivePluginHttpRouteRegistry,
-  getActivePluginRegistry,
-  getActivePluginRegistryWorkspaceDir,
-} from "./runtime.js";
-
-export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-route";
+import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
@@ -20,22 +12,12 @@ function isRuntimePluginRecordLoaded(plugin: PluginRecord): boolean {
   return plugin.status === "loaded" && (plugin.format === "bundle" || plugin.imported !== false);
 }
 
-// Plugin ids confirmed loaded across every live runtime registry surface
-// (active plus any pinned http-route/channel/session-extension registry), via
-// the canonical collectLivePluginRegistries() set. A plugin can stay live via a
-// pinned surface that diverged from the active registry, so reading "loaded"
-// from the active registry alone would mislabel it. No-op when the surfaces are
-// synced to the active registry (the common case).
-export function listLoadedRuntimePluginIdsAcrossSurfaces(): string[] {
-  const loaded: string[] = [];
-  for (const registry of collectLivePluginRegistries()) {
-    for (const plugin of registry.plugins ?? []) {
-      if (isRuntimePluginRecordLoaded(plugin)) {
-        loaded.push(plugin.id);
-      }
-    }
-  }
-  return normalizeSortedUniqueStringEntries(loaded);
+export function listLoadedRuntimePluginIds(): string[] {
+  return normalizeSortedUniqueStringEntries(
+    (getActivePluginRegistry()?.plugins ?? [])
+      .filter(isRuntimePluginRecordLoaded)
+      .map((plugin) => plugin.id),
+  );
 }
 
 function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefined {
@@ -93,34 +75,18 @@ export function registryContainsRuntimePluginIds(
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
 
-function resolveSurfaceRegistry(
-  surface: ActiveRuntimePluginRegistrySurface,
-): PluginRegistry | null {
-  switch (surface) {
-    case "active":
-      return getActivePluginRegistry();
-    case "channel":
-      return getActivePluginChannelRegistry();
-    case "http-route":
-      return getActivePluginHttpRouteRegistry();
-  }
-  return null;
-}
-
 export function getLoadedRuntimePluginRegistry(
   params: {
     env?: NodeJS.ProcessEnv;
     loadOptions?: PluginLoadOptions;
     workspaceDir?: string;
     requiredPluginIds?: readonly string[];
-    surface?: ActiveRuntimePluginRegistrySurface;
   } = {},
 ): PluginRegistry | undefined {
-  const surface = params.surface ?? "active";
   const requiredPluginIds = normalizeRequiredPluginIds(
     params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
   );
-  if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
+  if (params.loadOptions && requiredPluginIds?.length !== 0) {
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
     if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
       return undefined;
@@ -133,7 +99,7 @@ export function getLoadedRuntimePluginRegistry(
   if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
     return undefined;
   }
-  const registry = resolveSurfaceRegistry(surface);
+  const registry = getActivePluginRegistry();
   if (!registry) {
     return undefined;
   }

@@ -174,9 +174,6 @@ When `tools.media.<capability>.enabled` is not `false` and no models are configu
     - Video: Google &rarr; Qwen &rarr; Moonshot
 
   </Step>
-  <Step title="Antigravity CLI (image/video only)">
-    First installed `agy` or `antigravity` binary (override with `OPENCLAW_ANTIGRAVITY_CLI`), sandboxed against the media's directory.
-  </Step>
 </Steps>
 
 To disable auto-detection for a capability:

@@ -182,6 +182,12 @@ export async function dispatchMSTeamsInboundTurn(params: {
     },
     reply: {
       to: teamsTo,
+      // A user target is a mutable lookup alias; the conversation id is the
+      // authoritative route for message-tool reply suppression.
+      originatingTo: `conversation:${conversationId}`,
+      // Channel-only thread root (facts.threadId) so messaging-tool evidence matches
+      // session/origin thread ids; keep replyToId as parent. Undefined for DM/group.
+      messageThreadId: facts.threadId ?? undefined,
       replyToId: activity.replyToId ?? undefined,
       nativeChannelId,
     },

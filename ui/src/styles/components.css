@@ -1128,6 +1128,136 @@ openclaw-session-owner-chip {
   box-shadow: var(--focus-ring);
 }
 
+/* Carapace Sensitive Input adapted to the Control UI token contract. */
+.oc-sensitive-input {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  align-items: stretch;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.oc-sensitive-input:hover:not(:has(input:disabled)) {
+  border-color: var(--border-strong);
+}
+
+.oc-sensitive-input:focus-within {
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.oc-sensitive-input > input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+
+.oc-sensitive-input > input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.oc-sensitive-input > input::placeholder {
+  color: var(--muted);
+}
+
+.oc-sensitive-mask {
+  position: absolute;
+  z-index: 1;
+  inset: 0 44px 0 0;
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.oc-sensitive-mask[hidden] {
+  display: none;
+}
+
+.oc-sensitive-mask > span {
+  display: block;
+  will-change: transform;
+}
+
+.oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input {
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input::selection {
+  color: transparent;
+}
+
+.oc-sensitive-toggle {
+  position: relative;
+  z-index: 2;
+  display: inline-grid;
+  width: 44px;
+  min-width: 44px;
+  height: 100%;
+  min-height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--input);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.oc-sensitive-toggle:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.oc-sensitive-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.oc-sensitive-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
+.oc-sensitive-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (forced-colors: active) {
+  .oc-sensitive-mask {
+    display: none;
+  }
+
+  .oc-sensitive-input[data-sensitive-mask-ready="true"][data-revealed="false"] > input {
+    color: CanvasText;
+  }
+}
+
 .field select {
   appearance: none;
   padding-right: 36px;
@@ -1670,7 +1800,9 @@ openclaw-chat-session-rail {
 .chat-session-rail__status {
   --rail-health-color: var(--muted);
   gap: 5px;
-  min-width: 0;
+  /* Never shrink: the chip has no overflow clipping, so a squeezed box paints
+     its label over the pill headline next to it. */
+  flex: 0 0 auto;
   color: var(--rail-health-color);
   font-size: 11px;
   font-weight: 650;
@@ -1736,6 +1868,9 @@ openclaw-chat-session-rail {
 }
 
 .chat-session-rail__headline {
+  /* Block, not inline: ellipsis needs a block box inside the pill's expand
+     button, or the text hard-clips at the button edge. */
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--text);
@@ -2520,6 +2655,14 @@ openclaw-chat-session-rail {
 
 .data-table th[data-sortable]:hover {
   color: var(--text);
+}
+
+.data-table-sort-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  letter-spacing: inherit;
+  text-transform: inherit;
 }
 
 .data-table-sort-icon {
@@ -5396,10 +5539,9 @@ td.data-table-key-col {
 
 /* ── Session row primitives ──
    Shared by the sidebar recents list and the chat session picker. Rows read
-   as plain text lines: transient state (run spinner, unread dot) leads the
-   title, attribute badges follow it, and the trailing aside stacks a relative
-   time and the management actions in one grid cell, so hovering swaps them
-   without any layout shift. */
+   as plain text lines: attribute badges follow the title, and the trailing
+   aside stacks transient state, relative time, and management actions in one
+   grid cell, so hovering swaps state for actions without any layout shift. */
 .session-row-host {
   position: relative;
 }
@@ -5471,6 +5613,30 @@ td.data-table-key-col {
   /* Display-only, and its opacity transition forms a stacking context that
      would otherwise sit above the action buttons and swallow their clicks. */
   pointer-events: none;
+}
+
+.session-row-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 24px;
+  min-height: 24px;
+  transition: opacity var(--duration-fast) ease;
+  pointer-events: none;
+}
+
+.session-row-fork-indicator {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.session-row-fork-indicator svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
 }
 
 /* Attribute badges (attached automation, approval, cloud placement):
@@ -5606,8 +5772,7 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-.session-row-host:hover .session-row-trail,
-.session-row-host:focus-within .session-row-trail {
+.session-row-host:is(:hover, :focus-within) :is(.session-row-trail, .session-row-state) {
   opacity: 0;
 }
 
@@ -5625,6 +5790,18 @@ td.data-table-key-col {
 
   .sidebar-recent-session .session-row-trail {
     opacity: 0;
+  }
+
+  .sidebar-recent-session .session-row-aside:has(> .session-row-state) {
+    column-gap: 1px;
+  }
+
+  .sidebar-recent-session .session-row-state {
+    grid-area: 1 / 1;
+  }
+
+  .sidebar-recent-session .session-row-actions {
+    grid-area: 1 / 2;
   }
 }
 
@@ -5747,8 +5924,15 @@ td.data-table-key-col {
   color: #4285f4;
 }
 
+.provider-brand-icon[data-provider-icon="llamacpp"],
+.provider-brand-icon[data-provider-icon="lmstudio"],
+.provider-brand-icon[data-provider-icon="ollama"] {
+  color: var(--text-strong);
+}
+
 .provider-brand-icon[data-provider-icon="opencode"],
-.provider-brand-icon[data-provider-icon="opencodego"] {
+.provider-brand-icon[data-provider-icon="opencodego"],
+.provider-brand-icon[data-provider-icon="pi"] {
   color: var(--text-strong);
 }
 /* Shared working-claw motion: chat and settings use the same body flex and

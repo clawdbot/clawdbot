@@ -5,18 +5,21 @@ import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
+  getCronJobsStoreRevision,
   loadCronJobsStoreWithConfigJobs,
-  saveCronQuarantineFile,
   saveCronJobsStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
+
+const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
 
 type PersistOptions = {
   stateOnly?: boolean;
   suppressScheduledJobId?: string;
+  postPersistNotifications?: DeferredCronNotifications;
 };
 
 export type CronRollbackSnapshot = {
@@ -112,39 +115,6 @@ function warnInvalidPersistedCronJob(params: {
   );
 }
 
-async function flushPendingQuarantine(
-  state: CronServiceState,
-  nowMs: number,
-): Promise<string | null> {
-  if (state.pendingQuarantineConfigJobs.length === 0) {
-    return null;
-  }
-  try {
-    const quarantinePath = await saveCronQuarantineFile({
-      storePath: state.deps.storePath,
-      entries: state.pendingQuarantineConfigJobs,
-      nowMs,
-    });
-    state.pendingQuarantineConfigJobs = [];
-    state.lastQuarantineFailureWarnKey = null;
-    return quarantinePath;
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const warnKey = `${state.deps.storePath}\0${errorMessage}`;
-    if (state.lastQuarantineFailureWarnKey !== warnKey) {
-      state.lastQuarantineFailureWarnKey = warnKey;
-      state.deps.log.warn(
-        {
-          storePath: state.deps.storePath,
-          error: errorMessage,
-        },
-        "cron: failed to quarantine malformed persisted jobs; skipping active store sanitization",
-      );
-    }
-    return null;
-  }
-}
-
 /** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
 export async function ensureLoaded(
   state: CronServiceState,
@@ -155,10 +125,16 @@ export async function ensureLoaded(
     skipRecompute?: boolean;
   },
 ) {
-  // Fast path: store is already in memory. Other callers (add, list, run, …)
-  // trust the in-memory copy to avoid a stat syscall on every operation.
+  // Keep scheduler-local pacing/catch-up mutations unless another in-process
+  // owner actually committed a newer snapshot for this SQLite partition.
   if (state.store && !opts?.forceReload) {
-    return;
+    const loadedRevision = loadedCronStoreRevisions.get(state);
+    if (
+      loadedRevision === undefined ||
+      loadedRevision === getCronJobsStoreRevision(state.deps.storePath)
+    ) {
+      return;
+    }
   }
   const previousJobsById = new Map<string, CronJob>();
   for (const job of state.store?.jobs ?? []) {
@@ -230,30 +206,28 @@ export async function ensureLoaded(
   };
   state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
   state.storeLoadedAtMs = state.deps.nowMs();
+  loadedCronStoreRevisions.set(state, getCronJobsStoreRevision(state.deps.storePath));
 
   if (quarantinedConfigJobs.length > 0) {
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
-    const quarantinePath = await flushPendingQuarantine(state, state.storeLoadedAtMs);
-    if (quarantinePath) {
-      try {
-        await persist(state);
+    try {
+      if (await persist(state)) {
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
-            quarantinePath,
             quarantinedJobs: quarantinedConfigJobs.length,
           },
           "cron: sanitized active cron store after quarantining malformed persisted jobs",
         );
-      } catch (error) {
-        state.deps.log.warn(
-          {
-            storePath: state.deps.storePath,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          "cron: failed to sanitize malformed persisted jobs after quarantine; continuing with quarantined in-memory view",
-        );
       }
+    } catch (error) {
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "cron: failed to sanitize malformed persisted jobs after quarantine; continuing with quarantined in-memory view",
+      );
     }
   }
 
@@ -277,28 +251,52 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-/** Persists the in-memory cron store, flushing pending quarantine records first. */
+/** Persists cron rows and pending quarantine records in one SQLite transaction. */
 export async function persist(state: CronServiceState, opts?: PersistOptions) {
   const store = state.store;
   if (!store) {
     return false;
   }
-  let flushedPendingQuarantine = false;
-  if (state.pendingQuarantineConfigJobs.length > 0) {
-    const quarantinePath = await flushPendingQuarantine(state, state.deps.nowMs());
-    if (!quarantinePath) {
-      return false;
+  const quarantine =
+    state.pendingQuarantineConfigJobs.length > 0
+      ? { entries: state.pendingQuarantineConfigJobs, nowMs: state.deps.nowMs() }
+      : undefined;
+  const stateOnly = !quarantine && opts?.stateOnly === true;
+  try {
+    await saveCronJobsStore(
+      state.deps.storePath,
+      store,
+      quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined,
+    );
+  } catch (error) {
+    if (!quarantine) {
+      throw error;
     }
-    flushedPendingQuarantine = true;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const warnKey = `${state.deps.storePath}\0${errorMessage}`;
+    if (state.lastQuarantineFailureWarnKey !== warnKey) {
+      state.lastQuarantineFailureWarnKey = warnKey;
+      state.deps.log.warn(
+        { storePath: state.deps.storePath, error: errorMessage },
+        "cron: failed to quarantine malformed persisted jobs; skipping active store sanitization",
+      );
+    }
+    return false;
   }
-  const stateOnly = !flushedPendingQuarantine && opts?.stateOnly === true;
-  await saveCronJobsStore(state.deps.storePath, store, stateOnly ? { stateOnly: true } : undefined);
+  loadedCronStoreRevisions.set(state, getCronJobsStoreRevision(state.deps.storePath));
+  if (quarantine) {
+    state.pendingQuarantineConfigJobs = [];
+    state.lastQuarantineFailureWarnKey = null;
+  }
   publishDurableNextRunChanges({
     state,
     storeJobs: store.jobs,
     stateOnly,
     suppressScheduledJobId: opts?.suppressScheduledJobId,
   });
+  for (const notify of opts?.postPersistNotifications ?? []) {
+    notify();
+  }
   return true;
 }
 
@@ -315,27 +313,27 @@ export function snapshotStoreForRollback(state: CronServiceState): CronRollbackS
 export async function persistOrRestore(
   state: CronServiceState,
   snapshot: CronRollbackSnapshot,
-  opts: {
-    postPersistAutoDisableNotifications?: Array<() => void>;
-    suppressScheduledJobId?: string;
-  } = {},
+  opts: Omit<PersistOptions, "stateOnly"> = {},
 ) {
+  let writeCompleted = false;
+  const postPersistNotifications = opts.postPersistNotifications?.map((notify) => () => {
+    // Notification failures happen after commit and must not restore the
+    // speculative snapshot over rows that are already durable.
+    writeCompleted = true;
+    notify();
+  });
   try {
-    const persisted = await persist(
-      state,
-      opts.suppressScheduledJobId === undefined
-        ? undefined
-        : { suppressScheduledJobId: opts.suppressScheduledJobId },
-    );
+    const persisted = await persist(state, { ...opts, postPersistNotifications });
     if (!persisted) {
       throw new Error("cron: durable store write did not complete");
     }
+    writeCompleted = true;
   } catch (err) {
+    if (writeCompleted) {
+      throw err;
+    }
     state.store = snapshot.store;
     state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
     throw err;
-  }
-  for (const notify of opts.postPersistAutoDisableNotifications ?? []) {
-    notify();
   }
 }

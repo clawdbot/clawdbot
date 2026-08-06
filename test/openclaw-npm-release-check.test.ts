@@ -544,6 +544,28 @@ describe("parseNpmPackJsonOutput", () => {
     ]);
   });
 
+  it("parses npm 12 name-keyed pack output", () => {
+    expect(
+      parseNpmPackJsonOutput(
+        '{"openclaw":{"filename":"openclaw.tgz","files":[{"path":"dist/control-ui/index.html"}]}}',
+      ),
+    ).toEqual([
+      {
+        filename: "openclaw.tgz",
+        files: [{ path: "dist/control-ui/index.html" }],
+      },
+    ]);
+  });
+
+  it("parses trailing npm 12 output after lifecycle logs", () => {
+    const stdout = [
+      "> openclaw@2026.7.2 prepack",
+      '{"openclaw":{"filename":"openclaw.tgz","files":[]}}',
+    ].join("\n");
+
+    expect(parseNpmPackJsonOutput(stdout)).toEqual([{ filename: "openclaw.tgz", files: [] }]);
+  });
+
   it("parses the trailing JSON payload after npm lifecycle logs", () => {
     const stdout = [
       'npm warn Unknown project config "node-linker".',

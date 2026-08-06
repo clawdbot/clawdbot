@@ -282,47 +282,6 @@ describe("qa suite planning helpers", () => {
     ).toBe(25);
   });
 
-  it("rejects an explicitly requested scenario for the wrong provider", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("anthropic-only", {
-        config: {
-          requiredProvider: "anthropic",
-        },
-      }),
-    ];
-
-    expect(() =>
-      selectQaFlowSuiteScenarios({
-        scenarios,
-        scenarioIds: ["anthropic-only"],
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-      }),
-    ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: anthropic-only (provider=anthropic)",
-    );
-  });
-
-  it("rejects an explicitly requested scenario for the wrong provider mode", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("mock-only", {
-        config: { requiredProviderMode: "mock-openai" },
-      }),
-    ];
-
-    expect(() =>
-      selectQaFlowSuiteScenarios({
-        scenarios,
-        scenarioIds: ["mock-only"],
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.6-luna",
-      }),
-    ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: mock-only (providerMode=mock-openai)",
-    );
-  });
-
   it("rejects an explicitly requested scenario for the wrong model", () => {
     const scenarios = [
       makeQaSuiteTestScenario("openai-model", {
@@ -715,9 +674,13 @@ describe("qa suite planning helpers", () => {
         plugins: ["diagnostics-otel"],
         gatewayRuntime: { preserveDebugArtifacts: true },
       }),
+      makeQaSuiteTestScenario("blocked-channel", {
+        gatewayRuntime: { allowUnhealthyStartup: true },
+      }),
     ];
 
     expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
+      allowUnhealthyStartup: true,
       forwardHostHome: true,
       preserveDebugArtifacts: true,
     });
@@ -740,6 +703,45 @@ describe("qa suite planning helpers", () => {
     expect(
       shouldUseIsolatedQaSuiteScenarioWorkers({
         scenarios,
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    {
+      reason: "explicit scenario isolation",
+      makeScenario: () => makeQaSuiteTestScenario("isolated", { suiteIsolation: "isolated" }),
+    },
+    {
+      reason: "gateway runtime changes",
+      makeScenario: () =>
+        makeQaSuiteTestScenario("runtime-options", { gatewayRuntime: { forwardHostHome: true } }),
+    },
+    {
+      reason: "scenario-owned plugins",
+      makeScenario: () => makeQaSuiteTestScenario("plugin", { plugins: ["diagnostics-otel"] }),
+    },
+    {
+      reason: "memory state",
+      makeScenario: () => makeQaSuiteTestScenario("memory", { surface: "memory" }),
+    },
+    {
+      reason: "image generation setup",
+      makeScenario: () =>
+        makeQaSuiteTestScenario("image-generation", { config: { ensureImageGeneration: true } }),
+    },
+    {
+      reason: "state-mutating flow calls",
+      makeScenario: () => readQaScenarioById("plugin-lifecycle-hot-reload"),
+    },
+  ])("isolates serial runs for $reason", ({ makeScenario }) => {
+    const scenario = makeScenario();
+
+    expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("baseline"), scenario],
         concurrency: 1,
       }),
     ).toBe(true);

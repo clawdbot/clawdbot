@@ -45,9 +45,81 @@ export type {
 } from "../channels/message-access/index.js";
 export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
 
-import type { ChannelIngressMonitorLifecycle } from "../channels/message/ingress-monitor.js";
+import {
+  createChannelIngressMonitor,
+  type ChannelIngressMonitorDrainOptions,
+  type ChannelIngressMonitorFacts,
+  type ChannelIngressMonitorLifecycle,
+  type ChannelIngressMonitorPayloadCodec,
+  type CreateChannelIngressMonitorOptions,
+} from "../channels/message/ingress-monitor.js";
 
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+type StandardRawEventPayload = { version: 1; rawEvent: string };
+type StandardRawEventAdmission<TInspection> =
+  | { kind: "invalid"; message: string }
+  | { kind: "durable" | (null extends TInspection ? "ignored" : never) };
+type StandardRawEventIngressOptions<TRaw, TMetadata, TInspection> = Omit<
+  CreateChannelIngressMonitorOptions<TRaw, string, StandardRawEventPayload, TMetadata>,
+  "admissionMode" | "drain" | "inspect" | "payload" | "pollIntervalMs" | "retention"
+> & {
+  inspect: (raw: TRaw) => TInspection;
+  payload: Omit<
+    ChannelIngressMonitorPayloadCodec<TRaw, string, StandardRawEventPayload, TMetadata>,
+    "storage" | "version"
+  >;
+  pollIntervalMs?: number;
+  drain?: Omit<ChannelIngressMonitorDrainOptions<StandardRawEventPayload, TMetadata>, "startLimit">;
+  classifyAdmissionError: (error: unknown) => string | undefined;
+};
+
+/** Version-1 raw events, 500 ms polling, eight deliveries, and standard retention. */
+export function createStandardRawEventIngressMonitor<
+  TRaw,
+  TMetadata,
+  TInspection extends ChannelIngressMonitorFacts | null,
+>(options: StandardRawEventIngressOptions<TRaw, TMetadata, TInspection>) {
+  const { classifyAdmissionError, createStoppedError, drain, payload, pollIntervalMs, ...base } =
+    options;
+  const stoppedError =
+    createStoppedError ?? (() => new Error("Channel ingress monitor is stopped."));
+  const monitor = createChannelIngressMonitor({
+    ...base,
+    inspect: options.inspect,
+    payload: { ...payload, storage: "raw-event", version: 1 },
+    pollIntervalMs: pollIntervalMs ?? 500,
+    retention: "standard",
+    drain: { ...drain, startLimit: 8 },
+    admissionMode: "while-running",
+    createStoppedError: stoppedError,
+  });
+  return {
+    receive: async (raw: TRaw): Promise<StandardRawEventAdmission<TInspection>> => {
+      if (!monitor.isRunning()) {
+        throw stoppedError();
+      }
+      let facts: TInspection;
+      try {
+        facts = options.inspect(raw);
+      } catch (error) {
+        const message = classifyAdmissionError(error);
+        if (message === undefined) {
+          throw error;
+        }
+        return { kind: "invalid", message };
+      }
+      if (!facts) {
+        return { kind: "ignored" } as StandardRawEventAdmission<TInspection>;
+      }
+      await monitor.admit(raw, { facts });
+      return { kind: "durable" };
+    },
+    start: monitor.start,
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
+  };
+}
 
 /** Fan one logical inbound turn's ownership lifecycle across its durable claims. */
 export function fanInChannelIngressLifecycles(

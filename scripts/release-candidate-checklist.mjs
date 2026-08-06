@@ -17,13 +17,20 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import {
+  booleanFlag,
+  parseFlagArgs,
+  stringFlag,
+  stringListFlag,
+  stripLeadingPackageManagerSeparator,
+} from "./lib/arg-utils.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
   extractChangelogSection,
   formatShippedBaselineExclusions,
+  parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesSectionForTag,
   releaseNotesVersionForTag,
@@ -85,7 +92,8 @@ builds plugin publish plans, writes a green evidence bundle, then prints the exa
 OpenClaw Release Publish command only after everything is green.
 
 Options:
-  --tag <tag>                         Release tag to validate.
+  --tag <tag>                         Planned release tag. The tag must not exist yet.
+  --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
@@ -108,14 +116,6 @@ Options:
 `;
 }
 
-function requireValue(argv, index, flag) {
-  const value = argv[index];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
 export function releaseBranchForTag(tag) {
   if (tag.includes("-alpha.")) {
     return "";
@@ -129,6 +129,8 @@ export function releaseBranchForTag(tag) {
  */
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
+  const terminatorIndex = args.indexOf("--");
+  const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
   const options = {
     repo: DEFAULT_REPO,
     provider: DEFAULT_PROVIDER,
@@ -145,6 +147,7 @@ export function parseArgs(argv) {
     skipTelegram: false,
     telegramProviderMode: DEFAULT_TELEGRAM_PROVIDER_MODE,
     tag: "",
+    targetSha: "",
     workflowRef: "",
     fullReleaseRunId: "",
     npmPreflightRunId: "",
@@ -152,86 +155,55 @@ export function parseArgs(argv) {
     windowsNodeInstallerDigests: "",
     outputDir: "",
   };
-  const seen = new Set();
-  const setOnce = (flag, key, value) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seen.add(flag);
-    options[key] = value;
-  };
-  parseArgv: for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    switch (arg) {
-      case "--":
-        break parseArgv;
-      case "--tag":
-        setOnce(arg, "tag", requireValue(args, ++index, arg));
-        break;
-      case "--workflow-ref":
-        setOnce(arg, "workflowRef", requireValue(args, ++index, arg));
-        break;
-      case "--repo":
-        setOnce(arg, "repo", requireValue(args, ++index, arg));
-        break;
-      case "--full-release-run":
-        setOnce(arg, "fullReleaseRunId", requireValue(args, ++index, arg));
-        break;
-      case "--npm-preflight-run":
-        setOnce(arg, "npmPreflightRunId", requireValue(args, ++index, arg));
-        break;
-      case "--windows-node-tag":
-        setOnce(arg, "windowsNodeTag", requireValue(args, ++index, arg));
-        break;
-      case "--skip-dispatch":
-        setOnce(arg, "skipDispatch", true);
-        break;
-      case "--skip-local-generated-check":
-        setOnce(arg, "skipLocalGeneratedCheck", true);
-        break;
-      case "--skip-parallels":
-        setOnce(arg, "skipParallels", true);
-        break;
-      case "--parallels-registry-package-artifact":
-        options.parallelsRegistryPackageArtifactDirs.push(requireValue(args, ++index, arg));
-        break;
-      case "--skip-telegram":
-        setOnce(arg, "skipTelegram", true);
-        break;
-      case "--telegram-provider-mode":
-        setOnce(arg, "telegramProviderMode", requireValue(args, ++index, arg));
-        break;
-      case "--provider":
-        setOnce(arg, "provider", requireValue(args, ++index, arg));
-        break;
-      case "--mode":
-        setOnce(arg, "mode", requireValue(args, ++index, arg));
-        break;
-      case "--release-profile":
-        setOnce(arg, "releaseProfile", requireValue(args, ++index, arg));
-        break;
-      case "--npm-dist-tag":
-        setOnce(arg, "npmDistTag", requireValue(args, ++index, arg));
-        break;
-      case "--plugin-publish-scope":
-        setOnce(arg, "pluginPublishScope", requireValue(args, ++index, arg));
-        break;
-      case "--plugins":
-        setOnce(arg, "plugins", requireValue(args, ++index, arg));
-        break;
-      case "--output-dir":
-        setOnce(arg, "outputDir", requireValue(args, ++index, arg));
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
+  const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
+  parseFlagArgs(
+    helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex),
+    options,
+    [
+      ...[
+        ["--tag", "tag"],
+        ["--target-sha", "targetSha"],
+        ["--workflow-ref", "workflowRef"],
+        ["--repo", "repo"],
+        ["--full-release-run", "fullReleaseRunId"],
+        ["--npm-preflight-run", "npmPreflightRunId"],
+        ["--windows-node-tag", "windowsNodeTag"],
+        ["--telegram-provider-mode", "telegramProviderMode"],
+        ["--provider", "provider"],
+        ["--mode", "mode"],
+        ["--release-profile", "releaseProfile"],
+        ["--npm-dist-tag", "npmDistTag"],
+        ["--plugin-publish-scope", "pluginPublishScope"],
+        ["--plugins", "plugins"],
+        ["--output-dir", "outputDir"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, { allowInline: false, rejectShortOptions: true }),
+      ),
+      stringListFlag(
+        "--parallels-registry-package-artifact",
+        "parallelsRegistryPackageArtifactDirs",
+        { allowInline: false, rejectShortOptions: true },
+      ),
+      booleanFlag("--skip-dispatch", "skipDispatch"),
+      booleanFlag("--skip-local-generated-check", "skipLocalGeneratedCheck"),
+      booleanFlag("--skip-parallels", "skipParallels"),
+      booleanFlag("--skip-telegram", "skipTelegram"),
+    ],
+    {
+      onUnhandledArg(arg) {
         throw new Error(`unknown option: ${arg}`);
-    }
+      },
+    },
+  );
+  if (helpIndex !== -1) {
+    process.stdout.write(usage());
+    process.exit(0);
   }
   if (!options.tag) {
     throw new Error("--tag is required");
+  }
+  if (options.targetSha && !/^[a-f0-9]{40}$/u.test(options.targetSha)) {
+    throw new Error("--target-sha must be a full lowercase commit SHA");
   }
   if (options.tag.includes("-alpha.")) {
     if (!TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(options.workflowRef)) {
@@ -647,12 +619,12 @@ export function validateCandidateCheckout({
 }) {
   if (targetHeadSha !== targetSha) {
     throw new Error(
-      `release candidate tag resolves to ${targetSha}, but target worktree HEAD is ${targetHeadSha}`,
+      `release candidate target is ${targetSha}, but target worktree HEAD is ${targetHeadSha}`,
     );
   }
   if (targetTrackedStatus.trim()) {
     throw new Error(
-      "release candidate validation requires a clean tracked target worktree at the release tag",
+      "release candidate validation requires a clean tracked target worktree at the frozen release SHA",
     );
   }
   if (toolingSha !== trustedToolingSha) {
@@ -666,6 +638,39 @@ export function validateCandidateCheckout({
     );
   }
   return { status: "passed", targetSha, toolingSha, workflowRef };
+}
+
+/**
+ * Keeps release validation pre-publication: the final immutable tag is created
+ * only after this helper has recorded green evidence for the frozen SHA.
+ */
+export function assertPlannedReleaseTagIsAbsent(tag, checkRemoteTagExists) {
+  if (checkRemoteTagExists(tag)) {
+    throw new Error(
+      `release candidate tag ${tag} already exists; validate a new patch instead of reusing a published tag`,
+    );
+  }
+}
+
+function remoteTagExists(tag, cwd) {
+  const result = spawnSync(
+    "git",
+    ["ls-remote", "--exit-code", "--tags", "origin", `refs/tags/${tag}`],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status === 0) {
+    return true;
+  }
+  if (result.status === 2) {
+    return false;
+  }
+  throw new Error(
+    `could not determine whether planned release tag ${tag} already exists: ${result.stderr.trim() || result.stdout.trim() || `git exited ${result.status ?? "without a status"}`}`,
+  );
 }
 
 function gitIsAncestor(ancestor, target) {
@@ -747,35 +752,12 @@ function candidateContributionRecordPullRequests(
     Number(match.groups.number),
   );
   const rows = new Set(rowNumbers);
-  if (rows.size !== rowNumbers.length) {
-    const seen = new Set();
-    const duplicates = rowNumbers.filter((number) => {
-      if (seen.has(number)) {
-        return true;
-      }
-      seen.add(number);
-      return false;
-    });
-    throw new Error(
-      `${label} contains duplicate contribution record PR rows: ${[...new Set(duplicates)]
-        .map((number) => `#${number}`)
-        .join(", ")}`,
-    );
-  }
+  const provenance = parseContributionRecordProvenance(record);
   if (!requireExactProvenance) {
     return rows;
   }
-  const provenance = record.match(
-    /^This audited record covers the complete \S+\.\.[0-9a-f]{40} history: (?<count>[0-9]+) merged PRs?\./mu,
-  );
-  if (!provenance?.groups?.count) {
+  if (!provenance || !/^[0-9a-f]{40}$/u.test(provenance.target)) {
     throw new Error(`${label} is missing exact complete contribution record provenance`);
-  }
-  const declaredCount = Number(provenance.groups.count);
-  if (rows.size !== declaredCount) {
-    throw new Error(
-      `${label} contribution record declares ${declaredCount} PRs but contains ${rows.size}`,
-    );
   }
   return rows;
 }
@@ -880,12 +862,10 @@ export function validateCandidateChangelogProvenance({
     section,
     `CHANGELOG.md ## ${sectionVersion}`,
   );
-  const provenance = record.match(
-    /^This audited record covers the complete (?<base>\S+)\.\.(?<target>[0-9a-f]{40}) history:/mu,
-  );
-  const base = provenance?.groups?.base;
-  const recordedTarget = provenance?.groups?.target;
-  if (!base || !recordedTarget) {
+  const provenance = parseContributionRecordProvenance(record);
+  const base = provenance?.base;
+  const recordedTarget = provenance?.target;
+  if (!base || !recordedTarget || !/^[0-9a-f]{40}$/u.test(recordedTarget)) {
     throw new Error(
       `CHANGELOG.md ## ${sectionVersion} is missing exact complete contribution record provenance`,
     );
@@ -1512,7 +1492,8 @@ async function main() {
     return;
   }
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
-  const targetSha = gitRevParse(`${options.tag}^{}`, targetRoot);
+  const targetSha = gitRevParse(options.targetSha || "HEAD", targetRoot);
+  assertPlannedReleaseTagIsAbsent(options.tag, (tag) => remoteTagExists(tag, targetRoot));
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
   const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
   // The outer process pins a clean main commit before creating this tooling checkout.
@@ -1582,7 +1563,7 @@ async function main() {
     const workflowFile = "full-release-validation.yml";
     const targetContextRef = releaseBranchForTag(options.tag);
     options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      ref: options.tag,
+      ref: targetSha,
       ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
       provider: options.provider,
       mode: options.mode,
@@ -1599,7 +1580,7 @@ async function main() {
   if (!options.npmPreflightRunId && !options.skipDispatch) {
     const workflowFile = "openclaw-npm-release.yml";
     options.npmPreflightRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      tag: options.tag,
+      tag: targetSha,
       preflight_only: "true",
       npm_dist_tag: options.npmDistTag,
     });

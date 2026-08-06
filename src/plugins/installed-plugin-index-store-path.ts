@@ -2,7 +2,10 @@
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveActivePluginInstallRoots } from "./install-root-context.js";
+import {
+  hasActivePluginInstallRoots,
+  resolveActivePluginInstallRoots,
+} from "./install-root-context.js";
 
 const LEGACY_INSTALLED_PLUGIN_INDEX_STORE_PATH = path.join("plugins", "installs.json");
 
@@ -15,8 +18,13 @@ export type InstalledPluginIndexStoreOptions = {
 
 function resolveStoreEnv(options: InstalledPluginIndexStoreOptions): NodeJS.ProcessEnv {
   const env = options.env ?? process.env;
-  const stateDir = options.stateDir ?? resolveActivePluginInstallRoots(env).stateDir;
-  return { ...env, OPENCLAW_STATE_DIR: stateDir };
+  if (options.stateDir) {
+    return { ...env, OPENCLAW_STATE_DIR: options.stateDir };
+  }
+  if (hasActivePluginInstallRoots()) {
+    return { ...env, OPENCLAW_STATE_DIR: resolveActivePluginInstallRoots(env).stateDir };
+  }
+  return env;
 }
 
 /** Resolves the canonical SQLite-backed installed plugin index path. */
@@ -39,12 +47,7 @@ export function resolveInstalledPluginIndexStateDatabaseOptions(
       path: options.filePath,
     };
   }
-  if (options.stateDir) {
-    return {
-      env: resolveStoreEnv(options),
-    };
-  }
-  return options.env ? { env: options.env } : {};
+  return { env: resolveStoreEnv(options) };
 }
 
 /** Resolves the legacy JSON installed plugin index path for migration/doctor use. */

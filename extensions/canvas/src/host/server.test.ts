@@ -197,7 +197,6 @@ describe("canvas host", () => {
     log: (..._args: Parameters<typeof console.log>) => {},
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
-  let startCanvasHost: typeof import("./server.js").startCanvasHost;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -226,7 +225,6 @@ describe("canvas host", () => {
     });
 
   beforeAll(async () => {
-    vi.doUnmock("undici");
     vi.doMock("node:timers", async (importOriginal) => {
       const actual = await importOriginal<typeof import("node:timers")>();
       return {
@@ -241,7 +239,7 @@ describe("canvas host", () => {
     });
     vi.resetModules();
     const serverModule = await import("./server.js");
-    ({ createCanvasHostHandler, startCanvasHost } = serverModule);
+    ({ createCanvasHostHandler } = serverModule);
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -502,14 +500,11 @@ describe("canvas host", () => {
     }
   });
 
-  it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
+  it("serves canvas content from the mounted base path", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
     const handler = await createTestCanvasHostHandler(dir);
-
-    const originalClose = handler.close;
-    const closeSpy = vi.fn(async () => originalClose());
 
     try {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
@@ -523,25 +518,8 @@ describe("canvas host", () => {
 
       const miss = await captureHandlerResponse(handler, "/");
       expect(miss.handled).toBe(false);
-
-      handler.close = closeSpy;
-      const hosted = await startCanvasHost({
-        runtime: quietRuntime,
-        handler,
-        ownsHandler: false,
-        port: 0,
-        listenHost: "127.0.0.1",
-        allowInTests: true,
-      });
-
-      try {
-        expect(hosted.port).toBeGreaterThan(0);
-      } finally {
-        await hosted.close();
-        expect(closeSpy).not.toHaveBeenCalled();
-      }
     } finally {
-      await originalClose();
+      await handler.close();
     }
   });
 

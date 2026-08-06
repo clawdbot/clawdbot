@@ -11,9 +11,9 @@ export const GATEWAY_SERVICE_RUNTIME_PID_ENV = "OPENCLAW_GATEWAY_SERVICE_PID";
 const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
 const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
 const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
-export const NODE_SERVICE_MARKER = "openclaw";
+const NODE_SERVICE_MARKER = "openclaw";
 export const NODE_SERVICE_KIND = "node";
-export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
+const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
 export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = ["clawdbot-gateway"];
 
 function normalizeGatewayProfile(profile?: string): string | null {
@@ -59,6 +59,42 @@ export function resolveGatewayWindowsTaskName(profile?: string): string {
   return `OpenClaw Gateway (${normalized})`;
 }
 
+type GatewayNativeServiceIdentityConflict = {
+  envKey: "OPENCLAW_LAUNCHD_LABEL" | "OPENCLAW_SYSTEMD_UNIT" | "OPENCLAW_WINDOWS_TASK_NAME";
+  expected: string;
+};
+
+export function resolveGatewayNativeServiceIdentityConflict(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform = process.platform,
+): GatewayNativeServiceIdentityConflict | null {
+  const profile = normalizeGatewayProfile(env.OPENCLAW_PROFILE);
+  if (!profile) {
+    return null;
+  }
+
+  if (platform === "darwin") {
+    const envKey = "OPENCLAW_LAUNCHD_LABEL";
+    const actual = env[envKey]?.trim();
+    const expected = resolveGatewayLaunchAgentLabel(profile);
+    return actual && actual !== expected ? { envKey, expected } : null;
+  }
+  if (platform === "linux") {
+    const envKey = "OPENCLAW_SYSTEMD_UNIT";
+    const actual = env[envKey]?.trim();
+    const normalizedActual = actual?.endsWith(".service") ? actual : actual && `${actual}.service`;
+    const expected = `${resolveGatewaySystemdServiceName(profile)}.service`;
+    return normalizedActual && normalizedActual !== expected ? { envKey, expected } : null;
+  }
+  if (platform === "win32") {
+    const envKey = "OPENCLAW_WINDOWS_TASK_NAME";
+    const actual = env[envKey]?.trim();
+    const expected = resolveGatewayWindowsTaskName(profile);
+    return actual && actual !== expected ? { envKey, expected } : null;
+  }
+  return null;
+}
+
 function formatGatewayServiceDescription(params?: { profile?: string; version?: string }): string {
   const profile = normalizeGatewayProfile(params?.profile);
   const version = params?.version?.trim();
@@ -99,6 +135,19 @@ export function resolveNodeSystemdServiceName(): string {
 
 export function resolveNodeWindowsTaskName(): string {
   return NODE_WINDOWS_TASK_NAME;
+}
+
+export function resolveNodeServiceIdentityEnvironment(): Record<string, string> {
+  return {
+    OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
+    OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
+    OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+    OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
+    OPENCLAW_LOG_PREFIX: "node",
+    OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
+    OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
+  };
 }
 
 export function formatNodeServiceDescription(params?: { version?: string }): string {

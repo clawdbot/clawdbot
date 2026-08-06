@@ -34,12 +34,14 @@ const LEGACY_MODEL_CATALOG_BRIDGES = new Map([
 ]);
 
 function listSourceFiles(): string[] {
-  return (
-    listGitTrackedFiles({
-      repoRoot: REPO_ROOT,
-      pathspecs: ["src", "extensions", "packages", "test"],
-    }) ?? []
-  )
+  const files = listGitTrackedFiles({
+    repoRoot: REPO_ROOT,
+    pathspecs: ["src", "extensions", "packages", "test"],
+  });
+  if (!files) {
+    throw new Error("unable to list tracked source files for the model-catalog import guard");
+  }
+  return files
     .filter((file) => /\.(?:[cm]?ts|tsx|mts|cts)$/u.test(file))
     .filter((file) => fs.existsSync(path.join(REPO_ROOT, file)));
 }

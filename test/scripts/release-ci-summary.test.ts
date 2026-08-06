@@ -23,6 +23,7 @@ import {
   selectManifestArtifact,
   selectManifestParentJob,
   selectedChildKeys,
+  terminalParentJobFailures,
   validateEvidenceReuseChain,
   validateManifestArtifactCompatibility,
   validateManifestArtifactIdentity,
@@ -235,10 +236,14 @@ function rawManifest({
     runReleaseSoak: "false",
     targetSha,
     validationInputs: {
+      allowUnreleasedChangelog: "false",
       codexPluginSpec: "",
       crossOsSuiteFilter: "",
       liveSuiteFilter: "",
       mode: "direct",
+      npmTelegramPackageSpec: "",
+      npmTelegramProviderMode: "mock-openai",
+      npmTelegramScenario: "",
       packageAcceptancePackageSpec: "",
       provider: "openai",
       releasePackageSpec: "",
@@ -490,6 +495,20 @@ describe("release CI summary child correlation", () => {
     ).not.toBe(releaseCiWatchFingerprint(parent));
   });
 
+  it("classifies only terminal unsuccessful parent jobs as failures", () => {
+    expect(
+      terminalParentJobFailures({
+        jobs: [
+          { conclusion: "success", name: "success", status: "completed" },
+          { conclusion: "neutral", name: "neutral", status: "completed" },
+          { conclusion: "skipped", name: "skipped", status: "completed" },
+          { conclusion: "failure", name: "failed", status: "completed" },
+          { conclusion: "", name: "running", status: "in_progress" },
+        ],
+      }),
+    ).toEqual(["failed"]);
+  });
+
   it("summarizes only transitions while watching a release run", async () => {
     const states = [
       { attempt: 1, conclusion: "", jobs: [], status: "queued" },
@@ -520,6 +539,37 @@ describe("release CI summary child correlation", () => {
 
     expect(summaries).toBe(2);
     expect(sleeps).toBe(2);
+  });
+
+  it("stops watching after reporting a terminal parent job failure", async () => {
+    let summaries = 0;
+    let sleeps = 0;
+
+    await expect(
+      watchReleaseCiRun(parseReleaseCiSummaryArgs(["29071366025", "--watch", "--interval", "1"]), {
+        fetchParent: () => ({
+          attempt: 1,
+          conclusion: "",
+          jobs: [
+            {
+              conclusion: "failure",
+              name: "Run release/live/Docker/QA validation",
+              status: "completed",
+            },
+            { conclusion: "", name: "Run normal full CI", status: "in_progress" },
+          ],
+          status: "in_progress",
+        }),
+        sleep: async () => {
+          sleeps += 1;
+        },
+        summarize: () => {
+          summaries += 1;
+        },
+      }),
+    ).rejects.toThrow("Run release/live/Docker/QA validation");
+    expect(summaries).toBe(1);
+    expect(sleeps).toBe(0);
   });
 
   it("selects one immutable manifest artifact bound to the exact parent run", () => {
@@ -1262,6 +1312,35 @@ describe("release CI summary child correlation", () => {
     );
   });
 
+  it("requires the npm Telegram child for all-validation with an effective package spec", () => {
+    const raw = rawManifest({});
+    raw.childRuns.npmTelegram = "505";
+    raw.validationInputs.npmTelegramPackageSpec = "openclaw@beta";
+    const manifest = validateParentManifest(raw, {
+      runAttempt: 2,
+      runId: "29090000000",
+    });
+    const selected = requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs);
+    expect([...selected].toSorted()).toEqual([
+      "normalCi",
+      "npmTelegram",
+      "pluginPrerelease",
+      "productPerformance",
+      "releaseChecks",
+    ]);
+    const missing = {
+      ...manifest,
+      childRunIds: { ...manifest.childRunIds, npmTelegram: "" },
+    };
+    expect(() =>
+      manifestChildEntries(
+        missing,
+        expectedChildDispatches(manifest.runId, manifest.runAttempt, "main"),
+        selected,
+      ),
+    ).toThrow("selected child is missing from manifest: NPM Telegram Beta E2E");
+  });
+
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {
     const legacy = rawManifest({});
     delete (legacy as { validationInputs?: unknown }).validationInputs;
@@ -1527,7 +1606,10 @@ describe("release CI summary child correlation", () => {
     );
     const mismatchedRoot = {
       ...root,
-      validationInputs: { ...root.validationInputs, provider: "anthropic" },
+      validationInputs: {
+        ...root.validationInputs,
+        npmTelegramScenario: "telegram-status-command",
+      },
     };
 
     expect(() => validateEvidenceReuseChain(current, mismatchedRoot, mismatchedRoot)).toThrow(

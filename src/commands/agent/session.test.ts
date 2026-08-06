@@ -1,7 +1,7 @@
 // Agent session helper tests cover explicit session resolution through config and session stores.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionKeyForRequest } from "./session.js";
+import { resolveSessionKeyForRequest } from "./session.runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listSessionEntries: vi.fn(),
@@ -124,6 +124,25 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("canonicalizes an explicit main alias for the selected agent", () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {},
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "mybot", default: true }] },
+        session: { mainKey: "work" },
+      } satisfies OpenClawConfig,
+      sessionKey: "main",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:work");
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 

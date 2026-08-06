@@ -33,8 +33,6 @@ export type ConfigSetOptions = {
   providerEnv?: string[];
   providerPassEnv?: string[];
   providerTrustedDir?: string[];
-  providerAllowInsecurePath?: boolean;
-  providerAllowSymlinkCommand?: boolean;
   batchJson?: string;
   batchFile?: string;
 };
@@ -97,9 +95,7 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
     opts.providerJsonOnly ||
     opts.providerEnv?.length ||
     opts.providerPassEnv?.length ||
-    opts.providerTrustedDir?.length ||
-    opts.providerAllowInsecurePath ||
-    opts.providerAllowSymlinkCommand,
+    opts.providerTrustedDir?.length,
   );
 }
 
@@ -115,6 +111,9 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   const parsed = parseJson5Raw(raw, sourceLabel);
   if (!Array.isArray(parsed)) {
     throw new Error(`${sourceLabel} must be a JSON array.`);
+  }
+  if (parsed.length === 0) {
+    throw new Error(`${sourceLabel} must contain at least one config update.`);
   }
   const out: ConfigSetBatchEntry[] = [];
   for (const [index, entry] of parsed.entries()) {

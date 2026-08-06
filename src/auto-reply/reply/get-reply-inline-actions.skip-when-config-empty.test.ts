@@ -1057,7 +1057,7 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
     const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
-    expect(toolsArgs).not.toHaveProperty("senderIsOwner");
+    expect(toolsArgs.senderIsOwner).toBe(true);
     expect(toolsArgs.nativeChannelId).toBe("oc_native_chat");
     expect(toolsArgs.beforeToolCallHookContext).toMatchObject({
       cwd: "/tmp",
@@ -1347,6 +1347,64 @@ describe("handleInlineActions", () => {
       kind: "reply",
       reply: { text: "❌ Tool not available: message" },
     });
+    expect(toolExecute).not.toHaveBeenCalled();
+  });
+
+  it("does not expose owner-only tools to authorized non-owner skill dispatch", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ content: "sent" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "conversations_send",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/send_conversation hello",
+      CommandBody: "/send_conversation hello",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "send_conversation",
+        skillName: "send-conversation",
+        description: "Send a conversation message",
+        dispatch: {
+          kind: "tool",
+          toolName: "conversations_send",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/send-conversation.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/send_conversation hello",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "allowed-user",
+          senderIsOwner: false,
+          abortKey: "allowed-user",
+          rawBodyNormalized: "/send_conversation hello",
+          commandBodyNormalized: "/send_conversation hello",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool not available: conversations_send" },
+    });
+    const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
+    expect(toolsArgs.senderIsOwner).toBe(false);
     expect(toolExecute).not.toHaveBeenCalled();
   });
 

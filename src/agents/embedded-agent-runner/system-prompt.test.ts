@@ -10,6 +10,8 @@ import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-
 
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 describe("applySystemPromptToSession", () => {

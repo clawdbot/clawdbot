@@ -16,7 +16,7 @@ type AnthropicServiceTier = "auto" | "standard_only";
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicEphemeralCacheControl = {
   type: "ephemeral";
-  ttl?: "1h";
+  ttl?: "1h" | "5m";
 };
 
 type AnthropicPayloadPolicyInput = {
@@ -56,6 +56,8 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   return (
     hostname === "api.anthropic.com" ||
     hostname === "aiplatform.googleapis.com" ||
+    hostname === "aiplatform.us.rep.googleapis.com" ||
+    hostname === "aiplatform.eu.rep.googleapis.com" ||
     hostname.endsWith("-aiplatform.googleapis.com")
   );
 }
@@ -141,7 +143,8 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
   }
 }
 
-function applyAnthropicCacheControlToMessages(
+/** Apply one shared deepest-stable-message cache breakpoint policy. */
+export function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
   markerLimit: number,

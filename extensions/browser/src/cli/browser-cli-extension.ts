@@ -113,7 +113,29 @@ async function buildPairingString(gatewayUrl?: string): Promise<{
   };
 }
 
-/** Register `openclaw browser extension {path,pair}`. */
+/**
+ * Resolve the local relay CDP endpoint for third-party CDP clients
+ * (Puppeteer, chrome-devtools-mcp, raw WebSocket). Creates the host-local
+ * relay secret on first use, mirroring `pair`.
+ */
+async function buildCdpEndpoint(): Promise<{
+  browserUrl: string;
+  wsEndpoint: string;
+  headers: { Authorization: string };
+}> {
+  const cfg = getRuntimeConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const token = await ensureExtensionRelayToken();
+  const profile = firstExtensionProfile(resolved);
+  const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
+  return {
+    browserUrl: `http://127.0.0.1:${relayPort}`,
+    wsEndpoint: `ws://127.0.0.1:${relayPort}/cdp`,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
+/** Register `openclaw browser extension {path,pair,cdp}`. */
 export function registerBrowserExtensionCommands(
   browser: Command,
   _parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -166,6 +188,41 @@ export function registerBrowserExtensionCommands(
               info("2. Open the OpenClaw popup and paste this pairing string:"),
               "",
               theme.heading(result.pairing),
+              "",
+              info("The token is a host-local secret; keep it private."),
+            ].join("\n"),
+          );
+        },
+        (err: unknown) => {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
+        },
+      );
+    });
+
+  extension
+    .command("cdp")
+    .description("Print the relay CDP endpoint and auth header for external CDP clients")
+    .option("--json", "Print the endpoint as JSON")
+    .action(async (opts) => {
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const endpoint = await buildCdpEndpoint();
+          if (opts.json === true) {
+            defaultRuntime.writeJson(endpoint);
+            return;
+          }
+          defaultRuntime.log(
+            [
+              info("Relay CDP endpoint (pair the extension first):"),
+              `browserUrl: ${endpoint.browserUrl}`,
+              `wsEndpoint: ${endpoint.wsEndpoint}`,
+              `header:     Authorization: ${endpoint.headers.Authorization}`,
+              "",
+              info("Example (chrome-devtools-mcp):"),
+              `  npx chrome-devtools-mcp --wsEndpoint ${endpoint.wsEndpoint} \\`,
+              `    --wsHeaders '${JSON.stringify(endpoint.headers)}'`,
               "",
               info("The token is a host-local secret; keep it private."),
             ].join("\n"),

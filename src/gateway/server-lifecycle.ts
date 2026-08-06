@@ -9,7 +9,7 @@ import {
   type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
 import { upsertPresence } from "../infra/system-presence.js";
-import { stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
+import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
@@ -84,7 +84,6 @@ export async function prepareGatewayLifecycle(params: {
     gatewayInstanceRuntimeRef,
     startupState,
     readinessEventLoopHealth,
-    releasePluginRouteRegistry,
     browserAuthRateLimiter,
     wss,
     httpServer,
@@ -298,8 +297,22 @@ export async function prepareGatewayLifecycle(params: {
     clearTimeout(postReadyState.maintenanceTimer);
     postReadyState.maintenanceTimer = null;
   };
+  let outboundDeliveryRecoveryStopPromise: Promise<void> | null = null;
+  const stopOutboundDeliveryRecoveryForClose = () => {
+    outboundDeliveryRecoveryStopPromise ??= runtimeState.stopOutboundDeliveryRecovery();
+    return outboundDeliveryRecoveryStopPromise;
+  };
+  let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
+  const stopMediaCleanupForClose = () => {
+    mediaCleanupStopPromise ??= runtimeState.stopMediaCleanup();
+    return mediaCleanupStopPromise;
+  };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    // Fence background owners before any awaited close step can tear down the
+    // plugin/channel or shared-state runtime they still need.
+    void stopOutboundDeliveryRecoveryForClose();
+    void stopMediaCleanupForClose();
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();
@@ -318,9 +331,13 @@ export async function prepareGatewayLifecycle(params: {
   const beginClosePrelude = async () => {
     clearSessionSuspensionTimers();
     markClosePreludeStarted();
-    // Join the last reload before any owner it can publish into is torn down.
-    // The close handler re-awaits this same promise to retain warning reporting.
-    await stopConfigReloaderForClose().catch(() => {});
+    // Owners are fenced synchronously above. Join them before any runtime they
+    // can publish into is torn down.
+    await Promise.all([
+      stopOutboundDeliveryRecoveryForClose(),
+      stopMediaCleanupForClose(),
+      stopConfigReloaderForClose().catch(() => {}),
+    ]);
   };
   const runClosePrelude = async () => {
     await beginClosePrelude();
@@ -384,7 +401,6 @@ export async function prepareGatewayLifecycle(params: {
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
-      releasePluginRouteRegistry,
       clearSecretsRuntimeSnapshot,
       channelIds,
       stopChannel,
@@ -399,7 +415,7 @@ export async function prepareGatewayLifecycle(params: {
       tickInterval: runtimeState.tickInterval,
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
-      mediaCleanup: runtimeState.mediaCleanup,
+      stopMediaCleanup: stopMediaCleanupForClose,
       worktreeCleanup: runtimeState.worktreeCleanup,
       skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,
@@ -457,6 +473,30 @@ export async function prepareGatewayLifecycle(params: {
       clearFallbackGatewayContextForServer();
     }
   };
+
+  if (diagnosticsEnabled) {
+    // Gateway lifecycle owns both this existing heartbeat timer and the monitor
+    // it samples, so startup failure and normal close tear them down together.
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+      sampleLiveness: () => {
+        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
+        if (!sample || sample.degradedSinceMs == null) {
+          return null;
+        }
+        return {
+          reasons: sample.reasons,
+          intervalMs: sample.intervalMs,
+          degradedSinceMs: sample.degradedSinceMs,
+          eventLoopDelayP99Ms: sample.delayP99Ms,
+          eventLoopDelayMaxMs: sample.delayMaxMs,
+          eventLoopUtilization: sample.utilization,
+          cpuCoreRatio: sample.cpuCoreRatio,
+        };
+      },
+    });
+  }
 
   return {
     ...runtime,

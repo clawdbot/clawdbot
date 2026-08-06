@@ -34,9 +34,9 @@ function createSessionStorePath(prefix: string): string {
 }
 
 describe("resolveSandboxWorkspaceAuthority", () => {
-  it("attests a writable Docker workspace", () => {
+  it.each(["docker", "Podman"])("attests a writable %s workspace", (backend) => {
     const result = resolveSandboxWorkspaceAuthority({
-      config: configWithSandbox({ mode: "all", workspaceAccess: "rw" }),
+      config: configWithSandbox({ mode: "all", backend, workspaceAccess: "rw" }),
       agentId: "main",
       sessionKey: "agent:main:subagent:workboard-card",
     });

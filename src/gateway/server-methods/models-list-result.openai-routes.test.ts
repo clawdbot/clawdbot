@@ -22,9 +22,14 @@ function catalogEntry(id: string, api: ModelCatalogEntry["api"]): ModelCatalogEn
   return { id, name: id, provider: "openai", api };
 }
 
+function providerCatalogEntry(provider: string, id: string): ModelCatalogEntry {
+  return { ...catalogEntry(id, "openai-completions"), provider };
+}
+
 async function listModels(params: {
   catalog: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
+  discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
 }) {
@@ -46,6 +51,22 @@ async function listModels(params: {
   return await buildModelsListResult({
     context,
     params: { view: params.view ?? "all" },
+    ...(params.discoveryModes
+      ? {
+          preloadedCatalog: {
+            agentId: "main",
+            config,
+            snapshot: { entries: params.catalog, routeVariants: params.catalog },
+          },
+          catalogProjector: {
+            metadataSnapshot: {
+              plugins: [
+                { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
+              ],
+            },
+          } as never,
+        }
+      : {}),
     ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
   });
 }
@@ -846,6 +867,62 @@ describe("models.list OpenAI routes", () => {
           },
         ],
       });
+    });
+  });
+
+  it("includes runtime-discovered rows for configured providers without explicit models", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      const cfg = {
+        models: {
+          providers: {
+            litellm: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:14004",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      await expect(
+        listModels({
+          cfg,
+          discoveryModes: { litellm: "runtime" },
+          view: "provider-config",
+          catalog: [
+            providerCatalogEntry("litellm", "model-a"),
+            providerCatalogEntry("litellm", "model-b"),
+          ],
+        }),
+      ).resolves.toEqual({
+        models: [
+          expect.objectContaining({ id: "model-a", provider: "litellm" }),
+          expect.objectContaining({ id: "model-b", provider: "litellm" }),
+        ],
+      });
+    });
+  });
+
+  it("does not infer runtime inventory for static providers without explicit models", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      const cfg = {
+        models: {
+          providers: {
+            kimi: {
+              api: "openai-completions",
+              baseUrl: "https://api.kimi.com/coding/v1",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      await expect(
+        listModels({
+          cfg,
+          discoveryModes: { kimi: "static" },
+          view: "provider-config",
+          catalog: [providerCatalogEntry("kimi", "kimi-for-coding")],
+        }),
+      ).resolves.toEqual({ models: [] });
     });
   });
 

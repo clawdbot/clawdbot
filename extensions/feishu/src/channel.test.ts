@@ -306,6 +306,15 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
+  it("declares native chat IDs as delivery targets for guarded message mutations", () => {
+    for (const action of ["edit", "pin", "unpin"] as const) {
+      expect(feishuPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+        deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+      });
+    }
+  });
+
   it("does not advertise reactions when disabled via actions config", () => {
     const disabledCfg = {
       channels: {
@@ -675,6 +684,17 @@ describe("feishuPlugin actions", () => {
       messageId: "om_fallback",
       chatId: "oc_group_1",
     });
+    const trustedReadFile = vi.fn(async () => Buffer.from("approved image"));
+    const legacyReadFile = vi.fn(async () => Buffer.from("legacy image"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+      readFile: trustedReadFile,
+    };
+    const forgedMediaAccess = {
+      localRoots: ["/forged/workspace"],
+      workspaceDir: "/forged/workspace",
+    };
     const presentation = {
       blocks: [
         {
@@ -699,7 +719,10 @@ describe("feishuPlugin actions", () => {
         to: "chat:oc_group_1",
         message: `[Nexus] ${rawCardText}`,
         presentation,
-        media: "/tmp/pipeline.png",
+        media: "pipeline.png",
+        mediaAccess: forgedMediaAccess,
+        mediaLocalRoots: ["/forged/workspace"],
+        mediaReadFile: vi.fn(),
       },
       cfg: {
         ...cfg,
@@ -710,7 +733,9 @@ describe("feishuPlugin actions", () => {
       },
       accountId: undefined,
       toolContext: {},
-      mediaLocalRoots: ["/tmp"],
+      mediaAccess,
+      mediaLocalRoots: ["/legacy/workspace"],
+      mediaReadFile: legacyReadFile,
     } as never);
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
@@ -728,9 +753,13 @@ describe("feishuPlugin actions", () => {
     const table = requireRecord(fallbackBlocks[0], "fallback table");
     const rows = requireArray(table.rows, "fallback rows");
     expect(requireArray(rows.at(-1), "last fallback row")[0]).toContain("account-399-");
-    expect(fallbackPayload.mediaUrl).toBe("/tmp/pipeline.png");
+    expect(fallbackPayload.mediaUrl).toBe("pipeline.png");
     expect(fallbackPayload.text).toBeUndefined();
     expect(fallbackArgs.text).toBe("");
+    expect(fallbackArgs.mediaAccess).toBe(mediaAccess);
+    expect(fallbackArgs.mediaAccess).not.toBe(forgedMediaAccess);
+    expect(fallbackArgs.mediaLocalRoots).toEqual(["/legacy/workspace"]);
+    expect(fallbackArgs.mediaReadFile).toBe(legacyReadFile);
   });
 
   it("prefers structured presentation over raw card JSON text", async () => {
@@ -985,37 +1014,65 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
-  it("sends media through the outbound adapter", async () => {
-    feishuOutboundSendMediaMock.mockResolvedValueOnce({
-      channel: "feishu",
-      messageId: "om_media",
-      details: { messageId: "om_media", chatId: "oc_group_1" },
-    });
+  it.each(["send", "thread-reply"] as const)(
+    "preserves only trusted workspace media access for %s actions",
+    async (action) => {
+      feishuOutboundSendMediaMock.mockResolvedValueOnce({
+        channel: "feishu",
+        messageId: "om_media",
+        details: { messageId: "om_media", chatId: "oc_group_1" },
+      });
+      const trustedReadFile = vi.fn(async () => Buffer.from("approved image"));
+      const legacyReadFile = vi.fn(async () => Buffer.from("legacy image"));
+      const mediaAccess = {
+        localRoots: ["/approved/workspace"],
+        workspaceDir: "/approved/workspace",
+        readFile: trustedReadFile,
+      };
+      const forgedMediaAccess = {
+        localRoots: ["/forged/workspace"],
+        workspaceDir: "/forged/workspace",
+      };
 
-    const result = await feishuPlugin.actions?.handleAction?.({
-      action: "send",
-      params: {
+      const result = await feishuPlugin.actions?.handleAction?.({
+        action,
+        params: {
+          to: "chat:oc_group_1",
+          message: "test",
+          media: "image.png",
+          mediaAccess: forgedMediaAccess,
+          mediaLocalRoots: ["/forged/workspace"],
+          mediaReadFile: vi.fn(),
+          ...(action === "thread-reply" ? { messageId: "om_parent" } : {}),
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaAccess,
+        mediaLocalRoots: ["/legacy/workspace"],
+        mediaReadFile: legacyReadFile,
+      } as never);
+
+      expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith({
+        cfg,
         to: "chat:oc_group_1",
-        message: "test",
-        media: "/tmp/image.png",
-      },
-      cfg,
-      accountId: undefined,
-      toolContext: {},
-      mediaLocalRoots: ["/tmp"],
-    } as never);
-
-    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith({
-      cfg,
-      to: "chat:oc_group_1",
-      text: "test",
-      mediaUrl: "/tmp/image.png",
-      accountId: undefined,
-      mediaLocalRoots: ["/tmp"],
-      replyToId: undefined,
-    });
-    expect(resultDetails(result).messageId).toBe("om_media");
-  });
+        text: "test",
+        mediaUrl: "image.png",
+        accountId: undefined,
+        mediaAccess,
+        mediaLocalRoots: ["/legacy/workspace"],
+        mediaReadFile: legacyReadFile,
+        ...(action === "thread-reply" ? { threadId: "om_parent" } : { replyToId: undefined }),
+      });
+      const outboundArgs = requireRecord(
+        mockCallArg(feishuOutboundSendMediaMock, 0, 0, "feishuOutbound.sendMedia"),
+        "outbound args",
+      );
+      expect(outboundArgs.mediaAccess).toBe(mediaAccess);
+      expect(outboundArgs.mediaAccess).not.toBe(forgedMediaAccess);
+      expect(resultDetails(result).messageId).toBe("om_media");
+    },
+  );
 
   it("passes asVoice through media sends", async () => {
     feishuOutboundSendMediaMock.mockResolvedValueOnce({

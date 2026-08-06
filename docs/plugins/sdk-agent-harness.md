@@ -153,6 +153,29 @@ export default definePluginEntry({
 `authBootstrap` is intentionally absent from this generic example. Add
 `authBootstrap: "harness"` only when the harness meets the contract above.
 
+### Isolated completion
+
+The optional `runIsolatedCompletion(params)` capability serves product paths
+that require one fresh prompt-only inference call with a literal empty
+model-callable tool surface. Core passes the exact prepared `model`, `auth`,
+provider, model id, system prompt, user prompt, timeout, abort signal, and stream
+parameters. The harness must not re-resolve credentials, switch routes, reuse a
+native thread, attach tools, invoke agent lifecycle hooks, or deliver output.
+
+Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
+content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
+output are rejected. If the harness cannot prove these semantics, omit the capability.
+Callers that require isolated completion then fail closed before invoking that
+harness; OpenClaw does not replay the request through another runtime.
+Plugin callers select this behavior through
+`api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
+the harness callback is the provider-side enforcement SPI, not a second caller
+API.
+
+Native agent servers often have ambient built-in tools even when OpenClaw sends
+an empty tool list. In that case, use a separate provider transport that can
+serialize a true zero-tool request, or leave the capability unsupported.
+
 ### Delegated execution
 
 A harness owner may set `delegatedExecutionPluginIds` to the ids of trusted
@@ -181,6 +204,18 @@ fallback only applies when no registered plugin harness supports the resolved
 provider/model. Once a plugin harness has claimed a run, OpenClaw does not
 replay that same turn through another runtime, because that can change
 auth/runtime semantics or duplicate side effects.
+
+A failure that occurs before the harness starts any model work may use
+`AgentHarnessPreflightError` from
+`openclaw/plugin-sdk/agent-harness-runtime`. The default error remains terminal
+for the whole model-fallback chain. Pass `{ scope: "harness" }` only when the
+failure is local to the selected harness and retrying another model on that same
+harness would repeat it. OpenClaw records the actual selected harness at the
+attempt boundary, skips only later candidates proven to use that harness, and
+runs any differently owned candidate through its normal runtime and policy
+checks. Plugins opt into the scope but never name the harness owner on the
+error. Do not use harness scope after a request or tool action may have produced
+side effects.
 
 Configured runtime policy remains authoritative about the desired runtime. A
 persisted session `agentHarnessId` keeps ownership of its native transcript

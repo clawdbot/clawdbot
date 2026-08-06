@@ -6,6 +6,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
+  handleAbortChat,
   hasAbortableSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -62,6 +63,52 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
   };
 }
 
+describe("handleAbortChat", () => {
+  it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      connected: false,
+      chatMessage: "keep this draft",
+      sessionsResult: makeSessionsResult([
+        { key: "agent:main", hasActiveRun: true, status: "running" },
+      ]),
+    });
+
+    expect(hasAbortableSessionRun(host)).toBe(true);
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.chatError).toBe("Not connected. Try again after reconnecting.");
+    expect(host.lastError).toBe(host.chatError);
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.pendingAbort).toBeUndefined();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps offline exact-run stops safely queued for reconnect", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "keep this draft",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.pendingAbort).toEqual({
+      sourceClient: client,
+      sessionKey: "agent:main",
+      runId: "run-main",
+    });
+    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatError ?? null).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
 describe("replayPendingChatAbort", () => {
   it("dispatches a queued exact browser run stop through chat.abort", async () => {
     const request = vi.fn(async () => ({ aborted: true }));
@@ -84,6 +131,33 @@ describe("replayPendingChatAbort", () => {
       runId: "run-main",
     });
     expect(host.pendingAbort).toBeNull();
+  });
+
+  it("denies a queued exact-run stop when the reconnect is read-only", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = makeAbortHost({
+      client,
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["chat.abort"] },
+      },
+      pendingAbort: {
+        sourceClient: client,
+        runId: "run-main",
+        sessionKey: "global",
+        agentId: "work",
+      },
+    });
+
+    await expect(replayPendingChatAbort(host)).resolves.toBe(false);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.pendingAbort).toBeNull();
+    expect(host.chatError).toContain("operator.write");
+    expect(host.lastError).toBe(host.chatError);
   });
 
   it("consumes an ambiguously failed exact-run stop without retrying it", async () => {

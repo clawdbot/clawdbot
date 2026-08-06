@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import {
   inspectPortUsage,
   killProcessTree,
+  resolveGatewayServiceProbeHosts,
   schtasksCalls,
   schtasksResponses,
 } from "./schtasks-fixtures.js";
@@ -16,7 +17,12 @@ vi.mock("../schtasks-exec.js", () => ({
 }));
 
 vi.mock("../../infra/ports.js", () => ({
-  inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
+    inspectPortUsage(port, options),
+}));
+
+vi.mock("../gateway-service-probe-hosts.js", () => ({
+  resolveGatewayServiceProbeHosts: () => resolveGatewayServiceProbeHosts(),
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({

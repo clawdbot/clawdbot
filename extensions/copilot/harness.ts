@@ -32,6 +32,10 @@ import type {
   PoolKey,
 } from "./src/runtime.js";
 
+type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
+type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
+type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
+
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
 interface CreateCopilotAgentHarnessOptions {
@@ -882,6 +886,33 @@ export function createCopilotAgentHarness(
     }
   }
 
+  async function runIsolatedCompletion(
+    params: AgentHarnessIsolatedCompletionParams,
+  ): Promise<AgentHarnessIsolatedCompletionResult> {
+    const completionPromise = (async () => {
+      if (disposed) {
+        throw new Error("[copilot] harness has been disposed; cannot start isolated completion");
+      }
+      const { runCopilotIsolatedCompletion } = await import("./src/isolated-completion.js");
+      if (disposed) {
+        throw new Error("[copilot] harness was disposed while starting isolated completion");
+      }
+      return await runCopilotIsolatedCompletion(params, async () => {
+        const pool = await getPool();
+        if (disposed) {
+          throw new Error("[copilot] harness was disposed while starting isolated completion");
+        }
+        return pool;
+      });
+    })();
+    inFlight.add(completionPromise);
+    try {
+      return await completionPromise;
+    } finally {
+      inFlight.delete(completionPromise);
+    }
+  }
+
   return {
     id: options?.id ?? "copilot",
     label: options?.label ?? "GitHub Copilot agent runtime",
@@ -931,6 +962,8 @@ export function createCopilotAgentHarness(
     },
 
     runAttempt: (params) => runHarnessAttempt(params, "attempt"),
+
+    runIsolatedCompletion,
 
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");

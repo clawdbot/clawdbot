@@ -41,13 +41,12 @@ import {
 } from "../gateway/worker-environments/store.js";
 import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
+import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
   getAgentRunContext,
-  onAgentRuntimeEvent,
-} from "../infra/agent-events.js";
+} from "../infra/agent-run-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {

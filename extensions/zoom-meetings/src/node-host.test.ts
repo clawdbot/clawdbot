@@ -9,6 +9,7 @@ import { handleZoomMeetingsNodeHostCommand } from "./node-host.js";
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  childProcessMocks.spawnSync.mockReset();
 });
 
 describe("Zoom meetings node setup", () => {
@@ -39,5 +40,29 @@ describe("Zoom meetings node setup", () => {
         (call) => (call[2] as { timeout?: number } | undefined)?.timeout,
       ),
     ).toEqual([10_000, 4_000, 2_000]);
+  });
+
+  it("reports a timed-out command probe separately from a missing command", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const timeoutError = Object.assign(new Error("spawnSync /bin/sh ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    childProcessMocks.spawnSync
+      .mockReturnValueOnce({ status: 0, stderr: "", stdout: "BlackHole 2ch" })
+      .mockReturnValueOnce({ status: null, stderr: "", stdout: "", error: timeoutError });
+
+    await expect(
+      handleZoomMeetingsNodeHostCommand(
+        JSON.stringify({
+          action: "setup",
+          audioInputCommand: ["sox"],
+          audioOutputCommand: ["play"],
+        }),
+      ),
+    ).rejects.toThrow("Zoom meeting audio prerequisite check timed out on the node.");
+
+    expect(childProcessMocks.spawnSync).toHaveBeenCalledTimes(2);
   });
 });

@@ -109,6 +109,24 @@ describe("google music generation provider", () => {
     expectExplicitMusicGenerationCapabilities(buildGoogleMusicGenerationProvider());
   });
 
+  it("advertises Gemini music generation with a config-only Google API key", () => {
+    expect(
+      buildGoogleMusicGenerationProvider().isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                apiKey: "google-config-only-key",
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("submits generation and returns inline audio bytes plus lyrics", async () => {
     mockGoogleAuth();
     generateContentMock.mockResolvedValue({

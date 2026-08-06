@@ -22,6 +22,7 @@ import { resolveProviderInstallCatalogEntries } from "../plugins/provider-instal
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { t } from "../wizard/i18n/index.js";
 import {
   formatDeprecatedNonInteractiveAuthChoiceError,
   isDeprecatedAuthChoice,
@@ -38,6 +39,7 @@ import {
 } from "./onboard-custom-config.js";
 import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
+import { hasInteractiveOnboardingTty } from "./onboard-interactive-runner.js";
 import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
@@ -422,6 +424,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "nonInteractive",
   "classic",
   "tui",
+  "skipUi",
 ]);
 
 function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
@@ -536,6 +539,14 @@ export async function setupWizardCommand(
     return;
   }
 
+  if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
+    // Reset is destructive, so prove the selected interactive surface can run
+    // before reading or moving any operator state.
+    runtime.error(t("wizard.guided.ttyRequired"));
+    runtime.exit(1);
+    return;
+  }
+
   if (process.platform === "win32") {
     runtime.log(
       [
@@ -568,7 +579,10 @@ export async function setupWizardCommand(
       normalizedOpts.workspace === undefined &&
       snapshot.exists &&
       !snapshot.valid &&
-      !snapshot.sourceConfig
+      // A snapshot always carries a sourceConfig object (empty on failure), so
+      // only readError distinguishes "config could not be read" from "config
+      // parsed but configures no workspace", where the default is correct.
+      snapshot.readError !== undefined
     ) {
       rejectOption(
         runtime,

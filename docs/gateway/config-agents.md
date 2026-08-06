@@ -46,11 +46,11 @@ Optional default skill allowlist for agents that do not set
 {
   agents: {
     defaults: { skills: ["github", "weather"] },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```
@@ -141,14 +141,14 @@ injection behavior from the shared defaults. Omitted fields inherit from
       bootstrapMaxChars: 20000,
       bootstrapTotalMaxChars: 60000,
     },
-    list: [
-      {
-        id: "strict-worker",
+    entries: {
+      "strict-worker": {
+        default: true,
         contextInjection: "always",
         bootstrapMaxChars: 50000,
         bootstrapTotalMaxChars: 300000,
       },
-    ],
+    },
   },
 }
 ```
@@ -254,14 +254,14 @@ from `agents.defaults.contextLimits`.
     defaults: {
       contextLimits: { memoryGetMaxChars: 12000 },
     },
-    list: [
-      {
-        id: "tiny-local",
+    entries: {
+      "tiny-local": {
+        default: true,
         contextLimits: {
           memoryGetMaxChars: 6000,
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -284,7 +284,9 @@ Per-agent override for the skills prompt budget.
 ```json5
 {
   agents: {
-    list: [{ id: "tiny-local", skillsLimits: { maxSkillsPromptChars: 6000 } }],
+    entries: {
+      "tiny-local": { default: true, skillsLimits: { maxSkillsPromptChars: 6000 } },
+    },
   },
 }
 ```
@@ -727,7 +729,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | ssh | openshell
+        backend: "docker", // docker (default) | podman | openshell | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -946,7 +948,7 @@ noVNC observer access is password-protected and brokered through a one-time, aut
 
 </Accordion>
 
-Browser sandboxing and `sandbox.docker.binds` are Docker-only.
+Browser sandboxing requires the Docker engine. `sandbox.docker.binds` applies to both the Docker and Podman backends.
 
 Build images (from a source checkout):
 
@@ -970,9 +972,8 @@ for provider examples and precedence.
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         name: "Main Agent",
         workspace: "~/.openclaw/workspace",
@@ -1014,13 +1015,13 @@ for provider examples and precedence.
           elevated: { enabled: true },
         },
       },
-    ],
+    },
   },
 }
 ```
 
-- `id`: stable agent id (required).
-- `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
+- Each key in `agents.entries` is the stable agent id.
+- `default`: exactly one agent entry must set `default: true`.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
@@ -1051,10 +1052,10 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
-    list: [
-      { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-      { id: "work", workspace: "~/.openclaw/workspace-work" },
-    ],
+    entries: {
+      home: { default: true, workspace: "~/.openclaw/workspace-home" },
+      work: { workspace: "~/.openclaw/workspace-work" },
+    },
   },
   bindings: [
     { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
@@ -1092,13 +1093,13 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
+        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: { mode: "off" },
       },
-    ],
+    },
   },
 }
 ```
@@ -1110,9 +1111,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "family",
+    entries: {
+      family: {
+        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -1127,7 +1128,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           deny: ["write", "edit", "apply_patch", "exec", "process", "browser"],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -1139,9 +1140,9 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "public",
+    entries: {
+      public: {
+        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
@@ -1173,7 +1174,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
           ],
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -1259,7 +1260,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
-  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
+  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first. Set `false`, `0`, or `"0"` to disable the budget entirely.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master switch for supported channel thread bindings

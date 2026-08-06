@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -298,10 +299,10 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     .filter(Boolean);
   logCliCronProbe("loopback-preflight:tools", {
     toolCount: toolNames.length,
-    cronVisible: toolNames.includes("cron"),
+    cronVisible: toolNames.includes(AUTOMATIONS_TOOL_NAME),
   });
-  if (!toolNames.includes("cron")) {
-    throw new Error("mcp loopback tools/list did not expose cron");
+  if (!toolNames.includes(AUTOMATIONS_TOOL_NAME)) {
+    throw new Error(`mcp loopback tools/list did not expose ${AUTOMATIONS_TOOL_NAME}`);
   }
 
   const toolCall = await callLoopbackJsonRpc({
@@ -314,7 +315,7 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
       id: "cron-add",
       method: "tools/call",
       params: {
-        name: "cron",
+        name: AUTOMATIONS_TOOL_NAME,
         arguments: JSON.parse(cronProbe.argsJson) as Record<string, unknown>,
       },
     },

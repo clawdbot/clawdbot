@@ -1,10 +1,14 @@
 // Keeps fake-terminal test-only logs and opaque-session fixtures independently bounded.
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
+import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
+import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
-import { sleep, type PtyRun } from "./tui-pty-test-support.js";
+
+export * from "./tui-pty-harness-assertion-test-support.js";
 
 export async function writeTuiPtyFixtureScript(dir: string) {
   // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
@@ -22,7 +26,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
   await writeFile(
     scriptPath,
     `
-      import { appendFileSync } from "node:fs";
+      import { appendFileSync, existsSync, watch } from "node:fs";
+      import { dirname } from "node:path";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
@@ -35,9 +40,26 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
       let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
+      let modeTargetTraceLevel: string | undefined;
       const launchThinkingLevel = process.env.OPENCLAW_TUI_PTY_LAUNCH_THINKING;
       const initialMessage = process.env.OPENCLAW_TUI_PTY_INITIAL_MESSAGE;
+      const inFlightRunText = process.env.OPENCLAW_TUI_PTY_IN_FLIGHT_TEXT;
+      const dynamicCommandDescription = process.env.OPENCLAW_TUI_PTY_DYNAMIC_COMMAND_DESCRIPTION;
+      const thinkingLabel = process.env.OPENCLAW_TUI_PTY_THINKING_LABEL;
+      const safeThinkingLabel = process.env.OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL;
+      const thinkingLevels = [
+        ...(thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : []),
+        ...(safeThinkingLabel ? [{ id: "fixture-thinking-safe", label: safeThinkingLabel }] : []),
+      ];
+      const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
+      let disconnectPending = disconnectReason !== undefined;
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
+      const pickerModelValue = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_VALUE ?? "fixture-provider/fixture-model-2";
+      const pickerModelName = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_NAME ?? "Fixture 2";
+      const pickerSessionKey = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_KEY ?? "agent:main:picker-target";
+      const pickerSessionTitle = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_TITLE;
+      const pickerSessionPreview = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_PREVIEW;
+      const pickerSessionDisplayName = process.env.OPENCLAW_TUI_PTY_PICKER_SESSION_DISPLAY_NAME ?? "Picker target";
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = footerModel ?? "fixture-provider/fixture-model";
       let currentThinkingLevel = footerThinkingLevel;
@@ -74,52 +96,46 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       }
 
       function sessionEntry(key = "main") {
+        const isModeSource = key.endsWith(":mode-source");
+        const isModeTarget = key.endsWith(":mode-target");
+        const entryFastMode = isModeSource ? true : isModeTarget ? undefined : fastMode;
+        const entryVerboseLevel = isModeSource ? "full" : isModeTarget ? undefined : verboseLevel;
+        const entryTraceLevel = isModeSource ? "raw" : isModeTarget ? modeTargetTraceLevel : undefined;
+        const entryReasoningLevel = isModeSource ? "stream" : undefined;
         return {
           key,
-          displayName: "Main",
+          displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main",
           model: currentModel,
           modelProvider: "fixture-provider",
           contextTokens: 128,
-          fastMode,
+          ...(entryFastMode !== undefined ? { fastMode: entryFastMode } : {}),
           ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
-          ...(verboseLevel ? { verboseLevel } : {}),
-          thinkingLevels: [],
-        };
-      }
-
-      function assistantMessageFromSourceReplyPayloads(payloads: ReturnType<typeof buildEmbeddedRunPayloads>) {
-        if (payloads.length === 0) {
-          throw new Error("expected source reply payload");
-        }
-        for (const payload of payloads) {
-          const metadata = getReplyPayloadMetadata(payload);
-          if (!metadata?.sourceReplyTranscriptMirror) {
-            throw new Error("expected source reply transcript mirror metadata");
-          }
-          record("sourceReplyMetadata", metadata.sourceReplyTranscriptMirror);
-        }
-        const normalized = normalizeReplyPayloadsForDelivery(payloads);
-        const content = normalized.flatMap((payload) => {
-          const text = payload.text?.trim();
-          return text ? [{ type: "text", text }] : [];
-        });
-        if (content.length === 0) {
-          throw new Error("expected displayable source reply content");
-        }
-        return {
-          role: "assistant",
-          content,
-          timestamp: Date.now(),
+          ...(entryVerboseLevel ? { verboseLevel: entryVerboseLevel } : {}),
+          ...(entryTraceLevel ? { traceLevel: entryTraceLevel } : {}),
+          ...(entryReasoningLevel ? { reasoningLevel: entryReasoningLevel } : {}),
+          thinkingLevels,
         };
       }
 
       ${TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT}
+      ${TUI_PTY_ASSISTANT_FIXTURE_SCRIPT}
+      ${TUI_PTY_RENDERING_FIXTURE_SCRIPT}
 
       class FixtureBackend implements TuiBackend {
         connection = { url: "pty-fixture://local" };
         onEvent?: TuiBackend["onEvent"];
         onConnected?: TuiBackend["onConnected"];
+        onDisconnected?: TuiBackend["onDisconnected"];
         onGap?: TuiBackend["onGap"];
+
+        emitDisconnect() {
+          if (!disconnectPending || disconnectReason === undefined) {
+            return;
+          }
+          disconnectPending = false;
+          record("disconnect");
+          this.onDisconnected?.(disconnectReason);
+        }
 
         start() {
           queueMicrotask(() => this.onConnected?.());
@@ -145,31 +161,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               cause: new Error(escape + "[31mAuthorization: Bearer sk-abcdefghijklmnopqrstuv" + escape + "[0m"),
             });
           }
-          if (opts.message === "tool chronology proof") {
-            setTimeout(() => {
-              const emitAssistant = (state, text) => {
-                const message = {
-                  role: "assistant",
-                  content: [{ type: "text", text }],
-                  timestamp: Date.now(),
-                };
-                this.onEvent?.({ event: "chat", payload: { runId, sessionKey: opts.sessionKey, state, message } });
-              };
-              emitAssistant("delta", "PTY_BEFORE_TOOL");
-              const data = {
-                phase: "start",
-                toolCallId: "pty-chronology-tool",
-                name: "read_file",
-                args: { path: "chronology-proof.txt" },
-              };
-              this.onEvent?.({ event: "agent", payload: { runId, sessionKey: opts.sessionKey, stream: "tool", data } });
-              const completeText = "PTY_BEFORE_TOOL\\n\\nPTY_AFTER_TOOL";
-              emitAssistant("delta", completeText);
-              emitAssistant("final", completeText);
-              record("toolChronologyComplete", { runId });
-            }, 0);
-            return { runId };
-          }
+          if (startRenderingFixture(this, opts.message, runId, opts.sessionKey)) return { runId };
           if (opts.message === "/btw picker focus proof") {
             queueMicrotask(() => {
               record("pickerSideResult", { runId, sessionKey: opts.sessionKey });
@@ -179,7 +171,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                   kind: "btw",
                   runId,
                   sessionKey: opts.sessionKey,
-                  question: "picker focus proof",
+                  question: process.env.OPENCLAW_TUI_PTY_BTW_QUESTION ?? "picker focus proof",
                   text: "PTY_SIDE_OK",
                 },
               });
@@ -212,50 +204,6 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                 });
               }, delayMs);
             }
-            return { runId };
-          }
-          if (opts.message === "burst streaming proof") {
-            const tokens = Array.from({ length: 128 }, (_, index) =>
-              "T" + String(index).padStart(3, "0"),
-            );
-            setTimeout(() => {
-              for (let index = 0; index < tokens.length; index += 1) {
-                this.onEvent?.({
-                  event: "chat",
-                  payload: {
-                    runId,
-                    sessionKey: opts.sessionKey,
-                    state: "delta",
-                    message: {
-                      role: "assistant",
-                      content: [
-                        {
-                          type: "text",
-                          text: "PTY_STREAM_BURST: " + tokens.slice(0, index + 1).join(" "),
-                        },
-                      ],
-                      timestamp: Date.now(),
-                    },
-                  },
-                });
-              }
-              this.onEvent?.({
-                event: "chat",
-                payload: {
-                  runId,
-                  sessionKey: opts.sessionKey,
-                  state: "final",
-                  message: {
-                    role: "assistant",
-                    content: [
-                      { type: "text", text: "PTY_STREAM_BURST: " + tokens.join(" ") },
-                    ],
-                    timestamp: Date.now(),
-                  },
-                },
-              });
-              record("streamBurstComplete", { count: tokens.length });
-            }, 0);
             return { runId };
           }
           if (opts.message === "history gap proof") { return beginGapHistoryRecovery(this, runId, opts.sessionKey); }
@@ -361,13 +309,14 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                   runId,
                 })
               : [];
+            const attachmentOnlyMessage = buildAttachmentOnlyAssistantMessage(opts.message, runId);
             const message = isSourceReplyProof
               ? assistantMessageFromSourceReplyPayloads(sourceReplyPayloads)
-              : {
+              : (attachmentOnlyMessage ?? {
                   role: "assistant",
                   content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
                   timestamp: Date.now(),
-                };
+                });
             this.onEvent?.({
               event: "chat",
               payload: {
@@ -421,10 +370,15 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               messages: [{ role: "user", content: rapidSwitchMarker + "_HISTORY_MARKER" }],
             };
           }
+          const includeSessionInfo =
+            Boolean(footerModel) || sessionKey.endsWith(":mode-source") || sessionKey.endsWith(":mode-target");
           return {
             messages: [],
             fastMode,
-            ...(footerModel
+            ...(inFlightRunText
+              ? { inFlightRun: { runId: "run-restored-in-flight", text: inFlightRunText } }
+              : {}),
+            ...(includeSessionInfo
               ? {
                   thinkingLevel: footerThinkingLevel,
                   sessionInfo: sessionEntry(sessionKey),
@@ -438,7 +392,14 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             purpose: opts?.includeDerivedTitles ? "picker" : "refresh",
           });
           const sessions = enablePickerFixture
-            ? [sessionEntry("main"), { ...sessionEntry("agent:main:picker-target"), displayName: "Picker target" }]
+            ? [
+                sessionEntry("main"),
+                {
+                  ...sessionEntry(pickerSessionKey),
+                  derivedTitle: pickerSessionTitle,
+                  lastMessagePreview: pickerSessionPreview,
+                },
+              ]
             : [];
           return {
             ts: Date.now(),
@@ -449,7 +410,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               model: currentModel,
               modelProvider: "fixture-provider",
               contextTokens: 128,
-              thinkingLevels: [],
+              thinkingLevels,
             },
           };
         }
@@ -459,7 +420,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             defaultId: "main",
             mainKey: "main",
             scope: "per-sender",
-            agents: [{ id: "main", name: "Main" }],
+            agents: [{ id: "main", name: enablePickerFixture ? pickerSessionDisplayName : "Main" }],
           };
         }
 
@@ -476,6 +437,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           }
           if (typeof opts.verboseLevel === "string") {
             verboseLevel = opts.verboseLevel;
+          }
+          if (typeof opts.traceLevel === "string" && opts.key.endsWith(":mode-target")) {
+            modeTargetTraceLevel = opts.traceLevel;
           }
           return {
             ok: true,
@@ -495,13 +459,11 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true, key, entry: { ...sessionEntry(key), sessionId: "created-session" } };
         }
 
-        async resetSession(key: string, reason?: "new" | "reset") {
-          record("resetSession", { key, reason });
-          return {};
-        }
+        ${TUI_PTY_RESET_FIXTURE.methods}
 
         async getGatewayStatus() {
           record("getGatewayStatus");
+          this.emitDisconnect();
           return gatewayStatus;
         }
 
@@ -509,8 +471,22 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("listModels");
           return [
             { id: "fixture-provider/fixture-model", name: "Fixture", provider: "fixture-provider" },
-            { id: "fixture-provider/fixture-model-2", name: "Fixture 2", provider: "fixture-provider" },
+            { id: pickerModelValue, name: pickerModelName, provider: "fixture-provider" },
           ];
+        }
+
+        async listCommands() {
+          record("listCommands");
+          return dynamicCommandDescription
+            ? [{
+                name: "t08dynamic",
+                textAliases: ["/t08dynamic"],
+                description: dynamicCommandDescription,
+                source: "plugin" as const,
+                scope: "text" as const,
+                acceptsArgs: false,
+              }]
+            : [];
         }
 
         async listPluginApprovals() {
@@ -579,11 +555,12 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             },
             session: { scope: "per-sender", mainKey: "main" },
           },
-          deliver: false,
+          deliver: process.env.OPENCLAW_TUI_PTY_DELIVER === "1",
           thinking: launchThinkingLevel,
           message: initialMessage,
           historyLimit: 5,
           title: "openclaw tui pty fixture",
+          ${TUI_PTY_RESET_FIXTURE.options}
         });
       }
 
@@ -595,116 +572,6 @@ export async function writeTuiPtyFixtureScript(dir: string) {
     "utf8",
   );
   return scriptPath;
-}
-
-export type FixtureLogEntry = {
-  method: string;
-  payload?: unknown;
-};
-
-export const COMPACT_TERMINAL_SIZES = [
-  [64, 18],
-  [68, 18],
-  [72, 20],
-  [80, 20],
-] as const;
-
-export async function readFixtureLog(logPath: string): Promise<FixtureLogEntry[]> {
-  try {
-    const text = await readFile(logPath, "utf8");
-    return text
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as FixtureLogEntry);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-}
-
-export async function waitForFixtureLogEntry(
-  logPath: string,
-  predicate: (entry: FixtureLogEntry) => boolean,
-  timeoutMs: number,
-  readPtyOutput?: () => string,
-) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const entries = await readFixtureLog(logPath);
-    const match = entries.find(predicate);
-    if (match) {
-      return match;
-    }
-    await sleep(25);
-  }
-  const entries = await readFixtureLog(logPath);
-  // A swallowed command leaves no RPC; its visible rejection survives only in the terminal.
-  const ptyOutput = readPtyOutput?.() ?? "";
-  throw new Error(
-    `timed out waiting for fixture log entry\n${JSON.stringify(entries, null, 2)}\n${ptyOutput}`,
-  );
-}
-
-export function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown) {
-  if (typeof entry.payload !== "object" || entry.payload === null) {
-    return false;
-  }
-  const payload = entry.payload as Record<string, unknown>;
-  return Object.hasOwn(payload, field) && payload[field] === value;
-}
-
-/** Proves fixture-local fragmentation preserves a Unicode prompt through the real TUI loop. */
-export async function exerciseFragmentedUnicodePrompt(
-  startFixture: (opts: { env?: NodeJS.ProcessEnv }) => Promise<{
-    run: PtyRun;
-    waitForLogEntry: (predicate: (entry: FixtureLogEntry) => boolean) => Promise<FixtureLogEntry>;
-    cleanup: () => Promise<void>;
-  }>,
-  startupTimeoutMs: number,
-) {
-  const fixture = await startFixture({
-    env: { OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1", OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1" },
-  });
-  const message = "hello 👋 from pty";
-
-  try {
-    await fixture.run.waitForOutput("local ready", startupTimeoutMs);
-    await fixture.run.write(`${message}\r`);
-    await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
-    await fixture.waitForLogEntry(
-      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-    );
-  } finally {
-    await fixture.cleanup();
-  }
-}
-
-/** Approves a workspace skill using exact fragments that survive narrow-terminal wrapping. */
-export async function approveWorkspaceSkill(
-  fixture: {
-    run: PtyRun;
-    waitForLogEntry: (predicate: (entry: FixtureLogEntry) => boolean) => Promise<FixtureLogEntry>;
-  },
-  message: string,
-) {
-  await fixture.run.write(`${message}\r`);
-  await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
-  await fixture.run.waitForOutput("Plugin: workspace-skills");
-  // A compact PTY wraps the request; exact fragments avoid matching across terminal redraws.
-  await fixture.run.waitForOutput("Apply a pending workspace skill proposal");
-  await fixture.run.waitForOutput("into live workspace");
-  await fixture.run.waitForOutput("skills.");
-
-  await fixture.run.write("\x1b[A", { delay: false });
-  await fixture.run.write("\r");
-  await fixture.waitForLogEntry(
-    (entry) =>
-      entry.method === "resolvePluginApproval" &&
-      objectFieldEquals(entry, "decision", "allow-once"),
-  );
-  await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
 }
 
 function buildOpaqueSessionIsolationFixture(): string {

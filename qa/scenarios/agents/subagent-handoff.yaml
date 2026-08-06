@@ -32,6 +32,9 @@ flow:
         - call: reset
         - try:
             actions:
+              - set: requestCursorBefore
+                value:
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
               - call: runAgentPrompt
                 args:
                   - ref: env
@@ -76,7 +79,7 @@ flow:
         # request after the tool runs has plannedToolName unset.
         - set: subagentDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))] : []"
         - assert:
             expr: "!env.mock || subagentDebugRequests.some((request) => !request.toolOutput && /delegate one bounded qa task/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn')"
             message:

@@ -1,9 +1,78 @@
 import { describe, expect, it } from "vitest";
-import type { JsonObject } from "./protocol.js";
+import type { CodexDynamicToolFunctionSpec, JsonObject } from "./protocol.js";
 import {
+  codexDynamicToolsFingerprint,
   fingerprintCodexThreadConfig,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
+
+describe("codexDynamicToolsFingerprint", () => {
+  const createMessageTool = (description: string, channelDescription: string) =>
+    ({
+      type: "function",
+      name: "message",
+      description,
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel: {
+            type: "string",
+            description: channelDescription,
+          },
+        },
+      },
+    }) satisfies CodexDynamicToolFunctionSpec;
+
+  it("changes when model-visible dynamic tool descriptions change", () => {
+    expect(
+      codexDynamicToolsFingerprint([
+        createMessageTool("Send to the current Slack thread.", "Current channel."),
+      ]),
+    ).not.toBe(
+      codexDynamicToolsFingerprint([
+        createMessageTool("Send to the current Discord channel.", "Current channel."),
+      ]),
+    );
+  });
+
+  it("changes when model-visible input schema descriptions change", () => {
+    expect(
+      codexDynamicToolsFingerprint([createMessageTool("Send a message.", "Current Slack thread.")]),
+    ).not.toBe(
+      codexDynamicToolsFingerprint([
+        createMessageTool("Send a message.", "Current Discord channel."),
+      ]),
+    );
+  });
+
+  it("remains stable when tools and schema properties are reordered", () => {
+    const message = createMessageTool("Send a message.", "Current channel.");
+    const reorderedMessage: CodexDynamicToolFunctionSpec = {
+      name: message.name,
+      type: message.type,
+      inputSchema: {
+        properties: {
+          channel: {
+            description: "Current channel.",
+            type: "string",
+          },
+        },
+        type: "object",
+      },
+      description: message.description,
+    };
+    const search: CodexDynamicToolFunctionSpec = {
+      type: "function",
+      name: "search",
+      description: "Search the current conversation.",
+      inputSchema: { type: "object", properties: {} },
+    };
+
+    expect(codexDynamicToolsFingerprint([message, search])).toBe(
+      codexDynamicToolsFingerprint([search, reorderedMessage]),
+    );
+  });
+});
 
 describe("fingerprintCodexThreadConfig", () => {
   const request = {

@@ -15,7 +15,14 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
+import { resolveSqliteSessionEntry } from "../config/sessions/session-accessor.sqlite.js";
+import {
+  resolveExistingAgentSessionStoreTargetsReadOnlyResult,
+  type SessionStoreTargetsReadCache,
+} from "../config/sessions/targets-read-availability.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
@@ -30,11 +37,16 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
+import {
+  createGatewayByteStream,
+  resolveByteResponse,
+  writeByteHeaders,
+} from "./http-byte-range.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
@@ -107,6 +119,21 @@ type CleanupManagedOutgoingMediaRecordsResult = {
 };
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
+type SessionManagedOutgoingAttachmentIndexRead =
+  | { kind: "available"; index: SessionManagedOutgoingAttachmentIndex | null }
+  | {
+      kind: "unavailable";
+      reason:
+        | "database-missing"
+        | "schema-missing"
+        | "table-missing"
+        | "row-invalid"
+        | "read-failed";
+    };
+type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
+type SessionStoreAvailabilityRead = ReturnType<
+  typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
+>;
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
   transcriptPath: string;
@@ -591,6 +618,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   sessionKey?: string;
   agentId?: string;
   forceDeleteSessionRecords?: boolean;
+  hasActiveSessionRun?: (sessionKey: string, agentId: string | undefined) => boolean;
 }): Promise<CleanupManagedOutgoingMediaRecordsResult> {
   const stateDir = params?.stateDir ?? resolveStateDir();
   const nowMs = params?.nowMs ?? Date.now();
@@ -609,6 +637,8 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     string,
     SessionManagedOutgoingAttachmentIndex | null
   >();
+  const sessionStoreAvailabilityCache = new Map<string, SessionStoreAvailabilityRead>();
+  const sessionStoreTargetsReadCache: SessionStoreTargetsReadCache = new Map();
   for (const entry of entries) {
     const { record } = entry;
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
@@ -634,13 +664,22 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     ) {
       shouldDelete = true;
     } else if (!entry.cleanupPending && record.messageId) {
-      shouldDelete = !(await recordMatchesTranscriptMessage(
+      const transcriptMatch = await recordMatchesTranscriptMessage(
         record,
         transcriptAttachmentIndexCache,
-      ));
+        sessionStoreAvailabilityCache,
+        sessionStoreTargetsReadCache,
+        stateDir,
+      );
+      // Session-store unavailability is not proof that durable chat history no longer owns media.
+      shouldDelete = transcriptMatch === "missing";
     } else if (!entry.cleanupPending) {
       const createdAtMs = Date.parse(record.createdAt);
-      shouldDelete = Number.isFinite(createdAtMs) && nowMs - createdAtMs >= transientMaxAgeMs;
+      shouldDelete =
+        Number.isFinite(createdAtMs) &&
+        nowMs - createdAtMs >= transientMaxAgeMs &&
+        params?.hasActiveSessionRun?.(record.sessionKey, record.agentId?.trim() || undefined) !==
+          true;
     }
 
     if (shouldDelete) {
@@ -827,16 +866,10 @@ function setCachedSessionManagedOutgoingAttachmentIndex(
       index,
     },
   );
-  while (
-    sessionManagedOutgoingAttachmentIndexCache.size >
-    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES
-  ) {
-    const oldestKey = sessionManagedOutgoingAttachmentIndexCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    sessionManagedOutgoingAttachmentIndexCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(
+    sessionManagedOutgoingAttachmentIndexCache,
+    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES,
+  );
 }
 
 function sameManagedOutgoingAttachmentTranscriptStat(
@@ -854,19 +887,86 @@ async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
   agentId?: string,
-) {
+  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
+  storeTargetsReadCache?: SessionStoreTargetsReadCache,
+  stateDir?: string,
+): Promise<SessionManagedOutgoingAttachmentIndexRead> {
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
-    return cache.get(cacheKey) ?? null;
+    return { kind: "available", index: cache.get(cacheKey) ?? null };
   }
-  const { storePath, entry } = loadSessionEntryReadOnly(
-    sessionKey,
-    sessionKey === "global" && agentId ? { agentId } : undefined,
-  );
+  const cfg = getRuntimeConfig();
+  const ownerAgentId =
+    agentId ?? resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
+  const discovery =
+    storeAvailabilityCache?.get(ownerAgentId) ??
+    resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, ownerAgentId, {
+      cache: storeTargetsReadCache,
+      ...(stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {}),
+    });
+  storeAvailabilityCache?.set(ownerAgentId, discovery);
+  if (!discovery.available) {
+    return { kind: "unavailable", reason: discovery.reason };
+  }
+  const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
+  const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
+  type SessionEntry = ReturnType<typeof loadSessionEntryReadOnly>["entry"];
+  let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
+  for (const target of discovery.targets) {
+    const exact = loadExactSessionEntryReadOnlyResult({
+      agentId: ownerAgentId,
+      clone: false,
+      env,
+      sessionKey,
+      storePath: target.storePath,
+    });
+    if (!exact.found) {
+      return { kind: "unavailable", reason: exact.reason };
+    }
+    let targetEntry = exact.value?.entry;
+    if (!targetEntry) {
+      try {
+        targetEntry = resolveSqliteSessionEntry(
+          {
+            agentId: ownerAgentId,
+            clone: false,
+            env,
+            sessionKey,
+            storePath: target.storePath,
+          },
+          { readOnly: true },
+        ).existing;
+      } catch {
+        return { kind: "unavailable", reason: "row-invalid" };
+      }
+    }
+    if (targetEntry) {
+      if (matched) {
+        return { kind: "unavailable", reason: "read-failed" };
+      }
+      matched = { entry: targetEntry, storePath: target.storePath };
+    }
+  }
+  let entry: SessionEntry = matched?.entry;
+  let storePath = matched?.storePath ?? discovery.targets[0]?.storePath ?? "";
+  if (!entry && usesRuntimeState) {
+    const loaded = loadSessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
+    const exact = loadExactSessionEntryReadOnlyResult({
+      agentId: ownerAgentId,
+      clone: false,
+      sessionKey,
+      storePath: loaded.storePath,
+    });
+    if (!exact.found) {
+      return { kind: "unavailable", reason: exact.reason };
+    }
+    entry = exact.value?.entry ?? loaded.entry;
+    storePath = loaded.storePath;
+  }
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     cache?.set(cacheKey, null);
-    return null;
+    return { kind: "available", index: null };
   }
 
   let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
@@ -893,7 +993,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       );
       if (cachedIndex) {
         cache?.set(cacheKey, cachedIndex);
-        return cachedIndex;
+        return { kind: "available", index: cachedIndex };
       }
     } catch {
       sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
@@ -959,30 +1059,45 @@ async function getSessionManagedOutgoingAttachmentIndex(
     setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
   }
   cache?.set(cacheKey, index);
-  return index;
+  return { kind: "available", index };
 }
 
 async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-) {
+  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
+  storeTargetsReadCache?: SessionStoreTargetsReadCache,
+  stateDir?: string,
+): Promise<ManagedOutgoingTranscriptMatch> {
   if (!record.messageId) {
-    return false;
+    return "missing";
   }
-  const index = await getSessionManagedOutgoingAttachmentIndex(
+  const read = await getSessionManagedOutgoingAttachmentIndex(
     record.sessionKey,
     cache,
     record.agentId,
+    storeAvailabilityCache,
+    storeTargetsReadCache,
+    stateDir,
   );
-  return (
-    index?.has(buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId)) ?? false
-  );
+  if (read.kind === "unavailable") {
+    return "unavailable";
+  }
+  return read.index?.has(
+    buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId),
+  )
+    ? "match"
+    : "missing";
 }
 
 async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   record: ManagedImageRecord,
+  stateDir?: string,
 ): Promise<ManagedOutgoingMediaArtifactDownload | null> {
-  if (!(await recordMatchesTranscriptMessage(record))) {
+  if (
+    (await recordMatchesTranscriptMessage(record, undefined, undefined, undefined, stateDir)) !==
+    "match"
+  ) {
     return null;
   }
   const kind = resolveManagedRecordKind(record);
@@ -1036,7 +1151,7 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   if (!kind || (parsed.family === "image") !== (kind === "image")) {
     return null;
   }
-  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record);
+  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
 }
 
 /** Upgrade legacy managed-image URLs that predate stable artifact ids. */
@@ -1053,7 +1168,7 @@ export async function resolveManagedOutgoingMediaUrlDownload(params: {
   if (!record || record.sessionKey !== params.sessionKey) {
     return null;
   }
-  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record);
+  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
 }
 
 export async function attachManagedOutgoingMediaToMessage(params: {
@@ -1445,7 +1560,15 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  if (!(await recordMatchesTranscriptMessage(record))) {
+  if (
+    (await recordMatchesTranscriptMessage(
+      record,
+      undefined,
+      undefined,
+      undefined,
+      opts.stateDir,
+    )) !== "match"
+  ) {
     sendStatus(res, 404, "not found");
     return true;
   }
@@ -1459,6 +1582,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
+  const respondNotFound = () => sendStatus(res, 404, "not found");
+  let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
 
   let responseContentType = record.original.contentType || "application/octet-stream";
   let responseFilename = record.original.filename;
@@ -1472,17 +1597,21 @@ export async function handleManagedOutgoingMediaHttpRequest(
       sourceStat: opened.stat,
       mimeType: responseContentType,
       kind: mediaKind,
+    }).catch(async (error: unknown) => {
+      await byteStream.close();
+      throw error;
     });
     if (playback.kind === "preparing") {
-      await opened.handle.close().catch(() => {});
+      await byteStream.close();
       sendJson(res, 202, { status: "preparing" });
       return true;
     }
     if (playback.kind === "transcoded") {
       const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
       if (transcoded) {
-        await opened.handle.close().catch(() => {});
+        await byteStream.close();
         opened = transcoded;
+        byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
         responseContentType = playback.contentType;
         responseFilename = replacePlaybackFileExtension(
           responseFilename ?? "generated-media",
@@ -1492,14 +1621,6 @@ export async function handleManagedOutgoingMediaHttpRequest(
     }
   }
 
-  let handleClosed = false;
-  const closeOpenedHandle = async () => {
-    if (handleClosed) {
-      return;
-    }
-    handleClosed = true;
-    await opened.handle.close().catch(() => {});
-  };
   res.setHeader("content-type", responseContentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
@@ -1516,37 +1637,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
   const byteResponse = resolveByteResponse({
     file: opened.stat,
     method: req.method,
-    rangeHeader: req.headers.range,
-    ifRangeHeader: req.headers["if-range"],
+    request: req,
   });
   writeByteHeaders(res, byteResponse);
-  if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
-    await closeOpenedHandle();
-    res.end();
-    return true;
-  }
-
   // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
-  const stream = opened.handle.createReadStream({
-    start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
-    end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
-    autoClose: false,
-  });
-  const finishClose = () => {
-    void closeOpenedHandle();
-  };
-  stream.once("end", finishClose);
-  stream.once("close", finishClose);
-  stream.once("error", () => {
-    void closeOpenedHandle();
-    if (!res.headersSent) {
-      sendStatus(res, 404, "not found");
-    } else {
-      res.destroy();
-    }
-  });
-  res.once("close", finishClose);
-  stream.pipe(res);
+  await byteStream.pipe(byteResponse, req.method);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

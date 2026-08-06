@@ -112,6 +112,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
@@ -158,6 +159,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -197,6 +199,14 @@ internal fun resolveInitialChatLoadSessionKey(
   if (current.isNotEmpty() && current != "main" && current != main) return null
   return main
 }
+
+/** Reserves a viewport strip so the jump-to-latest target never covers chat content. */
+internal fun chatReaderListBottomInset(showJumpToLatest: Boolean): Dp =
+  if (showJumpToLatest) {
+    56.dp
+  } else {
+    0.dp
+  }
 
 internal enum class ChatComposerTrailingAction {
   StartTalk,
@@ -252,6 +262,8 @@ internal fun shouldUseUserMessageDisclosure(
 fun ChatScreen(
   viewModel: MainViewModel,
   talkActive: Boolean,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   onToggleTalk: () -> Unit,
   onOpenSessions: () -> Unit,
   onOpenDashboard: (String) -> Unit,
@@ -637,6 +649,8 @@ fun ChatScreen(
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
+      showSidebarButton = showSidebarButton,
+      onOpenSidebar = onOpenSidebar,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
@@ -1083,6 +1097,8 @@ internal fun canStartNewChat(
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   healthOk: Boolean,
   pendingRunCount: Int,
   newChatEnabled: Boolean,
@@ -1105,6 +1121,13 @@ private fun ChatHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+      if (showSidebarButton) {
+        HeaderIcon(
+          icon = Icons.Default.Menu,
+          contentDescription = nativeString("Show Sidebar"),
+          onClick = onOpenSidebar,
+        )
+      }
       OpenClawMascot(modifier = Modifier.size(25.dp))
       Text(
         text = nativeString("OpenClaw"),
@@ -1335,7 +1358,10 @@ private fun ChatMessageList(
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
-      modifier = Modifier.fillMaxSize(),
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .padding(bottom = chatReaderListBottomInset(readerScroll.showJumpToLatest)),
       state = readerScroll.listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -1642,7 +1668,7 @@ internal val starterPrompts =
   )
 
 @Composable
-private fun ChatBubble(
+internal fun ChatBubble(
   messageId: String?,
   entryId: String?,
   role: String,

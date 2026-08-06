@@ -200,6 +200,32 @@ describe("buildSlackProgressDraftBlocks", () => {
     ).toEqual([legacyLineBlock("• *Preamble*", "—"), legacyLineBlock("🛠️ *Exec*", "run tests")]);
   });
 
+  it("renders authored commentary Markdown in legacy rich draft details", () => {
+    expect(
+      buildSlackProgressDraftBlocks({
+        lines: [
+          {
+            id: "commentary:preamble-1",
+            kind: "item",
+            label: "Commentary",
+            text: "💬 Rendering the `sample-widget` fixture on **example.test**.",
+            prefix: false,
+          },
+          {
+            id: "reasoning",
+            kind: "item",
+            label: "Reasoning",
+            text: "_Reading the Slack handler_",
+            prefix: false,
+          },
+        ],
+      }),
+    ).toEqual([
+      legacyLineBlock("• *Commentary*", "Rendering the `sample-widget` fixture on *example.test*."),
+      legacyLineBlock("• *Reasoning*", "_Reading the Slack handler_"),
+    ]);
+  });
+
   it("does not emit legacy rich draft blocks when there are no lines or heading", () => {
     expect(
       buildSlackProgressDraftBlocks({

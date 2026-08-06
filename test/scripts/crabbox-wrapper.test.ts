@@ -7,8 +7,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +38,27 @@ const GIT_MERGE_BASE_RELEASE_HEAD_KEY = "merge-base\u0000origin/release/2026.7.2
 const GIT_CHECK_RELEASE_REF_KEY = "check-ref-format\u0000refs/remotes/origin/release/2026.7.2";
 const defaultProviderHelp =
   "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+const brokerProviderHelp = "provider: aws, azure, blacksmith-testbox, or daytona\n";
+const azureProviderHelp =
+  "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
+const fakeRunValueOptionHelp = [
+  "artifact-glob value",
+  "blacksmith-ref string",
+  "capture-stderr string",
+  "capture-stdout string",
+  "download value",
+  "id string",
+  "idle-timeout duration",
+  "label string",
+  "market string",
+  "provider string",
+  "script string",
+  "target string",
+  "ttl duration",
+  "windows-mode string",
+]
+  .map((option) => `  -${option}\n`)
+  .join("");
 const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
@@ -56,268 +79,110 @@ function makeFakeCrabbox(helpText: string): string {
 function writeFakeCrabbox(binDir: string, helpText: string): string {
   mkdirSync(binDir, { recursive: true });
   const crabboxPath = path.join(binDir, "crabbox");
-  const helperPath = path.join(binDir, "fake-crabbox-json.cjs");
   const stampClaimScript = [
-    "const fs = require('node:fs');",
     "const claimPaths = [process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_PATH, process.env.OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH].filter(Boolean);",
-    "for (const claimPath of claimPaths) {",
-    "  const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID };",
-    "  claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd();",
-    "  fs.mkdirSync(require('node:path').dirname(claimPath), { recursive: true });",
-    "  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8');",
-    "}",
-    "if (process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID) {",
-    "  process.stderr.write(JSON.stringify({ provider: 'blacksmith-testbox', leaseId: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID, exitCode: 0 }) + '\\n');",
-    "}",
-  ].join("\n");
-
-  if (process.platform !== "win32") {
-    const signalIgnoringDescendantScript = [
-      "import fs from 'node:fs';",
-      "process.on('SIGHUP', () => {});",
-      "process.on('SIGINT', () => {});",
-      "process.on('SIGTERM', () => {});",
-      "const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH;",
-      "const pidTmpPath = `${pidPath}.tmp.${process.pid}`;",
-      "fs.writeFileSync(pidTmpPath, String(process.pid));",
-      "fs.renameSync(pidTmpPath, pidPath);",
-      "setInterval(() => {}, 1000);",
-    ].join("");
-    const script = [
-      "#!/bin/sh",
-      'if [ "$1" = "--version" ]; then',
-      '  printf "%s\\n" "${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.22.1}"',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
-      `  printf "%s" ${shellSingleQuote(helpText)}`,
-      "  exit 0",
-      "fi",
-      'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && { [ -n "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}" ] || [ -n "${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}" ]; }; then',
-      `  ${shellSingleQuote(process.execPath)} --eval ${shellSingleQuote(stampClaimScript)}`,
-      "fi",
-      'if [ "$1" = "run" ] && [ -n "${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}" ] && [ "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS" != "0" ]; then',
-      '  printf "%s\\n" "fake run failure" >&2',
-      '  exit "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS"',
-      "fi",
-      'if [ "$1" = "config" ] && [ "$2" = "show" ]; then',
-      '  for arg in "$@"; do',
-      '    if [ "$arg" = "--json" ]; then',
-      '      status="${OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS:-0}"',
-      '      if [ "$status" != "0" ]; then',
-      '        printf "%s\\n" "config unavailable" >&2',
-      '        exit "$status"',
-      "      fi",
-      '      if [ -n "${OPENCLAW_FAKE_CRABBOX_CONFIG_JSON+x}" ]; then',
-      '        printf "%s" "$OPENCLAW_FAKE_CRABBOX_CONFIG_JSON"',
-      "      else",
-      '        printf "%s" "{\\"coordinator\\":\\"configured-broker\\",\\"brokerAuth\\":\\"configured\\"}"',
-      "      fi",
-      "      exit 0",
-      "    fi",
-      "  done",
-      "fi",
-      'if [ "$1" = "whoami" ]; then',
-      '  status="${OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS:-0}"',
-      '  if [ "$status" != "0" ]; then',
-      '    printf "%s\\n" "coordinator GET /v1/whoami: http 401: {\\"error\\":\\"unauthorized\\"}" >&2',
-      '    exit "$status"',
-      "  fi",
-      '  printf "%s\\n" "fake-crabbox-user"',
-      "  exit 0",
-      "fi",
-      'for arg in "$@"; do',
-      '  if [ "$arg" = "--artifact-glob" ] || [ "$arg" = "-artifact-glob" ]; then',
-      "    mkdir -p .crabbox/runs/run_fake",
-      '    printf "%s\\n" "fake artifact" > .crabbox/runs/run_fake/fake-artifacts.tgz',
-      "  fi",
-      "done",
-      'script_path=""',
-      'previous_arg=""',
-      'for arg in "$@"; do',
-      '  if [ "$previous_arg" = "--script" ] || [ "$previous_arg" = "-script" ]; then',
-      '    script_path="$arg"',
-      "    break",
-      "  fi",
-      '  previous_arg="$arg"',
-      "done",
-      'if [ "${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}" = "1" ]; then',
-      // Let the wrapper finish its synchronous keepalive check so this fixture
-      // exercises the post-exit checkout guard, not the active-child monitor.
-      "  sleep 0.1",
-      '  deleted_cwd="$PWD"',
-      "  cd / || exit 1",
-      '  rm -rf "$deleted_cwd"',
-      "  exit 0",
-      "fi",
-      'if [ "${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}" = "1" ]; then',
-      '  deleted_cwd="$PWD"',
-      "  cd / || exit 1",
-      '  rm -rf "$deleted_cwd"',
-      // Fail-safe only: the wrapper normally kills this child mid-loop. The
-      // deadline just has to outlast wrapper timer starvation under
-      // parallel-suite load, or the child exits 66 before the wrapper reacts
-      // and the test asserts on the wrong stderr message.
-      "  deadline=1000",
-      '  while [ "$deadline" -gt 0 ] && [ ! -d "$deleted_cwd" ]; do',
-      "    deadline=$((deadline - 1))",
-      "    sleep 0.01",
-      "  done",
-      '  if [ ! -d "$deleted_cwd" ]; then',
-      '    printf "%s\\n" "cwd was not restored: $deleted_cwd" >&2',
-      "    exit 66",
-      "  fi",
-      '  cd "$deleted_cwd" || exit 1',
-      "fi",
-      'if [ -n "${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}" ]; then',
-      // The descendant publishes its own PID only after its signal handlers exist.
-      // Atomic rename makes path existence a complete readiness handshake.
-      `  ${shellSingleQuote(process.execPath)} --input-type=module --eval ${shellSingleQuote(signalIgnoringDescendantScript)} &`,
-      '  trap "exit 0" INT TERM HUP',
-      "  while :; do sleep 1; done",
-      "fi",
-      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}" ]; then',
-      '  expected_bundle="$(mktemp)" || exit 67',
-      '  printf "%s" "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE" > "$expected_bundle"',
-      '  if [ ! -f .openclaw-crabbox-changed-gate.bundle ] || ! cmp -s .openclaw-crabbox-changed-gate.bundle "$expected_bundle"; then',
-      '    rm -f "$expected_bundle"',
-      '    printf "%s\\n" "changed-gate bundle mismatch" >&2',
-      "    exit 67",
-      "  fi",
-      '  rm -f "$expected_bundle"',
-      "fi",
-      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}" ]; then',
-      '  actual_bundle_bytes="$(wc -c < .openclaw-crabbox-changed-gate.bundle 2>/dev/null | tr -d " ")"',
-      '  if [ "$actual_bundle_bytes" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES" ]; then',
-      '    printf "%s\\n" "changed-gate bundle size mismatch" >&2',
-      "    exit 67",
-      "  fi",
-      "fi",
-      'if [ "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}" = "1" ] && [ ! -f "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
-      '  printf "%s\\n" "changed-gate bundle was not force-added" >&2',
-      "  exit 67",
-      "fi",
-      'printf "%s\\0" "__OPENCLAW_FAKE_CRABBOX_V1__"',
-      'printf "%s\\0" "$PWD"',
-      'printf "%s\\0" "$#"',
-      'for arg in "$@"; do',
-      '  printf "%s\\0" "$arg"',
-      "done",
-      'if [ -n "$script_path" ] && [ -f "$script_path" ]; then',
-      '  cat "$script_path"',
-      "fi",
-    ].join("\n");
-    writeFileSync(crabboxPath, `${script}\n`, "utf8");
-    chmodSync(crabboxPath, 0o755);
-    return crabboxPath;
+    "for (const claimPath of claimPaths) { const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID }; claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd(); fs.mkdirSync(path.dirname(claimPath), { recursive: true }); fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8'); }",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID) process.stderr.write(JSON.stringify({ provider: 'blacksmith-testbox', leaseId: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID, exitCode: 0 }) + '\\n');",
+  ].join("");
+  // Keep the descendant in the fake's process group, and publish readiness only
+  // after its signal handlers exist so the wrapper's group cleanup is deterministic.
+  const signalIgnoringDescendantScript =
+    "import fs from 'node:fs'; process.on('SIGHUP', () => {}); process.on('SIGINT', () => {}); process.on('SIGTERM', () => {}); const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH; const tmpPath = pidPath + '.tmp.' + process.pid; fs.writeFileSync(tmpPath, String(process.pid)); fs.renameSync(tmpPath, pidPath); setInterval(() => {}, 1000);";
+  // The two cwd-loss modes distinguish active-child monitoring from the post-exit
+  // guard; both must chdir away before deleting the temporary checkout.
+  const script = String.raw`
+const fs = require("node:fs"); const path = require("node:path"); const { spawn } = require("node:child_process");
+const args = process.argv.slice(2); const helpText = ${JSON.stringify(`${helpText}${fakeRunValueOptionHelp}`)};
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const optionValue = (name) => {
+  const index = args.findIndex((arg) => arg === "--" + name || arg === "-" + name); const assigned = args.find((arg) => arg.startsWith("--" + name + "=") || arg.startsWith("-" + name + "="));
+  return index >= 0 ? args[index + 1] || "" : assigned?.slice(assigned.indexOf("=") + 1) || "";
+};
+async function main() {
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1"); return; }
+  if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
+  if (args[0] === "doctor") {
+    const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
+    if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write("doctor target mismatch: got=" + target + "\n"); process.exit(64); }
+    if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write("doctor windows mode mismatch: got=" + windowsMode + "\n"); process.exit(64); }
+    const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || "").split(",").filter(Boolean));
+    const ready = !unready.has(provider); process[ready ? "stdout" : "stderr"].write(JSON.stringify({ ok: ready, provider }) + "\n");
+    process.exit(ready ? 0 : 1);
   }
-
-  const helperScript = [
-    "const args = process.argv.slice(2);",
-    'if (args[0] === "config" && args[1] === "show" && args.includes("--json")) {',
-    "  const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS || '0', 10);",
-    "  if (status !== 0) {",
-    "    process.stderr.write('config unavailable\\n');",
-    "    process.exit(status);",
-    "  }",
-    '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"coordinator":"configured-broker","brokerAuth":"configured"}\');',
-    "  process.exit(0);",
-    "}",
-    'if (args[0] === "whoami") {',
-    "  const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS || '0', 10);",
-    "  if (status !== 0) {",
-    '    process.stderr.write(\'coordinator GET /v1/whoami: http 401: {"error":"unauthorized"}\\n\');',
-    "    process.exit(status);",
-    "  }",
-    "  process.stdout.write('fake-crabbox-user\\n');",
-    "  process.exit(0);",
-    "}",
-    "const scriptIndex = args.findIndex((arg) => arg === '--script' || arg === '-script');",
-    "const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : '';",
-    "const scriptContent = scriptPath ? require('node:fs').readFileSync(scriptPath, 'utf8') : '';",
-    "if (args.includes('--artifact-glob') || args.includes('-artifact-glob')) {",
-    "  require('node:fs').mkdirSync('.crabbox/runs/run_fake', { recursive: true });",
-    "  require('node:fs').writeFileSync('.crabbox/runs/run_fake/fake-artifacts.tgz', 'fake artifact\\n');",
-    "}",
-    "if (Object.hasOwn(process.env, 'OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE')) {",
-    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
-    "  const bundle = require('node:fs').existsSync(bundlePath) ? require('node:fs').readFileSync(bundlePath, 'utf8') : null;",
-    "  if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write('changed-gate bundle mismatch\\n'); process.exit(67); }",
-    "}",
-    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES) {",
-    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
-    "  const size = require('node:fs').existsSync(bundlePath) ? require('node:fs').statSync(bundlePath).size : -1;",
-    "  if (size !== Number(process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES)) { process.stderr.write('changed-gate bundle size mismatch\\n'); process.exit(67); }",
-    "}",
-    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD === '1' && !require('node:fs').existsSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER || '')) { process.stderr.write('changed-gate bundle was not force-added\\n'); process.exit(67); }",
-    "console.log(JSON.stringify({ args, cwd: process.cwd(), scriptContent }));",
-  ].join("\n");
-  writeFileSync(helperPath, `${helperScript}\n`, "utf8");
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const args = process.argv.slice(2);",
-    'if (args[0] === "--version") {',
-    "  console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || 'crabbox 0.22.1');",
-    "  process.exit(0);",
-    "}",
-    'if (args[0] === "run" && args[1] === "--help") {',
-    `  process.stdout.write(${JSON.stringify(helpText)});`,
-    "  process.exit(0);",
-    "}",
-    `if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }`,
-    'if (args[0] === "run" && Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10) !== 0) {',
-    "  process.stderr.write('fake run failure\\n');",
-    "  process.exit(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS, 10));",
-    "}",
-    `require(${JSON.stringify(helperPath)});`,
-  ].join("\n");
-  writeFileSync(crabboxPath, `${script}\n`, "utf8");
-  writeFileSync(`${crabboxPath}.cmd`, windowsNodeCmdShim("crabbox"), "utf8");
-  chmodSync(crabboxPath, 0o755);
+  if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }
+  const runStatus = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10); if (args[0] === "run" && runStatus !== 0) { process.stderr.write("fake run failure\n"); process.exit(runStatus); }
+  if (args[0] === "config" && args[1] === "show" && args.includes("--json")) {
+    const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS || "0", 10);
+    if (status !== 0) { process.stderr.write("config unavailable\n"); process.exit(status); }
+    process.stdout.write(Object.hasOwn(process.env, "OPENCLAW_FAKE_CRABBOX_CONFIG_JSON") ? process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON : '{"coordinator":"configured-broker","brokerMode":"managed","brokerAuth":"configured"}');
+    return;
+  }
+  if (args[0] === "whoami") {
+    const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS || "0", 10);
+    if (status !== 0) { process.stderr.write('coordinator GET /v1/whoami: http 401: {"error":"unauthorized"}\n'); process.exit(status); }
+    process.stdout.write("fake-crabbox-user\n"); return;
+  }
+  if (args.includes("--artifact-glob") || args.includes("-artifact-glob")) { fs.mkdirSync(".crabbox/runs/run_fake", { recursive: true }); fs.writeFileSync(".crabbox/runs/run_fake/fake-artifacts.tgz", "fake artifact\n"); }
+  const scriptIndex = args.findIndex((arg) => arg === "--script" || arg === "-script"); const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : "";
+  const scriptContent = scriptPath ? fs.readFileSync(scriptPath, "utf8") : "";
+  if (process.env.OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT === "1") {
+    await wait(100); const deletedCwd = process.cwd(); process.chdir(path.parse(deletedCwd).root || "/");
+    fs.rmSync(deletedCwd, { recursive: true, force: true }); process.exit(0);
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE === "1") {
+    const deletedCwd = process.cwd(); process.chdir(path.parse(deletedCwd).root || "/");
+    fs.rmSync(deletedCwd, { recursive: true, force: true }); let attempts = 1000;
+    while (attempts-- > 0 && !fs.existsSync(deletedCwd)) await wait(10);
+    if (!fs.existsSync(deletedCwd)) { process.stderr.write("cwd was not restored: " + deletedCwd + "\n"); process.exit(66); }
+    process.chdir(deletedCwd);
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH) {
+    spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(signalIgnoringDescendantScript)}], { stdio: "ignore" });
+    setInterval(() => {}, 1000); return;
+  }
+  const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+  if (Object.hasOwn(process.env, "OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE")) {
+    const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf8") : null;
+    if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write("changed-gate bundle mismatch\n"); process.exit(67); }
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES) {
+    const bytes = fs.existsSync(bundlePath) ? fs.statSync(bundlePath).size : -1;
+    if (bytes !== Number(process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES)) { process.stderr.write("changed-gate bundle size mismatch\n"); process.exit(67); }
+  }
+  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD === "1" && !fs.existsSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER || "")) { process.stderr.write("changed-gate bundle was not force-added\n"); process.exit(67); }
+  process.stdout.write(JSON.stringify({ args, cwd: process.cwd(), scriptContent }) + "\n");
+}
+main().catch((error) => { process.stderr.write(String(error?.stack || error) + "\n"); process.exit(1); });`;
+  writeNodeCommand(crabboxPath, script);
   return crabboxPath;
 }
 
 function makeSlowVersionCrabbox(helpText: string): string {
-  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-crabbox-"));
-  tempDirs.push(binDir);
-  const crabboxPath = path.join(binDir, "crabbox");
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const args = process.argv.slice(2);",
-    'if (args[0] === "--version") { setTimeout(() => process.exit(0), 1_000); }',
-    `else if (args[0] === "run" && args[1] === "--help") { process.stdout.write(${JSON.stringify(helpText)}); }`,
-  ].join("\n");
-  writeFileSync(crabboxPath, `${script}\n`, "utf8");
-  writeFileSync(`${crabboxPath}.cmd`, windowsNodeCmdShim("crabbox"), "utf8");
-  chmodSync(crabboxPath, 0o755);
-  return binDir;
+  return makeSlowCrabbox(helpText, "version", 1_000);
 }
 
 // Fake Crabbox whose `run --help` is slow on every call and, like real Crabbox
 // 0.36, renders the provider help to stderr. Used to prove the wrapper retries a
 // cold/slow metadata probe instead of hard-failing.
 function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
-  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-help-crabbox-"));
+  return makeSlowCrabbox(helpText, "help", delayMs);
+}
+
+function makeSlowCrabbox(helpText: string, mode: "help" | "version", delayMs: number): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), `openclaw-slow-${mode}-crabbox-`));
   tempDirs.push(binDir);
   const crabboxPath = path.join(binDir, "crabbox");
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const args = process.argv.slice(2);",
-    "if (args[0] === '--version') {",
-    "  console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || 'crabbox 0.22.1');",
-    "  process.exit(0);",
-    "} else if (args[0] === 'run' && args[1] === '--help') {",
-    `  setTimeout(() => { process.stderr.write(${JSON.stringify(helpText)}); process.exit(0); }, ${delayMs});`,
-    "} else {",
-    "  process.exit(0);",
-    "}",
-  ].join("\n");
-  writeFileSync(crabboxPath, `${script}\n`, "utf8");
-  writeFileSync(`${crabboxPath}.cmd`, windowsNodeCmdShim("crabbox"), "utf8");
-  chmodSync(crabboxPath, 0o755);
+  const runHelpText = `${helpText}${fakeRunValueOptionHelp}`;
+  const script = String.raw`
+const args = process.argv.slice(2); const mode = ${JSON.stringify(mode)};
+if (args[0] === "--version") {
+  if (mode === "version") setTimeout(() => process.exit(0), ${delayMs});
+  else console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1");
+} else if (args[0] === "run" && args[1] === "--help") {
+  if (mode === "help") setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
+  else process.stdout.write(${JSON.stringify(runHelpText)});
+}`;
+  writeNodeCommand(crabboxPath, script);
   return binDir;
 }
 
@@ -376,8 +241,13 @@ function windowsNodeCmdShim(target: string): string {
   ].join("\r\n");
 }
 
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+function writeNodeCommand(commandPath: string, script: string): void {
+  writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
+  if (process.platform === "win32") {
+    const shim = windowsNodeCmdShim(path.basename(commandPath));
+    writeFileSync(`${commandPath}.cmd`, shim, "utf8");
+  }
+  chmodSync(commandPath, 0o755);
 }
 
 function makeFakeGit(
@@ -391,123 +261,39 @@ function makeFakeGit(
   const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fake-git-"));
   tempDirs.push(binDir);
   const gitPath = path.join(binDir, "git");
-  if (process.platform !== "win32") {
-    const script = [
-      "#!/bin/sh",
-      'if [ "$1" = "worktree" ] && [ "$2" = "add" ]; then',
-      '  mkdir -p "$4"',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET:-}" ]; then',
-      '    ln -s "$OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET" "$4/.openclaw-crabbox-changed-gate.bundle"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "sparse-checkout" ] && [ "$4" = "disable" ]; then',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then',
-      '  if [ "$4" = "HEAD" ]; then',
-      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_SHA:-def456}"',
-      '  elif [ "$4" = "HEAD^{tree}" ]; then',
-      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_TREE_SHA:-tree456}"',
-      "  else",
-      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_BASE_SHA:-abc123}"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "-c" ] && [ "$7" = "commit-tree" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER:-}" ]; then',
-      '    for arg in "$@"; do [ "$arg" != "-p" ] || exit 68; done',
-      '    : > "$OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"',
-      "  fi",
-      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER:-}" ]; then',
-      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER"',
-      "  fi",
-      '  printf "%s\\n" "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA:-synthetic789}"',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "update-ref" ] && [ "$4" = "HEAD" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER:-}" ]; then',
-      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "bundle" ] && [ "$4" = "create" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER:-}" ]; then',
-      '    [ "$#" = "6" ] && [ "$6" = "HEAD" ] || exit 68',
-      '    : > "$OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"',
-      "  fi",
-      '  if [ -n "${OPENCLAW_FAKE_GIT_BUNDLE_BYTES:-}" ]; then',
-      '    head -c "$OPENCLAW_FAKE_GIT_BUNDLE_BYTES" /dev/zero | tr "\\000" x > "$5"',
-      "  else",
-      '    printf "%s" "${OPENCLAW_FAKE_GIT_BUNDLE:-fake-bundle}" > "$5"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "add" ] && [ "$4" = "-f" ]; then',
-      '  if [ -n "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
-      '    : > "$OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"',
-      "  fi",
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "-C" ] && [ "$3" = "reset" ] && [ "$4" = "--mixed" ]; then',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then',
-      '  rm -rf "$4"',
-      "  exit 0",
-      "fi",
-      ...Object.entries(responses).flatMap(([responseKey, response]) => {
-        const args = responseKey.split("\u0000");
-        return [
-          `if ${shellArgListCondition(args)}; then`,
-          response.stdout ? `  printf "%s" ${shellSingleQuote(response.stdout)}` : "",
-          response.stderr ? `  printf "%s" ${shellSingleQuote(response.stderr)} >&2` : "",
-          `  exit ${response.status ?? 0}`,
-          "fi",
-        ].filter(Boolean);
-      }),
-      "exit 1",
-    ].join("\n");
-    writeFileSync(gitPath, `${script}\n`, "utf8");
-    chmodSync(gitPath, 0o755);
-    fakeGitBinDirs.set(key, binDir);
-    return binDir;
-  }
-
-  const script = [
-    "#!/usr/bin/env node",
-    "const fs = require('node:fs');",
-    "const responses = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || '{}')));",
-    "const args = process.argv.slice(2);",
-    "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, require('node:path').join(args[3], '.openclaw-crabbox-changed-gate.bundle')); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'rev-parse') { const value = args[3] === 'HEAD' ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || 'def456' : args[3] === 'HEAD^{tree}' ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || 'tree456' : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || 'abc123'; process.stdout.write(`${value}\\n`); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === '-c' && args[6] === 'commit-tree') { if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER) { if (args.includes('-p')) process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER, ''); } if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER, ''); process.stdout.write(`${process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || 'synthetic789'}\\n`); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'update-ref' && args[3] === 'HEAD') { if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER, ''); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'bundle' && args[3] === 'create') { if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER) { if (args.length !== 6 || args[5] !== 'HEAD') process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER, ''); } const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0); fs.writeFileSync(args[4], bytes ? 'x'.repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || 'fake-bundle'); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'add' && args[3] === '-f') { if (process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER, ''); process.exit(0); }",
-    "if (args[0] === '-C' && args[2] === 'reset' && args[3] === '--mixed') { process.exit(0); }",
-    "if (args[0] === 'worktree' && args[1] === 'remove') { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }",
-    "const key = args.join('\\u0000');",
-    "const response = responses.get(key);",
-    "if (!response) { process.exit(1); }",
-    "if (response.stdout) process.stdout.write(response.stdout);",
-    "if (response.stderr) process.stderr.write(response.stderr);",
-    "process.exit(response.status ?? 0);",
-  ].join("\n");
-  writeFileSync(gitPath, `${script}\n`, "utf8");
-  writeFileSync(`${gitPath}.cmd`, windowsNodeCmdShim("git"), "utf8");
-  chmodSync(gitPath, 0o755);
+  const script = String.raw`
+const fs = require("node:fs"); const path = require("node:path"); const args = process.argv.slice(2);
+const touch = (name) => { if (process.env[name]) fs.writeFileSync(process.env[name], ""); };
+if (args[0] === "worktree" && args[1] === "add") {
+  fs.mkdirSync(args[3], { recursive: true });
+  if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, path.join(args[3], ".openclaw-crabbox-changed-gate.bundle")); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "sparse-checkout" && args[3] === "disable") process.exit(0);
+if (args[0] === "-C" && args[2] === "rev-parse") {
+  const value = args[3] === "HEAD" ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || "def456" : args[3] === "HEAD^{tree}" ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || "tree456" : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123";
+  process.stdout.write(value + "\n"); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "-c" && args[6] === "commit-tree") {
+  if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER && args.includes("-p")) process.exit(68);
+  touch("OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"); touch("OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER");
+  process.stdout.write((process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || "synthetic789") + "\n"); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "update-ref" && args[3] === "HEAD") { touch("OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"); process.exit(0); }
+if (args[0] === "-C" && args[2] === "bundle" && args[3] === "create") {
+  if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER && (args.length !== 6 || args[5] !== "HEAD")) process.exit(68);
+  touch("OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"); const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0);
+  fs.writeFileSync(args[4], bytes ? "x".repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || "fake-bundle"); process.exit(0);
+}
+if (args[0] === "-C" && args[2] === "add" && args[3] === "-f") { touch("OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"); process.exit(0); }
+if (args[0] === "-C" && args[2] === "reset" && args[3] === "--mixed") process.exit(0);
+if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }
+const response = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || "{}"))).get(args.join("\u0000"));
+if (!response) process.exit(1);
+if (response.stdout) process.stdout.write(response.stdout); if (response.stderr) process.stderr.write(response.stderr);
+process.exit(response.status ?? 0);`;
+  writeNodeCommand(gitPath, script);
   fakeGitBinDirs.set(key, binDir);
   return binDir;
-}
-
-function shellArgListCondition(args: string[]): string {
-  const checks = [`[ "$#" -eq ${args.length} ]`];
-  for (const [index, arg] of args.entries()) {
-    checks.push(`[ "$${index + 1}" = ${shellSingleQuote(arg)} ]`);
-  }
-  return checks.join(" && ");
 }
 
 function runWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
@@ -566,7 +352,12 @@ function wrapperEnv(helpText: string, options: WrapperOptions): NodeJS.ProcessEn
     OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
     OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
     ...(options.configJson
-      ? { OPENCLAW_FAKE_CRABBOX_CONFIG_JSON: JSON.stringify(options.configJson) }
+      ? {
+          OPENCLAW_FAKE_CRABBOX_CONFIG_JSON: JSON.stringify({
+            brokerMode: "managed",
+            ...options.configJson,
+          }),
+        }
       : {}),
     ...(options.configStatus
       ? { OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS: String(options.configStatus) }
@@ -576,34 +367,102 @@ function wrapperEnv(helpText: string, options: WrapperOptions): NodeJS.ProcessEn
   };
 }
 
-function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): {
+type FakeCrabboxOutput = {
   args: string[];
   cwd: string;
   scriptContent?: string;
-} {
-  const marker = "__OPENCLAW_FAKE_CRABBOX_V1__\0";
-  if (result.stdout.startsWith(marker)) {
-    let offset = marker.length;
-    const readField = () => {
-      const end = result.stdout.indexOf("\0", offset);
-      if (end < 0) {
-        throw new Error("missing fake Crabbox output field terminator");
-      }
-      const value = result.stdout.slice(offset, end);
-      offset = end + 1;
-      return value;
-    };
-    const cwd = readField();
-    const argCount = Number.parseInt(readField(), 10);
-    const args = Array.from({ length: argCount }, () => readField());
-    const scriptContent = result.stdout.slice(offset);
-    return { args, cwd, scriptContent };
-  }
-  return JSON.parse(result.stdout.trim()) as {
-    args: string[];
-    cwd: string;
-    scriptContent?: string;
+};
+
+function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): FakeCrabboxOutput {
+  return JSON.parse(result.stdout.trim()) as FakeCrabboxOutput;
+}
+
+type ParsedWrapperRun = {
+  output: ReturnType<typeof parseFakeCrabboxOutput>;
+  remoteCommand: string;
+  result: ReturnType<typeof runWrapper>;
+};
+
+function expectSuccessfulWrapperRun(result: ReturnType<typeof runWrapper>): ParsedWrapperRun {
+  expect(result.status).toBe(0);
+  const output = parseFakeCrabboxOutput(result);
+  const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+  return { output, remoteCommand, result };
+}
+
+function runSuccessfulDefaultWrapper(args: string[], options: WrapperOptions = {}) {
+  return expectSuccessfulWrapperRun(runDefaultWrapper(args, options));
+}
+
+function runSuccessfulWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
+  return expectSuccessfulWrapperRun(runWrapper(helpText, args, options));
+}
+
+function runBrokerWrapper(args: string[], options: WrapperOptions = {}) {
+  return runWrapper(brokerProviderHelp, args, {
+    ...options,
+    env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0", ...options.env },
+  });
+}
+
+function runSuccessfulBrokerWrapper(args: string[], options: WrapperOptions = {}) {
+  return expectSuccessfulWrapperRun(runBrokerWrapper(args, options));
+}
+
+function managedBrokerConfig(
+  provider: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    provider,
+    coordinator: "configured-broker",
+    brokerMode: "managed",
+    brokerAuth: "configured",
+    ...overrides,
   };
+}
+
+function directBrokerConfig(provider: string): Record<string, unknown> {
+  return { provider, coordinator: "", brokerMode: "", brokerAuth: "missing" };
+}
+
+function windowsHydrateArgs(...args: string[]): string[] {
+  return ["actions", "hydrate", "--provider", "aws", "--target", "windows", ...args];
+}
+
+function runSuccessfulWindowsHydrate(...args: string[]): ParsedWrapperRun {
+  return runSuccessfulWrapper(azureProviderHelp, windowsHydrateArgs(...args));
+}
+
+function runSuccessfulNativeWindows(
+  provider: "aws" | "azure",
+  command: string[],
+  shell = false,
+): ParsedWrapperRun {
+  return runSuccessfulWrapper("provider: hetzner, aws, azure, local-container\n", [
+    "run",
+    "--provider",
+    provider,
+    "--target",
+    "windows",
+    "--windows-mode",
+    "normal",
+    "--id",
+    "cbx_test",
+    ...(shell ? ["--shell"] : []),
+    "--",
+    ...command,
+  ]);
+}
+
+function expectHydratedWindowsShell(run: ParsedWrapperRun, command: string): void {
+  expect(run.output.args).toContain("--shell");
+  expect(run.remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+  expect(run.remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
+  expect(run.remoteCommand).toContain(
+    'mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"',
+  );
+  expect(run.remoteCommand).toContain(command);
 }
 
 function normalizeShellLineEndings(value: string): string {
@@ -710,30 +569,63 @@ function expectGroupedShellCommand(remoteCommand: string, command: string): void
   }
 }
 
-function runMacosShell(shellScript: string, options: WrapperOptions = {}) {
-  const result = runDefaultWrapper(
+function expectMacosJsBootstrap(remoteCommand: string, command: string): void {
+  expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+  expectGroupedShellCommand(remoteCommand, command);
+}
+
+function expectMacosPackageCommand(
+  { output, remoteCommand }: ParsedWrapperRun,
+  command: string,
+  beforeGrouped?: (remoteCommand: string) => void,
+): void {
+  expect(output.args).toContain("--shell");
+  expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+  expect(remoteCommand).toContain("pnpm --version >&2");
+  expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
+  beforeGrouped?.(remoteCommand);
+  expectGroupedShellCommand(remoteCommand, command);
+}
+
+function runSuccessfulMacosShell(shellScript: string, options: WrapperOptions = {}) {
+  return runSuccessfulDefaultWrapper(
     ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
     options,
   );
-  const output = parseFakeCrabboxOutput(result);
-  return {
-    output,
-    remoteCommand: normalizeShellLineEndings(output.args.at(-1) ?? ""),
-    result,
-  };
 }
 
-function runMacosCommand(command: string[], options: WrapperOptions = {}) {
-  const result = runDefaultWrapper(
+function runSuccessfulMacosCommand(command: string[], options: WrapperOptions = {}) {
+  return runSuccessfulDefaultWrapper(
     ["run", "--provider", "aws", "--target", "macos", "--", ...command],
     options,
   );
-  const output = parseFakeCrabboxOutput(result);
-  return {
-    output,
-    remoteCommand: normalizeShellLineEndings(output.args.at(-1) ?? ""),
-    result,
-  };
+}
+
+function runSuccessfulMacosScript(script: string, trailingArgs: string[] = []): ParsedWrapperRun {
+  return runSuccessfulDefaultWrapper(
+    ["run", "--provider", "aws", "--target", "macos", "--script-stdin", ...trailingArgs],
+    { input: script },
+  );
+}
+
+function runDelegatedBlacksmith(args: string[], env: Record<string, string>) {
+  if (process.platform === "win32") {
+    return runDefaultWrapper(args, { ...cleanSparseSyncOptions, env });
+  }
+  const physicalSyncRoot = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-sync-physical-"));
+  const syncRootAlias = `${physicalSyncRoot}-alias`;
+  symlinkSync(physicalSyncRoot, syncRootAlias, "dir");
+  tempDirs.push(syncRootAlias, physicalSyncRoot);
+  const result = runDefaultWrapper(args, {
+    ...cleanSparseSyncOptions,
+    env: { ...env, OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRootAlias },
+  });
+  if (result.stdout.trim()) {
+    expect(
+      parseFakeCrabboxOutput(result).cwd.startsWith(`${realpathSync(physicalSyncRoot)}${path.sep}`),
+    ).toBe(true);
+  }
+  return result;
 }
 
 const remoteChangedGateEnvPrefix =
@@ -749,17 +641,36 @@ const sparseChangedGateOptions = {
   },
 } satisfies WrapperOptions;
 
+const cleanSparseSyncOptions = {
+  gitResponses: {
+    [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+    [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+  },
+} satisfies WrapperOptions;
+
+function withSparseSyncRoot(
+  name: string,
+  env: Record<string, string>,
+  check: (fixture: { result: ReturnType<typeof runWrapper>; syncRoot: string }) => void,
+): void {
+  const syncRoot = path.join(repoRoot, name);
+  rmSync(syncRoot, { recursive: true, force: true });
+  try {
+    const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
+      ...cleanSparseSyncOptions,
+      env: { ...env, OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot },
+    });
+    check({ result, syncRoot });
+  } finally {
+    rmSync(syncRoot, { recursive: true, force: true });
+  }
+}
+
 function runSparseShell(shellScript: string) {
-  const result = runDefaultWrapper(
+  return runSuccessfulDefaultWrapper(
     ["run", "--provider", "aws", "--shell", "--", shellScript],
     sparseChangedGateOptions,
   );
-  const output = parseFakeCrabboxOutput(result);
-  return {
-    output,
-    remoteCommand: normalizeShellLineEndings(output.args.at(-1) ?? ""),
-    result,
-  };
 }
 
 function expectChangedGateGitBootstrap(remoteCommand: string): void {
@@ -770,6 +681,11 @@ function expectChangedGateGitBootstrap(remoteCommand: string): void {
   );
   expect(remoteCommand).toContain("mktemp /tmp/openclaw-changed-gate.XXXXXX");
   expect(remoteCommand).toContain('cp "$openclaw_changed_gate_bundle"');
+  const cleanupIndex = remoteCommand.indexOf(
+    'rm -rf -- "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle".* || exit 2',
+  );
+  expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+  expect(cleanupIndex).toBeLessThan(remoteCommand.indexOf("rm -rf .git || exit 2"));
   expect(remoteCommand).toContain("git init -q || exit 2");
   expect(remoteCommand).toContain(`${remoteChangedGateFetch} || exit 2`);
   expect(remoteCommand).toContain(
@@ -798,8 +714,6 @@ afterAll(() => {
 });
 
 describe("scripts/crabbox-wrapper", () => {
-  const azureProviderHelp =
-    "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
   const advertisedProviderAliasHelp = [
     "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
     "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
@@ -829,11 +743,551 @@ describe("scripts/crabbox-wrapper", () => {
     runWrapper("provider: aws\n", ["--version"]);
   });
 
-  it("accepts advertised canonical providers from Crabbox help", () => {
-    const result = runDefaultWrapper(["run", "--provider", "local-container", "--", "echo ok"]);
+  it("routes CI workloads through the first ready provider", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "ci-fast", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox",
+        },
+      },
+    );
+    expect(output.args).toContain("daytona");
+    expect(result.stderr).toContain(
+      "route workload=ci-fast selected=daytona chain=blacksmith-testbox,daytona,azure,aws",
+    );
+  });
+
+  it("uses brokered cloud providers as the final CI fallback", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload=ci-fast", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox,daytona,azure",
+        },
+      },
+    );
+    expect(output.args).toContain("aws");
+    expect(result.stderr).toContain("selected=aws");
+  });
+
+  it("keeps the configured provider when no workload is requested", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(["run", "--", "echo ok"], {
+      configJson: managedBrokerConfig("aws", { target: "linux", windowsMode: "normal" }),
+    });
+    expect(output.args).not.toContain("--provider");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("derives run option arity from the probed Crabbox help", () => {
+    const helpText = `${defaultProviderHelp}${[
+      "sandbox-session-timeout duration",
+      "sandbox-memory float",
+      "sandbox-retries int",
+      "sandbox-setting string",
+      "sandbox-attachment value",
+    ]
+      .map((option) => `  -${option}\n`)
+      .join("")}`;
+    const { output } = runSuccessfulWrapper(helpText, [
+      "run",
+      "--sandbox-session-timeout",
+      "30s",
+      "--sandbox-memory",
+      "1.5",
+      "--sandbox-retries",
+      "2",
+      "--sandbox-setting",
+      "safe",
+      "--sandbox-attachment",
+      "name=proof",
+      "--provider",
+      "local-container",
+      "--",
+      "echo",
+      "ok",
+    ]);
+
+    expect(output.args).toEqual([
+      "run",
+      "--sandbox-session-timeout",
+      "30s",
+      "--sandbox-memory",
+      "1.5",
+      "--sandbox-retries",
+      "2",
+      "--sandbox-setting",
+      "safe",
+      "--sandbox-attachment",
+      "name=proof",
+      "--provider",
+      "local-container",
+      "--",
+      "echo",
+      "ok",
+    ]);
+  });
+
+  it("routes the provider-neutral changed gate without consuming its run option values", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      [
+        "run",
+        "--workload",
+        "ci-fast",
+        "--idle-timeout",
+        "90m",
+        "--ttl",
+        "240m",
+        "--timing-json",
+        "--",
+        "env",
+        "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
+        "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
+        "CI=1",
+        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
+        "corepack",
+        "pnpm",
+        "check:changed",
+      ],
+      { env: { OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox" } },
+    );
+
+    expect(output.args).toContain("daytona");
+    expect(output.args).not.toContain("blacksmith-testbox");
+    expect(output.args).toContain("90m");
+    expect(output.args).toContain("240m");
+    expect(output.args.slice(-3)).toEqual(["corepack", "pnpm", "check:changed"]);
+    expect(result.stderr).toContain("route workload=ci-fast selected=daytona");
+  });
+
+  it("requires the originating provider when reusing a workload-routed lease", () => {
+    const result = runBrokerWrapper(
+      ["run", "--workload", "interactive", "--id", "cbx_existing", "--", "echo ok"],
+      {},
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "reusing a workload-routed lease with --id requires --provider",
+    );
+  });
+
+  it.each([
+    {
+      name: "explicit provider",
+      args: [
+        "run",
+        "--workload",
+        "untrusted",
+        "--provider",
+        "aws",
+        "--id",
+        "cbx_trusted",
+        "--",
+        "echo ok",
+      ],
+      env: {},
+    },
+    {
+      name: "environment provider",
+      args: ["run", "--workload", "untrusted", "--id", "cbx_trusted", "--", "echo ok"],
+      env: { CRABBOX_PROVIDER: "aws" },
+    },
+  ])("rejects untrusted lease reuse through an $name", ({ args, env }) => {
+    const result = runBrokerWrapper(args, {
+      env: {
+        ...(env as Record<string, string>),
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "workload=untrusted requires a fresh lease; --id reuse is forbidden",
+    );
+  });
+
+  it("reuses a workload-routed lease through its explicit provider", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      [
+        "run",
+        "--provider",
+        "daytona",
+        "--workload",
+        "interactive",
+        "--id",
+        "cbx_existing",
+        "--",
+        "echo ok",
+      ],
+      {},
+    );
+    expect(output.args).toContain("daytona");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("routes configured macOS targets through AWS", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "ci-proof", "--", "echo ok"],
+      {
+        configJson: managedBrokerConfig("blacksmith-testbox", {
+          target: "macos",
+          windowsMode: "normal",
+        }),
+        env: {
+          OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET: "macos",
+        },
+      },
+    );
+    expect(output.args).toContain("aws");
+    expect(result.stderr).toContain("chain=aws");
+  });
+
+  it("probes native Windows readiness with the requested target context", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      [
+        "run",
+        "--workload",
+        "ci-proof",
+        "--target",
+        "windows",
+        "--windows-mode",
+        "normal",
+        "--",
+        "echo ok",
+      ],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET: "windows",
+          OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE: "normal",
+        },
+      },
+    );
+    expect(output.args).toContain("azure");
+    expect(result.stderr).toContain("chain=azure,aws");
+  });
+
+  it("rejects the Windows workload without a Windows target", () => {
+    const result = runBrokerWrapper(["run", "--workload", "windows", "--", "echo ok"], {});
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("workload=windows requires target=windows");
+    expect(result.stdout).toBe("");
+  });
+
+  it("preserves following options when workload has no value", () => {
+    const result = runBrokerWrapper(
+      ["run", "--workload", "--target", "windows", "--", "echo ok"],
+      {},
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--workload requires a value");
+    expect(result.stderr).not.toContain('unsupported Crabbox workload "--target"');
+    expect(result.stdout).toBe("");
+  });
+
+  it("rejects authenticated registered mode for broker-only cloud routing", () => {
+    const result = runBrokerWrapper(["run", "--workload", "desktop", "--", "echo ok"], {
+      configJson: managedBrokerConfig("azure", {
+        target: "linux",
+        windowsMode: "normal",
+        brokerMode: "registered",
+      }),
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
+    expect(result.stdout).toBe("");
+  });
+
+  it("falls through Blacksmith when the Crabbox binary is too old", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "ci-fast", "--", "echo ok"],
+      {
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" },
+      },
+    );
+    expect(output.args).toContain("azure");
+    expect(result.stderr).toContain(
+      "blacksmith-testbox:requires Crabbox >= 0.22.0 for Blacksmith Testbox",
+    );
+  });
+
+  it("ignores direct-cloud debugging during automatic readiness checks", () => {
+    const result = runBrokerWrapper(["run", "--workload", "desktop", "--", "echo ok"], {
+      configJson: { coordinator: "", brokerAuth: "missing" },
+      env: {
+        OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("no ready provider for workload=desktop");
+    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
+  });
+
+  it("does not treat an injected Azure Windows default as direct intent", () => {
+    const result = runBrokerWrapper(["run", "--target", "windows", "--", "echo ok"], {
+      configJson: directBrokerConfig("blacksmith-testbox"),
+      env: {
+        OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=azure requires a configured managed Crabbox broker");
+  });
+
+  it("keeps workload configuration away from administrative commands", () => {
+    const result = runDefaultWrapper(["--version"], {
+      env: { OPENCLAW_CRABBOX_WORKLOAD: "ci-fast" },
+    });
 
     expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toContain("local-container");
+    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("does not validate workload flags on administrative commands", () => {
+    const result = runDefaultWrapper(["--version", "--workload", "surprise"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stderr).not.toContain("unsupported Crabbox workload");
+  });
+
+  it("keeps explicit provider choices outside automatic routing", () => {
+    const { output, result } = runSuccessfulBrokerWrapper(
+      ["run", "--provider", "azure", "--workload", "interactive", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "azure",
+        },
+      },
+    );
+    expect(output.args).toContain("azure");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it.each([
+    {
+      name: "explicit",
+      args: ["run", "--provider", "blacksmith-testbox", "--workload", "untrusted", "--", "echo ok"],
+      env: {},
+    },
+    {
+      name: "environment",
+      args: ["run", "--workload", "untrusted", "--", "echo ok"],
+      env: { CRABBOX_PROVIDER: "blacksmith-testbox" },
+    },
+  ])("rejects $name providers outside the workload eligibility policy", ({ args, env }) => {
+    const result = runBrokerWrapper(args, {
+      env: {
+        ...(env as Record<string, string>),
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "provider=blacksmith-testbox is not eligible for workload=untrusted; allowed=azure,aws",
+    );
+  });
+
+  it("requires broker auth for explicit providers inside workload routing", () => {
+    const result = runBrokerWrapper(
+      ["run", "--provider", "azure", "--workload", "desktop", "--", "echo ok"],
+      {
+        configJson: directBrokerConfig("azure"),
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=azure requires a configured managed Crabbox broker");
+  });
+
+  it.each(["aws", "azure", "daytona"])(
+    "does not let direct overrides weaken implicit managed %s config",
+    (provider) => {
+      const result = runBrokerWrapper(["run", "--", "echo ok"], {
+        configJson: managedBrokerConfig(provider, { brokerAuth: "missing" }),
+        env: {
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+          OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
+        },
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `provider=${provider} requires a configured managed Crabbox broker`,
+      );
+    },
+  );
+
+  it("still validates workloads when a provider is explicit", () => {
+    const result = runWrapper(brokerProviderHelp, [
+      "run",
+      "--provider",
+      "azure",
+      "--workload",
+      "surprise",
+      "--",
+      "echo ok",
+    ]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('unsupported Crabbox workload "surprise"');
+  });
+
+  it("requires a compatible Crabbox for configured brokered Daytona runs", () => {
+    const result = runBrokerWrapper(["run", "--", "echo ok"], {
+      configJson: managedBrokerConfig("daytona"),
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.39.9" },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "provider=daytona requires Crabbox >= 0.40.0 for brokered execution",
+    );
+    expect(result.stderr).toContain(
+      "direct Daytona debugging requires an original `--provider daytona`, no `--workload`",
+    );
+  });
+
+  it.each(["azure", "daytona"])(
+    "allows opted-in explicit direct %s commands outside workload routing",
+    (provider) => {
+      const { output } = runSuccessfulBrokerWrapper(
+        ["run", "--provider", provider, "--", "echo ok"],
+        {
+          configJson: managedBrokerConfig(provider, { brokerAuth: "missing" }),
+          env: {
+            OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+          },
+        },
+      );
+
+      expect(output.args).toContain(provider);
+    },
+  );
+
+  it.each(["azure", "daytona"])(
+    "requires direct-cloud opt-in for explicit %s commands",
+    (provider) => {
+      const result = runBrokerWrapper(["run", "--provider", provider, "--", "echo ok"], {
+        configJson: directBrokerConfig(provider),
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `provider=${provider} requires a configured managed Crabbox broker`,
+      );
+      expect(result.stderr).toContain(
+        `direct ${provider} debugging requires an original \`--provider ${provider}\`, no \`--workload\``,
+      );
+    },
+  );
+
+  it.each(["azure", "daytona"])(
+    "does not treat CRABBOX_PROVIDER=%s as explicit direct intent",
+    (provider) => {
+      const result = runBrokerWrapper(["run", "--", "echo ok"], {
+        configJson: directBrokerConfig(provider),
+        env: {
+          CRABBOX_PROVIDER: provider,
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        },
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `provider=${provider} requires a configured managed Crabbox broker`,
+      );
+    },
+  );
+
+  it("keeps Blacksmith outside managed cloud broker auth", () => {
+    const { output } = runSuccessfulBrokerWrapper(
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      {
+        configJson: directBrokerConfig("blacksmith-testbox"),
+      },
+    );
+    expect(output.args).toContain("blacksmith-testbox");
+  });
+
+  it("allows intentional direct Daytona debugging on older Crabbox versions", () => {
+    const { output } = runSuccessfulBrokerWrapper(
+      ["run", "--provider", "daytona", "--", "echo ok"],
+      {
+        configJson: { coordinator: "", brokerAuth: "missing" },
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.39.9",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        },
+      },
+    );
+    expect(output.args).toContain("daytona");
+  });
+
+  it("does not allow direct cloud overrides inside workload routing", () => {
+    const result = runBrokerWrapper(["run", "--workload", "interactive", "--", "echo ok"], {
+      configJson: { coordinator: "", brokerAuth: "missing" },
+      env: {
+        OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("no ready provider for workload=interactive");
+    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
+  });
+
+  it("fails closed when no policy provider is ready", () => {
+    const result = runBrokerWrapper(["run", "--workload", "ci-fast", "--", "echo ok"], {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox,daytona,azure,aws",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("no ready provider for workload=ci-fast");
+    expect(result.stderr).toContain("provider readiness");
+    expect(result.stderr).toContain('{"ok":false,"provider":"blacksmith-testbox"}');
+    expect(result.stderr).toMatch(
+      /recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u,
+    );
+  });
+
+  it("rejects unknown workload policies before execution", () => {
+    const result = runDefaultWrapper(["run", "--workload", "surprise", "--", "echo ok"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('unsupported Crabbox workload "surprise"');
+  });
+
+  it("accepts advertised canonical providers from Crabbox help", () => {
+    const { output } = runSuccessfulDefaultWrapper([
+      "run",
+      "--provider",
+      "local-container",
+      "--",
+      "echo ok",
+    ]);
+    expect(output.args).toContain("local-container");
   });
 
   it("hints at lease expiry when a reused-lease run fails fast", () => {
@@ -1011,19 +1465,13 @@ describe("scripts/crabbox-wrapper", () => {
     };
     writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
 
-    const result = runDefaultWrapper(
+    const result = runDelegatedBlacksmith(
       ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
       {
-        env: {
-          ...testHomeEnv(home),
-          XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-          ...(status > 0 ? { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: String(status) } : {}),
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
+        ...testHomeEnv(home),
+        XDG_STATE_HOME: stateRoot,
+        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+        ...(status > 0 ? { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: String(status) } : {}),
       },
     );
 
@@ -1045,20 +1493,14 @@ describe("scripts/crabbox-wrapper", () => {
     writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
     writeFileSync(decoyPath, `${JSON.stringify(decoyClaim)}\n`, "utf8");
 
-    const result = runDefaultWrapper(
+    const result = runDelegatedBlacksmith(
       ["run", "--provider", "blacksmith-testbox", "--keep", "--timing-json", "--", "echo ok"],
       {
-        env: {
-          ...testHomeEnv(home),
-          XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: decoyPath,
-          OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
+        ...testHomeEnv(home),
+        XDG_STATE_HOME: stateRoot,
+        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+        OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: decoyPath,
+        OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
       },
     );
 
@@ -1089,19 +1531,13 @@ describe("scripts/crabbox-wrapper", () => {
     writeFileSync(siblingPath, `${JSON.stringify(siblingClaim)}\n`, "utf8");
     writeFileSync(foreignPath, `${JSON.stringify(foreignClaim)}\n`, "utf8");
 
-    const result = runDefaultWrapper(
+    const result = runDelegatedBlacksmith(
       ["run", "--provider", "blacksmith-testbox", "--keep", "--", "echo ok"],
       {
-        env: {
-          ...testHomeEnv(home),
-          XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: siblingPath,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
+        ...testHomeEnv(home),
+        XDG_STATE_HOME: stateRoot,
+        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+        OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: siblingPath,
       },
     );
 
@@ -1124,19 +1560,13 @@ describe("scripts/crabbox-wrapper", () => {
     mkdirSync(path.dirname(claimPath), { recursive: true });
     writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
 
-    const result = runDefaultWrapper(
+    const result = runDelegatedBlacksmith(
       ["run", "--provider", "blacksmith-testbox", "--keep-on-failure", "--", "false"],
       {
-        env: {
-          ...testHomeEnv(home),
-          XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-          OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "7",
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
+        ...testHomeEnv(home),
+        XDG_STATE_HOME: stateRoot,
+        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+        OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "7",
       },
     );
 
@@ -1161,19 +1591,13 @@ describe("scripts/crabbox-wrapper", () => {
     };
     writeFileSync(claimPath, `${JSON.stringify({ ...foreignClaim, repoRoot })}\n`, "utf8");
 
-    const result = runDefaultWrapper(
+    const result = runDelegatedBlacksmith(
       ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
       {
-        env: {
-          ...testHomeEnv(home),
-          XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
-          OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT: foreignClaim.repoRoot,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
+        ...testHomeEnv(home),
+        XDG_STATE_HOME: stateRoot,
+        OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+        OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT: foreignClaim.repoRoot,
       },
     );
 
@@ -1205,7 +1629,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("exports CI for complete Blacksmith Testbox shell snippets", () => {
-    const result = runDefaultWrapper([
+    const { output } = runSuccessfulDefaultWrapper([
       "run",
       "--provider",
       "blacksmith-testbox",
@@ -1214,8 +1638,7 @@ describe("scripts/crabbox-wrapper", () => {
       "cd packages && pnpm install && pnpm build",
     ]);
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
+    expect(output.args).toEqual([
       "run",
       "--provider",
       "blacksmith-testbox",
@@ -1226,9 +1649,14 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("only forces the short local-container Docker work root on Linux", () => {
-    const result = runDefaultWrapper(["run", "--provider", "local-container", "--", "echo ok"]);
+    const { result } = runSuccessfulDefaultWrapper([
+      "run",
+      "--provider",
+      "local-container",
+      "--",
+      "echo ok",
+    ]);
 
-    expect(result.status).toBe(0);
     const expectedMessage =
       "[crabbox] provider=docker using short host-visible work root for OpenClaw Docker tests";
     if (process.platform === "linux") {
@@ -1239,18 +1667,8 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("defaults AWS macOS runs to on-demand capacity", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "echo ok",
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
+    const { output } = runSuccessfulMacosCommand(["echo ok"]);
+    expect(output.args).toEqual([
       "run",
       "--provider",
       "aws",
@@ -1264,7 +1682,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("prefers Azure for unqualified Windows runs", () => {
-    const result = runWrapper(azureProviderHelp, [
+    const { output, result } = runSuccessfulWrapper(azureProviderHelp, [
       "run",
       "--target",
       "windows",
@@ -1276,9 +1694,7 @@ describe("scripts/crabbox-wrapper", () => {
       "check:changed",
     ]);
 
-    const output = parseFakeCrabboxOutput(result);
     const remoteCommand = normalizeShellLineEndings(output.scriptContent!);
-    expect(result.status).toBe(0);
     expect(output.args.slice(0, 7)).toEqual([
       "run",
       "--target",
@@ -1305,7 +1721,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("keeps WSL2 non-JavaScript commands on the default hydrate path", () => {
-    const result = runWrapper(azureProviderHelp, [
+    const { output } = runSuccessfulWrapper(azureProviderHelp, [
       "run",
       "--target",
       "windows",
@@ -1316,8 +1732,6 @@ describe("scripts/crabbox-wrapper", () => {
       "ok",
     ]);
 
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
     expect(output.args).toEqual([
       "run",
       "--target",
@@ -1335,54 +1749,38 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("keeps explicit provider env overrides for Windows runs", () => {
-    const result = runWrapper(azureProviderHelp, ["run", "--target", "windows", "--", "echo ok"], {
-      env: { CRABBOX_PROVIDER: "aws" },
-    });
+    const { output, result } = runSuccessfulWrapper(
+      azureProviderHelp,
+      ["run", "--target", "windows", "--", "echo ok"],
+      { env: { CRABBOX_PROVIDER: "aws" } },
+    );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "run",
-      "--target",
-      "windows",
-      "--",
-      "echo ok",
-    ]);
+    expect(output.args).toEqual(["run", "--target", "windows", "--", "echo ok"]);
     expect(result.stderr).toContain("provider=aws");
   });
 
   it("keeps the AWS provider env for Windows runs when Azure is unavailable", () => {
-    const result = runDefaultWrapper(["run", "--target", "windows", "--", "echo ok"], {
-      env: {
-        CRABBOX_PROVIDER: "aws",
-        OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
+    const { output, result } = runSuccessfulDefaultWrapper(
+      ["run", "--target", "windows", "--", "echo ok"],
+      {
+        env: { CRABBOX_PROVIDER: "aws" },
       },
-    });
+    );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "run",
-      "--target",
-      "windows",
-      "--",
-      "echo ok",
-    ]);
+    expect(output.args).toEqual(["run", "--target", "windows", "--", "echo ok"]);
     expect(result.stderr).toContain("provider=aws");
   });
 
   it("keeps existing Windows lease selections on the configured provider", () => {
-    const result = runWrapper(
+    const { output, result } = runSuccessfulWrapper(
       azureProviderHelp,
       ["run", "--id", "cbx_existing", "--target", "windows", "--", "echo ok"],
       {
-        env: {
-          CRABBOX_PROVIDER: "aws",
-          OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
-        },
+        env: { CRABBOX_PROVIDER: "aws" },
       },
     );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
+    expect(output.args).toEqual([
       "run",
       "--id",
       "cbx_existing",
@@ -1395,194 +1793,69 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("uses the native Windows daemon job for Windows hydrate actions", () => {
-    const result = runWrapper(azureProviderHelp, [
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--id",
-      "cbx_existing",
-    ]);
+    const { output } = runSuccessfulWindowsHydrate("--id", "cbx_existing");
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--id",
-      "cbx_existing",
-      "--job",
-      "hydrate-windows-daemon",
-    ]);
+    expect(output.args).toEqual(
+      windowsHydrateArgs("--id", "cbx_existing", "--job", "hydrate-windows-daemon"),
+    );
   });
 
   it("repairs generic hydrate jobs for native Windows hydrate actions", () => {
-    const result = runWrapper(azureProviderHelp, [
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--job",
-      "hydrate",
-      "--id",
-      "cbx_existing",
-    ]);
+    const { output } = runSuccessfulWindowsHydrate("--job", "hydrate", "--id", "cbx_existing");
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--job",
-      "hydrate-windows-daemon",
-      "--id",
-      "cbx_existing",
-    ]);
+    expect(output.args).toEqual(
+      windowsHydrateArgs("--job", "hydrate-windows-daemon", "--id", "cbx_existing"),
+    );
   });
 
   it("repairs generic hydrate job assignments for native Windows hydrate actions", () => {
-    const result = runWrapper(azureProviderHelp, [
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--job=hydrate",
-      "--id",
-      "cbx_existing",
-    ]);
+    const { output } = runSuccessfulWindowsHydrate("--job=hydrate", "--id", "cbx_existing");
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--job=hydrate-windows-daemon",
-      "--id",
-      "cbx_existing",
-    ]);
+    expect(output.args).toEqual(
+      windowsHydrateArgs("--job=hydrate-windows-daemon", "--id", "cbx_existing"),
+    );
   });
 
   it("keeps post-delimiter hydrate payloads untouched for native Windows hydrate actions", () => {
-    const result = runWrapper(azureProviderHelp, [
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
+    const { output } = runSuccessfulWindowsHydrate(
       "--id",
       "cbx_existing",
       "--",
       "--job",
       "hydrate",
-    ]);
+    );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--id",
-      "cbx_existing",
-      "--job",
-      "hydrate-windows-daemon",
-      "--",
-      "--job",
-      "hydrate",
-    ]);
+    expect(output.args).toEqual(
+      windowsHydrateArgs(
+        "--id",
+        "cbx_existing",
+        "--job",
+        "hydrate-windows-daemon",
+        "--",
+        "--job",
+        "hydrate",
+      ),
+    );
   });
 
   it("keeps explicit non-native hydrate jobs for Windows hydrate actions", () => {
-    const result = runWrapper(azureProviderHelp, [
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--job",
-      "hydrate-github",
-      "--id",
-      "cbx_existing",
-    ]);
+    const args = ["--job", "hydrate-github", "--id", "cbx_existing"];
+    const { output } = runSuccessfulWindowsHydrate(...args);
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--job",
-      "hydrate-github",
-      "--id",
-      "cbx_existing",
-    ]);
+    expect(output.args).toEqual(windowsHydrateArgs(...args));
   });
 
   it("keeps WSL2 hydrate actions on the requested job", () => {
-    const result = runWrapper(azureProviderHelp, [
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--windows-mode",
-      "wsl2",
-      "--job",
-      "hydrate",
-      "--id",
-      "cbx_existing",
-    ]);
+    const args = ["--windows-mode", "wsl2", "--job", "hydrate", "--id", "cbx_existing"];
+    const { output } = runSuccessfulWindowsHydrate(...args);
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "actions",
-      "hydrate",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--windows-mode",
-      "wsl2",
-      "--job",
-      "hydrate",
-      "--id",
-      "cbx_existing",
-    ]);
+    expect(output.args).toEqual(windowsHydrateArgs(...args));
   });
 
   it("prefers Azure for unqualified Windows warmups", () => {
-    const result = runWrapper(azureProviderHelp, ["warmup", "--target", "windows"]);
+    const { output } = runSuccessfulWrapper(azureProviderHelp, ["warmup", "--target", "windows"]);
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "warmup",
-      "--target",
-      "windows",
-      "--provider",
-      "azure",
-    ]);
+    expect(output.args).toEqual(["warmup", "--target", "windows", "--provider", "azure"]);
   });
 
   it("rejects Blacksmith Testbox for Windows-shaped proof", () => {
@@ -1608,10 +1881,10 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws requires a configured Crabbox broker");
-    expect(result.stderr).toContain(
-      "crabbox login --url https://crabbox.openclaw.ai --provider aws",
-    );
+    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
+    expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
+    expect(result.stderr).not.toContain("--provider aws");
+    expect(result.stderr).not.toContain("OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD");
   });
 
   it("fails closed for AWS proof when broker auth is stale", () => {
@@ -1622,23 +1895,18 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws requires a configured Crabbox broker");
+    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
   });
 
-  it("allows explicit direct AWS debugging without broker auth", () => {
+  it("ignores the legacy direct AWS override", () => {
     const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       configJson: { coordinator: "", brokerAuth: "missing" },
       env: { OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1" },
     });
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "run",
-      "--provider",
-      "aws",
-      "--",
-      "echo ok",
-    ]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
   });
 
   it("defaults AWS macOS warmups to on-demand capacity", () => {
@@ -1657,8 +1925,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("does not override explicit AWS macOS market or lease selections", () => {
-    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
-    const explicitMarket = runWrapper(helpText, [
+    const explicitMarket = runDefaultWrapper([
       "run",
       "--provider",
       "aws",
@@ -1668,7 +1935,7 @@ describe("scripts/crabbox-wrapper", () => {
       "--",
       "echo ok",
     ]);
-    const existingLease = runWrapper(helpText, [
+    const existingLease = runDefaultWrapper([
       "run",
       "--provider",
       "aws",
@@ -1706,20 +1973,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("bootstraps only Node for raw AWS macOS node commands", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "node",
-      "--version",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { output, remoteCommand } = runSuccessfulMacosCommand(["node", "--version"]);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("node-v${node_version}-darwin-${node_arch}.tar.gz");
@@ -1730,13 +1984,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("preflights Swift 6.2 for raw AWS macOS Swift app builds", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
+    const { output, remoteCommand } = runSuccessfulMacosCommand([
       "swift",
       "build",
       "--package-path",
@@ -1744,10 +1992,6 @@ describe("scripts/crabbox-wrapper", () => {
       "--product",
       "OpenClaw",
     ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(remoteCommand).toContain("/Applications/Xcode_26.1.app");
@@ -1764,46 +2008,23 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("preflights Swift and JS tooling for raw AWS macOS package scripts", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "pnpm",
-      "mac:package",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
-    expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
-    expectGroupedShellCommand(remoteCommand, "pnpm mac:package");
+    expectMacosPackageCommand(
+      runSuccessfulMacosCommand(["pnpm", "mac:package"]),
+      "pnpm mac:package",
+      (remoteCommand) => {
+        expect(remoteCommand).toContain("OpenClaw macOS app proof requires Swift tools 6.2+");
+        expect(remoteCommand).toContain("OpenClaw macOS app proof requires Xcode 26.x");
+      },
+    );
   });
 
   it("preserves sanitized env pnpm package commands when Swift preflight is needed", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
+    const { output, remoteCommand } = runSuccessfulMacosCommand([
       "env",
       "-i",
       "pnpm",
       "mac:package",
     ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
@@ -1811,40 +2032,14 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("preserves sanitized env package script commands when JS tooling is needed", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "env",
-      "-i",
-      "bash",
-      "scripts/package-mac-app.sh",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-    expectGroupedShellCommand(
-      remoteCommand,
+    expectMacosPackageCommand(
+      runSuccessfulMacosCommand(["env", "-i", "bash", "scripts/package-mac-app.sh"]),
       "openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
     );
   });
 
   it("does not bootstrap JS tooling for env package scripts behind command", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
+    const { remoteCommand } = runSuccessfulMacosCommand([
       "command",
       "env",
       "-i",
@@ -1852,10 +2047,6 @@ describe("scripts/crabbox-wrapper", () => {
       "bash",
       "scripts/package-mac-app.sh",
     ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
   });
 
@@ -1864,56 +2055,30 @@ describe("scripts/crabbox-wrapper", () => {
       ["--", "bash", "-lc", "env -i PATH=/usr/bin:/bin bash scripts/package-mac-app.sh"],
       ["--shell", "--", "bash -lc 'env -i PATH=/usr/bin:/bin bash scripts/package-mac-app.sh'"],
     ]) {
-      const result = runDefaultWrapper(["run", "--provider", "aws", "--target", "macos", ...args]);
-
-      const output = parseFakeCrabboxOutput(result);
-      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-      expect(result.status).toBe(0);
+      const { remoteCommand } = runSuccessfulDefaultWrapper([
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        ...args,
+      ]);
       expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
       expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
     }
   });
 
   it("does not bootstrap Corepack for nested env pnpm commands that cannot be shimmed", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
+    const { remoteCommand } = runSuccessfulMacosShell(
       "bash -lc 'env -i PATH=/usr/bin:/bin pnpm --version'",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    );
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toBe("bash -lc 'env -i PATH=/usr/bin:/bin pnpm --version'");
   });
 
   it("preserves sanitized env shell package scripts when JS tooling is needed", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      "env -i bash scripts/package-mac-app.sh",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-    expectGroupedShellCommand(
-      remoteCommand,
+    expectMacosPackageCommand(
+      runSuccessfulMacosShell("env -i bash scripts/package-mac-app.sh"),
       "openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
     );
   });
@@ -1929,50 +2094,17 @@ describe("scripts/crabbox-wrapper", () => {
         "openclaw_crabbox_env -i bash scripts/package-mac-app.sh >out.log 2>&1",
       ],
     ] as const) {
-      const result = runDefaultWrapper([
-        "run",
-        "--provider",
-        "aws",
-        "--target",
-        "macos",
-        "--shell",
-        "--",
-        shellCommand,
-      ]);
-
-      const output = parseFakeCrabboxOutput(result);
-      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-      expect(result.status).toBe(0);
-      expect(output.args).toContain("--shell");
-      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-      expect(remoteCommand).toContain("pnpm --version >&2");
-      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-      expect(remoteCommand).not.toContain("'>'");
-      expectGroupedShellCommand(remoteCommand, expectedCommand);
+      expectMacosPackageCommand(
+        runSuccessfulMacosShell(shellCommand),
+        expectedCommand,
+        (remoteCommand) => expect(remoteCommand).not.toContain("'>'"),
+      );
     }
   });
 
   it("preserves trailing shell segments when sanitizing env package scripts", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      "env -i bash scripts/package-mac-app.sh && echo done",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-    expectGroupedShellCommand(
-      remoteCommand,
+    expectMacosPackageCommand(
+      runSuccessfulMacosShell("env -i bash scripts/package-mac-app.sh && echo done"),
       "openclaw_crabbox_env -i bash scripts/package-mac-app.sh && echo done",
     );
   });
@@ -1988,25 +2120,7 @@ describe("scripts/crabbox-wrapper", () => {
         "time openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
     ] as const) {
-      const result = runDefaultWrapper([
-        "run",
-        "--provider",
-        "aws",
-        "--target",
-        "macos",
-        "--shell",
-        "--",
-        shellCommand,
-      ]);
-
-      const output = parseFakeCrabboxOutput(result);
-      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-      expect(result.status).toBe(0);
-      expect(output.args).toContain("--shell");
-      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-      expect(remoteCommand).toContain("pnpm --version >&2");
-      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-      expectGroupedShellCommand(remoteCommand, expectedCommand);
+      expectMacosPackageCommand(runSuccessfulMacosShell(shellCommand), expectedCommand);
     }
   });
 
@@ -2021,25 +2135,7 @@ describe("scripts/crabbox-wrapper", () => {
         "{ openclaw_crabbox_env -i bash scripts/package-mac-app.sh; }",
       ],
     ] as const) {
-      const result = runDefaultWrapper([
-        "run",
-        "--provider",
-        "aws",
-        "--target",
-        "macos",
-        "--shell",
-        "--",
-        shellCommand,
-      ]);
-
-      const output = parseFakeCrabboxOutput(result);
-      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-      expect(result.status).toBe(0);
-      expect(output.args).toContain("--shell");
-      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-      expect(remoteCommand).toContain("pnpm --version >&2");
-      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-      expectGroupedShellCommand(remoteCommand, expectedCommand);
+      expectMacosPackageCommand(runSuccessfulMacosShell(shellCommand), expectedCommand);
     }
   });
 
@@ -2056,49 +2152,14 @@ describe("scripts/crabbox-wrapper", () => {
       "env -i bash scripts/package-mac-app.sh",
       "EOF",
     ].join("\n");
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      shellCommand,
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-    expectGroupedShellCommand(remoteCommand, expectedCommand);
-    expect(remoteCommand).not.toContain("cat <<EOF\nopenclaw_crabbox_env");
+    const run = runSuccessfulMacosShell(shellCommand);
+    expectMacosPackageCommand(run, expectedCommand);
+    expect(run.remoteCommand).not.toContain("cat <<EOF\nopenclaw_crabbox_env");
   });
 
   it("preserves control-flow shell segments when sanitizing env package scripts", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      "if true; then env -i bash scripts/package-mac-app.sh; fi",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-    expectGroupedShellCommand(
-      remoteCommand,
+    expectMacosPackageCommand(
+      runSuccessfulMacosShell("if true; then env -i bash scripts/package-mac-app.sh; fi"),
       "if true; then openclaw_crabbox_env -i bash scripts/package-mac-app.sh; fi",
     );
   });
@@ -2122,26 +2183,12 @@ describe("scripts/crabbox-wrapper", () => {
         "PATH=/usr/bin:/bin openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
     ] as const) {
-      const result = runDefaultWrapper([
-        "run",
-        "--provider",
-        "aws",
-        "--target",
-        "macos",
-        "--shell",
-        "--",
-        shellCommand,
-      ]);
-
-      const output = parseFakeCrabboxOutput(result);
-      const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-      expect(result.status).toBe(0);
-      expect(output.args).toContain("--shell");
-      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-      expect(remoteCommand).toContain("pnpm --version >&2");
-      expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
-      expect(remoteCommand).toContain('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
-      expectGroupedShellCommand(remoteCommand, expectedCommand);
+      expectMacosPackageCommand(
+        runSuccessfulMacosShell(shellCommand),
+        expectedCommand,
+        (remoteCommand) =>
+          expect(remoteCommand).toContain('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";'),
+      );
     }
   });
 
@@ -2164,20 +2211,7 @@ describe("scripts/crabbox-wrapper", () => {
       script: "scripts/build-and-run-mac.sh",
     },
   ])("$name", ({ js = true, script }) => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "bash",
-      script,
-    ]);
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-
-    expect(result.status).toBe(0);
+    const { output, remoteCommand } = runSuccessfulMacosCommand(["bash", script]);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_62");
     if (js) {
@@ -2190,19 +2224,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("does not preflight Swift for raw AWS macOS commands that only mention package scripts", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "echo",
-      "scripts/package-mac-app.sh",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output } = runSuccessfulMacosCommand(["echo", "scripts/package-mac-app.sh"]);
     expect(output.args).not.toContain("--shell");
     expect(output.args).toEqual([
       "run",
@@ -2219,20 +2241,13 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("normalizes inherited Linux UTF-8 locale names for raw AWS macOS bootstrap", () => {
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--", "node", "--version"],
-      {
-        env: {
-          LANG: "C.UTF-8",
-          LC_ALL: "C.UTF-8",
-          LC_CTYPE: "C.UTF-8",
-        },
+    const { remoteCommand } = runSuccessfulMacosCommand(["node", "--version"], {
+      env: {
+        LANG: "C.UTF-8",
+        LC_ALL: "C.UTF-8",
+        LC_CTYPE: "C.UTF-8",
       },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    });
     expect(remoteCommand).toContain('macos_locale="${OPENCLAW_CRABBOX_MACOS_LOCALE:-en_US.UTF-8}"');
     expect(remoteCommand).toContain(
       'case "${LANG:-}" in C.UTF-8|C.utf8|c.UTF-8|c.utf8) export LANG="$macos_locale" ;; esac;',
@@ -2247,20 +2262,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("bootstraps Bun for raw AWS macOS bun commands", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "bun",
-      "--version",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { output, remoteCommand, result } = runSuccessfulMacosCommand(["bun", "--version"]);
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain("Node/Corepack/pnpm/Bun");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
@@ -2275,41 +2277,13 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("bootstraps Bun for raw AWS macOS env-prefixed bun commands", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "env",
-      "-i",
-      "bun",
-      "--version",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { remoteCommand } = runSuccessfulMacosCommand(["env", "-i", "bun", "--version"]);
     expect(remoteCommand).toContain("bun --version >&2 || return 1");
     expectGroupedShellCommand(remoteCommand, "openclaw_crabbox_env -i bun --version");
   });
 
   it("bootstraps Corepack for raw AWS macOS pnpm commands", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      "pnpm",
-      "--version",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { output, remoteCommand, result } = runSuccessfulMacosCommand(["pnpm", "--version"]);
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain(
       "bootstrapping pinned user-local JavaScript tooling before the command",
@@ -2392,19 +2366,7 @@ describe("scripts/crabbox-wrapper", () => {
       name: "injects the bootstrapped PATH for raw AWS macOS absolute env -i commands",
     },
   ])("$name", ({ command, excludes = [], expectShell, expectedCommand, includes = [] }) => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
-      ...command,
-    ]);
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-
-    expect(result.status).toBe(0);
+    const { output, remoteCommand } = runSuccessfulMacosCommand(command);
     if (expectShell) {
       expect(output.args).toContain("--shell");
     }
@@ -2422,20 +2384,19 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("does not rewrite custom env executables for raw AWS macOS ignore-environment commands", () => {
-    const { output, remoteCommand, result } = runMacosCommand([
+    const { output, remoteCommand } = runSuccessfulMacosCommand([
       "./tools/env",
       "-i",
       "pnpm",
       "--version",
     ]);
-    expect(result.status).toBe(0);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.args).not.toContain("--shell");
   });
 
   it("does not bootstrap env ignore-environment commands that bypass shell functions", () => {
     for (const prefix of ["command", "exec"]) {
-      const { output, remoteCommand, result } = runMacosCommand([
+      const { output, remoteCommand } = runSuccessfulMacosCommand([
         prefix,
         "env",
         "-i",
@@ -2443,21 +2404,19 @@ describe("scripts/crabbox-wrapper", () => {
         "pnpm",
         "--version",
       ]);
-      expect(result.status).toBe(0);
       expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
       expect(output.args).not.toContain("--shell");
     }
   });
 
   it("bootstraps env commands behind command when they keep the inherited PATH", () => {
-    const { remoteCommand, result } = runMacosCommand([
+    const { remoteCommand } = runSuccessfulMacosCommand([
       "command",
       "env",
       "CI=1",
       "pnpm",
       "--version",
     ]);
-    expect(result.status).toBe(0);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("pnpm --version >&2");
     expectGroupedShellCommand(remoteCommand, "command env CI=1 pnpm --version");
@@ -2465,8 +2424,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("does not shadow unrelated env calls in AWS macOS shell commands", () => {
     const shellScript = "node --version; env -i PATH=/usr/bin:/bin printenv PATH";
-    const { remoteCommand, result } = runMacosShell(shellScript);
-    expect(result.status).toBe(0);
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("openclaw_crabbox_env");
     expect(remoteCommand).not.toContain('env() { openclaw_crabbox_env "$@"; };');
@@ -2474,20 +2432,18 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("does not bootstrap env split-string commands after ignore-environment", () => {
-    const { output, remoteCommand, result } = runMacosCommand([
+    const { output, remoteCommand } = runSuccessfulMacosCommand([
       "env",
       "-i",
       "-S",
       "pnpm --version",
     ]);
-    expect(result.status).toBe(0);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.args).not.toContain("--shell");
   });
 
   it("bootstraps Corepack for raw AWS macOS env split-string pnpm commands", () => {
-    const { remoteCommand, result } = runMacosCommand(["/usr/bin/env", "-S", "pnpm --version"]);
-    expect(result.status).toBe(0);
+    const { remoteCommand } = runSuccessfulMacosCommand(["/usr/bin/env", "-S", "pnpm --version"]);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("pnpm --version >&2");
     expect(remoteCommand.indexOf("-S|--split-string|-S*|--split-string=*)")).toBeLessThan(
@@ -2497,8 +2453,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("bootstraps Corepack for AWS macOS node changed-gate commands", () => {
-    const { remoteCommand, result } = runMacosCommand(["node", "scripts/check-changed.mjs"]);
-    expect(result.status).toBe(0);
+    const { remoteCommand } = runSuccessfulMacosCommand(["node", "scripts/check-changed.mjs"]);
     expect(remoteCommand).toContain("node --version >&2");
     expect(remoteCommand).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(remoteCommand).toContain("pnpm --version >&2");
@@ -2509,13 +2464,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("bootstraps Corepack for AWS macOS node option changed-gate commands", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
+    const { remoteCommand } = runSuccessfulMacosCommand([
       "node",
       "--max-old-space-size",
       "4096",
@@ -2527,34 +2476,19 @@ describe("scripts/crabbox-wrapper", () => {
       "--import=tsx",
       "scripts/check-changed.mjs",
     ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(
+    expectMacosJsBootstrap(
       remoteCommand,
       `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} node --max-old-space-size 4096 --env-file-if-exists .env --unhandled-rejections strict --trace-warnings --import=tsx scripts/check-changed.mjs`,
     );
   });
 
   it("does not treat node script arguments as changed-gate commands", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--",
+    const { remoteCommand } = runSuccessfulMacosCommand([
       "node",
       "--trace-warnings",
       "scripts/other.mjs",
       "scripts/check-changed.mjs",
     ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
     expectGroupedShellCommand(
@@ -2564,23 +2498,9 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      "pnpm check:changed",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { output, remoteCommand } = runSuccessfulMacosShell("pnpm check:changed");
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} pnpm check:changed`);
+    expectMacosJsBootstrap(remoteCommand, `${remoteChangedGateExport} pnpm check:changed`);
   });
 
   it("bootstraps raw AWS macOS shell scripts that set up before JavaScript commands", () => {
@@ -2589,41 +2509,14 @@ describe("scripts/crabbox-wrapper", () => {
       'repo_tmp=$(node -e "console.log(require(\\"node:os\\").tmpdir())")',
       "pnpm --version",
     ].join("\n");
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      shellScript,
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { output, remoteCommand } = runSuccessfulMacosShell(shellScript);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    expectMacosJsBootstrap(remoteCommand, shellScript);
   });
 
   it("bootstraps raw AWS macOS shell scripts with env-prefixed JavaScript commands", () => {
     const shellScript = "/usr/bin/env CI=1 pnpm --version";
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      shellScript,
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(remoteCommand).toContain("pnpm --version >&2");
     expectGroupedShellCommand(remoteCommand, shellScript);
@@ -2631,13 +2524,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("bootstraps AWS macOS script-stdin runs before the uploaded script body", () => {
     const script = ["set -euo pipefail", "node -v", "pnpm --version"].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
-      { input: script },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output, result } = runSuccessfulMacosScript(script);
     expect(output.args).not.toContain("--script-stdin");
     expect(output.args).toContain("--script");
     expect(result.stderr).toContain(
@@ -2653,13 +2540,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("preserves AWS macOS script-stdin shebang payloads behind the bootstrap wrapper", () => {
     const script = ["#!/usr/bin/env node", "console.log(process.version);"].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--script-stdin", "--", "arg1"],
-      { input: script },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output } = runSuccessfulMacosScript(script, ["--", "arg1"]);
     expect(output.args).not.toContain("--script-stdin");
     expect(output.args).toContain("--script");
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
@@ -2679,13 +2560,7 @@ describe("scripts/crabbox-wrapper", () => {
       "pnpm --version",
       "bun --version",
     ].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
-      { input: script },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output } = runSuccessfulMacosScript(script);
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
     expect(output.scriptContent).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(output.scriptContent).toContain("pnpm --version >&2");
@@ -2698,13 +2573,7 @@ describe("scripts/crabbox-wrapper", () => {
       "set -euo pipefail",
       "swift build --package-path apps/macos --product OpenClaw",
     ].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
-      { input: script },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output } = runSuccessfulMacosScript(script);
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62");
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62 || exit $?");
@@ -2715,13 +2584,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("preflights Swift and JS for AWS macOS script-stdin package scripts", () => {
     const script = ["#!/usr/bin/env bash", "set -euo pipefail", "pnpm mac:package"].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
-      { input: script },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output } = runSuccessfulMacosScript(script);
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.scriptContent).toContain("pnpm --version >&2");
     expect(output.scriptContent).toContain("openclaw_crabbox_require_macos_swift_62");
@@ -2731,13 +2594,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("bootstraps Corepack for AWS macOS script-stdin env shebangs with option values", () => {
     const script = ["#!/usr/bin/env -C /tmp -u OPENCLAW_FAKE_VAR pnpm", "--version"].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
-      { input: script },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output } = runSuccessfulMacosScript(script);
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
     expect(output.scriptContent).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(output.scriptContent).toContain("pnpm --version >&2");
@@ -2746,13 +2603,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
     const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
-      { input: script },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
+    const { output } = runSuccessfulMacosScript(script);
     expect(output.scriptContent).toContain("bun_version=1.3.14");
     expect(output.scriptContent).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
@@ -2852,11 +2703,8 @@ describe("scripts/crabbox-wrapper", () => {
       shellScript: 'case "$(uname -m)" in arm64|x64) pnpm --version ;; esac',
     },
   ])("$name", ({ expectedCommand, shellScript }) => {
-    const { remoteCommand, result } = runMacosShell(shellScript);
-
-    expect(result.status).toBe(0);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, expectedCommand ?? shellScript);
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript);
+    expectMacosJsBootstrap(remoteCommand, expectedCommand ?? shellScript);
   });
 
   it.each([
@@ -2898,9 +2746,7 @@ describe("scripts/crabbox-wrapper", () => {
       shellScript: "/usr/bin/time -l command -v pnpm",
     },
   ])("$name", ({ expectSingleShell, shellScript }) => {
-    const { output, remoteCommand, result } = runMacosShell(shellScript);
-
-    expect(result.status).toBe(0);
+    const { output, remoteCommand } = runSuccessfulMacosShell(shellScript);
     if (expectSingleShell) {
       expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     }
@@ -2908,29 +2754,12 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("groups shell commands so fallbacks cannot mask AWS macOS bootstrap failures", () => {
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      "pnpm check:changed || true",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(
-      remoteCommand,
-      `${remoteChangedGateExport} pnpm check:changed || true`,
-    );
+    const { remoteCommand } = runSuccessfulMacosShell("pnpm check:changed || true");
+    expectMacosJsBootstrap(remoteCommand, `${remoteChangedGateExport} pnpm check:changed || true`);
   });
 
   it("does not bootstrap non-macOS AWS JavaScript commands", () => {
-    const result = runDefaultWrapper([
+    const { output } = runSuccessfulDefaultWrapper([
       "run",
       "--provider",
       "aws",
@@ -2940,9 +2769,6 @@ describe("scripts/crabbox-wrapper", () => {
       "pnpm",
       "--version",
     ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
     expect(output.args).toEqual([
       "run",
       "--provider",
@@ -2956,78 +2782,26 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("restores hydrated node_modules before AWS native Windows shell commands", () => {
-    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--windows-mode",
-      "normal",
-      "--id",
-      "cbx_test",
-      "--shell",
-      "--",
+    expectHydratedWindowsShell(
+      runSuccessfulNativeWindows("aws", ["corepack pnpm check:changed"], true),
       "corepack pnpm check:changed",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
-    expect(remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
-    expect(remoteCommand).toContain('mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"');
-    expect(remoteCommand).toContain("corepack pnpm check:changed");
+    );
   });
 
   it("restores hydrated node_modules before Azure native Windows shell commands", () => {
-    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
-      "run",
-      "--provider",
-      "azure",
-      "--target",
-      "windows",
-      "--windows-mode",
-      "normal",
-      "--id",
-      "cbx_test",
-      "--shell",
-      "--",
+    expectHydratedWindowsShell(
+      runSuccessfulNativeWindows("azure", ["corepack pnpm check:changed"], true),
       "corepack pnpm check:changed",
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
-    expect(remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
-    expect(remoteCommand).toContain('mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"');
-    expect(remoteCommand).toContain("corepack pnpm check:changed");
+    );
   });
 
   it("restores hydrated node_modules before AWS native Windows direct commands", () => {
-    const result = runWrapper("provider: hetzner, aws, azure, local-container\n", [
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "windows",
-      "--windows-mode",
-      "normal",
-      "--id",
-      "cbx_test",
-      "--",
+    const { output, remoteCommand } = runSuccessfulNativeWindows("aws", [
       "pnpm",
       "--filter",
       "@openclaw/discord",
       "test",
     ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
-    expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
     expect(remoteCommand).toContain("pnpm --filter '@openclaw/discord' test");
@@ -3181,6 +2955,22 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
   });
 
+  it("rejects a broken binary before workload provider discovery", () => {
+    const helpText =
+      "provider: hetzner, aws, local-container, blacksmith-testbox, daytona, azure, or cloudflare\n";
+    const result = runWrapper(helpText, ["run", "--workload", "ci-fast", "--", "echo ok"], {
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "100" },
+      extraPathEntries: [makeSlowVersionCrabbox(helpText)],
+      nodePreload: testTimingPreload({ spawnTimeoutMs: 25 }),
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
+    expect(result.stderr).not.toContain("no ready provider");
+    expect(result.stderr).not.toContain("provider readiness");
+  });
+
   it("retries a cold Crabbox whose run --help is slower than the default probe timeout", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
     // First probe is SIGKILLed at 25ms; the retry gets the full generous timeout
@@ -3215,7 +3005,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("uses a temporary full checkout for clean sparse Blacksmith syncs", () => {
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -3227,42 +3017,28 @@ describe("scripts/crabbox-wrapper", () => {
         "pnpm",
         "check:changed",
       ],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
-
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).not.toContain("--no-sync");
+    expect(output.args).not.toContain("--no-sync");
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("uses a temporary full checkout for clean sparse AWS syncs", () => {
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
-
-    expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
     expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
-    expect(parseFakeCrabboxOutput(result).args.join(" ")).toContain(
+    expect(output.args.join(" ")).toContain(
       "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
     );
-    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("uses a temporary full checkout when clean sparse AWS syncs reuse a lease", () => {
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -3276,28 +3052,17 @@ describe("scripts/crabbox-wrapper", () => {
         "pnpm",
         "build",
       ],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
-
-    expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("bootstraps Git metadata for sparse changed gates on remote raw syncs", () => {
-    const result = runDefaultWrapper(
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
       sparseChangedGateOptions,
     );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expectChangedGateGitBootstrap(remoteCommand);
     expect(remoteCommand).toContain("refs/heads/openclaw-changed-gate-head");
@@ -3307,7 +3072,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("uses an explicit release base for changed-gate sync and remote Git metadata", () => {
-    const result = runDefaultWrapper(
+    const { remoteCommand, result } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -3331,11 +3096,6 @@ describe("scripts/crabbox-wrapper", () => {
         },
       },
     );
-
-    const remoteCommand = normalizeShellLineEndings(
-      parseFakeCrabboxOutput(result).args.at(-1) ?? "",
-    );
-    expect(result.status).toBe(0);
     expect(result.stderr).toContain("overlaying local HEAD as worktree changes from release123");
     expect(remoteCommand).toContain("openclaw_changed_gate_base=release123");
     expect(remoteCommand).toContain(
@@ -3490,7 +3250,7 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
-    const result = runDefaultWrapper(
+    const { output, remoteCommand, result } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
       {
         gitResponses: {
@@ -3499,10 +3259,6 @@ describe("scripts/crabbox-wrapper", () => {
         },
       },
     );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
     expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
@@ -3515,7 +3271,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("bootstraps Git metadata for env-prefixed sparse changed gates", () => {
-    const result = runDefaultWrapper(
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -3532,9 +3288,6 @@ describe("scripts/crabbox-wrapper", () => {
       sparseChangedGateOptions,
     );
 
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
@@ -3543,18 +3296,13 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("preserves macOS JS bootstrapping for sparse changed gates on remote raw syncs", () => {
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--", "pnpm", "check:changed"],
+    const { output, remoteCommand } = runSuccessfulMacosCommand(
+      ["pnpm", "check:changed"],
       sparseChangedGateOptions,
     );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(remoteChangedGateFetch);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(
+    expectMacosJsBootstrap(
       remoteCommand,
       `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} pnpm check:changed`,
     );
@@ -3562,45 +3310,26 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("preserves macOS JS and Git bootstraps for sparse shell changed gates with setup", () => {
     const shellScript = ["set -euo pipefail", "pnpm check:changed"].join("\n");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
+    const { output, remoteCommand } = runSuccessfulMacosShell(
+      shellScript,
       sparseChangedGateOptions,
     );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
+    expectMacosJsBootstrap(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves macOS JS and Git bootstraps for shell-wrapped sparse changed gates", () => {
     const shellScript = "bash -lc 'pnpm check:changed'";
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
-      sparseChangedGateOptions,
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript, sparseChangedGateOptions);
     expect(remoteCommand).toContain("git init -q");
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
+    expectMacosJsBootstrap(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("does not mistake quoted remote-child markers for shell changed-gate environment", () => {
     const shellScript = 'echo "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1"; pnpm check:changed';
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
-      sparseChangedGateOptions,
-    );
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript, sparseChangedGateOptions);
 
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(remoteCommand).toContain(remoteChangedGateFetch);
     expectGroupedShellCommand(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
@@ -3643,9 +3372,8 @@ describe("scripts/crabbox-wrapper", () => {
         "/usr/bin/time -v timeout 1200s node --max-old-space-size=4096 scripts/check-changed.mjs --base origin/main --head HEAD",
     },
   ])("$name", ({ expectFetch, shellScript }) => {
-    const { remoteCommand, result } = runSparseShell(shellScript);
+    const { remoteCommand } = runSparseShell(shellScript);
 
-    expect(result.status).toBe(0);
     expect(remoteCommand).toContain("git init -q");
     if (expectFetch) {
       expect(remoteCommand).toContain(remoteChangedGateFetch);
@@ -3654,7 +3382,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("preserves sparse changed-gate Git bootstrap for direct timeout-wrapped node commands", () => {
-    const result = runDefaultWrapper(
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -3671,10 +3399,6 @@ describe("scripts/crabbox-wrapper", () => {
       ],
       sparseChangedGateOptions,
     );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toMatch(
@@ -3683,14 +3407,10 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("preserves sparse changed-gate Git bootstrap for direct timeout-wrapped shell commands", () => {
-    const result = runDefaultWrapper(
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "aws", "--", "timeout", "1200s", "bash", "-lc", "pnpm check:changed"],
       sparseChangedGateOptions,
     );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
     expect(remoteCommand).toMatch(
@@ -3781,80 +3501,35 @@ describe("scripts/crabbox-wrapper", () => {
       shellScript: 'echo "$(cat <<EOF\npnpm check:changed\nEOF\n)"',
     },
   ])("$name", ({ shellScript }) => {
-    const { remoteCommand, result } = runSparseShell(shellScript);
+    const { remoteCommand } = runSparseShell(shellScript);
 
-    expect(result.status).toBe(0);
     expect(remoteCommand).not.toContain("git init -q");
   });
 
   it("detects JavaScript commands after hyphenated heredoc delimiters", () => {
     const shellScript = "cat <<EOF-JSON\nnode is literal\nEOF-JSON\npnpm --version";
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      shellScript,
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript);
+    expectMacosJsBootstrap(remoteCommand, shellScript);
   });
 
   it("bootstraps raw AWS macOS shell scripts for unquoted heredoc command substitutions", () => {
     const shellScript = "cat <<EOF\n$(pnpm --version)\nEOF";
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      shellScript,
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expectGroupedShellCommand(remoteCommand, shellScript);
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript);
+    expectMacosJsBootstrap(remoteCommand, shellScript);
   });
 
   it("keeps quoted heredoc command substitutions literal", () => {
     const shellScript = "cat <<'EOF'\n$(pnpm --version)\nEOF";
-    const result = runDefaultWrapper([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "macos",
-      "--shell",
-      "--",
-      shellScript,
-    ]);
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
+    const { remoteCommand } = runSuccessfulMacosShell(shellScript);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
   });
 
   it("preserves existing shell changed-gate commands after remote Git bootstrap", () => {
-    const result = runDefaultWrapper(
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "aws", "--shell", "--", "env CI=1 pnpm check:changed"],
       sparseChangedGateOptions,
     );
 
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
@@ -3863,7 +3538,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("does not inject the POSIX changed-gate bootstrap for Windows targets", () => {
-    const result = runDefaultWrapper(
+    const { output } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -3877,9 +3552,6 @@ describe("scripts/crabbox-wrapper", () => {
       ],
       sparseChangedGateOptions,
     );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
     expect(output.args).not.toContain("--shell");
     expect(output.args).toEqual([
       "run",
@@ -3895,139 +3567,78 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("uses a temporary full checkout when local-container syncs clean sparse worktrees", () => {
-    const result = runDefaultWrapper(["run", "--provider", "local-container", "--", "echo ok"], {
-      gitResponses: {
-        [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-        [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-      },
-    });
-
-    expect(result.status).toBe(0);
+    const { output, result } = runSuccessfulDefaultWrapper(
+      ["run", "--provider", "local-container", "--", "echo ok"],
+      cleanSparseSyncOptions,
+    );
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("creates sparse-sync temporary full checkouts under the durable cache root", () => {
-    const syncRoot = path.join(repoRoot, ".crabbox-test-sync-root");
-    rmSync(syncRoot, { recursive: true, force: true });
-    try {
-      const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-        env: { OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      });
-
-      const output = parseFakeCrabboxOutput(result);
-      expect(result.status).toBe(0);
+    withSparseSyncRoot(".crabbox-test-sync-root", {}, ({ result, syncRoot }) => {
+      const { output } = expectSuccessfulWrapperRun(result);
       expect(output.cwd).toContain(`${syncRoot}${path.sep}openclaw-crabbox-sync-`);
       expect(readdirSync(syncRoot)).toEqual([]);
-    } finally {
-      rmSync(syncRoot, { recursive: true, force: true });
-    }
+    });
   });
 
   it("fails sparse-sync full checkout early when the sync root is too low on disk", () => {
-    const syncRoot = path.join(repoRoot, ".crabbox-test-low-disk-sync-root");
-    rmSync(syncRoot, { recursive: true, force: true });
-    try {
-      const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-        env: {
-          OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "999999999999999",
-          OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "insufficient free disk for Crabbox sparse-sync full checkout",
-      );
-      expect(result.stderr).toContain("OPENCLAW_CRABBOX_SYNC_TMPDIR");
-      expect(result.stderr).toContain("OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES");
-      expect(readdirSync(syncRoot)).toEqual([]);
-    } finally {
-      rmSync(syncRoot, { recursive: true, force: true });
-    }
+    withSparseSyncRoot(
+      ".crabbox-test-low-disk-sync-root",
+      { OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "999999999999999" },
+      ({ result, syncRoot }) => {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          "insufficient free disk for Crabbox sparse-sync full checkout",
+        );
+        expect(result.stderr).toContain("OPENCLAW_CRABBOX_SYNC_TMPDIR");
+        expect(result.stderr).toContain("OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES");
+        expect(readdirSync(syncRoot)).toEqual([]);
+      },
+    );
   });
 
   it("rejects malformed sparse-sync minimum free byte limits", () => {
-    const syncRoot = path.join(repoRoot, ".crabbox-test-invalid-disk-sync-root");
-    rmSync(syncRoot, { recursive: true, force: true });
-    try {
-      const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-        env: {
-          OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "1024mb",
-          OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        'OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES must be a non-negative integer byte count, got "1024mb"',
-      );
-      expect(readdirSync(syncRoot)).toEqual([]);
-    } finally {
-      rmSync(syncRoot, { recursive: true, force: true });
-    }
+    withSparseSyncRoot(
+      ".crabbox-test-invalid-disk-sync-root",
+      { OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "1024mb" },
+      ({ result, syncRoot }) => {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          'OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES must be a non-negative integer byte count, got "1024mb"',
+        );
+        expect(readdirSync(syncRoot)).toEqual([]);
+      },
+    );
   });
 
   it("rejects unsafe sparse-sync minimum free byte limits", () => {
-    const syncRoot = path.join(repoRoot, ".crabbox-test-unsafe-disk-sync-root");
-    rmSync(syncRoot, { recursive: true, force: true });
-    try {
-      const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-        env: {
-          OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: String(Number.MAX_SAFE_INTEGER + 1),
-          OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES must be a safe non-negative integer byte count",
-      );
-      expect(readdirSync(syncRoot)).toEqual([]);
-    } finally {
-      rmSync(syncRoot, { recursive: true, force: true });
-    }
+    withSparseSyncRoot(
+      ".crabbox-test-unsafe-disk-sync-root",
+      { OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: String(Number.MAX_SAFE_INTEGER + 1) },
+      ({ result, syncRoot }) => {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          "OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES must be a safe non-negative integer byte count",
+        );
+        expect(readdirSync(syncRoot)).toEqual([]);
+      },
+    );
   });
 
   it("rejects malformed sparse-sync keepalive intervals", () => {
-    const syncRoot = path.join(repoRoot, ".crabbox-test-invalid-keepalive-sync-root");
-    rmSync(syncRoot, { recursive: true, force: true });
-    try {
-      const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-        env: {
-          OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS: "10ms",
-          OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        'OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS must be a non-negative integer millisecond interval, got "10ms"',
-      );
-      expect(readdirSync(syncRoot)).toEqual([]);
-    } finally {
-      rmSync(syncRoot, { recursive: true, force: true });
-    }
+    withSparseSyncRoot(
+      ".crabbox-test-invalid-keepalive-sync-root",
+      { OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS: "10ms" },
+      ({ result, syncRoot }) => {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          'OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS must be a non-negative integer millisecond interval, got "10ms"',
+        );
+        expect(readdirSync(syncRoot)).toEqual([]);
+      },
+    );
   });
 
   (process.platform === "win32" ? it.skip : it)(
@@ -4094,41 +3705,29 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it("uses a temporary full checkout when existing AWS leases sync clean sparse worktrees", () => {
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "aws", "--id", "cbx_existing", "--", "echo ok"],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
 
-    expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).args).toContain("--reclaim");
-    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.args).toContain("--reclaim");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("uses a temporary full checkout when clean sparse branches differ from the Blacksmith ref", () => {
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).not.toContain("--no-sync");
+    expect(output.args).not.toContain("--no-sync");
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("keeps sparse dirty worktrees on the original checkout", () => {
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
       {
         gitResponses: {
@@ -4138,13 +3737,12 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
 
-    expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toBe(repoRoot);
+    expect(output.cwd).toBe(repoRoot);
   });
 
   it("keeps local artifact paths rooted at the original checkout", () => {
-    const result = runDefaultWrapper(
+    const { output } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -4159,16 +3757,9 @@ describe("scripts/crabbox-wrapper", () => {
         "--",
         "echo ok",
       ],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
 
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
     expect(output.args).toContain(
       `--capture-stdout=${path.join(repoRoot, ".artifacts/stdout.log")}`,
@@ -4181,7 +3772,7 @@ describe("scripts/crabbox-wrapper", () => {
     const preservedDir = path.join(repoRoot, ".crabbox", "runs", "run_fake");
     rmSync(preservedDir, { recursive: true, force: true });
 
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -4193,16 +3784,9 @@ describe("scripts/crabbox-wrapper", () => {
         "--",
         "echo ok",
       ],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
 
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
     expect(result.stderr).toContain("syncing from temporary full checkout");
     expect(result.stderr).toContain("preserved");
@@ -4211,7 +3795,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("uses the temporary full checkout for sparse sync-only runs", () => {
-    const result = runDefaultWrapper(
+    const { output, result } = runSuccessfulDefaultWrapper(
       [
         "run",
         "--provider",
@@ -4220,16 +3804,10 @@ describe("scripts/crabbox-wrapper", () => {
         "feature-branch",
         "--sync-only",
       ],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-        },
-      },
+      cleanSparseSyncOptions,
     );
 
-    expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 });

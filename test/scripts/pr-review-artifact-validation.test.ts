@@ -315,7 +315,7 @@ describePosix("scripts/pr review artifact validation", () => {
     const archives = readdirSync(join(localDir, "superseded"));
     expect(archives).toHaveLength(1);
     const archive = join(localDir, "superseded", archives[0]!);
-    expect(readdirSync(archive).sort()).toEqual(["review.json", "review.md"]);
+    expect(readdirSync(archive).toSorted()).toEqual(["review.json", "review.md"]);
     expect(JSON.parse(readFileSync(join(archive, "review.json"), "utf8")).pr.number).toBe(113928);
     expect(readFileSync(join(archive, "review.md"), "utf8")).toBe("A) Ship another PR\n");
 

@@ -344,7 +344,7 @@ export function createMeetingChromeTransport<
   type MeetingNodeStartResult = {
     launched?: boolean;
     bridgeId?: string;
-    audioBridge?: { type?: string };
+    audioBridge?: { type?: string; outputGeneration?: boolean };
     browser?: Health;
   };
 
@@ -459,6 +459,11 @@ export function createMeetingChromeTransport<
         logScope: options.platform.logScope,
         logPrefix: params.mode === "agent" ? "node agent" : "node",
       });
+      Reflect.set(
+        transport,
+        Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+        result.audioBridge.outputGeneration === true,
+      );
       const bindings = options.runtime.createBindings({
         platform: options.platform,
         ...params,

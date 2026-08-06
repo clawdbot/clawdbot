@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server.impl.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
   OpenClawAgentDatabaseMediaMigrationRequiredError,
@@ -243,7 +244,7 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   waitForActiveEmbeddedRuns: (timeoutMs?: number) => waitForActiveEmbeddedRuns(timeoutMs),
 }));
 
-vi.mock("../../agents/main-session-restart-recovery.js", () => ({
+vi.mock("../../agents/main-session-restart-recovery-marking.js", () => ({
   markRestartAbortedMainSessions: (params: unknown) => markRestartAbortedMainSessions(params),
 }));
 
@@ -260,7 +261,7 @@ vi.mock("../../logging/logger.js", () => ({
   flushLogger: () => flushLogger(),
 }));
 
-vi.mock("../../gateway/server-reload-handlers.js", () => ({
+vi.mock("../../gateway/server-reload-contracts.js", () => ({
   abortPendingChannelReloads: () => abortPendingChannelReloads(),
 }));
 
@@ -1049,6 +1050,10 @@ describe("runGatewayLoop", () => {
       const closeSecond = createCloseMock();
       const closeThird = createCloseMock();
       const { runtime, exited } = createRuntimeWithExitSignal();
+      const lifecycleSlot = resolveGlobalMap<string, number>(
+        Symbol("run-loop-lifecycle-slot"),
+        (state) => state.clear(),
+      );
 
       const start = vi.fn<StartServer>();
       let resolveFirst: (() => void) | null = null;
@@ -1065,6 +1070,7 @@ describe("runGatewayLoop", () => {
         resolveSecond = resolve;
       });
       start.mockImplementationOnce(async () => {
+        expect(lifecycleSlot.size).toBe(0);
         resolveSecond?.();
         return { close: closeSecond };
       });
@@ -1074,6 +1080,7 @@ describe("runGatewayLoop", () => {
         resolveThird = resolve;
       });
       start.mockImplementationOnce(async () => {
+        expect(lifecycleSlot.size).toBe(0);
         resolveThird?.();
         return { close: closeThird };
       });
@@ -1085,6 +1092,7 @@ describe("runGatewayLoop", () => {
       });
 
       await startedFirst;
+      lifecycleSlot.set("first", 1);
       const sigusr1 = captureSignal("SIGUSR1");
       const sigterm = captureSignal("SIGTERM");
       expect(start).toHaveBeenCalledTimes(1);
@@ -1157,6 +1165,7 @@ describe("runGatewayLoop", () => {
         resetAllLanes.mock.invocationCallOrder[0] ?? Infinity,
       );
 
+      lifecycleSlot.set("second", 2);
       sigusr1();
 
       await startedThird;

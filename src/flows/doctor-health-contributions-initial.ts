@@ -63,11 +63,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
-      id: "doctor:active-tool-schema-warnings",
-      label: "Active tool schema warnings",
-      run: runActiveToolSchemaWarningsHealth,
-    }),
-    createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],
@@ -114,6 +109,29 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Legacy state",
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: params.runLegacyStateHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcripts",
+      label: "Session transcripts",
+      healthChecks: {
+        description: "Legacy or branchy session transcript files are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
+            await import("../commands/doctor-session-transcripts.js");
+          return (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToHealthFinding,
+          );
+        },
+        repair: legacyOwnedRepair(async () => {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToRepairEffect } =
+            await import("../commands/doctor-session-transcripts.js");
+          return (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToRepairEffect,
+          );
+        }, "legacy doctor session transcript contribution owns transcript rewrites"),
+      },
+      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:agent-memory-schema",
@@ -230,6 +248,13 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runPluginRegistryHealth,
     }),
+    // Runtime tool discovery must follow plugin metadata repair; running it earlier
+    // scans each workspace again after the authoritative generation changes.
+    createDoctorHealthContribution({
+      id: "doctor:active-tool-schema-warnings",
+      label: "Active tool schema warnings",
+      run: runActiveToolSchemaWarningsHealth,
+    }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",
       label: "UI protocol freshness",
@@ -302,29 +327,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Session locks",
       healthCheckIds: ["core/doctor/session-locks"],
       run: runSessionLocksHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-transcripts",
-      label: "Session transcripts",
-      healthChecks: {
-        description: "Legacy or branchy session transcript files are represented as findings.",
-        defaultEnabled: false,
-        async detect() {
-          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
-            await import("../commands/doctor-session-transcripts.js");
-          return (await detectSessionTranscriptHealthIssues()).map(
-            sessionTranscriptIssueToHealthFinding,
-          );
-        },
-        repair: legacyOwnedRepair(async () => {
-          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToRepairEffect } =
-            await import("../commands/doctor-session-transcripts.js");
-          return (await detectSessionTranscriptHealthIssues()).map(
-            sessionTranscriptIssueToRepairEffect,
-          );
-        }, "legacy doctor session transcript contribution owns transcript rewrites"),
-      },
-      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcript-headers",

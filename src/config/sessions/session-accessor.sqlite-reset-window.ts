@@ -4,6 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -121,13 +122,7 @@ function readTranscriptGeneration(projection: ResetWindowProjection): string | u
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
   resetMessageWindowCache.delete(key);
   resetMessageWindowCache.set(key, entry);
-  while (resetMessageWindowCache.size > MAX_RESET_MESSAGE_WINDOW_CACHE) {
-    const oldest = resetMessageWindowCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    resetMessageWindowCache.delete(oldest);
-  }
+  pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
 }
 
 function findLatestResetMessageWindow(

@@ -18,9 +18,32 @@ import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
-let healthRefresh: Promise<HealthSummary> | null = null;
-let sensitiveHealthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+
+type HealthAudience = "public" | "admin";
+type HealthRefreshStrength = "passive" | "probe";
+type HealthRefreshOperation = {
+  generation: number;
+  promise: Promise<HealthSummary>;
+};
+type HealthRefreshState = {
+  nextGeneration: number;
+  committedGeneration: number;
+  inFlight: Record<HealthRefreshStrength, HealthRefreshOperation | null>;
+};
+
+const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
+  public: {
+    nextGeneration: 0,
+    committedGeneration: 0,
+    inFlight: { passive: null, probe: null },
+  },
+  admin: {
+    nextGeneration: 0,
+    committedGeneration: 0,
+    inFlight: { passive: null, probe: null },
+  },
+};
 
 export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Snapshot {
   const cfg = getRuntimeConfig();
@@ -86,44 +109,62 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
-  let refresh = includeSensitive ? sensitiveHealthRefresh : healthRefresh;
-  if (!refresh) {
-    refresh = (async () => {
-      let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
-      try {
-        runtimeSnapshot = opts?.getRuntimeSnapshot?.();
-      } catch {
-        runtimeSnapshot = undefined;
-      }
-      const eventLoop = opts?.getEventLoopHealth?.();
-      const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
-      const snap = await collectGatewayHealthSnapshot({
-        audience: includeSensitive ? "admin" : "public",
-        probe: opts?.probe !== false,
-        runtimeSnapshot,
-        ...(eventLoop ? { eventLoop } : {}),
-        ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
-      });
-      if (!includeSensitive) {
-        healthCache = snap;
-        healthVersion += 1;
-        if (broadcastHealthUpdate) {
-          broadcastHealthUpdate(snap);
-        }
-      }
-      return snap;
-    })().finally(() => {
-      if (includeSensitive) {
-        sensitiveHealthRefresh = null;
-      } else {
-        healthRefresh = null;
-      }
-    });
-    if (includeSensitive) {
-      sensitiveHealthRefresh = refresh;
-    } else {
-      healthRefresh = refresh;
-    }
+  const audience: HealthAudience = includeSensitive ? "admin" : "public";
+  const state = healthRefreshStates[audience];
+  const strength: HealthRefreshStrength = opts?.probe === false ? "passive" : "probe";
+  // Passive callers can reuse a stronger probe, but an explicit probe must not
+  // inherit a passive refresh that deliberately skipped live channel checks.
+  const existing =
+    strength === "passive"
+      ? (state.inFlight.probe ?? state.inFlight.passive)
+      : state.inFlight.probe;
+  if (existing) {
+    return existing.promise;
   }
-  return refresh;
+
+  const generation = state.nextGeneration + 1;
+  state.nextGeneration = generation;
+  const promise = (async () => {
+    let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
+    try {
+      runtimeSnapshot = opts?.getRuntimeSnapshot?.();
+    } catch {
+      runtimeSnapshot = undefined;
+    }
+    const eventLoop = opts?.getEventLoopHealth?.();
+    const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
+    const snap = await collectGatewayHealthSnapshot({
+      audience,
+      probe: strength === "probe",
+      runtimeSnapshot,
+      ...(eventLoop ? { eventLoop } : {}),
+      ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
+    });
+    if (
+      strength === "probe" &&
+      state.inFlight.passive &&
+      state.inFlight.passive.generation < generation
+    ) {
+      // Existing passive waiters may finish, but new callers must not join
+      // weaker work after this newer live probe has succeeded.
+      state.inFlight.passive = null;
+    }
+    // Concurrent passive/probe refreshes can finish out of order. Only a
+    // generation newer than the published cache may advance version/broadcast.
+    if (!includeSensitive && generation > state.committedGeneration) {
+      state.committedGeneration = generation;
+      healthCache = snap;
+      healthVersion += 1;
+      if (broadcastHealthUpdate) {
+        broadcastHealthUpdate(snap);
+      }
+    }
+    return snap;
+  })().finally(() => {
+    if (state.inFlight[strength]?.generation === generation) {
+      state.inFlight[strength] = null;
+    }
+  });
+  state.inFlight[strength] = { generation, promise };
+  return promise;
 }

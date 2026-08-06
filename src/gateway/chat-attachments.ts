@@ -5,7 +5,6 @@ import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants"
 import { extensionForMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -13,6 +12,7 @@ import { probeMediaFilesWithinBudget } from "../media/media-probe.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
+import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
 import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
@@ -77,8 +77,6 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 const MAX_CHAT_ATTACHMENT_MEDIA_PROBES = 8;
 const CHAT_ATTACHMENT_MEDIA_PROBE_CONCURRENCY = 2;
 const CHAT_ATTACHMENT_MEDIA_PROBE_BUDGET_MS = 3000;
-
-const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
 async function enrichOffloadedMediaMetadata(refs: OffloadedRef[]): Promise<void> {
   const candidates = refs.flatMap((ref) => {
@@ -172,16 +170,6 @@ export async function persistInboundImagesForTranscript(params: {
     ...nonImageOffloaded,
   );
   return ordered;
-}
-
-/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
-export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
-  const configured = cfg.agents?.defaults?.mediaMaxMb;
-  const mb =
-    typeof configured === "number" && Number.isFinite(configured) && configured > 0
-      ? configured
-      : DEFAULT_CHAT_ATTACHMENT_MAX_MB;
-  return Math.floor(mb * 1024 * 1024);
 }
 
 type UnsupportedAttachmentReason =
@@ -374,7 +362,7 @@ export async function parseMessageWithAttachments(
     acceptNonImage?: boolean;
   },
 ): Promise<ParsedMessageWithImages> {
-  const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_MB * 1024 * 1024;
+  const maxBytes = opts?.maxBytes ?? DEFAULT_CHAT_ATTACHMENT_MAX_BYTES;
   const log = opts?.log;
   const shouldForceImageOffload = opts?.supportsImages === false;
   const supportsInlineImages = opts?.supportsInlineImages !== false;

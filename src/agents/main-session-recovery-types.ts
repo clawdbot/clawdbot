@@ -1,7 +1,16 @@
 import type {
   InternalSessionEntry as SessionEntry,
+  MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../config/sessions.js";
+
+type MainSessionRecoveryExecutionIdentity = NonNullable<
+  MainRestartRecoveryState["executionIdentity"]
+>;
+
+type MainSessionRecoveryExecutionIdentityAdmission =
+  | { kind: "capture"; token: MainSessionRecoveryExecutionIdentity }
+  | { kind: "retry-reference"; token: MainSessionRecoveryExecutionIdentity };
 
 export type MainSessionRecoveryObservation = {
   sessionId: string;
@@ -15,6 +24,7 @@ export type MainSessionRecoveryReservation = {
   lifecycleGeneration: string;
   runId: string;
   attempt: number;
+  executionIdentityAdmission?: MainSessionRecoveryExecutionIdentityAdmission;
 };
 
 export type MainSessionRecoveryOwnerClaim = {
@@ -53,6 +63,12 @@ export type MainSessionRecoveryConflict =
   | "stale_reservation"
   | "stale_revision";
 
+type RecoveryRunOwner = {
+  lifecycleGeneration: string;
+  runId: string;
+  sessionId: string;
+};
+
 export type MainSessionRecoveryCommand =
   | {
       kind: "mark_interrupted";
@@ -79,29 +95,19 @@ export type MainSessionRecoveryCommand =
       now: number;
       observation: MainSessionRecoveryObservation;
       runId: string;
-    }
-  | { kind: "cancel_reservation"; reservation: MainSessionRecoveryReservation }
-  | { kind: "abandon_reservation"; reservation: MainSessionRecoveryReservation }
-  | {
-      kind: "validate_recovery";
-      lifecycleGeneration: string;
-      runId: string;
-      sessionId: string;
+      executionIdentity:
+        | { state: "disabled" }
+        | { state: "enabled"; token: MainSessionRecoveryExecutionIdentity };
     }
   | {
-      kind: "admit_recovery";
-      lifecycleGeneration: string;
+      kind: "cancel_reservation" | "abandon_reservation";
+      reservation: MainSessionRecoveryReservation;
+    }
+  | ({ kind: "validate_recovery" } & RecoveryRunOwner)
+  | ({
+      kind: "admit_recovery" | "mark_admitted_recovery_interrupted";
       now: number;
-      runId: string;
-      sessionId: string;
-    }
-  | {
-      kind: "mark_admitted_recovery_interrupted";
-      lifecycleGeneration: string;
-      now: number;
-      runId: string;
-      sessionId: string;
-    }
+    } & RecoveryRunOwner)
   | {
       kind: "claim_foreground";
       cycleId: string;
@@ -129,15 +135,18 @@ export type MainSessionRecoveryCommand =
   | { kind: "clear" };
 
 export type MainSessionRecoveryTransitionResult =
-  | { kind: "admitted_recovery" }
-  | { kind: "applied" }
-  | { kind: "doctor_repaired" }
+  | {
+      kind:
+        | "admitted_recovery"
+        | "applied"
+        | "doctor_repaired"
+        | "foreground_validated"
+        | "no_change"
+        | "recovery_validated"
+        | "tombstoned";
+    }
   | { kind: "failed"; noticeEntry: SessionEntry }
   | { kind: "foreground_claimed"; claim: MainSessionRecoveryOwnerClaim }
-  | { kind: "foreground_validated" }
-  | { kind: "no_change" }
   | { kind: "observed"; view: MainSessionRecoveryView }
   | { kind: "rejected"; reason: MainSessionRecoveryConflict }
-  | { kind: "recovery_validated" }
-  | { kind: "reserved"; reservation: MainSessionRecoveryReservation }
-  | { kind: "tombstoned" };
+  | { kind: "reserved"; reservation: MainSessionRecoveryReservation };

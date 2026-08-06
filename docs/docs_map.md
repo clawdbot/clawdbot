@@ -1,10 +1,10 @@
 ---
 summary: "Generated heading map for OpenClaw docs pages"
 read_when: "Finding which docs page covers a topic before reading the page"
-title: "Docs map"
+title: "Docs map source"
 ---
 
-# OpenClaw docs map
+# Docs map source
 
 This file is generated from `docs/**/*.md` and `docs/**/*.mdx` headings to help agents navigate the documentation tree.
 Do not edit it by hand; run `pnpm docs:map:gen`.

@@ -1,14 +1,18 @@
 // Public outbound delivery queue facade for storage and recovery operations.
 export {
   ackDelivery,
-  claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
+  enqueuePreparedDeliveryOnce,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
 } from "./delivery-queue-storage.js";
+export {
+  claimReusableDeliveryPlatformSendAttempt,
+  renewDeliveryPlatformSendLease,
+} from "./delivery-queue-platform-lease.js";
 export type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 export {
   drainPendingDeliveries,

@@ -30,6 +30,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { recordAgentHarnessPreflightOwner } from "./errors.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
@@ -333,6 +334,7 @@ export async function runAgentHarnessLifecycleAttempt(
       : await runAndClassify();
     result = withFallbackDiagnosticTrace(result, activeHarnessTrace);
   } catch (error) {
+    recordAgentHarnessPreflightOwner(error, harness.id);
     emitAgentHarnessRunError({
       harness,
       attemptParams: params,

@@ -9,7 +9,6 @@ import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.
 import {
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
-  resolveBundledPluginRepoEntryPath,
 } from "./bundled-plugin-metadata.js";
 
 type BundledPluginMetadata = ReturnType<typeof listBundledPluginMetadata>[number];
@@ -325,8 +324,6 @@ function createInstalledPluginRecordForManifest(
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory: hasPluginKind(record, "memory"),
-      deferConfiguredChannelFullLoadUntilAfterListen:
-        record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
       agentHarnesses: [
         ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...record.cliBackends]),
       ].toSorted((left, right) => left.localeCompare(right)),
@@ -433,6 +430,13 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps CUA's doctor contract sidecar on the bundled public surface", () => {
+    const cua = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "cua-computer");
+    expectArtifactPresence(cua?.publicSurfaceArtifacts, {
+      contains: ["doctor-contract-api.js"],
+    });
+  });
+
   it("keeps iMessage message-tool discovery on a narrow public surface", () => {
     const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
     expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
@@ -469,6 +473,22 @@ describe("bundled plugin metadata", () => {
     expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
       contains: ["runtime-setter-api.js"],
     });
+  });
+
+  it("keeps QA runner discovery on narrow bundled runtime sidecars", () => {
+    const runnerPlugins = listRepoBundledPluginMetadata().filter(
+      (entry) => (entry.manifest.qaRunners?.length ?? 0) > 0,
+    );
+    expect(runnerPlugins.length).toBeGreaterThan(0);
+
+    for (const plugin of runnerPlugins) {
+      expectArtifactPresence(plugin?.publicSurfaceArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+      expectArtifactPresence(plugin?.runtimeSidecarArtifacts, {
+        contains: ["qa-runner-api.js"],
+      });
+    }
   });
 
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
@@ -836,75 +856,6 @@ describe("bundled plugin metadata", () => {
         pluginsDir,
       ),
     ).toBe(path.join(pluginRoot, "index.js"));
-  });
-
-  it("resolves bundled repo entry paths from dist before workspace source", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-entry-");
-    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
-    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
-
-    writeJson(path.join(pluginRoot, "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-      },
-    });
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "alpha",
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
-
-    expect(
-      resolveBundledPluginRepoEntryPath({
-        rootDir: tempRoot,
-        pluginId: "alpha",
-        preferBuilt: true,
-      }),
-    ).toBe(path.join(pluginRoot, "index.ts"));
-
-    fs.mkdirSync(distPluginRoot, { recursive: true });
-    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export const built = true;\n", "utf8");
-    expect(
-      resolveBundledPluginRepoEntryPath({
-        rootDir: tempRoot,
-        pluginId: "alpha",
-        preferBuilt: true,
-      }),
-    ).toBe(path.join(distPluginRoot, "index.js"));
-  });
-
-  it("keeps bundled repo entry path resolution inside the plugin directory", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-contained-");
-    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
-
-    writeJson(path.join(pluginRoot, "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["../escape.ts"],
-      },
-    });
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "alpha",
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(path.join(tempRoot, "extensions", "escape.ts"), "export {};\n", "utf8");
-    fs.mkdirSync(path.join(tempRoot, "dist", "extensions"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tempRoot, "dist", "extensions", "escape.js"),
-      "export {};\n",
-      "utf8",
-    );
-
-    expect(
-      resolveBundledPluginRepoEntryPath({
-        rootDir: tempRoot,
-        pluginId: "alpha",
-        preferBuilt: true,
-      }),
-    ).toBeNull();
   });
 
   it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {

@@ -42,28 +42,6 @@ enum WindowPlacement {
         return NSRect(x: x, y: y, width: clampedWidth, height: clampedHeight)
     }
 
-    static func anchoredBelowFrame(size: NSSize, anchor: NSRect, padding: CGFloat, in bounds: NSRect) -> NSRect {
-        if bounds == .zero {
-            let x = round(anchor.midX - size.width / 2)
-            let y = round(anchor.minY - size.height - padding)
-            return NSRect(x: x, y: y, width: size.width, height: size.height)
-        }
-
-        let clampedWidth = min(size.width, bounds.width)
-        let clampedHeight = min(size.height, bounds.height)
-
-        let desiredX = round(anchor.midX - clampedWidth / 2)
-        let desiredY = round(anchor.minY - clampedHeight - padding)
-
-        let maxX = bounds.maxX - clampedWidth
-        let maxY = bounds.maxY - clampedHeight
-
-        let x = maxX >= bounds.minX ? min(max(desiredX, bounds.minX), maxX) : bounds.minX
-        let y = maxY >= bounds.minY ? min(max(desiredY, bounds.minY), maxY) : bounds.minY
-
-        return NSRect(x: x, y: y, width: clampedWidth, height: clampedHeight)
-    }
-
     static func cascadedFrame(from frame: NSRect, offset: CGFloat = 24, in bounds: NSRect) -> NSRect {
         guard bounds != .zero else {
             return frame.offsetBy(dx: offset, dy: -offset)

@@ -23,13 +23,10 @@ const detected: SystemAgentSetupDetectResult = {
   ],
   unavailableCandidates: [
     {
-      id: "gemini-cli",
-      brandId: "google-gemini-cli",
-      label: "Gemini CLI",
-      detail: "installed; login status unavailable",
-      reason: "OpenClaw could not confirm a usable login.",
-      authOptionId: "google-gemini-cli",
-      manualProviderId: "gemini-api-key",
+      id: "pi-cli",
+      label: "Pi",
+      detail: "installed; no setup route available",
+      reason: "This local runtime must be configured outside OpenClaw.",
     },
   ],
   manualProviders: [
@@ -37,8 +34,8 @@ const detected: SystemAgentSetupDetectResult = {
       id: "gemini-api-key",
       brandId: "google",
       groupLabel: "Google",
-      label: "Google Gemini API key",
-      hint: "Use an AI Studio API key.",
+      label: "Google AI Studio API key",
+      hint: "Supported API-key access from aistudio.google.com/apikey",
     },
     {
       id: "openai",
@@ -50,15 +47,6 @@ const detected: SystemAgentSetupDetectResult = {
     },
   ],
   authOptions: [
-    {
-      id: "google-gemini-cli",
-      brandId: "google-gemini-cli",
-      label: "Gemini CLI OAuth",
-      groupLabel: "Google",
-      kind: "oauth",
-      featured: true,
-      hint: "Continue with Google.",
-    },
     {
       id: "openai-oauth",
       brandId: "openai",
@@ -73,6 +61,33 @@ const detected: SystemAgentSetupDetectResult = {
       label: "Other provider",
       kind: "device-code",
       featured: false,
+    },
+  ],
+  prepareOptions: [
+    {
+      id: "ollama",
+      brandId: "ollama",
+      label: "Ollama",
+      hint: "Connect to an Ollama server and select a cloud or local model",
+      actionLabel: "Choose connection",
+      icon: "https://cdn.simpleicons.org/ollama",
+      website: "https://ollama.com/download",
+    },
+    {
+      id: "lmstudio",
+      brandId: "lmstudio",
+      label: "LM Studio",
+      hint: "Connect to a running LM Studio server and use an already loaded model",
+      actionLabel: "Connect server",
+      icon: "https://cdn.simpleicons.org/lmstudio",
+      website: "https://lmstudio.ai/download",
+    },
+    {
+      id: "llama-cpp",
+      brandId: "llama-cpp",
+      label: "llama.cpp",
+      hint: "Run one private GGUF model directly inside this Gateway",
+      actionLabel: "Set up model",
     },
   ],
   recommendedInstalls: [
@@ -144,7 +159,11 @@ function text(container: Element): string {
   return container.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
-function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
+function wizardStep(
+  step: WizardStep,
+  value: unknown = step.initialValue,
+  wizardMode: ModelSetupViewProps["wizardMode"] = "auth",
+): HTMLDivElement {
   return mount(
     props({
       wizard: {
@@ -154,6 +173,7 @@ function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLD
         busy: false,
         validationError: null,
       },
+      wizardMode,
       wizardValue: value,
     }),
   );
@@ -175,14 +195,15 @@ describe("renderModelSetup", () => {
 
   it("renders candidate, unavailable, sign-in, and manual sections", () => {
     const container = mount(props());
-    expect(text(container)).toContain("Connect your AI");
+    expect(text(container)).toContain("Connect a verified AI model");
     expect(text(container)).toContain("Found on this Gateway");
     expect(text(container)).toContain("Codex CLI");
     expect(text(container)).toContain("openai/gpt-5 · Signed in locally");
     expect(text(container)).toContain("Found, but needs attention");
-    expect(text(container)).toContain("OpenClaw could not confirm a usable login");
+    expect(text(container)).toContain("This local runtime must be configured outside OpenClaw");
     expect(text(container)).toContain("Sign in with a provider");
-    expect(text(container)).toContain("Set up a local model");
+    expect(text(container)).toContain("Run a model locally");
+    expect(text(container)).toContain("LM Studio");
     expect(text(container)).toContain("Connect with an API key or token");
     expect(
       container.querySelector('[data-manual-provider="openai"][data-selected]'),
@@ -193,9 +214,6 @@ describe("renderModelSetup", () => {
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
     expect(container.querySelector("details")?.open).toBe(false);
     expect(
-      container.querySelector('[data-unavailable-candidate="gemini-cli"] [data-provider-icon]'),
-    ).not.toBeNull();
-    expect(
       container.querySelector('[data-candidate-kind="codex-cli"] [data-provider-icon="codex"]'),
     ).not.toBeNull();
     expect(
@@ -203,6 +221,9 @@ describe("renderModelSetup", () => {
     ).not.toBeNull();
     expect(
       container.querySelector('.model-setup__manual [data-provider-icon="codex"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-prepare-choice="lmstudio"] [data-provider-icon="lmstudio"]'),
     ).not.toBeNull();
     expect(
       container.querySelector('[data-auth-choice="other-device"] .provider-brand-icon--fallback')
@@ -462,26 +483,16 @@ describe("renderModelSetup", () => {
     expect(onSuccessClose).toHaveBeenCalledOnce();
   });
 
-  it("offers direct recovery actions for an unavailable provider", () => {
-    const onStartAuth = vi.fn();
-    const onUseManualProvider = vi.fn();
+  it("only rechecks unavailable runtimes without a supported setup route", () => {
     const onDetect = vi.fn();
-    const container = mount(props({ onStartAuth, onUseManualProvider, onDetect }));
+    const container = mount(props({ onDetect }));
     const buttons = container.querySelectorAll<HTMLButtonElement>(
-      '[data-unavailable-candidate="gemini-cli"] button',
+      '[data-unavailable-candidate="pi-cli"] button',
     );
 
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
-      "Sign in with Google",
-      "Use API key",
-      "Check again",
-    ]);
+    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Check again"]);
     buttons[0]?.click();
-    buttons[1]?.click();
-    buttons[2]?.click();
 
-    expect(onStartAuth).toHaveBeenCalledWith(expect.objectContaining({ id: "google-gemini-cli" }));
-    expect(onUseManualProvider).toHaveBeenCalledWith("gemini-api-key");
     expect(onDetect).toHaveBeenCalledOnce();
   });
 
@@ -495,8 +506,17 @@ describe("renderModelSetup", () => {
     const llamaCpp = container.querySelector<HTMLButtonElement>(
       '[data-prepare-choice="llama-cpp"] button',
     );
-    expect(ollama?.textContent).toContain("Check & set up");
-    expect(llamaCpp).not.toBeNull();
+    expect(ollama?.textContent).toContain("Choose connection");
+    expect(llamaCpp?.textContent).toContain("Set up model");
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
+        ?.textContent,
+    ).toContain("Connect server");
+    const llamaCppRow = container.querySelector('[data-prepare-choice="llama-cpp"]');
+    expect(llamaCppRow?.querySelector('[data-provider-icon="llamacpp"]')).not.toBeNull();
+    expect(text(llamaCppRow!)).toContain("llama.cpp");
+    expect(text(llamaCppRow!)).not.toContain("Gemma");
+    expect(llamaCppRow?.classList.contains("model-setup__prepare-row--featured")).toBe(false);
     ollama?.click();
     expect(onStartPrepare).toHaveBeenCalledWith(expect.objectContaining({ id: "ollama" }));
 
@@ -750,9 +770,25 @@ describe("renderModelSetup", () => {
     );
     expect(text(container)).toContain("Connection verified");
     expect(text(container)).toContain("Verified in 91 ms");
+    expect(
+      container.querySelector('.model-setup-success [data-provider-icon="codex"]'),
+    ).not.toBeNull();
+    expect(container.querySelector(".model-setup-success__status-badge")).not.toBeNull();
     container.querySelector<HTMLButtonElement>(".model-setup-success .primary")?.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
     expect(container.querySelector(".settings-section")).not.toBeNull();
+  });
+
+  it("keeps the success shield for providers without a bundled mark", () => {
+    const container = mount(
+      props({
+        activation: { phase: "success", modelRef: "custom-provider/model" },
+      }),
+    );
+    const successIcon = container.querySelector(".model-setup-success__icon");
+    expect(successIcon?.classList.contains("model-setup-success__icon--provider")).toBe(false);
+    expect(successIcon?.querySelector(":scope > svg")).not.toBeNull();
+    expect(successIcon?.querySelector(".model-setup-success__status-badge")).toBeNull();
   });
 
   it("continues first-run setup after the model is ready", () => {
@@ -766,7 +802,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).not.toContain("Open Chat");
   });
 
-  it("renders an idle current connection and verifies it", () => {
+  it("renders the selected model and verifies it", () => {
     const onVerify = vi.fn();
     const container = mount(
       props({
@@ -776,7 +812,10 @@ describe("renderModelSetup", () => {
     );
     const current = container.querySelector(".model-setup__current");
     expect(container.querySelector(".settings-section")).toBe(current);
-    expect(text(current!)).toContain("Current connection openai/gpt-5 Verify connection");
+    expect(text(current!)).toContain("Selected model OpenAI gpt-5 · Signed in locally");
+    expect(text(current!)).toContain("Signed in locally");
+    expect(text(current!)).toContain("Check model");
+    expect(current?.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     current?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onVerify).toHaveBeenCalledOnce();
   });
@@ -817,7 +856,7 @@ describe("renderModelSetup", () => {
 
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    expect(text(container)).toContain("Current connection openai/gpt-5.6-sol");
+    expect(text(container)).toContain("Selected model OpenAI gpt-5.6-sol");
   });
 
   it("renders connection verification progress", () => {
@@ -841,10 +880,12 @@ describe("renderModelSetup", () => {
         verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 },
       }),
     );
-    expect(text(container)).toContain("Answered in 1234 ms");
+    expect(text(container)).toContain("Ready · 1234 ms");
     const current = container.querySelector(".model-setup__current");
-    expect(current?.textContent).toContain("anthropic/claude-opus-4-8");
-    expect(current?.querySelector("strong")?.textContent).not.toContain("openai/gpt-5");
+    expect(current?.textContent).toContain("Anthropic");
+    expect(current?.textContent).toContain("claude-opus-4-8");
+    expect(current?.textContent).not.toContain("openai/gpt-5");
+    expect(current?.querySelector('[data-provider-icon="claude"]')).not.toBeNull();
   });
 
   it("renders failed connection verification", () => {
@@ -854,7 +895,9 @@ describe("renderModelSetup", () => {
         verify: { phase: "failed", status: "billing", error: "No credits" },
       }),
     );
-    expect(text(container)).toContain("Billing problem No credits");
+    expect(text(container)).toContain(
+      "Billing problem. No credits Restore provider billing or quota, then retry.",
+    );
   });
 
   it("hides the current connection without a configured model", () => {
@@ -867,11 +910,11 @@ describe("renderModelSetup", () => {
     const nonAdmin = mount(
       props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
     );
-    expect(text(nonAdmin)).toContain("Current connection openai/gpt-5");
+    expect(text(nonAdmin)).toContain("Selected model OpenAI gpt-5");
     expect(nonAdmin.querySelector(".model-setup__current button")).toBeNull();
 
     const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
-    expect(text(unsupportedGateway)).toContain("Current connection openai/gpt-5");
+    expect(text(unsupportedGateway)).toContain("Selected model OpenAI gpt-5");
     expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
   });
 
@@ -920,12 +963,12 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Expires in 10 minutes");
   });
 
-  it("copies device codes through the plain-HTTP clipboard fallback", async () => {
-    vi.stubGlobal("navigator", {});
-    let copiedText: string | undefined;
+  it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+    vi.stubGlobal("navigator", copied ? {} : { clipboard: { writeText } });
     const execCommand = vi.fn().mockImplementation(() => {
-      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
-      return true;
+      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("ABCD-EFGH");
+      return copied;
     });
     (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
     const container = wizardStep({
@@ -934,14 +977,14 @@ describe("renderModelSetup", () => {
       deviceCode: { code: "ABCD-EFGH" },
     });
 
-    const copy = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Copy",
-    );
-    expect(copy).toBeDefined();
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__device-code button");
     copy?.click();
 
-    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
-    expect(copiedText).toBe("ABCD-EFGH");
+    const feedback = copied ? "Copied!" : "Copy failed";
+    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
+    expect(copy?.getAttribute("aria-label")).toBe(feedback);
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(writeText).toHaveBeenCalledTimes(copied ? 0 : 1);
     expect(document.querySelector("textarea")).toBeNull();
   });
 
@@ -989,9 +1032,18 @@ describe("renderModelSetup", () => {
     const confirm = wizardStep({ id: "confirm", type: "confirm", message: "Continue?" });
     expect(text(confirm)).toContain("Yes");
     expect(text(confirm)).toContain("No");
+
+    const prepareConfirm = wizardStep(
+      { id: "confirm", type: "confirm", message: "Set up this model?" },
+      undefined,
+      "prepare",
+    );
+    expect(text(prepareConfirm)).toContain("Continue");
+    expect(text(prepareConfirm)).toContain("No");
+    expect(text(prepareConfirm)).not.toContain("Yes");
   });
 
-  it.each(["multiselect", "progress", "action"] as const)("renders the %s wizard step", (type) => {
+  it.each(["multiselect", "action"] as const)("renders the %s wizard step", (type) => {
     const container = wizardStep({
       id: type,
       type,
@@ -1002,5 +1054,32 @@ describe("renderModelSetup", () => {
     });
     expect(text(container)).toContain(`${type} message`);
     expect(text(container)).toContain("Continue");
+  });
+
+  it("renders gateway progress without an answer control", () => {
+    const container = wizardStep({
+      id: "download",
+      type: "progress",
+      message: "Downloading Gemma 4 E4B… 42%",
+      executor: "gateway",
+    });
+
+    expect(text(container)).toContain("Downloading Gemma 4 E4B… 42%");
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(container.querySelector(".wizard-step__spinner")).not.toBeNull();
+    expect(container.querySelector(".wizard-step__progress button")).toBeNull();
+  });
+
+  it("keeps a Continue action for client progress", () => {
+    const container = wizardStep({
+      id: "client-progress",
+      type: "progress",
+      message: "Waiting for the local client",
+      executor: "client",
+    });
+
+    expect(text(container)).toContain("Waiting for the local client");
+    expect(text(container)).toContain("Continue");
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 });

@@ -17,6 +17,16 @@ private func toolCallContent(name: String) -> OpenClawChatMessageContent {
         name: name)
 }
 
+private func thinkingContent(_ thinking: String) -> OpenClawChatMessageContent {
+    OpenClawChatMessageContent(
+        type: "thinking",
+        text: nil,
+        thinking: thinking,
+        mimeType: nil,
+        fileName: nil,
+        content: nil)
+}
+
 @Suite("ChatMessageVisibleText")
 struct ChatMessageVisibleTextTests {
     @Test func `assistant visible text skips non text blocks`() {
@@ -54,6 +64,23 @@ struct ChatMessageVisibleTextTests {
 
         #expect(ChatMessageVisibleText.copyText(in: assistant) == "Visible **answer**")
         #expect(ChatMessageVisibleText.copyText(in: user) == "Keep <think>this literal tag</think>")
+    }
+
+    @Test func `assistant display includes structured thinking only when enabled`() {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                thinkingContent("Check the persisted state."),
+                textContent("Here is the answer."),
+                toolCallContent(name: "read"),
+            ],
+            timestamp: 1)
+
+        #expect(ChatMessageVisibleText.displayText(in: message, includeThinking: false)
+            == "Here is the answer.")
+        #expect(ChatMessageVisibleText.displayText(in: message, includeThinking: true)
+            == "<think>\nCheck the persisted state.\n</think>\nHere is the answer.")
+        #expect(ChatMessageVisibleText.copyText(in: message) == "Here is the answer.")
     }
 
     @Test func `history decode retains transcript identity and truncation signals`() throws {
