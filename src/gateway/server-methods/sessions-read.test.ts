@@ -24,6 +24,15 @@ setupGatewaySessionsHandlerTestHarness();
 
 const UNKNOWN_AGENT_ID = "ghost";
 const UNKNOWN_SESSION_KEY = `agent:${UNKNOWN_AGENT_ID}:zzz`;
+// Stands in for a gateway that already published its startup catalog.
+const preparedCatalogSnapshot = {
+  agentId: "main",
+  agentDir: "/tmp/sessions-read-agent",
+  workspaceDir: "/tmp/sessions-read-workspace",
+  config: {},
+  entries: [],
+  routeVariants: [],
+};
 
 function requireStateDir(): string {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
@@ -59,7 +68,7 @@ async function listAgentIdsViaRpc(
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: async () => [],
-      readPreparedGatewayModelCatalogSnapshot: async () => ({ entries: [] }),
+      readPreparedGatewayModelCatalogSnapshot: async () => preparedCatalogSnapshot,
       ...catalogContext,
     } as unknown as GatewayRequestContext,
     client: includeSystem
@@ -86,7 +95,9 @@ test("agents.list includes system rows only when negotiated", async () => {
 
 test("agents.list reads published model facts without starting provider discovery", async () => {
   const loadGatewayModelCatalog = vi.fn(async () => []);
-  const readPreparedGatewayModelCatalogSnapshot = vi.fn(async () => ({ entries: [] }));
+  const readPreparedGatewayModelCatalogSnapshot = vi.fn(
+    async () => preparedCatalogSnapshot,
+  ) as unknown as NonNullable<GatewayRequestContext["readPreparedGatewayModelCatalogSnapshot"]>;
 
   await expect(
     listAgentIdsViaRpc(false, {
