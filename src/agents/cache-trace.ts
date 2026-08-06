@@ -3,15 +3,16 @@
  */
 import crypto from "node:crypto";
 import path from "node:path";
+import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
+import { stableStringify } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
+import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
-import { stableStringify } from "./stable-stringify.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
 // Payloads are redacted before JSONL output while stable digests preserve
@@ -90,15 +91,14 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const config = params.cfg?.diagnostics?.cacheTrace;
   const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const fileOverride = env.OPENCLAW_CACHE_TRACE_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
-  const includeMessages =
-    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
-  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
-  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+  const includeMessages = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES);
+  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT);
+  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM);
 
   return {
     enabled,
@@ -114,7 +114,7 @@ function getWriter(filePath: string): CacheTraceWriter {
 }
 
 function digest(value: unknown): string {
-  const serialized = stableStringify(value);
+  const serialized = stableStringify(value, sanitizeSurrogates);
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
@@ -156,17 +156,17 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     };
 
     if (payload.prompt !== undefined && cfg.includePrompt) {
-      event.prompt = payload.prompt;
+      event.prompt = redactAgentDiagnosticPayload(payload.prompt);
     }
     if (payload.system !== undefined && cfg.includeSystem) {
-      event.system = sanitizeDiagnosticPayload(payload.system);
+      event.system = redactAgentDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
     if (payload.options) {
-      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
+      event.options = redactAgentDiagnosticPayload(payload.options);
     }
     if (payload.model) {
-      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
+      event.model = redactAgentDiagnosticPayload(payload.model);
     }
 
     const messages = payload.messages;
@@ -179,15 +179,15 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       if (cfg.includeMessages) {
         // Full messages are optional; summaries/digests are always recorded when
         // message payloads are supplied.
-        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
+        event.messages = redactAgentDiagnosticPayload(messages);
       }
     }
 
     if (payload.note) {
-      event.note = payload.note;
+      event.note = redactAgentDiagnosticPayload(payload.note);
     }
     if (payload.error) {
-      event.error = payload.error;
+      event.error = redactAgentDiagnosticPayload(payload.error);
     }
 
     const line = safeJsonStringify(event);

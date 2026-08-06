@@ -12,13 +12,13 @@
  */
 
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { PRIVATE_CHAT_ONLY_TEXT } from "../../engine/commands/command-visibility.js";
 import { getFrameworkCommands } from "../../engine/commands/slash-commands-impl.js";
+import { resolveGroupCommandLevelFromAccountConfig } from "../../engine/config/group.js";
 import { resolveQQBotAccount } from "../config.js";
 import { buildFrameworkSlashContext } from "./framework-context-adapter.js";
 import { parseQQBotFrom } from "./from-parser.js";
 import { dispatchFrameworkSlashResult } from "./result-dispatcher.js";
-
-const PRIVATE_CHAT_ONLY_TEXT = "💡 请在私聊中使用此指令";
 
 function isExplicitQQBotC2cFrom(from: string | undefined | null): boolean {
   const raw = (from ?? "").trim();
@@ -41,17 +41,25 @@ export function registerQQBotFrameworkCommands(api: OpenClawPluginApi): void {
       requireAuth: true,
       acceptsArgs: true,
       handler: async (ctx: PluginCommandContext) => {
+        const from = parseQQBotFrom(ctx.from);
+        const account = resolveQQBotAccount(ctx.config, ctx.accountId ?? undefined);
+        const groupCommandLevel =
+          from.msgType === "group" || from.msgType === "guild"
+            ? resolveGroupCommandLevelFromAccountConfig(
+                account.config as unknown as Record<string, unknown>,
+                from.targetId,
+              )
+            : undefined;
         if (cmd.c2cOnly && !isExplicitQQBotC2cFrom(ctx.from)) {
           return { text: PRIVATE_CHAT_ONLY_TEXT };
         }
 
-        const from = parseQQBotFrom(ctx.from);
-        const account = resolveQQBotAccount(ctx.config, ctx.accountId ?? undefined);
         const slashCtx = buildFrameworkSlashContext({
           ctx,
           account,
           from,
           commandName: cmd.name,
+          groupCommandLevel,
         });
         const result = await cmd.handler(slashCtx);
         return await dispatchFrameworkSlashResult({

@@ -1,4 +1,7 @@
 // Msteams tests cover send plugin behavior.
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./send.js";
@@ -83,11 +86,14 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-vi.mock("./graph-upload.js", () => ({
-  uploadAndShareSharePoint: mockState.uploadAndShareSharePoint,
-  getDriveItemProperties: mockState.getDriveItemProperties,
-  uploadAndShareOneDrive: vi.fn(),
-}));
+vi.mock("./graph-upload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./graph-upload.js")>();
+  return {
+    ...actual,
+    uploadAndShareSharePoint: mockState.uploadAndShareSharePoint,
+    getDriveItemProperties: mockState.getDriveItemProperties,
+  };
+});
 
 vi.mock("./graph-chat.js", () => ({
   buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard,
@@ -151,16 +157,11 @@ function mockProactiveSendContextFailure(error: string) {
   });
 }
 
-function createSharePointSendContext(params: {
-  conversationId: string;
-  graphChatId: string | null;
-  siteId: string;
-}) {
+function createSharePointSendContext(params: { conversationId: string; siteId: string }) {
   return {
     app: createMockApp(),
     appId: "app-id",
     conversationId: params.conversationId,
-    graphChatId: params.graphChatId,
     ref: {},
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     conversationType: "groupChat" as const,
@@ -215,6 +216,14 @@ function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
+
+async function useActualOutboundMediaLoader() {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
+  mockState.loadOutboundMediaFromUrl.mockImplementation(actual.loadOutboundMediaFromUrl);
+}
+
 describe("sendMessageMSTeams", () => {
   beforeEach(() => {
     mockState.loadOutboundMediaFromUrl.mockReset();
@@ -262,6 +271,7 @@ describe("sendMessageMSTeams", () => {
 
   it("loads media through shared helper and forwards mediaLocalRoots", async () => {
     const mediaBuffer = Buffer.from("tiny-image");
+    mockState.sendMSTeamsMessages.mockResolvedValueOnce(["message-text", "message-media"]);
     mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
       buffer: mediaBuffer,
       contentType: "image/png",
@@ -287,14 +297,111 @@ describe("sendMessageMSTeams", () => {
 
     const sendPayload = firstObjectArg(mockState.sendMSTeamsMessages);
     const messages = sendPayload.messages as Array<Record<string, unknown>>;
-    expect(messages).toHaveLength(1);
+    expect(messages).toHaveLength(2);
     expect(messages[0]?.text).toBe("hello");
-    expect(messages[0]?.mediaUrl).toBe(`data:image/png;base64,${mediaBuffer.toString("base64")}`);
-    expect(result.receipt?.primaryPlatformMessageId).toBe("message-1");
-    expect(result.receipt?.platformMessageIds).toEqual(["message-1"]);
-    expect(result.receipt?.parts).toHaveLength(1);
-    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-1");
-    expect(result.receipt?.parts[0]?.kind).toBe("media");
+    expect(messages[0]?.mediaUrl).toBeUndefined();
+    expect(messages[1]?.text).toBeUndefined();
+    expect(messages[1]?.mediaUrl).toBe(`data:image/png;base64,${mediaBuffer.toString("base64")}`);
+    expect(result.messageId).toBe("message-text");
+    expect(result.receipt?.primaryPlatformMessageId).toBe("message-text");
+    expect(result.receipt?.platformMessageIds).toEqual(["message-text", "message-media"]);
+    expect(result.receipt?.parts).toHaveLength(2);
+    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-text");
+    expect(result.receipt?.parts[1]?.platformMessageId).toBe("message-media");
+    expect(result.receipt?.parts[0]?.kind).toBe("text");
+    expect(result.receipt?.parts[1]?.kind).toBe("media");
+  });
+
+  it.each([
+    { name: "trusted host reader", hostReader: true },
+    { name: "reader-free gateway authority", hostReader: false },
+  ])("loads workspace-relative media through $name", async ({ hostReader }) => {
+    const workspaceDir = await realpath(
+      await mkdtemp(join(tmpdir(), "openclaw-msteams-workspace-")),
+    );
+    const filePath = join(workspaceDir, "report.txt");
+    const fileContents = Buffer.from("approved Teams attachment");
+    const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
+    const conflictingReader = vi.fn(async () => Buffer.from("forged Teams attachment"));
+    const mediaAccess = {
+      localRoots: [workspaceDir],
+      workspaceDir,
+      ...(hostReader ? { readFile: approvedReader } : {}),
+    };
+
+    try {
+      await writeFile(filePath, fileContents);
+      await useActualOutboundMediaLoader();
+
+      await sendMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        text: "approved attachment",
+        mediaUrl: "report.txt",
+        mediaAccess,
+        mediaLocalRoots: [join(workspaceDir, "unapproved")],
+        ...(hostReader ? { mediaReadFile: conflictingReader } : {}),
+      });
+
+      expect(mockState.loadOutboundMediaFromUrl.mock.calls[0]?.[1]?.mediaAccess).toBe(mediaAccess);
+      expect(conflictingReader).not.toHaveBeenCalled();
+      if (hostReader) {
+        expect(approvedReader).toHaveBeenCalledWith(filePath);
+      } else {
+        expect(approvedReader).not.toHaveBeenCalled();
+      }
+      const messages = firstObjectArg(mockState.sendMSTeamsMessages).messages as Array<{
+        mediaUrl?: string;
+      }>;
+      expect(messages[1]?.mediaUrl).toBe(
+        `data:text/plain;base64,${fileContents.toString("base64")}`,
+      );
+    } finally {
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects workspace-relative attachments outside host-approved roots", async () => {
+    const sandbox = await realpath(await mkdtemp(join(tmpdir(), "openclaw-msteams-roots-")));
+    const workspaceDir = join(sandbox, "workspace");
+    const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
+
+    try {
+      await mkdir(workspaceDir);
+      await writeFile(join(sandbox, "outside.txt"), "outside approved workspace");
+      await useActualOutboundMediaLoader();
+
+      await expect(
+        sendMessageMSTeams({
+          cfg: {} as OpenClawConfig,
+          to: "conversation:19:conversation@thread.tacv2",
+          text: "outside attachment",
+          mediaUrl: "../outside.txt",
+          mediaAccess: { localRoots: [workspaceDir], workspaceDir, readFile: approvedReader },
+        }),
+      ).rejects.toThrow("Local media path is not under an allowed directory");
+      expect(approvedReader).not.toHaveBeenCalled();
+      expect(mockState.sendMSTeamsMessages).not.toHaveBeenCalled();
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a host media reader that has no approved local roots", async () => {
+    const approvedReader = vi.fn(async () => Buffer.from("private attachment"));
+    await useActualOutboundMediaLoader();
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        text: "private attachment",
+        mediaUrl: "report.txt",
+        mediaAccess: { workspaceDir: "/approved/workspace", readFile: approvedReader },
+      }),
+    ).rejects.toThrow("Host media read requires explicit localRoots");
+    expect(approvedReader).not.toHaveBeenCalled();
+    expect(mockState.sendMSTeamsMessages).not.toHaveBeenCalled();
   });
 
   it("sends with provided cfg even when Teams runtime text helpers are unavailable", async () => {
@@ -382,46 +489,12 @@ describe("sendMessageMSTeams", () => {
     expect(firstObjectArg(mockState.sendMSTeamsMessages).replyStyle).toBe("top-level");
   });
 
-  it("uses graphChatId instead of conversationId when uploading to SharePoint", async () => {
-    // Simulates a group chat where Bot Framework conversationId is valid but we have
-    // a resolved Graph chat ID cached from a prior send.
-    const graphChatId = "19:graph-native-chat-id@thread.tacv2";
-    const botFrameworkConversationId = "19:bot-framework-id@thread.tacv2";
+  it("uses the Graph-native group conversation ID for SharePoint sharing", async () => {
+    const graphConversationId = "19:group-id@thread.v2";
 
     mockState.resolveMSTeamsSendContext.mockResolvedValue(
       createSharePointSendContext({
-        conversationId: botFrameworkConversationId,
-        graphChatId,
-        siteId: "site-123",
-      }),
-    );
-    mockSharePointPdfUpload({
-      bufferSize: 100,
-      fileName: "doc.pdf",
-      itemId: "item-1",
-      uniqueId: "{GUID-123}",
-    });
-
-    await sendMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:bot-framework-id@thread.tacv2",
-      text: "here is a file",
-      mediaUrl: "https://example.com/doc.pdf",
-    });
-
-    // The Graph-native chatId must be passed to SharePoint upload, not the Bot Framework ID
-    const uploadPayload = firstObjectArg(mockState.uploadAndShareSharePoint);
-    expect(uploadPayload.chatId).toBe(graphChatId);
-    expect(uploadPayload.siteId).toBe("site-123");
-  });
-
-  it("falls back to conversationId when graphChatId is not available", async () => {
-    const botFrameworkConversationId = "19:fallback-id@thread.tacv2";
-
-    mockState.resolveMSTeamsSendContext.mockResolvedValue(
-      createSharePointSendContext({
-        conversationId: botFrameworkConversationId,
-        graphChatId: null,
+        conversationId: graphConversationId,
         siteId: "site-456",
       }),
     );
@@ -434,15 +507,40 @@ describe("sendMessageMSTeams", () => {
 
     await sendMessageMSTeams({
       cfg: {} as OpenClawConfig,
-      to: "conversation:19:fallback-id@thread.tacv2",
+      to: `conversation:${graphConversationId}`,
       text: "report",
       mediaUrl: "https://example.com/report.pdf",
     });
 
-    // Falls back to conversationId when graphChatId is null
     const uploadPayload = firstObjectArg(mockState.uploadAndShareSharePoint);
-    expect(uploadPayload.chatId).toBe(botFrameworkConversationId);
+    expect(uploadPayload.chatId).toBe(graphConversationId);
     expect(uploadPayload.siteId).toBe("site-456");
+  });
+
+  it("fails clearly when a group file has no SharePoint site", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      ...createSharePointSendContext({
+        conversationId: "19:group-id@thread.v2",
+        siteId: "unused",
+      }),
+      sharePointSiteId: undefined,
+    });
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      kind: "file",
+    });
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:group-id@thread.v2",
+        text: "report",
+        mediaUrl: "https://example.com/report.pdf",
+      }),
+    ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
+    expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
   });
 });
 

@@ -3,6 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
 
+export function toRepoPath(filePath: string): string {
+  return filePath.split(path.sep).join("/");
+}
+
+export function toRepoRelativePath(repoRoot: string, filePath: string): string {
+  return toRepoPath(path.relative(repoRoot, filePath));
+}
+
+export function isRepoRootRelativeRef(value: string) {
+  return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
+}
+
 export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {
   if (!outputDir) {
     return undefined;

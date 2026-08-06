@@ -7,6 +7,7 @@ import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
+  createOpenAIFastModeWrapper,
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
@@ -35,7 +36,23 @@ const openaiModel = {
   api: "openai-responses",
   provider: "openai",
   id: "gpt-5.2",
+  baseUrl: "https://api.openai.com/v1",
 } as Model<"openai-responses">;
+
+describe("createOpenAIFastModeWrapper", () => {
+  it("resolves dynamic fast mode for each stream call", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    let enabled = true;
+    const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
+
+    void wrapped(openaiModel, { messages: [] }, {});
+    enabled = false;
+    void wrapped(openaiModel, { messages: [] }, {});
+
+    expect(payloads[0]?.service_tier).toBe("priority");
+    expect(payloads[1]).not.toHaveProperty("service_tier");
+  });
+});
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
@@ -147,6 +164,12 @@ describe("createCodexNativeWebSearchWrapper", () => {
           const payloadObj = payload as { tools?: unknown } | undefined;
           if (payloadObj && Array.isArray(payloadObj.tools)) {
             payloadObj.tools.push({ type: "function", name: "web_search" });
+            payloadObj.tools.push({
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("code mode payload function getter exploded");
+              },
+            });
           }
         },
       },
@@ -156,6 +179,65 @@ describe("createCodexNativeWebSearchWrapper", () => {
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
     ]);
+  });
+
+  it("filters async replacement payloads when code mode owns the tool surface", async () => {
+    let observedOptions: Parameters<StreamFn>[2];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      observedOptions = options;
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.5",
+    } as Model<"openai-responses">;
+
+    void wrapped(
+      model,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
+        ],
+      },
+      {
+        onPayload: async () => ({
+          tools: [
+            { type: "function", name: "exec" },
+            { type: "function", name: "computer" },
+            { type: "function", name: "image" },
+            { type: "function", name: "message" },
+            { type: "function", name: "sessions_yield" },
+            { type: "function", name: "structured_output" },
+            {
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("async code mode payload function getter exploded");
+              },
+            },
+            { type: "function", name: "wait" },
+            { type: "web_search" },
+          ],
+        }),
+      },
+    );
+
+    const nextPayload = await observedOptions?.onPayload?.({ tools: [] }, model);
+    expect(nextPayload).toEqual({
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", name: "sessions_yield" },
+        { type: "function", name: "structured_output" },
+        { type: "function", name: "wait" },
+      ],
+    });
   });
 
   it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {
@@ -200,6 +282,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
+          { type: "function", name: "sessions_yield" },
+          { type: "function", name: "structured_output" },
+          { type: "function", name: "computer" },
+          { type: "function", name: "image" },
+          { type: "function", name: "message" },
           { type: "function", name: "read" },
         ],
       };
@@ -222,6 +309,8 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { name: "exec", description: "", parameters: {} },
           { name: "wait", description: "", parameters: {} },
+          { name: "sessions_yield", description: "", parameters: {} },
+          { name: "structured_output", description: "", parameters: {} },
         ],
       },
       {},
@@ -231,57 +320,159 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]?.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
+      { type: "function", name: "sessions_yield" },
+      { type: "function", name: "structured_output" },
     ]);
   });
 
-  it("keeps grouped provider tool declarations when code mode filters the payload", () => {
+  it.each(["functionDeclarations", "function_declarations"] as const)(
+    "keeps grouped %s when code mode filters the payload",
+    (declarationField) => {
+      const payloads: Array<Record<string, unknown>> = [];
+      const baseStreamFn: StreamFn = (model, context, options) => {
+        const payload: Record<string, unknown> = {
+          model: model.id,
+          tools: [
+            {
+              [declarationField]: [
+                { name: "exec", description: "Run code" },
+                { name: "sessions_yield", description: "Yield the current session" },
+                { name: "structured_output", description: "Return a structured response" },
+                { name: "computer", description: "Control a desktop" },
+                { name: "image", description: "Read an image" },
+                { name: "message", description: "Deliver the response" },
+                { name: "read", description: "Read a file" },
+                { name: "wait", description: "Resume code" },
+              ],
+            },
+            { google_search: {} },
+          ],
+        };
+        options?.onPayload?.(payload, model);
+        payloads.push(structuredClone(payload));
+        return createAssistantMessageEventStream();
+      };
+      const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+        codeModeToolSurfaceEnabled: true,
+      });
+
+      void wrapped(
+        {
+          api: "google-generative-ai",
+          provider: "google",
+          id: "gemini-3.1-pro",
+        } as never,
+        {
+          messages: [],
+          tools: [
+            { name: "exec", description: "", parameters: {} },
+            { name: "wait", description: "", parameters: {} },
+            { name: "sessions_yield", description: "", parameters: {} },
+            { name: "structured_output", description: "", parameters: {} },
+          ],
+        },
+        {},
+      );
+
+      expect(payloads[0]?.tools).toEqual([
+        {
+          [declarationField]: [
+            { name: "exec", description: "Run code" },
+            { name: "sessions_yield", description: "Yield the current session" },
+            { name: "structured_output", description: "Return a structured response" },
+            { name: "wait", description: "Resume code" },
+          ],
+        },
+      ]);
+    },
+  );
+
+  it("does not inject native web_search when agent policy denies web search", () => {
     const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (model, context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
         model: model.id,
-        tools: [
-          {
-            functionDeclarations: [
-              { name: "exec", description: "Run code" },
-              { name: "read", description: "Read a file" },
-              { name: "wait", description: "Resume code" },
-            ],
-          },
-          { google_search: {} },
-        ],
+        tools: [{ type: "function", name: "read" }],
       };
       options?.onPayload?.(payload, model);
       payloads.push(structuredClone(payload));
       return createAssistantMessageEventStream();
     };
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
-      codeModeToolSurfaceEnabled: true,
+      agentId: "main",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["group:web"] },
+            },
+          ],
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
     });
 
     void wrapped(
       {
-        api: "google-generative-ai",
-        provider: "google",
-        id: "gemini-3.1-pro",
-      } as never,
-      {
-        messages: [],
-        tools: [
-          { name: "exec", description: "", parameters: {} },
-          { name: "wait", description: "", parameters: {} },
-        ],
-      },
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      { messages: [] },
       {},
     );
 
-    expect(payloads[0]?.tools).toEqual([
-      {
-        functionDeclarations: [
-          { name: "exec", description: "Run code" },
-          { name: "wait", description: "Resume code" },
-        ],
+    expect(payloads[0]?.tools).toEqual([{ type: "function", name: "read" }]);
+  });
+
+  it("does not inject native web_search when runtime sender policy denies web search", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [{ type: "function", name: "read" }],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      messageProvider: "teams",
+      senderId: "alice",
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:msteams:alice": { deny: ["web_search"] },
+          },
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
       },
-    ]);
+    });
+
+    void wrapped(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([{ type: "function", name: "read" }]);
   });
 });
 
@@ -505,6 +696,61 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     void wrapped(model as Model<typeof model.api>, { messages: [] }, {});
 
     expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+  });
+
+  it("preserves max for native GPT-5.6 models", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "xhigh", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
+    void wrapped(
+      {
+        ...openaiModel,
+        id: "gpt-5.6-sol",
+      },
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "max", summary: "auto" });
+  });
+
+  it("raises unsupported minimal reasoning to low for native GPT-5.6 models", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "minimal", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "minimal");
+    void wrapped(
+      {
+        ...openaiModel,
+        id: "gpt-5.6-luna",
+      },
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
+  it("keeps max clamped to xhigh for earlier OpenAI and Azure models", () => {
+    const models = [
+      { ...openaiModel, id: "gpt-5.5" },
+      {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5.6-sol",
+        baseUrl: "https://example.openai.azure.com/openai",
+      } as Model<"azure-openai-responses">,
+    ];
+
+    for (const model of models) {
+      const { baseStreamFn, payloads } = createPayloadCapture({
+        initialReasoning: { effort: "high" },
+      });
+      const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "max");
+      void wrapped(model, { messages: [] }, {});
+      expect(payloads[0]?.reasoning).toEqual({ effort: "xhigh" });
+    }
   });
 });
 

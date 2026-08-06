@@ -43,6 +43,12 @@ describe("parseTimeoutMsWithFallback", () => {
     );
   });
 
+  it("throws on empty values when requested", () => {
+    expect(() => parseTimeoutMsWithFallback("  ", 3000, { invalidType: "error" })).toThrow(
+      "Invalid --timeout",
+    );
+  });
+
   it("throws on non-positive parsed values", () => {
     expect(() => parseTimeoutMsWithFallback("0", 3000)).toThrow('Received: "0"');
     expect(() => parseTimeoutMsWithFallback("-1", 3000)).toThrow('Received: "-1"');
@@ -55,5 +61,9 @@ describe("parseTimeoutMsWithFallback", () => {
     expect(() => parseTimeoutMsWithFallback(String(Number.MAX_SAFE_INTEGER + 1), 3000)).toThrow(
       "Received",
     );
+  });
+
+  it("throws on partial-numeric values", () => {
+    expect(() => parseTimeoutMsWithFallback("1000ms", 3000)).toThrow('Received: "1000ms"');
   });
 });

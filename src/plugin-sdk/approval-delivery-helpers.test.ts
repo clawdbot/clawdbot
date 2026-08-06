@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createApproverRestrictedNativeApprovalAdapter,
   createApproverRestrictedNativeApprovalCapability,
+  createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";
@@ -60,7 +61,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     });
   });
 
-  it("reports initiating-surface state and DM routing from configured approvers", () => {
+  it("reports approval availability and DM routing from the relevant delivery surface", () => {
     const adapter = createApproverRestrictedNativeApprovalAdapter({
       channel: "telegram",
       channelLabel: "Telegram",
@@ -117,6 +118,14 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       }),
     ).toEqual({ kind: "enabled" });
     expect(
+      getActionAvailabilityState({
+        cfg: {} as never,
+        accountId: "disabled",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
       getExecInitiatingSurfaceState({
         cfg: {} as never,
         accountId: "disabled",
@@ -133,7 +142,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     });
   });
 
-  it("reports enabled when approvers exist even if native delivery is off (#59620)", () => {
+  it("keeps plugin availability approver-based when native delivery is off", () => {
     const adapter = createApproverRestrictedNativeApprovalAdapter({
       channel: "telegram",
       channelLabel: "Telegram",
@@ -154,6 +163,14 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         cfg: {} as never,
         accountId: "default",
         action: "approve",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      getActionAvailabilityState({
+        cfg: {} as never,
+        accountId: "default",
+        action: "approve",
+        approvalKind: "plugin",
       }),
     ).toEqual({ kind: "enabled" });
     expect(
@@ -312,6 +329,13 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     ).toBe("Matrix:matrix:ops:setup");
     expect(
+      capability.describePluginApprovalSetup?.({
+        channel: "matrix",
+        channelLabel: "Matrix",
+        accountId: "ops",
+      }),
+    ).toBeUndefined();
+    expect(
       capability.native?.describeDeliveryCapabilities({
         cfg: {} as never,
         accountId: "work",
@@ -402,8 +426,91 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     );
     expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(split.describePluginApprovalSetup).toBeUndefined();
     expect(split.nativeRuntime).toBe(nativeRuntime);
     expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(legacy.describePluginApprovalSetup).toBeUndefined();
+  });
+
+  it("assembles forwarding-routed capabilities without replacing channel auth results", () => {
+    const authResult = { authorized: true } as const;
+    const authorizeActorAction = vi.fn(() => authResult);
+    const render = { exec: { buildPendingPayload: vi.fn() } };
+    const routed = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
+      channel: "example",
+      channelLabel: "Example",
+      authorizeActorAction,
+      routing: {
+        defaultForwardingMode: "session",
+        isTransportEnabled: () => true,
+        listAccountIds: () => ["default"],
+        resolveDefaultAccountId: () => "default",
+        normalizeTo: (to) => to.trim().toLowerCase() || null,
+        resolveApprovers: () => ["owner"],
+      },
+      render,
+    });
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          targets: [{ channel: "example", to: "Origin" }],
+        },
+      },
+    } as never;
+    const request = {
+      id: "approval-1",
+      request: {
+        command: "pwd",
+        turnSourceChannel: "example",
+        turnSourceTo: "Origin",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 10_000,
+    } as never;
+
+    expect(
+      routed.capability.authorizeActorAction?.({
+        cfg,
+        accountId: "default",
+        senderId: "owner",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toBe(authResult);
+    expect(routed.capability.render).toBe(render);
+    expect(
+      routed.capability.getActionAvailabilityState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      routed.capability.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual({
+      enabled: true,
+      preferredSurface: "origin",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+    expect(
+      routed.capability.delivery?.shouldSuppressForwardingFallback?.({
+        cfg,
+        approvalKind: "exec",
+        target: { channel: "example", to: "ORIGIN", source: "target" },
+        request,
+      }),
+    ).toBe(true);
+    expect(routed.routing.isNativeApprovalHandlerConfigured({ cfg })).toBe(true);
   });
 });
 
@@ -445,30 +552,11 @@ describe("createChannelApprovalCapability", () => {
       getExecInitiatingSurfaceState: undefined,
       resolveApproveCommandBehavior: undefined,
       describeExecApprovalSetup: undefined,
+      describePluginApprovalSetup: undefined,
       delivery,
       nativeRuntime,
       render,
       native,
-    });
-  });
-
-  it("keeps the deprecated approvals alias as a compatibility shim", () => {
-    const delivery = { hasConfiguredDmRoute: vi.fn() };
-
-    expect(
-      createChannelApprovalCapability({
-        approvals: { delivery },
-      }),
-    ).toEqual({
-      authorizeActorAction: undefined,
-      getActionAvailabilityState: undefined,
-      getExecInitiatingSurfaceState: undefined,
-      resolveApproveCommandBehavior: undefined,
-      describeExecApprovalSetup: undefined,
-      delivery,
-      nativeRuntime: undefined,
-      render: undefined,
-      native: undefined,
     });
   });
 });

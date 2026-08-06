@@ -1,7 +1,7 @@
 // Channel plugin resolution tests cover trusted catalog lookup, install prompts, and setup plugin snapshots.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
@@ -20,7 +20,6 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
   getChannelPluginCatalogEntry: mocks.getChannelPluginCatalogEntry,
 }));
@@ -80,6 +79,7 @@ describe("resolveInstallableChannelPlugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getChannelPlugin.mockReturnValue(undefined);
+    mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     mocks.ensureChannelSetupPluginInstalled.mockResolvedValue({
       cfg: {},
       installed: false,
@@ -99,9 +99,12 @@ describe("resolveInstallableChannelPlugin", () => {
     });
     const bundledPlugin = createPlugin("telegram");
 
-    mocks.listChannelPluginCatalogEntries.mockImplementation(
-      ({ excludeWorkspace }: { excludeWorkspace?: boolean }) =>
-        excludeWorkspace ? [bundledEntry] : [workspaceEntry],
+    mocks.listChannelPluginCatalogEntries.mockImplementation(() => [workspaceEntry]);
+    mocks.getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, opts?: { excludePluginRefs?: Array<{ pluginId: string }> }) =>
+        opts?.excludePluginRefs?.some((entry) => entry.pluginId === "evil-telegram-shadow")
+          ? bundledEntry
+          : undefined,
     );
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockImplementation(
       ({ pluginId }: { pluginId?: string }) => ({

@@ -6,6 +6,8 @@ const resetMocks = vi.hoisted(() => ({
     ok: true as const,
     key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
     entry: { sessionId: "next-session", updatedAt: 1 },
+    agentId: "claude",
+    storePath: "/tmp/claude-sessions.json",
   })),
 }));
 const sessionMetaMocks = vi.hoisted(() => ({
@@ -53,7 +55,12 @@ describe("acpStatefulBindingTargetDriver", () => {
           agentId: "claude",
         },
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({
+      ok: true,
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+      sessionId: "next-session",
+      storePath: "/tmp/claude-sessions.json",
+    });
 
     expect(resetMocks.performGatewaySessionReset).toHaveBeenCalledWith({
       key: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",

@@ -246,6 +246,66 @@ export type NativeApprovalTarget = {
   threadId?: string | number | null;
 };
 
+/**
+ * Create the standard target adapters for messaging channels whose native
+ * approval destination is a normalized `to` value.
+ */
+export function createNativeApprovalMessagingTargetResolvers(params: {
+  /** Lowercase channel id used by forwarding and turn-source routes. */
+  channel: string;
+  /** Channel-owned destination normalizer. */
+  normalizeTo: (to: string) => string | null | undefined;
+}): {
+  normalizeForwardTarget: (target: NativeApprovalForwardTarget) => NativeApprovalTarget | null;
+  resolveTurnSourceTarget: (request: ApprovalRequest) => NativeApprovalTarget | null;
+  resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => NativeApprovalTarget | null;
+  normalizeTarget: (target: NativeApprovalTarget) => NativeApprovalTarget | null;
+} {
+  const normalizeTo = (to: string): string | null => params.normalizeTo(to) || null;
+  const normalizeTarget = (target: NativeApprovalTarget): NativeApprovalTarget | null => {
+    const to = normalizeTo(target.to);
+    return to ? { ...target, to } : null;
+  };
+
+  return {
+    normalizeForwardTarget: (target) => {
+      if (normalizeLowercaseStringOrEmpty(target.channel) !== params.channel) {
+        return null;
+      }
+      const to = normalizeTo(target.to);
+      return to
+        ? {
+            to,
+            accountId: normalizeOptionalString(target.accountId),
+            threadId: target.threadId ?? null,
+          }
+        : null;
+    },
+    resolveTurnSourceTarget: (request) => {
+      if (normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel) !== params.channel) {
+        return null;
+      }
+      const to = normalizeTo(request.request.turnSourceTo ?? "");
+      return to
+        ? {
+            to,
+            accountId: normalizeOptionalString(request.request.turnSourceAccountId),
+          }
+        : null;
+    },
+    resolveSessionTarget: (sessionTarget) => {
+      const to = normalizeTo(sessionTarget.to);
+      return to
+        ? {
+            to,
+            accountId: normalizeOptionalString(sessionTarget.accountId),
+          }
+        : null;
+    },
+    normalizeTarget,
+  };
+}
+
 /** Compare channel-native approval targets with the same normalization used by outbound routes. */
 export function nativeApprovalTargetsMatch(params: {
   /** Channel id used for route target normalization. */
@@ -973,3 +1033,4 @@ export function createChannelApproverDmTargetResolver<
     return targets;
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

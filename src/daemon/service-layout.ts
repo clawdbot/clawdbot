@@ -47,12 +47,29 @@ function resolveSystemdScopeFromServicePath(
   return "user";
 }
 
-function findGatewayEntrypoint(programArguments: readonly string[]): string | undefined {
-  const gatewayIndex = programArguments.indexOf("gateway");
+function resolveGatewayServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
+  const gatewayIndex = command.programArguments.indexOf("gateway");
   if (gatewayIndex <= 0) {
     return undefined;
   }
-  return programArguments[gatewayIndex - 1];
+  const entrypoint = command.programArguments[gatewayIndex - 1];
+  if (!entrypoint) {
+    return undefined;
+  }
+  if (path.isAbsolute(entrypoint) || path.win32.isAbsolute(entrypoint)) {
+    return entrypoint;
+  }
+  const workingDirectory = command.workingDirectory?.trim();
+  if (!workingDirectory) {
+    return undefined;
+  }
+  if (path.isAbsolute(workingDirectory)) {
+    return path.resolve(workingDirectory, entrypoint);
+  }
+  if (path.win32.isAbsolute(workingDirectory)) {
+    return path.win32.resolve(workingDirectory, entrypoint);
+  }
+  return undefined;
 }
 
 async function tryRealpath(value: string | undefined): Promise<string | undefined> {
@@ -108,7 +125,9 @@ export async function summarizeGatewayServiceLayout(
     return undefined;
   }
   const sourcePath = command.sourcePath?.trim() || undefined;
-  const entrypoint = findGatewayEntrypoint(command.programArguments);
+  // Service managers resolve relative commands against their configured
+  // working directory; without an absolute base, ownership is ambiguous.
+  const entrypoint = resolveGatewayServiceEntrypoint(command);
   const [sourcePathReal, entrypointReal] = await Promise.all([
     tryRealpath(sourcePath),
     tryRealpath(entrypoint),

@@ -13,7 +13,7 @@ export { parseProviderModelMap, redactLiveApiKey };
 
 // Default provider/model matrix for image live tests. Provider env filters can
 // override these without changing test source.
-export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
+export const DEFAULT_LIVE_IMAGE_MODELS: Partial<Record<string, string>> = {
   deepinfra: "deepinfra/black-forest-labs/FLUX-1-schnell",
   fal: "fal/fal-ai/flux/dev",
   google: "google/gemini-3.1-flash-image-preview",
@@ -43,7 +43,7 @@ export function parseCsvFilter(raw?: string): Set<string> | null {
 }
 
 export function resolveConfiguredLiveImageModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.imageGenerationModel);
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.image);
 }
 
 export function resolveLiveImageAuthStore(params: {

@@ -1,7 +1,8 @@
 // Covers conversion from OpenClaw bundle-MCP config into Codex app-server
 // thread config patches.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMcpServersConfig, loadCodexBundleMcpThreadConfig } from "./codex-mcp-config.js";
+import { testing as resolverTesting } from "./mcp-connection-resolver.js";
 
 const mocks = vi.hoisted(() => ({
   bundleMcp: {
@@ -23,6 +24,10 @@ beforeEach(() => {
     },
     diagnostics: [],
   };
+});
+
+afterEach(() => {
+  resolverTesting.setMcpServerConnectionResolversForTest();
 });
 
 describe("buildCodexMcpServersConfig", () => {
@@ -114,6 +119,77 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("applies session server and tool denials to bundled Codex MCP config", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          docs: {
+            type: "http",
+            url: "https://docs.example.com/mcp",
+            toolFilter: { exclude: ["delete_all"] },
+          },
+          constructor: { type: "http", url: "https://constructor.example.com/mcp" },
+          search: { type: "http", url: "https://search.example.com/mcp" },
+        },
+      },
+      diagnostics: [],
+    };
+
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolOverrides: {
+        mcpServers: { search: false },
+        mcpToolsDeny: { docs: ["delete_page"] },
+      },
+    });
+
+    expect(loaded.configPatch).toEqual({
+      mcp_servers: {
+        constructor: {
+          url: "https://constructor.example.com/mcp",
+        },
+        docs: {
+          url: "https://docs.example.com/mcp",
+          disabled_tools: ["delete_all", "delete_page"],
+        },
+      },
+    });
+  });
+
+  it("lets user config disable a same-named bundled server unless the session enables it", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          docs: { type: "http", url: "https://bundled.example.com/mcp" },
+        },
+      },
+      diagnostics: [],
+    };
+    const cfg = {
+      mcp: {
+        servers: {
+          docs: { enabled: false, url: "https://configured.example.com/mcp" },
+        },
+      },
+    };
+
+    expect(
+      loadCodexBundleMcpThreadConfig({ workspaceDir: "/workspace", cfg }).configPatch,
+    ).toBeUndefined();
+    expect(
+      loadCodexBundleMcpThreadConfig({
+        workspaceDir: "/workspace",
+        cfg,
+        toolOverrides: { mcpServers: { docs: true } },
+      }).configPatch,
+    ).toEqual({
+      mcp_servers: {
+        docs: { url: "https://bundled.example.com/mcp" },
+      },
+    });
+  });
+
   it("leaves user mcp.servers to the Codex user MCP projection path", () => {
     // User MCP config is projected elsewhere; this loader only injects bundled
     // MCP servers so the same server does not appear twice in Codex.
@@ -177,5 +253,98 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.configPatch).toBeUndefined();
     expect(loaded.fingerprint).toBeUndefined();
     expect(loaded.evaluated).toBe(true);
+  });
+
+  it("excludes requester-scoped servers from projection and fingerprint", () => {
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://should-never-project.example/mcp" }),
+      },
+    ]);
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          search: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+          "user-mail": {
+            type: "http",
+            url: "https://unresolved.invalid",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+    // Same static set without a scoped entry must fingerprint identically.
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          search: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+    const withoutScopedConfig = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+
+    expect(loaded.configPatch).toEqual({
+      mcp_servers: {
+        search: {
+          url: "https://mcp.example.com/mcp",
+        },
+      },
+    });
+    expect(JSON.stringify(loaded.configPatch)).not.toContain("unresolved.invalid");
+    expect(JSON.stringify(loaded.configPatch)).not.toContain("user-mail");
+    expect(loaded.configPatch).toEqual(withoutScopedConfig.configPatch);
+    expect(loaded.fingerprint).toBe(withoutScopedConfig.fingerprint);
+  });
+
+  it("keeps static projection byte-identical when no resolver exists", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          search: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+
+    const a = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+    const b = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+    expect(a.configPatch).toEqual(b.configPatch);
+    expect(a.fingerprint).toBe(b.fingerprint);
+    expect(a.configPatch).toEqual({
+      mcp_servers: {
+        search: {
+          url: "https://mcp.example.com/mcp",
+        },
+      },
+    });
   });
 });

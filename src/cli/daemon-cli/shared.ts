@@ -12,7 +12,7 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import { parseInlineOptionToken } from "../../infra/inline-option-token.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
@@ -70,27 +70,7 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
 
 /** Extract `--port` from service ProgramArguments. */
 export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
-  if (!programArguments?.length) {
-    return null;
-  }
-  for (let i = 0; i < programArguments.length; i += 1) {
-    const arg = programArguments[i];
-    if (arg === "--port") {
-      const next = programArguments[i + 1];
-      const parsed = parsePort(next);
-      if (parsed) {
-        return parsed;
-      }
-    }
-    if (arg?.startsWith("--port=")) {
-      const option = parseInlineOptionToken(arg);
-      const parsed = parsePort(option.hasInlineValue ? option.inlineValue : undefined);
-      if (parsed) {
-        return parsed;
-      }
-    }
-  }
-  return null;
+  return parseTcpPortFromArgs(programArguments);
 }
 
 /** Pick the best local probe host for a configured Gateway bind mode. */
@@ -157,7 +137,14 @@ export function normalizeListenerAddress(raw: string): string {
 
 /** Render platform-specific hints for missing/stopped Gateway runtimes. */
 export function renderRuntimeHints(
-  runtime: { missingUnit?: boolean; missingSupervision?: boolean; status?: string } | undefined,
+  runtime:
+    | {
+        missingUnit?: boolean;
+        missingSupervision?: boolean;
+        missingGuiSession?: boolean;
+        status?: string;
+      }
+    | undefined,
   env: NodeJS.ProcessEnv = process.env,
   logFile?: string | null,
 ): string[] {
@@ -168,6 +155,21 @@ export function renderRuntimeHints(
   const fileLog = logFile ?? null;
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
+    if (fileLog) {
+      hints.push(`File logs: ${fileLog}`);
+    }
+    return hints;
+  }
+  if (runtime.missingGuiSession) {
+    hints.push(
+      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+    );
+    hints.push(
+      `Sign in to the macOS desktop as this user, then run: ${formatCliCommand("openclaw gateway restart", env)}`,
+    );
+    hints.push(
+      "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }

@@ -8,7 +8,17 @@ describe("isBlockedObjectKey", () => {
       expect(isBlockedObjectKey(key)).toBe(true);
     }
 
-    for (const key of ["toString", "value", "constructorName", "__proto__x", "Prototype"]) {
+    for (const key of [
+      "toString",
+      "value",
+      "constructorName",
+      "__proto__x",
+      "Prototype",
+      "__defineGetter__",
+      "__defineSetter__",
+      "__lookupGetter__",
+      "__lookupSetter__",
+    ]) {
       expect(isBlockedObjectKey(key)).toBe(false);
     }
   });

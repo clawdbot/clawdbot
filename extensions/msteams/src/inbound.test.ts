@@ -1,9 +1,7 @@
 // Msteams tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  decodeHtmlEntities,
   extractMSTeamsQuoteInfo,
-  htmlToPlainText,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -71,36 +69,6 @@ describe("msteams inbound", () => {
     });
   });
 
-  describe("decodeHtmlEntities", () => {
-    it("decodes common entities", () => {
-      expect(decodeHtmlEntities("&amp;&lt;&gt;&quot;&#39;&#x27;&nbsp;")).toBe("&<>\"'' ");
-    });
-
-    it("leaves plain text unchanged", () => {
-      expect(decodeHtmlEntities("hello world")).toBe("hello world");
-    });
-
-    it("prevents double-decoding: &amp;lt; should become &lt; not <", () => {
-      // If &amp; were decoded first, &amp;lt; → &lt; → < (wrong).
-      // With &amp; decoded last, &amp;lt; stays as &lt; (correct).
-      expect(decodeHtmlEntities("&amp;lt;b&amp;gt;")).toBe("&lt;b&gt;");
-    });
-  });
-
-  describe("htmlToPlainText", () => {
-    it("strips tags and decodes entities", () => {
-      expect(htmlToPlainText("<strong>Hello &amp; world</strong>")).toBe("Hello & world");
-    });
-
-    it("collapses whitespace from tag removal", () => {
-      expect(htmlToPlainText("<p>foo</p><p>bar</p>")).toBe("foo bar");
-    });
-
-    it("trims leading and trailing whitespace", () => {
-      expect(htmlToPlainText("  <span>hi</span>  ")).toBe("hi");
-    });
-  });
-
   describe("extractMSTeamsQuoteInfo", () => {
     const replyAttachment = (overrides?: { content?: string; contentType?: string }) => ({
       contentType: overrides?.contentType ?? "text/html",
@@ -160,11 +128,11 @@ describe("msteams inbound", () => {
           content:
             '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
             '<strong itemprop="mri">Bob</strong>' +
-            '<p itemprop="copy">2 &lt; 3 &amp; 4 &gt; 1</p>' +
+            '<p itemprop="copy">2 &lt; 3 &amp; 4 &gt; 1; &copy;&Tab;keep &amp;lt; literal</p>' +
             "</blockquote>",
         },
       ]);
-      expect(result).toEqual({ sender: "Bob", body: "2 < 3 & 4 > 1" });
+      expect(result).toEqual({ sender: "Bob", body: "2 < 3 & 4 > 1; © keep &lt; literal" });
     });
 
     it("handles multiline body by collapsing whitespace", () => {
@@ -217,6 +185,73 @@ describe("msteams inbound", () => {
         replyAttachment(),
       ]);
       expect(result).toEqual({ sender: "Alice", body: "Hello world" });
+    });
+
+    it("parses body from itemprop='preview' when 'copy' is absent", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
+            '<strong itemprop="mri">Frank</strong>' +
+            '<p itemprop="preview">truncated snippet…</p>' +
+            "</blockquote>",
+        },
+      ]);
+      expect(result?.body).toBe("truncated snippet…");
+      expect(result?.sender).toBe("Frank");
+    });
+
+    it("prefers 'copy' over 'preview' when both are present", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
+            '<strong itemprop="mri">Grace</strong>' +
+            '<p itemprop="preview">short…</p>' +
+            '<p itemprop="copy">the full text</p>' +
+            "</blockquote>",
+        },
+      ]);
+      expect(result?.body).toBe("the full text");
+    });
+
+    it("captures the blockquote itemid as the quoted message id", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1783379480258">' +
+            '<strong itemprop="mri">Heidi</strong>' +
+            '<p itemprop="preview">San Francisco right now…</p>' +
+            "</blockquote>",
+        },
+      ]);
+      expect(result).toEqual({
+        sender: "Heidi",
+        body: "San Francisco right now…",
+        id: "1783379480258",
+      });
+    });
+
+    it("parses a real Teams quote-reply payload (preview + itemid)", () => {
+      const result = extractMSTeamsQuoteInfo([
+        {
+          contentType: "text/html",
+          content:
+            '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1783379480258">' +
+            '<strong itemprop="mri" itemid="28:abc">Display Name</strong>' +
+            '<span itemprop="time" itemid="1783379480258"></span>' +
+            '<p itemprop="preview">San Francisco right now ... Today\'s range: 54-64 °F (avg…</p>' +
+            "</blockquote>\n<p>what abt not?</p>",
+        },
+      ]);
+      expect(result).toEqual({
+        sender: "Display Name",
+        body: "San Francisco right now ... Today's range: 54-64 °F (avg…",
+        id: "1783379480258",
+      });
     });
   });
 });

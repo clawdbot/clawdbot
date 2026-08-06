@@ -6,7 +6,9 @@ source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 BASE_IMAGE="${BASE_IMAGE:-openclaw-sandbox:bookworm-slim}"
 TARGET_IMAGE="${TARGET_IMAGE:-openclaw-sandbox-common:bookworm-slim}"
-PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file}"
+PACKAGES="${PACKAGES:-curl wget jq coreutils grep python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file}"
+INSTALL_NODE="${INSTALL_NODE:-1}"
+NODE_MAJOR="${NODE_MAJOR:-24}"
 INSTALL_PNPM="${INSTALL_PNPM:-1}"
 INSTALL_BUN="${INSTALL_BUN:-1}"
 BUN_INSTALL_DIR="${BUN_INSTALL_DIR:-/opt/bun}"
@@ -30,6 +32,8 @@ docker_build_exec \
   -f "$ROOT_DIR/scripts/docker/sandbox/Dockerfile.common" \
   --build-arg BASE_IMAGE="${BASE_IMAGE}" \
   --build-arg PACKAGES="${PACKAGES}" \
+  --build-arg INSTALL_NODE="${INSTALL_NODE}" \
+  --build-arg NODE_MAJOR="${NODE_MAJOR}" \
   --build-arg INSTALL_PNPM="${INSTALL_PNPM}" \
   --build-arg INSTALL_BUN="${INSTALL_BUN}" \
   --build-arg BUN_INSTALL_DIR="${BUN_INSTALL_DIR}" \

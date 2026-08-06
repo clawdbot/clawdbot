@@ -1,7 +1,7 @@
 // Telegram tests cover inline buttons plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { buildTelegramInteractiveButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { describeTelegramInteractiveButtonBehavior } from "./button-types.test-helpers.js";
 import {
   isTelegramInlineButtonsEnabled,
@@ -49,16 +49,18 @@ describeTelegramInteractiveButtonBehavior();
 describe("buildTelegramInteractiveButtons callback rewrites", () => {
   it("drops shared buttons whose callback data exceeds Telegram's limit", () => {
     expect(
-      buildTelegramInteractiveButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Keep", value: "keep" },
-              { label: "Too long", value: `a${"b".repeat(64)}` },
-            ],
-          },
-        ],
+      resolveTelegramInlineButtons({
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Keep", value: "keep" },
+                { label: "Too long", value: `a${"b".repeat(64)}` },
+              ],
+            },
+          ],
+        },
       }),
     ).toEqual([[{ text: "Keep", callback_data: "keep", style: undefined }]]);
   });
@@ -66,19 +68,21 @@ describe("buildTelegramInteractiveButtons callback rewrites", () => {
   it("rewrites /approve allow-always callbacks to always so plugin IDs fit Telegram limits", () => {
     const pluginApprovalId = `plugin:${"a".repeat(36)}`;
     expect(
-      buildTelegramInteractiveButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Allow Always",
-                value: `/approve ${pluginApprovalId} allow-always`,
-                style: "primary",
-              },
-            ],
-          },
-        ],
+      resolveTelegramInlineButtons({
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Allow Always",
+                  value: `/approve ${pluginApprovalId} allow-always`,
+                  style: "primary",
+                },
+              ],
+            },
+          ],
+        },
       }),
     ).toEqual([
       [
@@ -107,6 +111,39 @@ describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () =>
 
     expect(resolveTelegramInlineButtonsScope({ cfg })).toBe("allowlist");
     expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(true);
+  });
+
+  it("preserves the default inline-buttons scope when legacy capabilities are empty", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+          capabilities: [],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramInlineButtonsScope({ cfg })).toBe("allowlist");
+    expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(true);
+  });
+
+  it("inherits the channel scope when an account legacy capabilities array is empty", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          capabilities: { inlineButtons: "off" },
+          accounts: {
+            ops: {
+              botToken: "123:telegram-ops-token",
+              capabilities: [],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramInlineButtonsScope({ cfg, accountId: "ops" })).toBe("off");
+    expect(isTelegramInlineButtonsEnabled({ cfg, accountId: "ops" })).toBe(false);
   });
 
   it('preserves configured "off" when botToken is an unresolved SecretRef', () => {

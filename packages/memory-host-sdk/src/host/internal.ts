@@ -4,7 +4,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
+import { normalizeStringEntries, uniqueStrings } from "@openclaw/normalization-core";
+import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
+import { MEMORY_HOST_ROOT_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
 import {
@@ -24,14 +26,14 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   detectMime,
   estimateStringChars,
-  runTasksWithConcurrency,
+  truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
-import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
+import type { MemoryEntryProvenance } from "./types.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -52,12 +54,18 @@ export type MemoryFileEntry = {
 export type MemoryChunk = {
   startLine: number;
   endLine: number;
+  entryStartLine?: number;
+  entryEndLine?: number;
   text: string;
   hash: string;
   embeddingInput?: EmbeddingInput;
+  provenance?: MemoryEntryProvenance;
 };
 
-export type MultimodalMemoryChunk = {
+// Persisted with index metadata so boundary changes rebuild unchanged files.
+export const MEMORY_CHUNKING_VERSION = 2;
+
+type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
   structuredInputBytes: number;
 };
@@ -68,12 +76,14 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
   maxFileBytes: 0,
 };
 
-export function ensureDir(dir: string): string {
+function ensureMemoryHostDir(dir: string): string {
   fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-export function normalizeRelPath(value: string): string {
+export { ensureMemoryHostDir as ensureDir };
+
+function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
   return trimmed.replace(/\\/g, "/");
 }
@@ -105,7 +115,11 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === CANONICAL_ROOT_MEMORY_FILENAME || normalized.toLowerCase() === "dreams.md") {
+  if (
+    normalized === MEMORY_HOST_ROOT_FILENAME ||
+    normalized === "USER.md" ||
+    normalized.toLowerCase() === "dreams.md"
+  ) {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -175,6 +189,7 @@ export async function listMemoryFiles(
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
+  await addMarkdownFile(path.join(workspaceDir, "USER.md"));
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
@@ -384,9 +399,118 @@ export async function buildMultimodalChunkForIndexing(
   };
 }
 
+export type CuratedMarkdownEntry = {
+  startLine: number;
+  endLine: number;
+  text: string;
+  kind: "entry" | "section";
+};
+
+export const INVALID_PROJECT_ANNOTATION_KEY = "!invalid-project-annotation";
+
+// Carrier syntax is line-scoped like recall metadata parsing. Never cross a
+// newline from an unterminated marker into the next entry's valid annotation.
+const MEMORY_ANNOTATION_CARRIER_RE = /<!--\s*(?:trigger|importance|project)\s*:[^\r\n]*?-->/giu;
+
+export function stripMemoryAnnotationCarriers(text: string): string {
+  let stripped = false;
+  const withoutCarriers = text.replace(MEMORY_ANNOTATION_CARRIER_RE, () => {
+    stripped = true;
+    return "";
+  });
+  return stripped ? withoutCarriers.replace(/[ \t]+(?=\r?$)/gmu, "") : text;
+}
+
+export type CuratedProjectAnnotations = {
+  annotated: boolean;
+  valid: boolean;
+  keys: string[];
+  rawCount: number;
+  validCount: number;
+};
+
+export function normalizeProjectAnnotationKey(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || /[\r\n<>]/u.test(trimmed)) {
+    return null;
+  }
+  if (trimmed.startsWith("path:")) {
+    return trimmed;
+  }
+  const separator = trimmed.indexOf("/");
+  if (separator < 1) {
+    return trimmed;
+  }
+  // Preserve remote path case so case-sensitive hosts fail closed. Providers
+  // with case-insensitive slugs may miss boosts/digests across casing variants,
+  // but folding paths could cross-inject memory between distinct repositories.
+  return `${trimmed.slice(0, separator).toLowerCase()}${trimmed.slice(separator)}`;
+}
+
+export function extractProjectKeysFromCuratedEntry(text: string): CuratedProjectAnnotations {
+  const keys = new Set<string>();
+  const markerCount = [...text.matchAll(/<!--\s*project\s*:/giu)].length;
+  let parsedCount = 0;
+  let rawCount = 0;
+  let validCount = 0;
+  for (const match of text.matchAll(/<!--\s*project\s*:\s*([\s\S]*?)\s*-->/giu)) {
+    parsedCount += 1;
+    for (const rawKey of (match[1] ?? "").split(";")) {
+      rawCount += 1;
+      const key = normalizeProjectAnnotationKey(rawKey);
+      if (key) {
+        keys.add(key);
+        validCount += 1;
+      }
+    }
+  }
+  const annotated = markerCount > 0;
+  return {
+    annotated,
+    valid: !annotated || (parsedCount === markerCount && rawCount > 0 && rawCount === validCount),
+    keys: [...keys],
+    rawCount,
+    validCount,
+  };
+}
+
+export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEntry[] {
+  const lines = content.split("\n");
+  const entries: CuratedMarkdownEntry[] = [];
+  let startIndex = 0;
+  let kind: CuratedMarkdownEntry["kind"] = lines[0]?.startsWith("- ") ? "entry" : "section";
+  const flush = (endIndex: number) => {
+    if (endIndex < startIndex) {
+      return;
+    }
+    entries.push({
+      startLine: startIndex + 1,
+      endLine: endIndex + 1,
+      text: lines.slice(startIndex, endIndex + 1).join("\n"),
+      kind,
+    });
+  };
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const nextKind = line.startsWith("- ")
+      ? "entry"
+      : /^#{1,6}(?:\s|$)/u.test(line)
+        ? "section"
+        : undefined;
+    if (!nextKind) {
+      continue;
+    }
+    flush(index - 1);
+    startIndex = index;
+    kind = nextKind;
+  }
+  flush(lines.length - 1);
+  return entries;
+}
+
 export function chunkMarkdown(
   content: string,
-  chunking: { tokens: number; overlap: number },
+  chunking: { tokens: number; overlap: number; perEntry?: boolean },
 ): MemoryChunk[] {
   const lines = content.split("\n");
   if (lines.length === 0) {
@@ -398,6 +522,11 @@ export function chunkMarkdown(
 
   let current: Array<{ line: string; lineNo: number }> = [];
   let currentChars = 0;
+  let entryStartLine: number | undefined;
+  let entryFirstChunk = 0;
+  const curatedEntryStarts = chunking.perEntry
+    ? new Map(splitCuratedMarkdownEntries(content).map((entry) => [entry.startLine, entry]))
+    : undefined;
 
   const flush = () => {
     if (current.length === 0) {
@@ -443,9 +572,32 @@ export function chunkMarkdown(
     currentChars = acc;
   };
 
+  const finishEntry = (entryEndLine: number) => {
+    if (entryStartLine === undefined) {
+      return;
+    }
+    // Every size fragment remains part of the same curated entry and inherits
+    // its full annotation span; dropping scope on later fragments can leak them.
+    for (const chunk of chunks.slice(entryFirstChunk)) {
+      chunk.entryStartLine = entryStartLine;
+      chunk.entryEndLine = entryEndLine;
+    }
+  };
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
     const lineNo = i + 1;
+    const curatedEntry = curatedEntryStarts?.get(lineNo);
+    if (curatedEntry) {
+      if (current.length > 0) {
+        flush();
+      }
+      finishEntry(lineNo - 1);
+      current = [];
+      currentChars = 0;
+      entryStartLine = curatedEntry.kind === "entry" ? lineNo : undefined;
+      entryFirstChunk = chunks.length;
+    }
     const segments: string[] = [];
     if (line.length === 0) {
       segments.push("");
@@ -454,25 +606,23 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; start += maxChars) {
-        const coarse = line.slice(start, start + maxChars);
+      for (let start = 0; start < line.length;) {
+        const coarse = truncateUtf16Safe(line.slice(start), maxChars);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length; ) {
+          for (let j = 0; j < coarse.length;) {
             let end = Math.min(j + fineStep, coarse.length);
-            // Avoid splitting inside a UTF-16 surrogate pair (CJK Extension B+).
-            if (end < coarse.length) {
-              const code = coarse.charCodeAt(end - 1);
-              if (code >= 0xd800 && code <= 0xdbff) {
-                end += 1; // include the low surrogate
-              }
+            const lastCodeUnit = coarse.charCodeAt(end - 1);
+            if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
+              end += 1;
             }
             segments.push(coarse.slice(j, end));
-            j = end; // advance cursor to the adjusted boundary
+            j = end;
           }
         } else {
           segments.push(coarse);
         }
+        start += coarse.length;
       }
     }
     for (const segment of segments) {
@@ -486,6 +636,7 @@ export function chunkMarkdown(
     }
   }
   flush();
+  finishEntry(lines.length);
   return chunks;
 }
 
@@ -540,17 +691,11 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export async function runWithConcurrency<T>(
+export function runMemoryHostTasksWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
-  });
-  if (hasError) {
-    throw firstError;
-  }
-  return results;
+  return runWithConcurrencyImpl(tasks, limit);
 }
+
+export { runMemoryHostTasksWithConcurrency as runWithConcurrency };

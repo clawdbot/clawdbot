@@ -1,14 +1,28 @@
 // Msteams tests cover thread parent context plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
-import {
-  resetThreadParentContextCachesForTest,
-  fetchParentMessageCached,
-  formatParentContextEvent,
-  markParentContextInjected,
-  shouldInjectParentContext,
-  summarizeParentMessage,
-} from "./thread-parent-context.js";
+
+let fetchParentMessageCached: typeof import("./thread-parent-context.js").fetchParentMessageCached;
+let formatParentContextEvent: typeof import("./thread-parent-context.js").formatParentContextEvent;
+let markParentContextInjected: typeof import("./thread-parent-context.js").markParentContextInjected;
+let shouldInjectParentContext: typeof import("./thread-parent-context.js").shouldInjectParentContext;
+let summarizeParentMessage: typeof import("./thread-parent-context.js").summarizeParentMessage;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    fetchParentMessageCached,
+    formatParentContextEvent,
+    markParentContextInjected,
+    shouldInjectParentContext,
+    summarizeParentMessage,
+  } = await import("./thread-parent-context.js"));
+});
+
+// Matches an unpaired UTF-16 surrogate (lone high or lone low), without relying
+// on the ES2024 String.prototype.isWellFormed() runtime API.
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 describe("summarizeParentMessage", () => {
   it("returns undefined for missing message", () => {
@@ -81,6 +95,20 @@ describe("summarizeParentMessage", () => {
     expect(summary?.text.length).toBeLessThanOrEqual(400);
     expect(summary?.text.endsWith("…")).toBe(true);
   });
+
+  it("keeps truncated parent text well-formed when truncating surrogate pairs", () => {
+    const msg: GraphThreadMessage = {
+      id: "p1",
+      from: { user: { displayName: "Dana" } },
+      body: { content: `${"a".repeat(398)}🦞${"b".repeat(50)}`, contentType: "text" },
+    };
+
+    const summary = summarizeParentMessage(msg);
+
+    expect(summary?.text).not.toMatch(UNPAIRED_SURROGATE_RE);
+    expect(summary?.text).toBe(`${"a".repeat(398)}…`);
+    expect(summary?.text.endsWith("\ud83e…")).toBe(false);
+  });
 });
 
 describe("formatParentContextEvent", () => {
@@ -92,10 +120,6 @@ describe("formatParentContextEvent", () => {
 });
 
 describe("fetchParentMessageCached", () => {
-  beforeEach(() => {
-    resetThreadParentContextCachesForTest();
-  });
-
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -214,10 +238,6 @@ describe("fetchParentMessageCached", () => {
 });
 
 describe("shouldInjectParentContext / markParentContextInjected", () => {
-  beforeEach(() => {
-    resetThreadParentContextCachesForTest();
-  });
-
   it("returns true for first observation", () => {
     expect(shouldInjectParentContext("session-1", "parent-1")).toBe(true);
   });

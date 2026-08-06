@@ -2,8 +2,30 @@ parent_config: ../../config/swiftlint.yml
 
 included:
   - Sources
-  - ../shared/ClawdisNodeKit/Sources
+  - ShareExtension
+  - ActivityWidget
+  - WatchApp
+  - ../shared/OpenClawKit/Sources/OpenClawChatUI
+  - ../shared/OpenClawKit/Sources/OpenClawKit
+  - ../shared/OpenClawKit/Sources/OpenClawNativeState
+  - ../shared/OpenClawKit/Sources/OpenClawProtocol
+  - ../swabble/Sources/SwabbleKit
+
+excluded:
+  - ../macos
+  - ../macos-mlx-tts
+  - ../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift
 
 type_body_length:
   warning: 900
   error: 1300
+
+custom_rules:
+  openclaw_design_colors:
+    name: "OpenClaw design colors"
+    excluded:
+      - Sources/Design/OpenClawBrand.swift
+      - ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTheme.swift
+    regex: '(Color\.accentColor|(^|[^A-Za-z0-9_])\.accentColor\b|Color\.(red|green|orange|cyan|blue|yellow|purple|pink)\b|\.(foregroundStyle|tint|fill|stroke|strokeBorder|background)\(\s*\.(red|green|orange|cyan|blue|yellow|purple|pink)\b|Color\(red:\s*0\s*/\s*255\.0,\s*green:\s*122\s*/\s*255\.0,\s*blue:\s*255\s*/\s*255\.0\))'
+    message: "Use OpenClawBrand or OpenClawChatTheme design tokens instead of raw accent/status colors."
+    severity: error

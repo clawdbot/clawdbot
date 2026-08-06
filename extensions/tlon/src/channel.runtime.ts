@@ -4,6 +4,10 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -66,7 +70,7 @@ async function createHttpPokeApi(params: {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
-            Cookie: cookie.split(";")[0],
+            Cookie: expectDefined(cookie.split(";").at(0), "cookie first segment"),
           },
           body: JSON.stringify([pokeData]),
         },
@@ -76,7 +80,7 @@ async function createHttpPokeApi(params: {
 
       try {
         if (!response.ok && response.status !== 204) {
-          const errorText = await response.text();
+          const errorText = await readResponseTextLimited(response, 16 * 1024);
           throw new Error(`Poke failed: ${response.status} - ${errorText}`);
         }
 
@@ -137,6 +141,8 @@ async function withHttpPokeAccountApi<T>(
 
 export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
   textChunkLimit: 10000,
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   deliveryCapabilities: {
@@ -208,34 +214,39 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   },
 };
 
-export async function probeTlonAccount(account: ConfiguredTlonAccount) {
-  try {
-    const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
-      account.dangerouslyAllowPrivateNetwork,
-    );
-    const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
-    const { response, release } = await urbitFetch({
-      baseUrl: account.url,
-      path: "/~/name",
-      init: {
-        method: "GET",
-        headers: { Cookie: cookie },
-      },
-      ssrfPolicy,
-      timeoutMs: 30_000,
-      auditContext: "tlon-probe-account",
-    });
-    try {
-      if (!response.ok) {
-        return { ok: false, error: `Name request failed: ${response.status}` };
+export async function probeTlonAccount(account: ConfiguredTlonAccount, timeoutMs?: number) {
+  return await runChannelProbe(
+    timeoutMs,
+    async () => {
+      const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+        account.dangerouslyAllowPrivateNetwork,
+      );
+      const cookie = await authenticate(account.url, account.code, { ssrfPolicy });
+      const { response, release } = await urbitFetch({
+        baseUrl: account.url,
+        path: "/~/name",
+        init: {
+          method: "GET",
+          headers: { Cookie: cookie },
+        },
+        ssrfPolicy,
+        timeoutMs: 30_000,
+        auditContext: "tlon-probe-account",
+      });
+      try {
+        if (!response.ok) {
+          return { ok: false, error: `Name request failed: ${response.status}` };
+        }
+        return { ok: true };
+      } finally {
+        await release();
       }
-      return { ok: true };
-    } finally {
-      await release();
-    }
-  } catch (error) {
-    return { ok: false, error: (error as { message?: string })?.message ?? String(error) };
-  }
+    },
+    (error) => ({
+      ok: false,
+      error: (error as { message?: string })?.message ?? String(error),
+    }),
+  );
 }
 
 export async function startTlonGatewayAccount(

@@ -1,27 +1,27 @@
 // Node match tests cover node selection from names, ids, and address hints.
 import { describe, expect, it } from "vitest";
-import { normalizeNodeKey, resolveNodeIdFromCandidates, resolveNodeMatches } from "./node-match.js";
+import { resolveNodeIdFromCandidates } from "./node-match.js";
 
 describe("shared/node-match", () => {
   it("normalizes node keys by lowercasing and collapsing separators", () => {
-    expect(normalizeNodeKey(" Mac Studio! ")).toBe("mac-studio");
-    expect(normalizeNodeKey("---PI__Node---")).toBe("pi-node");
-    expect(normalizeNodeKey("###")).toBe("");
-  });
-
-  it("matches candidates by node id, remote ip, normalized name, and long prefix", () => {
-    const nodes = [
-      { nodeId: "mac-abcdef", displayName: "Mac Studio", remoteIp: "100.0.0.1" },
-      { nodeId: "pi-456789", displayName: "Raspberry Pi", remoteIp: "100.0.0.2" },
-    ];
-
-    expect(resolveNodeMatches(nodes, "mac-abcdef")).toEqual([nodes[0]]);
-    expect(resolveNodeMatches(nodes, "100.0.0.2")).toEqual([nodes[1]]);
-    expect(resolveNodeMatches(nodes, "mac studio")).toEqual([nodes[0]]);
-    expect(resolveNodeMatches(nodes, "  Mac---Studio!! ")).toEqual([nodes[0]]);
-    expect(resolveNodeMatches(nodes, "pi-456")).toEqual([nodes[1]]);
-    expect(resolveNodeMatches(nodes, "openclaw")).toStrictEqual([]);
-    expect(resolveNodeMatches(nodes, "   ")).toStrictEqual([]);
+    for (const [displayName, query] of [
+      [" Mac Studio! ", "mac-studio"],
+      ["---PI__Node---", "pi node"],
+      ["工作站 01", "工作站-01"],
+      ["Cafe\u0301 01", "café-01"],
+      ["किताब", "किताब"],
+      ["Mac ❤️ Studio", "mac studio"],
+      ["Node 1️⃣", "node 1"],
+    ] as const) {
+      expect(resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], query)).toBe(
+        "node-1",
+      );
+    }
+    for (const displayName of ["❤️", "###"]) {
+      expect(() =>
+        resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], "named-node"),
+      ).toThrow(/unknown node/);
+    }
   });
 
   it("resolves unique matches and prefers a unique connected node", () => {
@@ -143,5 +143,55 @@ describe("shared/node-match", () => {
         "nope",
       ),
     ).toThrow(/unknown node: nope.*known: 100.0.0.1, pi-456/);
+  });
+
+  it("matches Unicode names without letting punctuation select them", () => {
+    const nodes = [
+      { nodeId: "cn-desktop", displayName: "工作站" },
+      { nodeId: "cn-laptop", displayName: "笔记本" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "工作站")).toBe("cn-desktop");
+    expect(() => resolveNodeIdFromCandidates(nodes, "###")).toThrow(/unknown node: ###/);
+  });
+
+  it("preserves combining marks that distinguish Unicode display names", () => {
+    const nodes = [
+      { nodeId: "hi-short-i", displayName: "किताब" },
+      { nodeId: "hi-short-u", displayName: "कुताब" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "किताब")).toBe("hi-short-i");
+    expect(resolveNodeIdFromCandidates(nodes, "कुताब")).toBe("hi-short-u");
+  });
+
+  it("ignores emoji decoration marks during display-name matching", () => {
+    const nodes = [
+      { nodeId: "heart", displayName: "Mac ❤️ Studio" },
+      { nodeId: "keycap", displayName: "Node 1️⃣" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "Mac Studio")).toBe("heart");
+    expect(resolveNodeIdFromCandidates(nodes, "Node 1")).toBe("keycap");
+  });
+
+  it("keeps compact display-name selectors below exact name matches", () => {
+    const nodes = [
+      { nodeId: "mac-compact", displayName: "Mac Studio" },
+      { nodeId: "mac-exact", displayName: "MacStudio" },
+      { nodeId: "cafe-compact", displayName: "Cafe\u0301 01" },
+      { nodeId: "cafe-exact", displayName: "Cafe\u030101" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "MacStudio", true)).toBe("mac-exact");
+    expect(resolveNodeIdFromCandidates([nodes[0]!, nodes[2]!], "MacStudio", true)).toBe(
+      "mac-compact",
+    );
+    expect(resolveNodeIdFromCandidates([nodes[2]!, nodes[3]!], "Café01", true)).toBe("cafe-exact");
+    expect(resolveNodeIdFromCandidates([nodes[2]!], "Café01", true)).toBe("cafe-compact");
+  });
+
+  it("requires callers to opt in to compact display-name selectors", () => {
+    const nodes = [{ nodeId: "mac-compact", displayName: "Mac Studio" }];
+    expect(() => resolveNodeIdFromCandidates(nodes, "MacStudio")).toThrow(
+      /unknown node: MacStudio/,
+    );
+    expect(resolveNodeIdFromCandidates(nodes, "MacStudio", true)).toBe("mac-compact");
   });
 });

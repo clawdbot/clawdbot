@@ -5,6 +5,11 @@
   },
   "enabledByDefault": true,
   "providers": ["litellm"],
+  "modelCatalog": {
+    "discovery": {
+      "litellm": "runtime"
+    }
+  },
   "setup": {
     "providers": [
       {
@@ -18,6 +23,7 @@
       "provider": "litellm",
       "method": "api-key",
       "choiceId": "litellm-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "LiteLLM API key",
       "choiceHint": "Unified gateway for 100+ LLM providers",
       "groupId": "litellm",

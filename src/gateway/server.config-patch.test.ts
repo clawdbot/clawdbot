@@ -3,10 +3,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
-import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
+import { deleteTestEnvValue } from "../test-utils/env.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -22,6 +28,7 @@ const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
 
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
 let sharedTempRoot: string;
+let rateLimitEpochMs = Date.now();
 
 function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   if (!startedServer) {
@@ -30,14 +37,11 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   return startedServer.ws;
 }
 
-function requireConfigObject(
-  value: Record<string, unknown> | undefined,
-  label: string,
-): Record<string, unknown> {
+function requireConfigObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label}`);
   }
-  return value;
+  return value as Record<string, unknown>;
 }
 
 beforeAll(async () => {
@@ -47,6 +51,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  vi.restoreAllMocks();
   if (!startedServer) {
     return;
   }
@@ -106,14 +111,36 @@ async function getCurrentConfigObject() {
   const current = await rpcReq<{
     raw?: string | null;
     hash?: string;
+    path?: string;
     config?: Record<string, unknown>;
   }>(requireWs(), "config.get", {});
   expect(current.ok).toBe(true);
   expect(typeof current.payload?.hash).toBe("string");
+  expect(typeof current.payload?.path).toBe("string");
   return {
     hash: String(current.payload?.hash),
+    path: String(current.payload?.path),
     raw: current.payload?.raw,
     config: requireConfigObject(current.payload?.config, "current config"),
+  };
+}
+
+async function restoreConfigFileForTest(
+  original: Awaited<ReturnType<typeof getCurrentConfigObject>>,
+) {
+  await writeJsonFile(original.path, original.config);
+}
+
+function makeRouteBinding(index: number) {
+  return {
+    agentId: "main",
+    match: {
+      channel: "telegram",
+      peer: {
+        kind: "direct",
+        id: `user-${index}`,
+      },
+    },
   };
 }
 
@@ -124,8 +151,8 @@ async function expectSchemaLookupInvalid(pathValue: unknown) {
 }
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
-  delete process.env[missingEnvVar];
-  const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
+  deleteTestEnvValue(missingEnvVar);
+  const authStorePath = path.join(resolveDefaultAgentDir({}), "auth-profiles.json");
   await fs.mkdir(path.dirname(authStorePath), { recursive: true });
   await fs.writeFile(
     authStorePath,
@@ -148,13 +175,121 @@ async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
 }
 
 beforeEach(() => {
-  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+  rateLimitEpochMs += 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
 });
 
 describe("gateway config methods", () => {
+  it("reloads owners independently and reports a changed unresolved owner as cold", async () => {
+    const original = await getCurrentConfigObject();
+    const secretFile = path.join(await resetTempDir("owner-reload"), "secrets.json");
+    await writeJsonFile(secretFile, { first: "first-old", second: "second-old" });
+    await fs.chmod(secretFile, 0o600);
+    const ref = (id: string) => ({ source: "file", provider: "reload-proof", id });
+    const providerConfig = {
+      secrets: {
+        providers: {
+          "reload-proof": { source: "file", path: secretFile, mode: "json" },
+        },
+      },
+      models: {
+        providers: {
+          "reload-first": {
+            apiKey: ref("/first"),
+            baseUrl: "https://first.example.invalid/v1",
+            models: [],
+          },
+          "reload-second": {
+            apiKey: ref("/second"),
+            baseUrl: "https://second.example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    try {
+      const seed = await rpcReq<{ degradedSecretOwners?: unknown[] }>(
+        requireWs(),
+        "config.patch",
+        {
+          raw: JSON.stringify(providerConfig),
+          baseHash: original.hash,
+        },
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(seed.ok).toBe(true);
+      expect(seed.payload?.degradedSecretOwners).toBeUndefined();
+
+      await writeJsonFile(secretFile, { second: "second-new" });
+      await fs.chmod(secretFile, 0o600);
+      const reload = await rpcReq<{ warningCount?: number }>(
+        requireWs(),
+        "secrets.reload",
+        {},
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(reload.ok).toBe(true);
+      const stale = getActiveSecretsRuntimeSnapshot();
+      expect(stale?.config.models?.providers?.["reload-first"]?.apiKey).toBe("first-old");
+      expect(stale?.config.models?.providers?.["reload-second"]?.apiKey).toBe("second-new");
+      expect(stale?.degradedOwners).toMatchObject([
+        { ownerKind: "provider", ownerId: "reload-first", degradationState: "stale" },
+      ]);
+
+      const beforeCold = await getCurrentConfigObject();
+      const cold = await rpcReq<{
+        degradedSecretOwners?: Array<{ ownerId?: string; state?: string }>;
+      }>(
+        requireWs(),
+        "config.patch",
+        {
+          raw: JSON.stringify({
+            models: {
+              providers: {
+                "reload-first": { apiKey: ref("/changed") },
+              },
+            },
+          }),
+          baseHash: beforeCold.hash,
+        },
+        CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+      );
+      expect(cold.ok).toBe(true);
+      expect(cold.payload?.degradedSecretOwners).toEqual([
+        expect.objectContaining({ ownerId: "reload-first", state: "cold" }),
+      ]);
+      const coldSnapshot = getActiveSecretsRuntimeSnapshot();
+      expect(coldSnapshot?.config.models?.providers?.["reload-first"]?.apiKey).toEqual(
+        ref("/changed"),
+      );
+      expect(coldSnapshot?.config.models?.providers?.["reload-second"]?.apiKey).toBe("second-new");
+    } finally {
+      await restoreConfigFileForTest(original);
+      activateSecretsRuntimeSnapshot(
+        await prepareSecretsRuntimeSnapshot({
+          config: original.config,
+          includeAuthStoreRefs: true,
+        }),
+      );
+    }
+  });
+
+  it("includes the active runtime config revision", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      configRevisionHash?: string;
+      appliedConfigHash?: string | null;
+    }>(requireWs(), "config.get", {});
+
+    expect(current.ok).toBe(true);
+    expect(current.payload).toHaveProperty("configRevisionHash");
+    expect(current.payload).toHaveProperty("appliedConfigHash");
+  });
+
   it("rejects config.set when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
-    delete process.env[missingEnvVar];
+    deleteTestEnvValue(missingEnvVar);
     const current = await getCurrentConfigObject();
     const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
 
@@ -185,13 +320,157 @@ describe("gateway config methods", () => {
     requireConfigObject(res.payload?.config, "updated config");
   });
 
-  it("returns the persisted config from config.set responses", async () => {
+  it.each([
+    { change: "deletes an earlier mapping", ids: ["bravo"], unidentifiedFirst: false },
+    { change: "reorders existing mappings", ids: ["bravo", "alpha"], unidentifiedFirst: false },
+    { change: "deletes an earlier unidentified mapping", ids: ["bravo"], unidentifiedFirst: true },
+  ])(
+    "keeps redacted hook secrets with their owner when config.set $change",
+    async ({ ids, unidentifiedFirst }) => {
+      const { resetConfigRuntimeState } = await import("../config/config.js");
+      const original = await getCurrentConfigObject();
+      const configured = structuredClone(original.config);
+      configured.hooks = {
+        ...requireConfigObject(configured.hooks ?? {}, "original hooks config"),
+        mappings: [
+          {
+            ...(unidentifiedFirst ? {} : { id: "alpha" }),
+            sessionKey: "synthetic-alpha-session",
+          },
+          { id: "bravo", sessionKey: "synthetic-bravo-session" },
+        ],
+      };
+
+      try {
+        await writeJsonFile(original.path, configured);
+        resetConfigRuntimeState();
+        const current = await getCurrentConfigObject();
+        const visibleHooks = requireConfigObject(current.config.hooks, "redacted hooks config");
+        const visibleMappings = visibleHooks.mappings as Array<{
+          id: string;
+          sessionKey: string;
+        }>;
+        expect(visibleMappings.map((mapping) => mapping.sessionKey)).toEqual([
+          REDACTED_SENTINEL,
+          REDACTED_SENTINEL,
+        ]);
+
+        const submitted = structuredClone(current.config);
+        const submittedHooks = requireConfigObject(submitted.hooks, "submitted hooks config");
+        submittedHooks.mappings = ids.map((id) =>
+          visibleMappings.find((mapping) => mapping.id === id),
+        );
+
+        const response = await sendConfigSet(configRawPayload(submitted, current.hash));
+
+        expect(response.error).toBeUndefined();
+        expect(response.ok).toBe(true);
+        expect(JSON.stringify(response.payload)).not.toContain("synthetic-alpha-session");
+        expect(JSON.stringify(response.payload)).not.toContain("synthetic-bravo-session");
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8")) as {
+          hooks?: { mappings?: Array<{ id: string; sessionKey: string }> };
+        };
+        expect(persisted.hooks?.mappings).toEqual(
+          ids.map((id) => ({ id, sessionKey: `synthetic-${id}-session` })),
+        );
+      } finally {
+        await restoreConfigFileForTest(original);
+        resetConfigRuntimeState();
+      }
+    },
+  );
+
+  it("rejects config.set when a stale snapshot drops an agent entry without changing disk", async () => {
+    const { resetConfigRuntimeState } = await import("../config/config.js");
+    const original = await getCurrentConfigObject();
+    const rosterConfig = structuredClone(original.config);
+    const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
+    rosterConfig.agents = {
+      ...agents,
+      entries: {
+        main: { default: true },
+        worker: { workspace: "/srv/worker" },
+      },
+    };
+    delete (rosterConfig.agents as Record<string, unknown>).list;
+
+    try {
+      await writeJsonFile(original.path, rosterConfig);
+      resetConfigRuntimeState();
+      const current = await getCurrentConfigObject();
+      const staleConfig = structuredClone(current.config);
+      const staleAgents = requireConfigObject(staleConfig.agents, "stale agents config");
+      const staleEntries = requireConfigObject(staleAgents.entries, "stale agent entries");
+      delete staleEntries.worker;
+      const before = await fs.readFile(original.path, "utf-8");
+
+      const res = await sendConfigSet(configRawPayload(staleConfig, current.hash));
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("INVALID_REQUEST");
+      expect(res.error?.message ?? "").toContain("worker");
+      expect(res.error?.message ?? "").toContain("agents.delete RPC");
+      expect(res.error?.message ?? "").toContain("openclaw agents delete");
+      await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(before);
+    } finally {
+      await restoreConfigFileForTest(original);
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("accepts config.set when the submitted roster keeps every agent entry", async () => {
+    const { resetConfigRuntimeState } = await import("../config/config.js");
+    const original = await getCurrentConfigObject();
+    const rosterConfig = structuredClone(original.config);
+    const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
+    rosterConfig.agents = {
+      ...agents,
+      entries: {
+        main: { default: true },
+        Worker: { workspace: "/srv/worker" },
+      },
+    };
+    delete (rosterConfig.agents as Record<string, unknown>).list;
+
+    try {
+      await writeJsonFile(original.path, rosterConfig);
+      resetConfigRuntimeState();
+      const current = await getCurrentConfigObject();
+      const submittedConfig = structuredClone(current.config);
+      const submittedAgents = requireConfigObject(
+        submittedConfig.agents,
+        "submitted agents config",
+      );
+      const submittedEntries = requireConfigObject(
+        submittedAgents.entries,
+        "submitted agent entries",
+      );
+      const worker = submittedEntries.Worker ?? submittedEntries.worker;
+      delete submittedEntries.Worker;
+      submittedEntries.worker = worker;
+
+      const res = await sendConfigSet(configRawPayload(submittedConfig, current.hash));
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = JSON.parse(await fs.readFile(original.path, "utf-8")) as {
+        agents?: { entries?: Record<string, unknown> };
+      };
+      expect(Object.keys(persisted.agents?.entries ?? {}).toSorted()).toEqual(["main", "worker"]);
+    } finally {
+      await restoreConfigFileForTest(original);
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("invalidates a warm config.get response when config.set commits", async () => {
     const current = await getCurrentConfigObject();
     const nextConfig = structuredClone(current.config);
     delete nextConfig.meta;
-
-    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
-    gateway.port = 19001;
+    const ui = (nextConfig.ui ??= {}) as Record<string, unknown>;
+    const prefs = (ui.prefs ??= {}) as Record<string, unknown>;
+    const locale = prefs.locale === "de" ? "en" : "de";
+    prefs.locale = locale;
 
     const res = await rpcReq<{
       ok?: boolean;
@@ -207,6 +486,10 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(after.ok).toBe(true);
     expect(res.payload?.config).toEqual(after.payload?.config);
+    expect(
+      ((after.payload?.config?.ui as Record<string, unknown>)?.prefs as Record<string, unknown>)
+        ?.locale,
+    ).toBe(locale);
     requireConfigObject(res.payload?.config, "response config");
   });
 
@@ -250,6 +533,82 @@ describe("gateway config methods", () => {
       const persisted = await fs.readFile(configPath, "utf-8");
       expect(persisted).toContain('"port": 19002');
       expect(persisted).not.toContain('"baseUrl"');
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("accepts config.patch when bundled provider baseUrl was only defaulted", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    try {
+      await writeJsonFile(configPath, {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openclaw" },
+            },
+          },
+        },
+      });
+      resetConfigRuntimeState();
+
+      const current = await getCurrentConfigObject();
+
+      const res = await rpcReq<{
+        ok?: boolean;
+        error?: { message?: string };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ gateway: { port: 19003 } }),
+        baseHash: current.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = await fs.readFile(configPath, "utf-8");
+      expect(persisted).toContain('"port": 19003');
+      expect(persisted).not.toContain('"baseUrl"');
+      expect(persisted).not.toContain('"models": []');
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("preserves authored empty bundled provider models during config.patch", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    try {
+      await writeJsonFile(configPath, {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openclaw" },
+              models: [],
+            },
+          },
+        },
+      });
+      resetConfigRuntimeState();
+
+      const current = await getCurrentConfigObject();
+
+      const res = await rpcReq<{
+        ok?: boolean;
+        error?: { message?: string };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ gateway: { port: 19004 } }),
+        baseHash: current.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        models?: { providers?: { openai?: { baseUrl?: unknown; models?: unknown } } };
+      };
+      expect(persisted.models?.providers?.openai?.baseUrl).toBeUndefined();
+      expect(persisted.models?.providers?.openai?.models).toEqual([]);
     } finally {
       await fs.rm(configPath, { force: true });
       resetConfigRuntimeState();
@@ -300,6 +659,96 @@ describe("gateway config methods", () => {
     } finally {
       await fs.rm(configPath, { force: true });
       resetConfigRuntimeState();
+    }
+  });
+
+  it("round-trips prototype-like browser profile names through config.patch", async () => {
+    const original = await getCurrentConfigObject();
+    const profileNames = ["constructor", "prototype"] as const;
+
+    try {
+      const create = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          browser: {
+            profiles: Object.fromEntries(
+              profileNames.map((name, index) => [
+                name,
+                {
+                  cdpPort: 18991 + index,
+                  constructor: { polluted: true },
+                  prototype: { polluted: true },
+                },
+              ]),
+            ),
+          },
+        }),
+        baseHash: original.hash,
+      });
+      expect(create.ok).toBe(true);
+
+      const afterCreate = await getCurrentConfigObject();
+      const browser = requireConfigObject(afterCreate.config.browser, "browser");
+      const profiles = requireConfigObject(browser.profiles, "browser.profiles");
+      for (const [index, name] of profileNames.entries()) {
+        const profile = requireConfigObject(profiles[name], `browser.profiles.${name}`);
+        expect(profile.cdpPort).toBe(18991 + index);
+        expect(Object.hasOwn(profile, "constructor")).toBe(false);
+        expect(Object.hasOwn(profile, "prototype")).toBe(false);
+      }
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+
+      const remove = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          browser: { profiles: { constructor: null, prototype: null } },
+        }),
+        baseHash: afterCreate.hash,
+      });
+      expect(remove.ok).toBe(true);
+
+      const afterRemove = await getCurrentConfigObject();
+      const afterBrowser = requireConfigObject(afterRemove.config.browser, "browser");
+      const afterProfiles = requireConfigObject(afterBrowser.profiles, "browser.profiles");
+      for (const name of profileNames) {
+        expect(Object.hasOwn(afterProfiles, name)).toBe(false);
+      }
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("rejects concurrent config.patch writes that share a stale base hash", async () => {
+    const original = await getCurrentConfigObject();
+    const names = Array.from({ length: 8 }, (_, index) => `concurrent-mcp-${index}`);
+
+    try {
+      const results = await Promise.all(
+        names.map((name, index) =>
+          rpcReq<{ ok?: boolean; error?: { message?: string } }>(requireWs(), "config.patch", {
+            raw: JSON.stringify({
+              mcp: {
+                servers: {
+                  [name]: { command: "node", args: [`server-${index}.mjs`] },
+                },
+              },
+            }),
+            baseHash: original.hash,
+          }),
+        ),
+      );
+
+      expect(results.filter((result) => result.ok).length).toBe(1);
+      const failures = results.filter((result) => !result.ok);
+      expect(failures).toHaveLength(names.length - 1);
+      for (const failure of failures) {
+        expect(failure.error?.message).toContain("config changed since last load");
+      }
+
+      const after = await getCurrentConfigObject();
+      const mcp = requireConfigObject(after.config.mcp, "mcp");
+      const servers = requireConfigObject(mcp.servers, "mcp.servers");
+      expect(names.filter((name) => Object.hasOwn(servers, name))).toHaveLength(1);
+    } finally {
+      await restoreConfigFileForTest(original);
     }
   });
 
@@ -425,6 +874,50 @@ describe("gateway config methods", () => {
     expect(after.payload?.hash).toBe(current.payload?.hash);
   });
 
+  it("accepts messages.groupChat.historyLimit: 0 through config.patch", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    let previousConfig: string | null = null;
+    try {
+      try {
+        previousConfig = await fs.readFile(configPath, "utf-8");
+      } catch (error) {
+        if ((error as { code?: string }).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ messages: { groupChat: { historyLimit: 1 } } }, null, 2)}\n`,
+        "utf-8",
+      );
+      resetConfigRuntimeState();
+
+      const current = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
+
+      const res = await rpcReq<{
+        config?: { messages?: { groupChat?: { historyLimit?: number } } };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ messages: { groupChat: { historyLimit: 0 } } }),
+        baseHash: current.payload?.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      expect(res.payload?.config?.messages?.groupChat?.historyLimit).toBe(0);
+    } finally {
+      if (previousConfig === null) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+      resetConfigRuntimeState();
+    }
+  });
+
   it("rejects config.patch when raw is null", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "null",
@@ -434,9 +927,331 @@ describe("gateway config methods", () => {
     expect(res.error?.message ?? "").toContain("raw must be an object");
   });
 
+  it("rejects config.patch that shrinks an existing array without replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const bindings = [0, 1, 2].map(makeRouteBinding);
+    const seededConfig = { ...original.config, bindings };
+    const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ bindings: [bindings[0]] }),
+        baseHash: before.hash,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "config.patch would remove entries from array path(s): bindings",
+      );
+      const after = await getCurrentConfigObject();
+      expect(after.hash).toBe(before.hash);
+      expect(after.config.bindings).toEqual(bindings);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("rejects config.patch that removes existing array entries without shrinking length", async () => {
+    const original = await getCurrentConfigObject();
+    const bindings = [0, 1].map(makeRouteBinding);
+    const seededConfig = { ...original.config, bindings };
+    const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ bindings: [bindings[1], makeRouteBinding(2)] }),
+        baseHash: before.hash,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "config.patch would remove entries from array path(s): bindings",
+      );
+      const after = await getCurrentConfigObject();
+      expect(after.hash).toBe(before.hash);
+      expect(after.config.bindings).toEqual(bindings);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("allows config.patch to append array entries without replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const bindings = [0, 1].map(makeRouteBinding);
+    const seededConfig = { ...original.config, bindings };
+    const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const nextBindings = [...bindings, makeRouteBinding(2)];
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ bindings: nextBindings }),
+        baseHash: before.hash,
+      });
+
+      expect(res.ok).toBe(true);
+      const after = await getCurrentConfigObject();
+      expect(after.config.bindings).toEqual(nextBindings);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("allows config.patch to shrink an existing array with replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const bindings = [0, 1, 2].map(makeRouteBinding);
+    const seededConfig = { ...original.config, bindings };
+    const seed = await sendConfigApply(configRawPayload(seededConfig, original.hash));
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const replacement = [bindings[0]];
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ bindings: replacement }),
+        baseHash: before.hash,
+        replacePaths: ["bindings"],
+      });
+
+      expect(res.ok).toBe(true);
+      const after = await getCurrentConfigObject();
+      expect(after.config.bindings).toEqual(replacement);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("accepts exact numeric record keys in replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const channels =
+      original.config.channels &&
+      typeof original.config.channels === "object" &&
+      !Array.isArray(original.config.channels)
+        ? (original.config.channels as Record<string, unknown>)
+        : {};
+    const discord = {
+      ...(channels.discord as Record<string, unknown> | undefined),
+      allowFrom: ["*"],
+      guilds: {
+        "123": {
+          channels: {
+            general: {
+              users: ["111", "222"],
+            },
+          },
+        },
+      },
+    };
+    const seed = await sendConfigApply(
+      configRawPayload({ ...original.config, channels: { ...channels, discord } }, original.hash),
+    );
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          channels: {
+            discord: {
+              guilds: { "123": { channels: { general: { users: ["111"] } } } },
+            },
+          },
+        }),
+        baseHash: before.hash,
+        replacePaths: ["channels.discord.guilds.123.channels.general.users"],
+      });
+
+      expect(res.ok).toBe(true);
+      const after = await getCurrentConfigObject();
+      const afterChannels = requireConfigObject(after.config.channels, "channels");
+      expect(
+        (
+          afterChannels.discord as {
+            guilds?: { "123"?: { channels?: { general?: { users?: unknown[] } } } };
+          }
+        ).guilds?.["123"]?.channels?.general?.users,
+      ).toEqual(["111"]);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("rejects nested destructive array patches inside id-keyed arrays without replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const agents = {
+      ...(original.config.agents as Record<string, unknown> | undefined),
+      entries: {
+        main: { default: true, skills: ["alpha", "beta"] },
+        worker: { skills: ["gamma"] },
+      },
+    };
+    const seed = await sendConfigApply(
+      configRawPayload({ ...original.config, agents }, original.hash),
+    );
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
+        baseHash: before.hash,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "config.patch would remove entries from array path(s): agents.entries.main.skills",
+      );
+      const after = await getCurrentConfigObject();
+      expect(after.hash).toBe(before.hash);
+      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
+        agents.entries,
+      );
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("rejects nested destructive array patches when replacePaths names only a parent object", async () => {
+    const original = await getCurrentConfigObject();
+    const agents = {
+      ...(original.config.agents as Record<string, unknown> | undefined),
+      entries: {
+        main: { default: true, skills: ["alpha", "beta"] },
+        worker: { skills: ["gamma"] },
+      },
+    };
+    const seed = await sendConfigApply(
+      configRawPayload({ ...original.config, agents }, original.hash),
+    );
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
+        baseHash: before.hash,
+        replacePaths: ["agents"],
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "config.patch would remove entries from array path(s): agents.entries.main.skills",
+      );
+      const after = await getCurrentConfigObject();
+      expect(after.hash).toBe(before.hash);
+      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
+        agents.entries,
+      );
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("rejects deleting a parent object that contains arrays without replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const agents = {
+      ...(original.config.agents as Record<string, unknown> | undefined),
+      entries: { main: { default: true, skills: ["alpha"] }, worker: {} },
+    };
+    const seed = await sendConfigApply(
+      configRawPayload({ ...original.config, agents }, original.hash),
+    );
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ agents: null }),
+        baseHash: before.hash,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "config.patch would remove entries from array path(s): agents.entries.main.skills",
+      );
+      const after = await getCurrentConfigObject();
+      expect(after.hash).toBe(before.hash);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("rejects deleting a nested parent object inside id-keyed arrays without replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const agents = {
+      ...(original.config.agents as Record<string, unknown> | undefined),
+      entries: {
+        main: {
+          default: true,
+          subagents: { allowAgents: ["worker"] },
+        },
+        worker: {},
+      },
+    };
+    const seed = await sendConfigApply(
+      configRawPayload({ ...original.config, agents }, original.hash),
+    );
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ agents: { entries: { main: { subagents: null } } } }),
+        baseHash: before.hash,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "config.patch would remove entries from array path(s): agents.entries.main.subagents.allowAgents",
+      );
+      const after = await getCurrentConfigObject();
+      expect(after.hash).toBe(before.hash);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
+  it("allows nested destructive array patches inside id-keyed arrays with replacePaths", async () => {
+    const original = await getCurrentConfigObject();
+    const agents = {
+      ...(original.config.agents as Record<string, unknown> | undefined),
+      entries: {
+        main: { default: true, skills: ["alpha", "beta"] },
+        worker: { skills: ["gamma"] },
+      },
+    };
+    const seed = await sendConfigApply(
+      configRawPayload({ ...original.config, agents }, original.hash),
+    );
+    expect(seed.ok).toBe(true);
+
+    try {
+      const before = await getCurrentConfigObject();
+      const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
+        baseHash: before.hash,
+        replacePaths: ["agents.entries.main.skills"],
+      });
+
+      expect(res.ok).toBe(true);
+      const after = await getCurrentConfigObject();
+      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual({
+        main: { default: true, skills: ["alpha"] },
+        worker: { skills: ["gamma"] },
+      });
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
   it("rejects config.patch when merged SecretRefs cannot resolve", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
-    delete process.env[missingEnvVar];
+    deleteTestEnvValue(missingEnvVar);
     const beforeHash = await getConfigHash();
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
@@ -468,7 +1283,7 @@ describe("gateway config methods", () => {
 describe("gateway config.apply", () => {
   it("rejects config.apply when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
-    delete process.env[missingEnvVar];
+    deleteTestEnvValue(missingEnvVar);
     const current = await getCurrentConfigObject();
     const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
 
@@ -611,11 +1426,10 @@ describe("gateway server sessions", () => {
     expect(patched.ok).toBe(true);
     expect(patched.payload?.key).toBe("agent:ops:work");
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      { thinkingLevel?: string }
-    >;
-    expect(stored["agent:ops:work"]?.thinkingLevel).toBe("medium");
-    expect(stored.main).toBeUndefined();
+    expect(
+      loadSessionEntry({ agentId: "ops", sessionKey: "agent:ops:work", storePath })?.thinkingLevel,
+    ).toBe("medium");
+    expect(loadSessionEntry({ agentId: "ops", sessionKey: "main", storePath })).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,12 +1,14 @@
 /** Validation and normalization for ACP session runtime options and config controls. */
 import { isAbsolute } from "node:path";
-import { normalizeText } from "@openclaw/acp-core/normalize-text";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as normalizeText,
+} from "@openclaw/normalization-core/string-coerce";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 
-export { normalizeText } from "@openclaw/acp-core/normalize-text";
+export { normalizeOptionalString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
 const MAX_MODEL_LENGTH = 200;
@@ -277,15 +279,13 @@ export function mergeRuntimeOptions(params: {
   patch?: Partial<AcpSessionRuntimeOptions>;
 }): AcpSessionRuntimeOptions {
   const current = normalizeRuntimeOptions(params.current);
-  const patch = normalizeRuntimeOptions(validateRuntimeOptionPatch(params.patch));
-  const mergedExtras = {
-    ...current.backendExtras,
-    ...patch.backendExtras,
-  };
+  const patch = validateRuntimeOptionPatch(params.patch);
   return normalizeRuntimeOptions({
     ...current,
     ...patch,
-    ...(Object.keys(mergedExtras).length > 0 ? { backendExtras: mergedExtras } : {}),
+    ...(patch.backendExtras
+      ? { backendExtras: { ...current.backendExtras, ...patch.backendExtras } }
+      : {}),
   });
 }
 
@@ -331,7 +331,7 @@ export function buildRuntimeConfigOptionPairs(
   if (normalized.model) {
     pairs.set(resolveRuntimeConfigOptionKey("model", advertisedConfigOptionKeys), normalized.model);
   }
-  if (normalized.thinking) {
+  if (normalized.thinking && shouldEmitThinkingConfigOption(advertisedConfigOptionKeys)) {
     pairs.set(
       resolveRuntimeConfigOptionKey("thinking", advertisedConfigOptionKeys),
       normalized.thinking,
@@ -359,6 +359,16 @@ export function buildRuntimeConfigOptionPairs(
     }
   }
   return [...pairs.entries()];
+}
+
+function shouldEmitThinkingConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
+  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
+  return (
+    advertisedKeys.size === 0 ||
+    RUNTIME_CONFIG_OPTION_ALIASES.thinking.some((alias) =>
+      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
+    )
+  );
 }
 
 function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {

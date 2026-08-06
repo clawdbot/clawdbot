@@ -1,3 +1,5 @@
+import Observation
+import OpenClawChatUI
 import SwiftUI
 
 enum AppAppearancePreference: String, CaseIterable, Identifiable {
@@ -29,6 +31,14 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
+    var systemImage: String {
+        switch self {
+        case .system: "circle.lefthalf.filled"
+        case .light: "sun.max"
+        case .dark: "moon.stars"
+        }
+    }
+
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
@@ -36,56 +46,101 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         case .dark: .dark
         }
     }
+}
 
-    var userInterfaceStyle: UIUserInterfaceStyle {
-        switch self {
-        case .system: .unspecified
-        case .light: .light
-        case .dark: .dark
+@MainActor
+@Observable
+final class AppAppearanceModel {
+    private(set) var preference: AppAppearancePreference
+
+    init(userDefaults: UserDefaults = .standard) {
+        let storedPreference = userDefaults.string(forKey: AppAppearancePreference.storageKey)
+            .flatMap(AppAppearancePreference.init(rawValue:))
+        self.preference = AppAppearancePreference.launchArgumentPreference ?? storedPreference ?? .system
+        if AppAppearancePreference.launchArgumentPreference != nil {
+            userDefaults.set(self.preference.rawValue, forKey: AppAppearancePreference.storageKey)
+        }
+    }
+
+    func select(_ preference: AppAppearancePreference, userDefaults: UserDefaults = .standard) {
+        guard self.preference != preference else { return }
+        userDefaults.set(preference.rawValue, forKey: AppAppearancePreference.storageKey)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            self.preference = preference
         }
     }
 }
 
 enum OpenClawBrand {
-    static let lightCanvasTop = Color(red: 246 / 255.0, green: 247 / 255.0, blue: 249 / 255.0)
-    static let lightCanvasMiddle = Color(red: 250 / 255.0, green: 251 / 255.0, blue: 252 / 255.0)
-    static let lightCanvasBottom = Color.white
-    static let darkCanvasTop = Color(red: 3 / 255.0, green: 7 / 255.0, blue: 7 / 255.0)
-    static let darkCanvasMiddle = Color(red: 13 / 255.0, green: 17 / 255.0, blue: 17 / 255.0)
-    static let darkCanvasBottom = Color(red: 17 / 255.0, green: 18 / 255.0, blue: 20 / 255.0)
+    // Carapace semantic palette: these tokens are shared by voice surfaces that
+    // need the web system's quieter ink/paper hierarchy in native SwiftUI.
+    static let carapaceElevated = Color(red: 32 / 255.0, green: 32 / 255.0, blue: 36 / 255.0)
+    static let carapaceCoral = Color(red: 245 / 255.0, green: 101 / 255.0, blue: 74 / 255.0)
+    static let carapaceSea = Color(red: 79 / 255.0, green: 200 / 255.0, blue: 174 / 255.0)
+    // Accent fills stay dark enough for white content; foreground accents adapt
+    // separately so small labels retain 4.5:1 contrast on dark surfaces and tinted pills.
+    static let uiAccent = adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56))
+    static let uiAccentForeground = adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102))
+    static let uiAccentHot = adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86))
+    static let uiAccentHotForeground = adaptiveUIColor(light: (166, 55, 50), dark: (255, 123, 115))
+    static let uiTeal = adaptiveUIColor(light: (0, 196, 176), dark: (0, 196, 176))
+    static let uiVoid = adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17))
+    static let uiObsidian = adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28))
+    static let uiTextSecondary = adaptiveUIColor(light: (90, 94, 110), dark: (168, 170, 191))
+    static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (48, 209, 88))
+    static let uiWarn = adaptiveUIColor(light: (154, 87, 0), dark: (255, 214, 10))
+    static let uiDanger = adaptiveUIColor(light: (185, 28, 28), dark: (252, 165, 165))
+    static let uiInfo = adaptiveUIColor(light: (0, 91, 196), dark: (100, 168, 255))
+    // Carapace status foreground tokens. Keep these separate from the broader
+    // app feedback palette so compact state indicators match the web system.
+    static let uiStatusSuccess = adaptiveUIColor(light: (22, 163, 74), dark: (34, 197, 94))
+    static let uiStatusWarning = adaptiveUIColor(light: (217, 119, 6), dark: (251, 191, 36))
+    static let uiStatusError = adaptiveUIColor(light: (220, 38, 38), dark: (239, 68, 68))
 
-    static let accent = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 198 / 255.0, green: 62 / 255.0, blue: 56 / 255.0, alpha: 1)
-            : UIColor(red: 183 / 255.0, green: 56 / 255.0, blue: 51 / 255.0, alpha: 1)
-    })
-    static let accentHot = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 232 / 255.0, green: 92 / 255.0, blue: 86 / 255.0, alpha: 1)
-            : UIColor(red: 204 / 255.0, green: 75 / 255.0, blue: 69 / 255.0, alpha: 1)
-    })
-    static let danger = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 252 / 255.0, green: 165 / 255.0, blue: 165 / 255.0, alpha: 1)
-            : UIColor(red: 185 / 255.0, green: 28 / 255.0, blue: 28 / 255.0, alpha: 1)
-    })
-    static let ok = Color(red: 34 / 255.0, green: 197 / 255.0, blue: 94 / 255.0)
-    static let warn = Color(red: 245 / 255.0, green: 158 / 255.0, blue: 11 / 255.0)
-    static let graphite = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 20 / 255.0, green: 22 / 255.0, blue: 24 / 255.0, alpha: 1)
-            : UIColor(red: 246 / 255.0, green: 247 / 255.0, blue: 249 / 255.0, alpha: 1)
-    })
-    static let graphiteElevated = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 34 / 255.0, green: 36 / 255.0, blue: 39 / 255.0, alpha: 1)
-            : UIColor.white
-    })
-    static let graphiteSoft = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 148 / 255.0, green: 163 / 255.0, blue: 184 / 255.0, alpha: 1)
-            : UIColor(red: 102 / 255.0, green: 112 / 255.0, blue: 133 / 255.0, alpha: 1)
-    })
+    static let accent = Color(uiColor: Self.uiAccent)
+    static let accentForeground = Color(uiColor: Self.uiAccentForeground)
+    static let accentHot = Color(uiColor: Self.uiAccentHot)
+    static let accentHotForeground = Color(uiColor: Self.uiAccentHotForeground)
+    static let teal = Color(uiColor: Self.uiTeal)
+    static let void = Color(uiColor: Self.uiVoid)
+    static let obsidian = Color(uiColor: Self.uiObsidian)
+    static let textSecondary = Color(uiColor: Self.uiTextSecondary)
+    static let danger = Color(uiColor: Self.uiDanger)
+    static let ok = Color(uiColor: Self.uiOK)
+    static let warn = Color(uiColor: Self.uiWarn)
+    static let info = Color(uiColor: Self.uiInfo)
+    static let statusSuccess = Color(uiColor: Self.uiStatusSuccess)
+    static let statusWarning = Color(uiColor: Self.uiStatusWarning)
+    static let statusError = Color(uiColor: Self.uiStatusError)
+    static let graphite = void
+    static let graphiteElevated = obsidian
+    static let activationCanvas = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15)))
+    static let activationSurface = Color(uiColor: adaptiveUIColor(light: (255, 253, 252), dark: (33, 29, 30)))
+    static let activationSecondaryActionTop = Color(uiColor: adaptiveUIColor(
+        light: (255, 255, 255),
+        dark: (36, 32, 33)))
+    static let activationSecondaryActionBottom = Color(uiColor: adaptiveUIColor(
+        light: (248, 248, 250),
+        dark: (30, 27, 28)))
+    static let activationInsetSurface = Color(uiColor: adaptiveUIColor(light: (246, 241, 238), dark: (44, 37, 38)))
+    static let activationNeutralSurface = Color(uiColor: adaptiveUIColor(light: (242, 242, 247), dark: (34, 34, 37)))
+    static let activationNeutralInsetSurface = Color(uiColor: adaptiveUIColor(
+        light: (247, 247, 249),
+        dark: (42, 42, 45)))
+    static let activationNeutralStroke = Color(uiColor: adaptiveUIColor(
+        light: (0, 0, 0),
+        dark: (255, 255, 255)).withAlphaComponent(0.08))
+    static let activationNeutralDivider = Color(uiColor: adaptiveUIColor(
+        light: (0, 0, 0),
+        dark: (255, 255, 255)).withAlphaComponent(0.09))
+    static let activationPrimaryAction = Color(uiColor: adaptiveUIColor(light: (209, 54, 51), dark: (238, 82, 76)))
+    static let activationPrimaryActionText = Color.white
+    static let activationHairline = Color(uiColor: adaptiveUIColor(
+        light: (136, 44, 40),
+        dark: (255, 210, 205)).withAlphaComponent(0.13))
+    static let activationGlow = Color(uiColor: adaptiveUIColor(light: (228, 78, 67), dark: (255, 111, 96)))
 
     static var sheetBackground: LinearGradient {
         LinearGradient(
@@ -98,38 +153,105 @@ enum OpenClawBrand {
             endPoint: .bottomTrailing)
     }
 
-    static var toolbarChrome: LinearGradient {
+    static var activationCanvasGradient: LinearGradient {
         LinearGradient(
             colors: [
-                graphiteElevated.opacity(0.92),
-                graphite.opacity(0.78),
+                activationCanvas,
+                activationCanvas,
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing)
     }
 
-    static func glassFill(brighten: Bool) -> Color {
-        Color.black.opacity(brighten ? 0.10 : 0.22)
+    static var activationInsetGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                activationInsetSurface.opacity(0.94),
+                activationInsetSurface,
+                activationSurface.opacity(0.36),
+            ],
+            startPoint: .top,
+            endPoint: .bottom)
     }
 
-    static func glassStroke(brighten: Bool, increasedContrast: Bool, active: Bool = false) -> Color {
-        if active {
-            return self.accent.opacity(increasedContrast ? 0.70 : 0.46)
+    static var activationNeutralGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                activationNeutralInsetSurface,
+                activationNeutralSurface,
+            ],
+            startPoint: .top,
+            endPoint: .bottom)
+    }
+
+    static var activationPrimaryGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 1.0, green: 0.42, blue: 0.34),
+                activationGlow,
+                activationPrimaryAction,
+                Color(red: 0.66, green: 0.12, blue: 0.12),
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing)
+    }
+
+    static var activationDisabledGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                activationNeutralInsetSurface,
+                activationNeutralSurface.opacity(0.92),
+            ],
+            startPoint: .top,
+            endPoint: .bottom)
+    }
+
+    private static func adaptiveUIColor(
+        light: (red: CGFloat, green: CGFloat, blue: CGFloat),
+        dark: (red: CGFloat, green: CGFloat, blue: CGFloat)) -> UIColor
+    {
+        UIColor { traits in
+            let components = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: components.red / 255,
+                green: components.green / 255,
+                blue: components.blue / 255,
+                alpha: 1)
         }
-        return Color.white.opacity(increasedContrast ? 0.50 : (brighten ? 0.24 : 0.16))
     }
+}
 
-    static func formSectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(self.accent)
-            .textCase(.uppercase)
-    }
+extension TalkWaveformPalette {
+    /// iOS app branding for shared voice contours. This lives with the palette
+    /// owner so removing a presentation surface cannot remove the app theme.
+    static let openClawBrand = TalkWaveformPalette(
+        active: [
+            OpenClawBrand.carapaceCoral,
+            OpenClawBrand.carapaceSea,
+            OpenClawBrand.accent,
+        ],
+        inactive: [
+            Color(uiColor: .systemGray2),
+            Color(uiColor: .systemGray3),
+            Color(uiColor: .systemGray4),
+        ])
+}
 
-    static func canvasColors(for colorScheme: ColorScheme) -> [Color] {
-        colorScheme == .dark
-            ? [self.darkCanvasTop, self.darkCanvasMiddle, self.darkCanvasBottom]
-            : [self.lightCanvasTop, self.lightCanvasMiddle, self.lightCanvasBottom]
+struct OpenClawActivationGlyph: View {
+    let size: CGFloat
+    var mood: OpenClawMascotMood = .idle
+    /// Opt-in tap Easter eggs; leave off when the glyph sits inside a control.
+    var interactive = false
+
+    var body: some View {
+        OpenClawMascotView(floats: false, mood: self.mood, interactive: self.interactive)
+            .frame(width: self.size, height: self.size)
+            .shadow(
+                color: OpenClawBrand.activationGlow.opacity(0.18),
+                radius: self.size * 0.12,
+                x: 0,
+                y: self.size * 0.05)
+            .accessibilityHidden(true)
     }
 }
 
@@ -141,5 +263,221 @@ extension View {
                 OpenClawBrand.sheetBackground
                     .ignoresSafeArea()
             }
+    }
+
+    func openClawCraftSurface(cornerRadius: CGFloat = 24, shadow: Bool = true) -> some View {
+        self.modifier(OpenClawCraftSurfaceModifier(cornerRadius: cornerRadius, shadow: shadow))
+    }
+}
+
+private struct OpenClawCraftSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let shadow: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                    .fill(OpenClawBrand.activationSurface)
+                    .shadow(
+                        color: self.shadow ? Color.black.opacity(0.07) : .clear,
+                        radius: 16,
+                        x: 0,
+                        y: 8)
+            }
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.36), lineWidth: 0.5)
+                    .blendMode(.plusLighter)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                    .stroke(OpenClawBrand.activationHairline, lineWidth: 0.5)
+            }
+    }
+}
+
+struct OpenClawPrimaryActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    var height: CGFloat = 54
+
+    private var resolvedCornerRadius: CGFloat {
+        self.height / 2
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(OpenClawType.subheadSemiBold)
+            .foregroundStyle(self.isEnabled ? OpenClawBrand.activationPrimaryActionText : Color.secondary)
+            .tint(self.isEnabled ? OpenClawBrand.activationPrimaryActionText : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .frame(height: self.height)
+            .background {
+                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
+                    .fill(self.isEnabled ? Self.primaryFill : OpenClawBrand.activationDisabledGradient)
+                    .shadow(
+                        color: self.isEnabled ? OpenClawBrand.activationPrimaryAction.opacity(0.08) : .clear,
+                        radius: 1,
+                        x: 0,
+                        y: 1)
+                    .shadow(
+                        color: self.isEnabled ? OpenClawBrand.activationPrimaryAction.opacity(0.08) : .clear,
+                        radius: 2,
+                        x: 0,
+                        y: 2)
+            }
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(self.isEnabled ? 0.14 : 0.06),
+                                Color.white.opacity(0),
+                            ],
+                            startPoint: .top,
+                            endPoint: .center))
+                    .frame(height: self.height * 0.48)
+                    .allowsHitTesting(false)
+            }
+            .overlay(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0),
+                                Color.white.opacity(self.isEnabled ? 0.08 : 0.03),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom))
+                    .frame(height: self.height * 0.34)
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
+                    .stroke(
+                        self.isEnabled
+                            ? OpenClawBrand.activationPrimaryAction.opacity(0.72)
+                            : OpenClawBrand.activationNeutralStroke,
+                        lineWidth: 0.75)
+            }
+            .scaleEffect(configuration.isPressed && self.isEnabled ? 0.98 : 1)
+            .animation(.smooth(duration: 0.14), value: configuration.isPressed)
+    }
+
+    private static var primaryFill: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.93, green: 0.27, blue: 0.25),
+                Color(red: 0.91, green: 0.25, blue: 0.24),
+            ],
+            startPoint: .top,
+            endPoint: .bottom)
+    }
+}
+
+struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    var height: CGFloat = 50
+    var shadowOpacity: Double = 0.035
+
+    private var resolvedCornerRadius: CGFloat {
+        self.height / 2
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(OpenClawType.subheadSemiBold)
+            .foregroundStyle(self.isEnabled ? OpenClawBrand.activationPrimaryAction : .secondary)
+            .frame(maxWidth: .infinity)
+            .frame(height: self.height)
+            .background {
+                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
+                    .fill(Self.secondaryFill)
+                    .shadow(
+                        color: self.isEnabled ? Color.black.opacity(self.shadowOpacity) : .clear,
+                        radius: 1,
+                        x: 0,
+                        y: 1)
+                    .shadow(
+                        color: self.isEnabled ? Color.black.opacity(self.shadowOpacity) : .clear,
+                        radius: 2,
+                        x: 0,
+                        y: 2)
+            }
+            .overlay(alignment: .top) {
+                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.42),
+                                Color.white.opacity(0),
+                            ],
+                            startPoint: .top,
+                            endPoint: .center))
+                    .frame(height: self.height * 0.48)
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: self.resolvedCornerRadius, style: .continuous)
+                    .stroke(OpenClawBrand.activationHairline, lineWidth: 0.75)
+            }
+            .scaleEffect(configuration.isPressed && self.isEnabled ? 0.98 : 1)
+            .animation(.smooth(duration: 0.14), value: configuration.isPressed)
+    }
+
+    private static var secondaryFill: LinearGradient {
+        LinearGradient(
+            colors: [
+                OpenClawBrand.activationSecondaryActionTop,
+                OpenClawBrand.activationSecondaryActionBottom,
+            ],
+            startPoint: .top,
+            endPoint: .bottom)
+    }
+}
+
+struct OpenClawCloseButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    var minWidth: CGFloat = 36
+    var height: CGFloat = 36
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(OpenClawType.subheadSemiBold)
+            .foregroundStyle(
+                self.isEnabled
+                    ? OpenClawBrand.activationPrimaryAction
+                    : Color.secondary)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minWidth: self.minWidth)
+            .frame(height: self.height)
+            .padding(.horizontal, 7)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(OpenClawBrand.activationNeutralGradient)
+                    .shadow(
+                        color: self.isEnabled ? Color.black.opacity(0.045) : .clear,
+                        radius: 1,
+                        x: 0,
+                        y: 1)
+                    .shadow(
+                        color: self.isEnabled ? Color.black.opacity(0.03) : .clear,
+                        radius: 4,
+                        x: 0,
+                        y: 2)
+            }
+            .overlay(alignment: .top) {
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.55), lineWidth: 0.5)
+                    .blendMode(.plusLighter)
+            }
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(OpenClawBrand.activationNeutralStroke, lineWidth: 0.6)
+            }
+            .contentShape(Capsule(style: .continuous))
+            .opacity(configuration.isPressed && self.isEnabled ? 0.66 : 1)
+            .scaleEffect(configuration.isPressed && self.isEnabled ? 0.98 : 1)
+            .animation(.smooth(duration: 0.14), value: configuration.isPressed)
     }
 }

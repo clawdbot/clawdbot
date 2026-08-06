@@ -6,10 +6,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 type MatrixCryptoNodePackage = typeof import("@matrix-org/matrix-sdk-crypto-nodejs");
 
-export type MatrixCryptoNodeBindings = Pick<
-  MatrixCryptoNodePackage,
-  "Attachment" | "EncryptedAttachment"
->;
+type MatrixCryptoNodeBindings = Pick<MatrixCryptoNodePackage, "Attachment" | "EncryptedAttachment">;
 
 export function loadMatrixCryptoNodeBindings(): MatrixCryptoNodeBindings {
   const { Attachment, EncryptedAttachment } =

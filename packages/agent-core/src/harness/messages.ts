@@ -1,5 +1,5 @@
 // Agent Core module implements messages behavior.
-import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
+import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -7,7 +7,6 @@ import type {
   CompactionSummaryMessage,
   CustomMessage,
 } from "../types.js";
-import { parseSessionTimestampMs, requireSessionTimestampMs } from "./session/timestamps.js";
 
 export type {
   BashExecutionMessage,
@@ -28,6 +27,22 @@ export type HarnessMessage =
 // boundary even though these message roles are part of AgentMessage.
 export function asAgentMessage(message: HarnessMessage): AgentMessage {
   return message as AgentMessage;
+}
+
+function parseSessionTimestampMs(value: unknown): number | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function requireSessionTimestampMs(value: string, label: string): number {
+  const parsed = parseSessionTimestampMs(value);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a valid timestamp`);
+  }
+  return parsed;
 }
 
 function normalizeCompactionSummaryTimestamp(timestamp: number | string): number {
@@ -139,10 +154,16 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             typeof message.content === "string"
               ? [{ type: "text" as const, text: message.content }]
               : message.content;
+          // Transient current-turn runtime-context carriers must not anchor a
+          // provider prompt-cache breakpoint (their bytes change every turn).
+          const runtimeContextCarrier =
+            (message.details as { runtimeContextCarrier?: unknown } | undefined)
+              ?.runtimeContextCarrier === true;
           return {
             role: "user",
             content,
             timestamp: message.timestamp,
+            ...(runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
           };
         }
         case "branchSummary":

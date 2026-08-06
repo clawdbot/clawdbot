@@ -1,11 +1,15 @@
 /**
- * Builds model visibility policies with configured fallbacks included.
+ * Builds model visibility policies while retaining configured automatic fallbacks.
  */
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
+import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
   createModelVisibilityPolicyWithFallbacks,
   type ModelVisibilityPolicy,
@@ -16,14 +20,25 @@ export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
   allowPluginNormalization: true,
 } as const;
 
-function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
-  if (params.agentId) {
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-    if (override !== undefined) {
-      return override;
-    }
-  }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+function resolveAdditionalConfiguredModelRefs(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): string[] {
+  const defaults = params.cfg.agents?.defaults;
+  const agent = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
+  return [
+    resolveAgentModelPrimaryValue(defaults?.model),
+    ...resolveAgentModelFallbackValues(defaults?.model),
+    resolveAgentModelPrimaryValue(agent?.model),
+    ...resolveAgentModelFallbackValues(agent?.model),
+    ...Object.keys(defaults?.models ?? {}),
+    ...Object.keys(agent?.models ?? {}),
+    agent?.utilityModel ?? defaults?.utilityModel,
+    resolveAgentModelPrimaryValue(defaults?.imageModel),
+    ...resolveAgentModelFallbackValues(defaults?.imageModel),
+    resolveAgentModelPrimaryValue(defaults?.pdfModel),
+    ...resolveAgentModelFallbackValues(defaults?.pdfModel),
+  ].filter((ref): ref is string => typeof ref === "string");
 }
 
 export function createModelVisibilityPolicy(
@@ -42,10 +57,12 @@ export function createModelVisibilityPolicy(
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
-    fallbackModels: resolveAllowedFallbacks({
+    agentId: params.agentId,
+    fallbackModels: resolveConfiguredModelFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    additionalConfiguredModelRefs: resolveAdditionalConfiguredModelRefs(params),
     // Model visibility is used by lightweight status/list paths. Keep plugin
     // manifest normalization opt-in so those paths do not load plugin runtime
     // metadata unless a caller explicitly needs it.

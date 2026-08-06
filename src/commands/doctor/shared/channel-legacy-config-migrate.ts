@@ -27,6 +27,59 @@ function collectRelevantDoctorChannelIds(raw: unknown): string[] {
     .toSorted();
 }
 
+function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
+  const channels = isRecord(raw.channels) ? raw.channels : null;
+  if (!channels) {
+    return;
+  }
+  const migrateEntry = (
+    entry: Record<string, unknown>,
+    path: string,
+    preserveEmptyPluginBlock = false,
+  ) => {
+    const heartbeat = isRecord(entry.heartbeat) ? entry.heartbeat : null;
+    const keys = heartbeat ? Object.keys(heartbeat) : [];
+    if (
+      !heartbeat ||
+      (preserveEmptyPluginBlock && keys.length === 0) ||
+      keys.some((key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator")
+    ) {
+      return;
+    }
+    if (entry.heartbeatVisibility === undefined) {
+      entry.heartbeatVisibility = entry.heartbeat;
+      changes.push(`Moved ${path}.heartbeat → ${path}.heartbeatVisibility.`);
+    } else {
+      changes.push(`Removed ${path}.heartbeat (${path}.heartbeatVisibility already set).`);
+    }
+    delete entry.heartbeat;
+  };
+  const defaults = isRecord(channels.defaults) ? channels.defaults : null;
+  if (defaults) {
+    migrateEntry(defaults, "channels.defaults");
+  }
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (channelId === "defaults" || !isRecord(value)) {
+      continue;
+    }
+    const preserveEmptyPluginBlock = channelId === "feishu";
+    migrateEntry(value, `channels.${channelId}`, preserveEmptyPluginBlock);
+    const accounts = isRecord(value.accounts) ? value.accounts : null;
+    if (!accounts) {
+      continue;
+    }
+    for (const [accountId, account] of Object.entries(accounts)) {
+      if (isRecord(account)) {
+        migrateEntry(
+          account,
+          `channels.${channelId}.accounts.${accountId}`,
+          preserveEmptyPluginBlock,
+        );
+      }
+    }
+  }
+}
+
 function resolveBundledChannelCompatibilityNormalizer(
   channelId: string,
 ): ChannelDoctorCompatibilityNormalizer | undefined {
@@ -60,6 +113,7 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
 } {
   let nextCfg = cfg as OpenClawConfig;
   const changes: string[] = [];
+  migrateHeartbeatVisibility(cfg, changes);
   const unresolvedChannelIds: string[] = [];
 
   for (const channelId of collectRelevantDoctorChannelIds(cfg)) {

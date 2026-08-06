@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Runs an E2E command under a pseudo-terminal.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import process from "node:process";
-import { spawn } from "@lydell/node-pty";
+import { spawn as spawnPty } from "@lydell/node-pty";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const [logPath, command, ...args] = process.argv.slice(2);
@@ -17,6 +17,9 @@ if (!logPath || !command) {
 let exiting = false;
 let forwardedSignal = null;
 let forceKillTimer = null;
+let terminationDrainTimer = null;
+let terminationPids = [];
+let pendingExitCode = null;
 let logFailed = false;
 const outputLimitMarker = `\n[run-with-pty output truncated after ${OUTPUT_MAX_BYTES} bytes]\n`;
 const outputState = {
@@ -25,7 +28,7 @@ const outputState = {
 };
 
 const log = fs.createWriteStream(logPath, { flags: "w" });
-const pty = spawn(command, args, {
+const pty = spawnPty(command, args, {
   name: process.env.TERM || "xterm-256color",
   cols: readPositiveIntEnv("COLUMNS", 120),
   rows: readPositiveIntEnv("LINES", 40),
@@ -43,11 +46,7 @@ log.on("error", (error) => {
     process.exit(1);
   }
   if (!exiting) {
-    pty.kill("SIGTERM");
-    forceKillTimer ??= setTimeout(() => {
-      pty.kill("SIGKILL");
-    }, FORCE_KILL_MS);
-    forceKillTimer.unref?.();
+    terminatePtyTree("SIGTERM");
   }
 });
 
@@ -86,18 +85,23 @@ pty.onData((data) => {
 
 pty.onExit(({ exitCode, signal }) => {
   exiting = true;
-  clearTimeout(forceKillTimer);
+  if (terminationPids.length === 0) {
+    clearTerminationTimers();
+  }
   if (logFailed) {
-    process.exit(1);
+    exitWhenTerminationDrains(1);
+    return;
   }
   log.end(() => {
     if (forwardedSignal) {
-      process.exit(signalExitCode(forwardedSignal));
+      exitWhenTerminationDrains(signalExitCode(forwardedSignal));
+      return;
     }
     if (typeof exitCode === "number") {
-      process.exit(exitCode);
+      exitWhenTerminationDrains(exitCode);
+      return;
     }
-    process.exit(signal ? 128 + signal : 1);
+    exitWhenTerminationDrains(signal ? 128 + signal : 1);
   });
 });
 
@@ -109,13 +113,106 @@ for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     if (!exiting) {
       forwardedSignal ??= signal;
-      pty.kill(signal);
-      forceKillTimer ??= setTimeout(() => {
-        pty.kill("SIGKILL");
-      }, FORCE_KILL_MS);
-      forceKillTimer.unref?.();
+      terminatePtyTree(signal);
     }
   });
+}
+
+function terminatePtyTree(signal) {
+  // node-pty kill() targets only pty.pid on Unix; wrapper-owned shutdowns
+  // keep the captured child tree alive until ignored descendants drain.
+  if (terminationPids.length === 0) {
+    terminationPids = collectPtyProcessTreePids();
+  }
+  signalPtyProcessTree(signal);
+  forceKillTimer ??= setTimeout(() => {
+    signalPtyProcessTree("SIGKILL");
+  }, FORCE_KILL_MS);
+  forceKillTimer.unref?.();
+}
+
+function exitWhenTerminationDrains(exitCode) {
+  pendingExitCode = exitCode;
+  if (processTreeIsAlive(terminationPids)) {
+    terminationDrainTimer ??= setInterval(finishIfTerminationDrained, 25);
+    return;
+  }
+  finishIfTerminationDrained();
+}
+
+function finishIfTerminationDrained() {
+  if (processTreeIsAlive(terminationPids)) {
+    return;
+  }
+  clearTerminationTimers();
+  process.exit(pendingExitCode ?? 1);
+}
+
+function clearTerminationTimers() {
+  if (forceKillTimer) {
+    clearTimeout(forceKillTimer);
+    forceKillTimer = null;
+  }
+  if (terminationDrainTimer) {
+    clearInterval(terminationDrainTimer);
+    terminationDrainTimer = null;
+  }
+}
+
+function collectPtyProcessTreePids() {
+  if (process.platform === "win32" || typeof pty.pid !== "number") {
+    return typeof pty.pid === "number" ? [pty.pid] : [];
+  }
+  const ps = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
+  if (ps.status !== 0) {
+    return [pty.pid];
+  }
+  const childrenByParent = new Map();
+  for (const line of ps.stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const siblings = childrenByParent.get(ppid) ?? [];
+    siblings.push(pid);
+    childrenByParent.set(ppid, siblings);
+  }
+  const pids = [pty.pid];
+  for (const parentPid of pids) {
+    for (const pid of childrenByParent.get(parentPid) ?? []) {
+      pids.push(pid);
+    }
+  }
+  return [...new Set(pids)];
+}
+
+function processTreeIsAlive(pids) {
+  return pids.some((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === "EPERM";
+    }
+  });
+}
+
+function signalPtyProcessTree(signal) {
+  if (process.platform === "win32" || terminationPids.length === 0) {
+    pty.kill(signal);
+    return;
+  }
+  for (const pid of terminationPids.toReversed()) {
+    try {
+      process.kill(pid, signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
 }
 
 function signalExitCode(signal) {

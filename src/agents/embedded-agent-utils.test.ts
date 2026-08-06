@@ -8,14 +8,64 @@ import {
   extractAssistantText,
   extractAssistantThinking,
   extractAssistantVisibleText,
+  createThinkingTagStreamState,
+  extractThinkingFromTaggedStream,
+  extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 
+const REFERENCE_THINKING_TAG_NAME_PATTERN = String.raw`(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)`;
+const REFERENCE_THINKING_TAG_OPEN_RE = new RegExp(
+  String.raw`<\s*${REFERENCE_THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+const REFERENCE_THINKING_TAG_CLOSE_RE = new RegExp(
+  String.raw`<\s*\/\s*${REFERENCE_THINKING_TAG_NAME_PATTERN}\s*>`,
+  "gi",
+);
+
+function extractThinkingFromTaggedStreamReference(text: string): string {
+  if (!text) {
+    return "";
+  }
+  const closed = extractThinkingFromTaggedText(text);
+  if (closed) {
+    return closed;
+  }
+  const openMatches = [...text.matchAll(REFERENCE_THINKING_TAG_OPEN_RE)];
+  const lastOpen = openMatches.at(-1);
+  if (!lastOpen) {
+    return "";
+  }
+  const lastClose = [...text.matchAll(REFERENCE_THINKING_TAG_CLOSE_RE)].at(-1);
+  if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
+    return closed;
+  }
+  return text.slice((lastOpen.index ?? 0) + lastOpen[0].length).trim();
+}
+
+function randomChunks(text: string, seed: number): string[] {
+  const chunks: string[] = [];
+  let offset = 0;
+  let value = seed;
+  while (offset < text.length) {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    const length = Math.min(1 + (value % 7), text.length - offset);
+    chunks.push(text.slice(offset, offset + length));
+    offset += length;
+  }
+  return chunks;
+}
+
 function makeAssistantMessage(
-  message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
+  message: Omit<
+    AssistantMessage,
+    "api" | "provider" | "model" | "usage" | "stopReason" | "content"
+  > &
     Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">> & {
+      content: unknown;
       phase?: "commentary" | "final_answer";
     },
 ): AssistantMessage {
@@ -33,8 +83,34 @@ function makeAssistantMessage(
     },
     stopReason: "stop",
     ...message,
-  };
+  } as unknown as AssistantMessage;
 }
+
+describe("extractThinkingFromTaggedStream", () => {
+  it("matches full-buffer extraction at every randomized chunk boundary", () => {
+    const cases = [
+      "plain text with <not-a-thinking-tag> and no reasoning",
+      "Before <think>first line\nsecond line</think> after",
+      "prefix<thought>one</thought>middle<mm:thinking>two</mm:thinking>suffix",
+      "surrounding text <antml:think>unfinished reasoning tail",
+      "< \nAnTThinking \t>spaced tag content< / antthinking > visible",
+      "<think>closed</think><think>unclosed trailing reasoning",
+    ];
+
+    for (const text of cases) {
+      for (let seed = 1; seed <= 24; seed += 1) {
+        const state = createThinkingTagStreamState();
+        let prefix = "";
+        for (const chunk of randomChunks(text, seed)) {
+          prefix += chunk;
+          expect(extractThinkingFromTaggedStream(prefix, state), `${text} (seed ${seed})`).toBe(
+            extractThinkingFromTaggedStreamReference(prefix),
+          );
+        }
+      }
+    }
+  });
+});
 
 describe("extractAssistantText", () => {
   it("strips tool-only Minimax invocation XML from text", () => {
@@ -669,7 +745,7 @@ describe("formatReasoningMessage", () => {
 });
 
 describe("extractAssistantThinking", () => {
-  it("surfaces signed native reasoning even when the provider returns an empty summary", () => {
+  it("drops signature-only native reasoning blocks so no diagnostic bubble is surfaced", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
@@ -683,9 +759,8 @@ describe("extractAssistantThinking", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantThinking(msg)).toBe(
-      "Native reasoning was produced; no summary text was returned.",
-    );
+    // Signature-only block (no summary text) yields "" so downstream .filter(Boolean) drops it.
+    expect(extractAssistantThinking(msg)).toBe("");
   });
 });
 
@@ -790,6 +865,23 @@ describe("extractAssistantVisibleText", () => {
     expect(extractAssistantVisibleText(msg)).toBe("");
   });
 
+  it("does not fall back to unphased legacy text when an empty output_text final_answer block exists", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Legacy answer" },
+        {
+          type: "output_text",
+          text: "   ",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("");
+  });
+
   it("falls back to legacy unphased text when phased text is absent", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -798,6 +890,32 @@ describe("extractAssistantVisibleText", () => {
     });
 
     expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string content", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: "Visible prefix <think>private reasoning tail",
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Visible prefix");
+  });
+
+  it("preserves literal reasoning-looking tags in unphased visible text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Before <think>literal tag text after",
+          textSignature: JSON.stringify({ v: 1, id: "item_unphased" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Before <think>literal tag text after");
   });
 
   it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {

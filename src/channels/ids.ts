@@ -50,20 +50,13 @@ export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
 /**
  * Maps configured built-in channel aliases to canonical chat channel ids.
  */
-export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
+const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
   Object.fromEntries(
     BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
       entry.aliases.map((alias) => [alias, entry.id] as const),
     ),
   ),
 ) as Record<string, ChatChannelId>;
-
-/**
- * Lists configured built-in chat channel aliases.
- */
-export function listChatChannelAliases(): string[] {
-  return Object.keys(CHAT_CHANNEL_ALIASES);
-}
 
 function listRuntimeBundledChatChannelEntries(): BundledChatChannelEntry[] {
   // Generated metadata is the hot-path source. The runtime catalog fallback covers

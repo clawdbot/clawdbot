@@ -4,20 +4,27 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
 } from "../../plugins/hook-types.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentReplyResult,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
+import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -34,6 +41,7 @@ type MockCompactionResult =
         tokensAfter?: number;
         sessionId?: string;
         sessionFile?: string;
+        sessionTarget?: ContextEngineSessionTarget;
       };
       reason?: string;
     }
@@ -55,16 +63,59 @@ type MockResolvedModel = {
   provider: string;
   contextWindow: number;
   api: string;
+  baseUrl?: string;
   reasoning?: boolean;
 };
 
-type MockResolveModelResult = {
-  model: MockResolvedModel;
-  error: null;
+const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
+  policyHash: "",
+  index: {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "",
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  },
+  registryDiagnostics: [],
+  manifestRegistry: { plugins: [], diagnostics: [] },
+  plugins: [],
+  diagnostics: [],
+  byPluginId: new Map(),
+  normalizePluginId: (pluginId: string) => pluginId,
+  owners: {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  },
+  metrics: {
+    registrySnapshotMs: 0,
+    manifestRegistryMs: 0,
+    ownerMapsMs: 0,
+    totalMs: 0,
+    indexPluginCount: 0,
+    manifestPluginCount: 0,
+  },
+};
+
+type MockAgentDiscoveryStores = {
   authStorage: {
     setRuntimeApiKey: ReturnType<typeof vi.fn>;
   };
   modelRegistry: Record<string, never>;
+};
+
+type MockResolveModelResult = MockAgentDiscoveryStores & {
+  model: MockResolvedModel;
+  error: null;
 };
 
 export const mockedGlobalHookRunner = {
@@ -74,12 +125,6 @@ export const mockedGlobalHookRunner = {
       _eventValue: { cleanedBody: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
-  ),
-  runBeforeAgentStart: vi.fn(
-    async (
-      _eventValue: { prompt: string; messages?: unknown[] },
-      _ctx: PluginHookAgentContext,
-    ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
   ),
   runBeforeAgentFinalize: vi.fn(
     async (
@@ -103,7 +148,7 @@ export const mockedGlobalHookRunner = {
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const mockedContextEngine = {
+const mockedContextEngine = {
   info: { ownsCompaction: false as boolean },
   compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
     ok: false as const,
@@ -112,45 +157,115 @@ export const mockedContextEngine = {
   })),
 };
 
-export const mockedContextEngineCompact = mockedContextEngine.compact;
-export const mockedCompactDirect = mockedContextEngine.compact;
-export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
-export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
-export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
-export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
-export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
-export const mockedResolveModelAsync = vi.fn(
-  async (): Promise<MockResolveModelResult> => ({
-    model: {
-      id: "test-model",
-      provider: "anthropic",
-      contextWindow: 200000,
-      api: "messages",
+type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
+  observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
+};
+
+function makeMockRuntimePlan(): MockRuntimePlan {
+  return {
+    auth: {
+      authProfileProviderForAuth: "openai",
+      providerForAuth: "openai",
     },
-    error: null,
+    observability: {
+      harnessId: "codex",
+    },
+  };
+}
+
+export const mockedCompactDirect = mockedContextEngine.compact;
+const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
+const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
+const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
+  () => makeMockRuntimePlan() as AgentRuntimePlan,
+);
+export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
+  async (input: Record<string, unknown>) => {
+    const pluginRegistry = getActivePluginRegistry();
+    return {
+      snapshot: {
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        pluginRegistry: pluginRegistry
+          ? {
+              ...pluginRegistry,
+              agentHarnesses: [...pluginRegistry.agentHarnesses],
+            }
+          : undefined,
+        metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
+    };
+  },
+);
+const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
+const mockedSleepWithAbort = vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined);
+function createMockAgentDiscoveryStores(): MockAgentDiscoveryStores {
+  return {
     authStorage: {
       setRuntimeApiKey: vi.fn(),
     },
     modelRegistry: {},
-  }),
+  };
+}
+
+const mockedCreateEmptyAgentDiscoveryStores = vi.fn(createMockAgentDiscoveryStores);
+function createMockResolvedModel(
+  provider = "anthropic",
+  modelId = "test-model",
+  cfg?: unknown,
+): MockResolveModelResult {
+  const providerConfig = (
+    cfg as {
+      models?: { providers?: Record<string, { api?: string; baseUrl?: string }> };
+    }
+  )?.models?.providers?.[provider];
+  const usesOpenAITransport = provider === "openai" || provider === "codex";
+  return {
+    model: {
+      id: modelId,
+      provider,
+      contextWindow: 200000,
+      api: providerConfig?.api ?? (usesOpenAITransport ? "openai-responses" : "messages"),
+      ...(providerConfig?.baseUrl
+        ? { baseUrl: providerConfig.baseUrl }
+        : usesOpenAITransport
+          ? { baseUrl: "https://api.openai.com/v1" }
+          : {}),
+    },
+    error: null,
+    ...createMockAgentDiscoveryStores(),
+  };
+}
+export const mockedResolveModelAsync = vi.fn(
+  async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
+    createMockResolvedModel(provider, modelId, cfg),
 );
-export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+const mockedPrepareProviderRuntimeAuth = vi.fn<
+  (params?: { context?: { apiKey?: string } }) => Promise<{ apiKey: string } | undefined>
+>(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-export const mockedBuildEmbeddedRunPayloads = vi.fn<
+const mockedBuildEmbeddedRunPayloads = vi.fn<
   (
     ...args: Parameters<typeof buildEmbeddedRunPayloads>
   ) => ReturnType<typeof buildEmbeddedRunPayloads>
 >(() => []);
-export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
-export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
-export const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
+const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
+const mockedWaitForDeferredTurnMaintenanceForSession = vi.fn(
+  async (_sessionKey?: string) => undefined,
+);
+const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
+const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 type MockTruncateOversizedToolResultsResult = {
   truncated: boolean;
   truncatedCount: number;
   reason?: string;
 };
-export const mockedTruncateOversizedToolResultsInSession = vi.fn<
+const mockedTruncateOversizedToolResultsInSession = vi.fn<
   () => Promise<MockTruncateOversizedToolResultsResult>
 >(async () => ({
   truncated: false,
@@ -171,6 +286,7 @@ type MockCoerceToFailoverError = (
 ) => unknown;
 type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
 type MockResolveFailoverStatus = (reason: string) => number | undefined;
+type MockAssistantErrorProbe = (assistant?: { errorMessage?: string }) => boolean;
 export class MockedFailoverError extends Error {
   constructor(message: string) {
     super(message);
@@ -178,8 +294,8 @@ export class MockedFailoverError extends Error {
   }
 }
 
-export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
-export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
+const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
+const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
     message: formatErrorMessage(err),
     reason: undefined,
@@ -187,9 +303,9 @@ export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
     code: undefined,
   }),
 );
-export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
+const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
 
-export const mockedLog: {
+const mockedLog: {
   debug: Mock<(...args: unknown[]) => void>;
   info: Mock<(...args: unknown[]) => void>;
   warn: Mock<(...args: unknown[]) => void>;
@@ -203,20 +319,27 @@ export const mockedLog: {
   isEnabled: vi.fn(() => false),
 };
 
-export const mockedFormatBillingErrorMessage = vi.fn(() => "");
+const mockedFormatBillingErrorMessage = vi.fn(() => "");
 export const mockedClassifyFailoverReason = vi.fn<(raw: string) => FailoverReason | null>(
   () => null,
 );
-export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
+export const mockedClassifyAssistantFailoverReason = vi.fn(
+  (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
+    mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
+);
+const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
 });
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
-export const mockedIsAuthAssistantError = vi.fn(() => false);
-export const mockedIsBillingAssistantError = vi.fn(() => false);
+const mockedIsAuthAssistantError = vi.fn(() => false);
+const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
-export const mockedIsFailoverAssistantError = vi.fn(() => false);
-export const mockedIsFailoverErrorMessage = vi.fn(() => false);
+export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
+const mockedIsFailoverErrorMessage = vi.fn(() => false);
+const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
+  /^\s*an unknown error occurred\.?\s*$/i.test(raw),
+);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
   return (
@@ -226,14 +349,12 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
     lower.includes("prompt is too long")
   );
 });
-export const mockedParseImageSizeError = vi.fn(() => null);
-export const mockedParseImageDimensionError = vi.fn(() => null);
-export const mockedIsRateLimitAssistantError = vi.fn(() => false);
-export const mockedIsTimeoutErrorMessage = vi.fn(() => false);
-export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
-  () => null,
-);
-export const mockedEvaluateContextWindowGuard = vi.fn(() => ({
+const mockedParseImageSizeError = vi.fn(() => null);
+const mockedParseImageDimensionError = vi.fn(() => null);
+export const mockedIsRateLimitAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
+const mockedIsTimeoutErrorMessage = vi.fn(() => false);
+const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(() => null);
+const mockedEvaluateContextWindowGuard = vi.fn(() => ({
   shouldWarn: false,
   shouldBlock: false,
   tokens: 200000,
@@ -241,49 +362,90 @@ export const mockedEvaluateContextWindowGuard = vi.fn(() => ({
   hardMinTokens: 1000,
   warnBelowTokens: 5000,
 }));
-export const mockedResolveContextWindowInfo = vi.fn(() => ({
+const mockedResolveContextWindowInfo = vi.fn(() => ({
   tokens: 200000,
   source: "model",
 }));
-export const mockedFormatContextWindowWarningMessage = vi.fn(
+const mockedFormatContextWindowWarningMessage = vi.fn(
   (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
     `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
 );
-export const mockedFormatContextWindowBlockMessage = vi.fn(
+const mockedFormatContextWindowBlockMessage = vi.fn(
   (params: { guard: { tokens: number; source: string } }) =>
     `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
 );
-export const mockedGetApiKeyForModel = vi.fn(
-  async ({ profileId }: { profileId?: string } = {}) => ({
-    apiKey: "test-key",
-    profileId: profileId ?? "test-profile",
-    source: "test",
-    mode: "api-key" as const,
-  }),
+type MockGetApiKeyForModelParams = {
+  profileId?: string;
+  model?: { api?: string };
+};
+export const mockedGetApiKeyForModel = vi.fn<
+  (params?: MockGetApiKeyForModelParams) => Promise<ResolvedProviderAuth>
+>(async ({ profileId }: MockGetApiKeyForModelParams = {}) => ({
+  apiKey: "test-key",
+  profileId: profileId ?? "test-profile",
+  source: "test",
+  mode: "api-key",
+}));
+const mockedIsProfileInCooldown = vi.fn(
+  (_store: unknown, _profileId: string, _now?: number, _modelId?: string) => false,
 );
 export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
-export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
-export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
-  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
-);
+export const mockedEnsureAuthProfileStore = vi.fn<() => AuthProfileStore>(() => ({
+  version: 1,
+  profiles: {},
+}));
+export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn<
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => AuthProfileStore
+>((_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({
+  version: 1,
+  profiles: {},
+}));
+
+export function useOpenAIPlatformAuthFixture(): void {
+  const profileId = "openai:test";
+  mockedEnsureAuthProfileStore.mockReturnValue({
+    version: 1,
+    profiles: {
+      [profileId]: {
+        type: "api_key",
+        provider: "openai",
+        key: "test-key",
+      },
+    },
+    order: { openai: [profileId] },
+  });
+  mockedResolveAuthProfileOrder.mockReturnValue([profileId]);
+}
 export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string[]>(
   (_params?: unknown) => [],
 );
-export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
-export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
+type AuthProfileOrderResolution = ReturnType<
+  typeof import("../model-auth.js").resolveAuthProfileOrderWithMetadata
+>;
+const mockedResolveAuthProfileOrderWithMetadata = vi.fn<
+  (_params?: unknown) => AuthProfileOrderResolution
+>((params?: unknown) => ({
+  profileIds: mockedResolveAuthProfileOrder(params),
+  hasExplicitOrder: false,
+}));
+const mockedResolveProviderEntryApiKeyProfileReference = vi.fn<(_params?: unknown) => unknown>(
+  () => ({ kind: "none" }),
+);
+const mockedHasUsableCustomProviderApiKey = vi.fn(() => false);
+const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
+const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
+  agentId: "main",
   sessionId: "test-session",
-  sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
+  sessionKey: "agent:main:test-key",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,
   runId: "run-1",
 } as const;
 
-/** Reset every mocked runner dependency to the default successful no-op state. */
-export function resetRunOverflowCompactionHarnessMocks(): void {
+function resetMockAgentHarness(): void {
   clearAgentHarnesses();
   registerAgentHarness({
     id: "codex",
@@ -293,14 +455,29 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+    finalizeSettledTurn: async ({ attempt }) => {
+      const result = await mockedRunEmbeddedAttempt({ ...attempt, disableTools: true });
+      const assistant =
+        result.currentAttemptCompletedAssistant ??
+        result.currentAttemptAssistant ??
+        result.lastAssistant;
+      if (!assistant) {
+        throw new Error("mocked settled-turn finalization returned no assistant message");
+      }
+      return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
+    },
   });
+}
 
+/** Reset every mocked runner dependency to the default successful no-op state. */
+function resetRunOverflowCompactionHarnessMocks(): void {
+  vi.unstubAllEnvs();
+  resetCommandQueueStateForTest();
+  resetMockAgentHarness();
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
   mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
   mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
-  mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
-  mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforeAgentFinalize.mockReset();
   mockedGlobalHookRunner.runBeforeAgentFinalize.mockResolvedValue(undefined);
   mockedGlobalHookRunner.runBeforePromptBuild.mockReset();
@@ -316,29 +493,22 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockReset();
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
-  mockedBuildAgentRuntimePlan.mockReturnValue({});
-  mockedContextEngineCompact.mockReset();
-  mockedContextEngineCompact.mockResolvedValue({
+  mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+  mockedBuildAgentRuntimePlan.mockImplementation(() => makeMockRuntimePlan() as AgentRuntimePlan);
+  mockedCompactDirect.mockReset();
+  mockedCompactDirect.mockResolvedValue({
     ok: false,
     compacted: false,
     reason: "nothing to compact",
   });
 
-  mockedEnsureRuntimePluginsLoaded.mockReset();
+  mockedCreateEmptyAgentDiscoveryStores.mockReset();
+  mockedCreateEmptyAgentDiscoveryStores.mockImplementation(createMockAgentDiscoveryStores);
   mockedResolveModelAsync.mockReset();
-  mockedResolveModelAsync.mockResolvedValue({
-    model: {
-      id: "test-model",
-      provider: "anthropic",
-      contextWindow: 200000,
-      api: "messages",
-    },
-    error: null,
-    authStorage: {
-      setRuntimeApiKey: vi.fn(),
-    },
-    modelRegistry: {},
-  });
+  mockedResolveModelAsync.mockImplementation(
+    async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
+      createMockResolvedModel(provider, modelId, cfg),
+  );
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
   mockedRunEmbeddedAttempt.mockReset();
@@ -346,6 +516,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
+  mockedWaitForDeferredTurnMaintenanceForSession.mockReset();
+  mockedWaitForDeferredTurnMaintenanceForSession.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
   mockedResolveLiveToolResultMaxChars.mockReset();
@@ -380,6 +552,11 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
 
   mockedClassifyFailoverReason.mockReset();
   mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedClassifyAssistantFailoverReason.mockReset();
+  mockedClassifyAssistantFailoverReason.mockImplementation(
+    (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
+      mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
+  );
   mockedFormatBillingErrorMessage.mockReset();
   mockedFormatBillingErrorMessage.mockReturnValue("");
   mockedFormatAssistantErrorText.mockReset();
@@ -399,6 +576,10 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedIsFailoverErrorMessage.mockReset();
   mockedIsFailoverErrorMessage.mockReturnValue(false);
+  mockedIsGenericUnknownStreamErrorMessage.mockReset();
+  mockedIsGenericUnknownStreamErrorMessage.mockImplementation((raw: string) =>
+    /^\s*an unknown error occurred\.?\s*$/i.test(raw),
+  );
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
     const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
@@ -445,27 +626,117 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   );
   mockedGetApiKeyForModel.mockReset();
   mockedGetApiKeyForModel.mockImplementation(
-    async ({ profileId }: { profileId?: string } = {}) => ({
+    async ({ profileId }: MockGetApiKeyForModelParams = {}) => ({
       apiKey: "test-key",
       profileId: profileId ?? "test-profile",
       source: "test",
       mode: "api-key",
     }),
   );
+  mockedIsProfileInCooldown.mockReset();
+  mockedIsProfileInCooldown.mockReturnValue(false);
   mockedMarkAuthProfileFailure.mockReset();
   mockedMarkAuthProfileFailure.mockResolvedValue(undefined);
   mockedEnsureAuthProfileStore.mockReset();
-  mockedEnsureAuthProfileStore.mockReturnValue({});
+  mockedEnsureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReset();
-  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({});
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: {},
+  });
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedResolveAuthProfileOrderWithMetadata.mockReset();
+  mockedResolveAuthProfileOrderWithMetadata.mockImplementation((params?: unknown) => ({
+    profileIds: mockedResolveAuthProfileOrder(params),
+    hasExplicitOrder: false,
+  }));
+  mockedResolveProviderEntryApiKeyProfileReference.mockReset();
+  mockedResolveProviderEntryApiKeyProfileReference.mockReturnValue({ kind: "none" });
+  mockedHasUsableCustomProviderApiKey.mockReset();
+  mockedHasUsableCustomProviderApiKey.mockReturnValue(false);
   mockedMarkAuthProfileSuccess.mockReset();
   mockedMarkAuthProfileSuccess.mockResolvedValue(undefined);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
   mockedRunPostCompactionSideEffects.mockReset();
   mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
+  mockedSleepWithAbort.mockReset();
+  mockedSleepWithAbort.mockResolvedValue(undefined);
+}
+
+/** Reset only the seams mutated by the shared public-entry integration suites. */
+export function resetSharedRunIntegrationHarnessMocks(): void {
+  vi.unstubAllEnvs();
+  resetCommandQueueStateForTest();
+  resetMockAgentHarness();
+
+  mockedBuildEmbeddedRunPayloads.mockReset();
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+  mockedClassifyFailoverReason.mockReset();
+  mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedClassifyAssistantFailoverReason.mockReset();
+  mockedClassifyAssistantFailoverReason.mockImplementation(
+    (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
+      mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
+  );
+  mockedCompactDirect.mockReset();
+  mockedCompactDirect.mockResolvedValue({
+    ok: false,
+    compacted: false,
+    reason: "nothing to compact",
+  });
+  mockedEnsureAuthProfileStore.mockReset();
+  mockedEnsureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReset();
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: {},
+  });
+  mockedFormatAssistantErrorText.mockReset();
+  mockedFormatAssistantErrorText.mockReturnValue("");
+  mockedGetApiKeyForModel.mockReset();
+  mockedGetApiKeyForModel.mockImplementation(
+    async ({ profileId }: MockGetApiKeyForModelParams = {}) => ({
+      apiKey: "test-key",
+      profileId: profileId ?? "test-profile",
+      source: "test",
+      mode: "api-key",
+    }),
+  );
+  mockedGlobalHookRunner.hasHooks.mockReset();
+  mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+  mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
+  mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue(undefined);
+  mockedIsCompactionFailureError.mockReset();
+  mockedIsCompactionFailureError.mockReturnValue(false);
+  mockedIsFailoverAssistantError.mockReset();
+  mockedIsFailoverAssistantError.mockReturnValue(false);
+  mockedIsLikelyContextOverflowError.mockReset();
+  mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
+    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
+    return (
+      lower.includes("request_too_large") ||
+      lower.includes("context window exceeded") ||
+      (lower.includes("context window") && lower.includes("ran out of room")) ||
+      lower.includes("prompt is too long")
+    );
+  });
+  mockedIsRateLimitAssistantError.mockReset();
+  mockedIsRateLimitAssistantError.mockReturnValue(false);
+  mockedResolveAuthProfileOrder.mockReset();
+  mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedResolveModelAsync.mockReset();
+  mockedResolveModelAsync.mockImplementation(
+    async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
+      createMockResolvedModel(provider, modelId, cfg),
+  );
+  mockedRunEmbeddedAttempt.mockReset();
+
+  mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+  mockedLog.warn.mockClear();
+  mockedMarkAuthProfileFailure.mockClear();
+  mockedSleepWithAbort.mockClear();
 }
 
 /** Install module mocks, import the runner, and return the mocked entrypoint. */
@@ -483,13 +754,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
   }));
+  vi.doMock("../../infra/backoff.js", () => ({
+    sleepWithAbort: mockedSleepWithAbort,
+  }));
   vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: mockedResolveContextEngine,
     resolveContextEngineOwnerPluginId: mockedResolveContextEngineOwnerPluginId,
-  }));
-
-  vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
   }));
 
   vi.doMock("../harness/runtime-plugin.js", () => ({
@@ -539,20 +809,54 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
+    shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
   }));
-
+  // Runtime preparation already carries the fixture's provider facts. Keep the
+  // real handle shape without rediscovering every bundled provider plugin.
+  vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    resolveProviderRuntimePluginHandle: vi.fn((params: Record<string, unknown>) => params),
+  }));
   vi.doMock("../auth-profiles.js", () => ({
-    isProfileInCooldown: vi.fn(() => false),
+    isProfileInCooldown: mockedIsProfileInCooldown,
     markAuthProfileFailure: mockedMarkAuthProfileFailure,
     markAuthProfileSuccess: mockedMarkAuthProfileSuccess,
+    resolveAuthProfileEligibility: vi.fn(() => ({ eligible: true, reasonCode: "ok" })),
     resolveProfilesUnavailableReason: vi.fn(() => undefined),
   }));
+
+  vi.doMock("../auth-profiles/order.js", async () => {
+    const actual = await vi.importActual<typeof import("../auth-profiles/order.js")>(
+      "../auth-profiles/order.js",
+    );
+    return {
+      ...actual,
+      resolveAuthProfileOrderWithMetadata: mockedResolveAuthProfileOrderWithMetadata,
+    };
+  });
 
   vi.doMock("../usage.js", () => ({
     normalizeUsage: vi.fn((usage?: unknown) =>
       usage && typeof usage === "object" ? usage : undefined,
+    ),
+    hasNonzeroUsage: vi.fn(
+      (usage?: {
+        total?: number;
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        reasoningTokens?: number;
+      }) =>
+        [
+          usage?.total,
+          usage?.input,
+          usage?.output,
+          usage?.cacheRead,
+          usage?.cacheWrite,
+          usage?.reasoningTokens,
+        ].some((value) => (value ?? 0) > 0),
     ),
     derivePromptTokens: vi.fn(
       (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>
@@ -562,6 +866,45 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
               return sum > 0 ? sum : undefined;
             })()
           : undefined,
+    ),
+    deriveContextPromptTokens: vi.fn(
+      (params: {
+        lastCallUsage?: {
+          input?: number;
+          output?: number;
+          cacheRead?: number;
+          cacheWrite?: number;
+          contextUsage?:
+            | { state: "available"; promptTokens: number; totalTokens: number }
+            | { state: "unavailable" };
+          total?: number;
+        };
+        promptTokens?: number;
+        usage?: { input?: number; cacheRead?: number; cacheWrite?: number };
+      }) => {
+        if (
+          typeof params.promptTokens === "number" &&
+          Number.isFinite(params.promptTokens) &&
+          params.promptTokens > 0
+        ) {
+          return params.promptTokens;
+        }
+        const lastCall = params.lastCallUsage;
+        if (lastCall?.contextUsage?.state === "available") {
+          return lastCall.contextUsage.promptTokens;
+        }
+        if (lastCall?.contextUsage?.state === "unavailable") {
+          return undefined;
+        }
+        for (const usage of [lastCall, params.usage]) {
+          const promptTokens =
+            (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
+          if (promptTokens > 0) {
+            return promptTokens;
+          }
+        }
+        return undefined;
+      },
     ),
   }));
 
@@ -603,11 +946,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   });
 
   vi.doMock("../workspace-run.js", () => ({
-    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string }) => ({
+    resolveRunWorkspaceDir: vi.fn((params: { workspaceDir: string; agentId?: string }) => ({
       workspaceDir: params.workspaceDir,
       usedFallback: false,
+      isCanonicalWorkspace: false,
       fallbackReason: undefined,
-      agentId: "main",
+      agentId: params.agentId ?? "main",
     })),
     redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
   }));
@@ -615,6 +959,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../embedded-agent-helpers.js", () => ({
     formatBillingErrorMessage: mockedFormatBillingErrorMessage,
     classifyFailoverReason: mockedClassifyFailoverReason,
+    classifyAssistantFailoverReason: mockedClassifyAssistantFailoverReason,
     extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
     formatAssistantErrorText: mockedFormatAssistantErrorText,
     isAuthAssistantError: mockedIsAuthAssistantError,
@@ -623,6 +968,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
     isFailoverErrorMessage: mockedIsFailoverErrorMessage,
+    isGenericUnknownStreamErrorMessage: mockedIsGenericUnknownStreamErrorMessage,
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
@@ -638,14 +984,18 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./tool-result-truncation.js", () => ({
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+    truncateOversizedToolResultsInActiveTarget: mockedTruncateOversizedToolResultsInSession,
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
+    truncateOversizedToolResultsInRuntimeTranscript: mockedTruncateOversizedToolResultsInSession,
   }));
 
   vi.doMock("./context-engine-maintenance.js", () => ({
     runContextEngineMaintenance: mockedRunContextEngineMaintenance,
+    waitForDeferredTurnMaintenanceForSession: mockedWaitForDeferredTurnMaintenanceForSession,
   }));
 
   vi.doMock("./model.js", () => ({
+    createEmptyAgentDiscoveryStores: mockedCreateEmptyAgentDiscoveryStores,
     resolveModelAsync: mockedResolveModelAsync,
   }));
 
@@ -656,31 +1006,57 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureAuthProfileStoreWithoutExternalProfiles:
       mockedEnsureAuthProfileStoreWithoutExternalProfiles,
     getApiKeyForModel: mockedGetApiKeyForModel,
+    hasUsableCustomProviderApiKey: mockedHasUsableCustomProviderApiKey,
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
+    resolveAuthProfileOrderWithMetadata: mockedResolveAuthProfileOrderWithMetadata,
+    resolveProviderEntryApiKeyProfileReference: mockedResolveProviderEntryApiKeyProfileReference,
     shouldPreferExplicitConfigApiKeyAuth: mockedShouldPreferExplicitConfigApiKeyAuth,
+  }));
+
+  // Auth policy remains real; only manifest-derived discovery facts are
+  // prepared here so the shared runner does not rescan all bundled plugins.
+  vi.doMock("../model-auth-env-vars.js", () => ({
+    listKnownProviderEnvApiKeyNames: vi.fn(() => ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]),
+    listProviderEnvAuthLookupKeys: vi.fn(() => ["anthropic"]),
+    resolveProviderEnvAuthLookupMaps: vi.fn(() => ({
+      aliasMap: {},
+      envCandidateMap: {
+        anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+      },
+      authEvidenceMap: {},
+      setupProviderFallbackRefs: ["anthropic"],
+    })),
   }));
 
   vi.doMock("../models-config.js", () => ({
     ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
+  vi.doMock("../prepared-model-runtime.js", () => ({
+    activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
+    acquireAgentRunPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
+    prepareModelRuntimeSnapshot: vi.fn(async () => ({
+      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+    })),
+  }));
+
   vi.doMock("../context-window-guard.js", () => ({
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
-    CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
     formatContextWindowBlockMessage: mockedFormatContextWindowBlockMessage,
     formatContextWindowWarningMessage: mockedFormatContextWindowWarningMessage,
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
-  vi.doMock("../../process/command-queue.js", () => ({
-    enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
-    clearCommandLane: vi.fn(() => 0),
-  }));
-
-  vi.doMock("../../utils/message-channel.js", () => ({
-    isMarkdownCapableMessageChannel: vi.fn(() => true),
-  }));
+  vi.doMock("../../utils/message-channel.js", async () => {
+    const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+      "../../utils/message-channel.js",
+    );
+    return {
+      ...actual,
+      isMarkdownCapableMessageChannel: vi.fn(() => true),
+    };
+  });
 
   vi.doMock("../defaults.js", () => ({
     DEFAULT_CONTEXT_TOKENS: 200000,
@@ -696,8 +1072,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./lanes.js", () => ({
-    resolveSessionLane: vi.fn(() => "session-lane"),
-    resolveEmbeddedSessionLane: vi.fn(() => "session-lane"),
+    resolveSessionLane: vi.fn((key: string) => `session:${key}`),
+    resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 
@@ -713,15 +1089,39 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
-  vi.doMock("./utils.js", () => ({
-    describeUnknownError: vi.fn((err: unknown) => {
-      if (err instanceof Error) {
-        return err.message;
-      }
-      return String(err);
-    }),
-  }));
+  vi.doMock("./utils.js", async () => {
+    const actual = await vi.importActual<typeof import("./utils.js")>("./utils.js");
+    return {
+      ...actual,
+      describeUnknownError: vi.fn((err: unknown) => {
+        if (err instanceof Error) {
+          return err.message;
+        }
+        return String(err);
+      }),
+    };
+  });
 
   const { runEmbeddedAgent } = await import("./run.js");
-  return { runEmbeddedAgent };
+  return {
+    runEmbeddedAgent: (params) =>
+      runEmbeddedAgent({ ...params, agentId: params.agentId ?? "main" }),
+  };
 }
+
+/** Move one-time runner compilation out of individual behavior timings. */
+export async function warmRunOverflowCompactionHarness(
+  runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent,
+  params?: Partial<Parameters<typeof runEmbeddedAgent>[0]>,
+): Promise<void> {
+  resetRunOverflowCompactionHarnessMocks();
+  mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "warmup" }]);
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["warmup"] }));
+  await runEmbeddedAgent({
+    ...overflowBaseRunParams,
+    ...params,
+    runId: params?.runId ?? "run-overflow-compaction-harness-warmup",
+  });
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

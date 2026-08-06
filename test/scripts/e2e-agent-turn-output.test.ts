@@ -80,6 +80,26 @@ describe("scripts/e2e/lib/agent-turn-output", () => {
     }
   });
 
+  it("does not accept reply-shaped JSON embedded in diagnostic lines", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
+    try {
+      const outputPath = join(dir, "agent.log");
+      writeFileSync(
+        outputPath,
+        [
+          `echo ${JSON.stringify({ payloads: [{ text: "OPENCLAW_E2E_OK_DIAGNOSTIC" }] })}`,
+          JSON.stringify({ payloads: [{ text: "real reply without marker" }] }),
+        ].join("\n"),
+      );
+
+      expect(() =>
+        assertAgentReplyContainsMarker("OPENCLAW_E2E_OK_DIAGNOSTIC", outputPath),
+      ).toThrow(/agent reply payload did not contain marker/u);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not accept markers that only appear in error payload text", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-e2e-agent-output-"));
     try {

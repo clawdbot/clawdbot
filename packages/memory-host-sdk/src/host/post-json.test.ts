@@ -35,6 +35,23 @@ function streamingTextResponse(params: {
   return new Response(stream, { status: params.status, headers: params.headers });
 }
 
+function stallingSuccessResponse(onCancel: () => void): Response {
+  const reader = {
+    read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
+    cancel: async () => {
+      onCancel();
+    },
+    releaseLock: () => undefined,
+  } as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    body: { getReader: () => reader },
+    headers: new Headers(),
+    ok: true,
+    status: 200,
+  } as Response;
+}
+
 describe("postJson", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -71,6 +88,35 @@ describe("postJson", () => {
       errorPrefix: "post failed",
       parse: (payload) => payload,
     });
+  });
+
+  it("applies abort signals while reading successful response bodies", async () => {
+    let canceled = false;
+    const controller = new AbortController();
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        stallingSuccessResponse(() => {
+          canceled = true;
+        }),
+      );
+    });
+
+    const read = postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      signal: controller.signal,
+      errorPrefix: "post failed",
+      parse: () => ({}),
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    controller.abort(new Error("body aborted"));
+
+    await expect(read).rejects.toThrow("body aborted");
+    expect(canceled).toBe(true);
   });
 
   it("attaches status to thrown error when requested", async () => {
@@ -146,7 +192,7 @@ describe("postJson", () => {
         streamingTextResponse({
           body: "{}",
           status: 200,
-          headers: { "content-length": "32" },
+          headers: { "content-length": "00032" },
           onCancel: () => {
             canceled = true;
           },
@@ -165,6 +211,28 @@ describe("postJson", () => {
       }),
     ).rejects.toThrow("post failed: response body too large: 32 bytes (limit: 8 bytes)");
     expect(canceled).toBe(true);
+  });
+
+  it("accepts leading-zero content-length values on successful JSON responses", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        new Response("{}", {
+          status: 200,
+          headers: { "content-length": "0002" },
+        }),
+      );
+    });
+
+    const result = await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      errorPrefix: "post failed",
+      maxResponseBytes: 8,
+      parse: (payload) => payload,
+    });
+
+    expect(result).toEqual({});
   });
 
   it("cancels successful JSON responses that exceed the streaming byte cap", async () => {

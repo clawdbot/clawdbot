@@ -1,24 +1,82 @@
 /**
  * Shared bash-tool helper tests.
- * Covers strict env parsing and sandbox workdir mapping between container and
- * host workspace paths.
+ * Covers strict env parsing and compact session labels.
  */
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deriveSessionName, readEnvInt, resolveSandboxWorkdir } from "./bash-tools.shared.js";
+import {
+  buildDockerExecArgs,
+  chunkString,
+  deriveSessionName,
+  readEnvInt,
+} from "./bash-tools.shared.js";
 
-async function withTempDir(run: (dir: string) => Promise<void>) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bash-workdir-"));
-  try {
-    await run(dir);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
+describe("buildDockerExecArgs", () => {
+  it("prepends custom PATH after login shell sourcing to preserve both custom and system tools", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: { PATH: "/custom/bin:/usr/local/bin:/usr/bin", HOME: "/home/user" },
+      tty: false,
+    });
 
-describe("resolveSandboxWorkdir", () => {
+    const commandArg = args.at(-1);
+    expect(args).toContain("OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
+    expect(commandArg).toBe(
+      'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; echo hello',
+    );
+  });
+
+  it("does not interpolate PATH into the shell command", () => {
+    const injectedPath = "$(touch /tmp/openclaw-path-injection)";
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: { PATH: injectedPath, HOME: "/home/user" },
+      tty: false,
+    });
+
+    expect(args).toContain(`OPENCLAW_PREPEND_PATH=${injectedPath}`);
+    expect(args.at(-1)).not.toContain(injectedPath);
+    expect(args.at(-1)).toContain("OPENCLAW_PREPEND_PATH");
+  });
+
+  it("does not add PATH export when PATH is not in env", () => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      command: "echo hello",
+      env: { HOME: "/home/user" },
+      tty: false,
+    });
+
+    expect(args.at(-1)).toBe("echo hello");
+    expect(args.at(-1)).not.toContain("export PATH");
+  });
+
+  it.each([
+    {
+      name: "includes workdir flags",
+      input: { command: "pwd", workdir: "/workspace", tty: false },
+      expected: ["-w", "/workspace"],
+    },
+    {
+      name: "uses a login shell",
+      input: { command: "echo test", tty: false },
+      expected: ["/bin/sh", "-lc"],
+    },
+    { name: "includes the tty flag", input: { command: "bash", tty: true }, expected: ["-t"] },
+  ])("$name", ({ input, expected }) => {
+    const args = buildDockerExecArgs({
+      containerName: "test-container",
+      env: { HOME: "/home/user" },
+      ...input,
+    });
+    for (const value of expected) {
+      expect(args).toContain(value);
+    }
+  });
+});
+
+describe("readEnvInt", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -56,67 +114,6 @@ describe("resolveSandboxWorkdir", () => {
 
     expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
   });
-
-  it("maps container root workdir to host workspace", async () => {
-    await withTempDir(async (workspaceDir) => {
-      const warnings: string[] = [];
-      const resolved = await resolveSandboxWorkdir({
-        workdir: "/workspace",
-        sandbox: {
-          containerName: "sandbox-1",
-          workspaceDir,
-          containerWorkdir: "/workspace",
-        },
-        warnings,
-      });
-
-      expect(resolved.hostWorkdir).toBe(workspaceDir);
-      expect(resolved.containerWorkdir).toBe("/workspace");
-      expect(warnings).toStrictEqual([]);
-    });
-  });
-
-  it("maps nested container workdir under the container workspace", async () => {
-    await withTempDir(async (workspaceDir) => {
-      const nested = path.join(workspaceDir, "scripts", "runner");
-      await mkdir(nested, { recursive: true });
-      const warnings: string[] = [];
-      const resolved = await resolveSandboxWorkdir({
-        workdir: "/workspace/scripts/runner",
-        sandbox: {
-          containerName: "sandbox-2",
-          workspaceDir,
-          containerWorkdir: "/workspace",
-        },
-        warnings,
-      });
-
-      expect(resolved.hostWorkdir).toBe(nested);
-      expect(resolved.containerWorkdir).toBe("/workspace/scripts/runner");
-      expect(warnings).toStrictEqual([]);
-    });
-  });
-
-  it("supports custom container workdir prefixes", async () => {
-    await withTempDir(async (workspaceDir) => {
-      const nested = path.join(workspaceDir, "project");
-      await mkdir(nested, { recursive: true });
-      const warnings: string[] = [];
-      const resolved = await resolveSandboxWorkdir({
-        workdir: "/sandbox-root/project",
-        sandbox: {
-          containerName: "sandbox-3",
-          workspaceDir,
-          containerWorkdir: "/sandbox-root",
-        },
-        warnings,
-      });
-
-      expect(resolved.hostWorkdir).toBe(nested);
-      expect(resolved.containerWorkdir).toBe("/sandbox-root/project");
-      expect(warnings).toStrictEqual([]);
-    });
-  });
 });
 
 describe("deriveSessionName", () => {
@@ -142,5 +139,24 @@ describe("deriveSessionName", () => {
       expect(typeof label).toBe("string");
       expect(elapsedMs).toBeLessThan(100);
     }
+  });
+});
+
+describe("chunkString", () => {
+  it("preserves surrogate pairs at chunk boundaries", () => {
+    const input = "a".repeat(8191) + "🚀b";
+    expect(chunkString(input, 8192)).toEqual(["a".repeat(8191), "🚀b"]);
+  });
+
+  it("returns single chunk for input smaller than limit", () => {
+    expect(chunkString("hello", 8192)).toEqual(["hello"]);
+  });
+
+  it("emits a whole code point when the limit is one UTF-16 unit", () => {
+    expect(chunkString("😀a", 1)).toEqual(["😀", "a"]);
+  });
+
+  it("preserves every code point across mixed chunk boundaries", () => {
+    expect(chunkString("aa🚀bb", 2)).toEqual(["aa", "🚀", "bb"]);
   });
 });

@@ -1,2 +1,2 @@
 // Discord API module exposes the plugin public contract.
-export const defaultTopLevelPlacement = "child" as const;
+export { defaultTopLevelPlacement } from "./src/thread-binding-api.js";

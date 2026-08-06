@@ -3,23 +3,39 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
-  clearMemoryEmbeddingProviders as clearRegistry,
-  listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
-  registerMemoryEmbeddingProvider as registerAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+  hashText,
+  INVALID_PROJECT_ANNOTATION_KEY,
+  MEMORY_CHUNKING_VERSION,
+  type MemorySessionSyncTarget,
+  type MemorySyncParams,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawAgentDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "../test-helpers.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 import {
-  DEFAULT_LOCAL_MODEL,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "./provider-adapters.js";
+  closeAllMemoryIndexManagers,
+  closeMemoryIndexManagersForAgent,
+  MemoryIndexManager as RuntimeMemoryIndexManager,
+} from "./manager.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -30,23 +46,53 @@ afterAll(() => {
 });
 
 let embedBatchCalls = 0;
+let embeddedBatchTexts: string[] = [];
 let embedBatchInputCalls = 0;
+let providerRuntimeBatchCalls: string[][] = [];
+let providerRuntimeBatchGate: Promise<void> | null = null;
+let providerRuntimeBatchErrors: unknown[] = [];
+let providerRuntimeBatchFailuresRemaining = 0;
+let providerRuntimeActiveBatchCalls = 0;
+let providerRuntimeMaxActiveBatchCalls = 0;
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
+let providerCloseFailure: unknown = new Error("provider close failed");
+let providerCreationFailure: string | null = null;
+let providerNullResult: string | null = null;
 let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
+
+const identityAliasFixture = vi.hoisted(() => ({
+  provider: "identity-alias-test",
+  canonicalModel: "hf:fixture/default-model.gguf",
+  cacheModel: "/fixture/cache/default-model.gguf",
+}));
 
 function createLocalWorkerExitError(): Error {
   return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
-    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    code: "LOCAL_EMBEDDING_WORKER_EXITED",
     reason: "exit",
     exitCode: 134,
   });
 }
 
-vi.mock("./embeddings.js", () => {
+function setMemoryIndexStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreMemoryIndexStateDir(): void {
+  if (originalMemoryIndexStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalMemoryIndexStateDir);
+  }
+}
+
+vi.mock("./embeddings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embeddings.js")>();
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
     const alpha = lower.split("alpha").length - 1;
@@ -56,6 +102,7 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta, image, audio];
   };
   return {
+    ...actual,
     resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
       providerId === "gemini" || providerId === "fallback-provider"
         ? `${providerId}-embed`
@@ -70,6 +117,28 @@ vi.mock("./embeddings.js", () => {
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
     resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
       providerId === "local" ? "local" : "remote",
+    resolveEmbeddingProviderIndexIdentity: (options: { provider?: string; model?: string }) =>
+      options.provider === identityAliasFixture.provider
+        ? {
+            provider: {
+              id: identityAliasFixture.provider,
+              model: identityAliasFixture.canonicalModel,
+            },
+            cacheKeyData: {
+              provider: identityAliasFixture.provider,
+              model: identityAliasFixture.canonicalModel,
+            },
+            aliases: [
+              {
+                model: identityAliasFixture.cacheModel,
+                cacheKeyData: {
+                  provider: identityAliasFixture.provider,
+                  model: identityAliasFixture.cacheModel,
+                },
+              },
+            ],
+          }
+        : undefined,
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -81,6 +150,16 @@ vi.mock("./embeddings.js", () => {
         outputDimensionality: options.outputDimensionality,
       });
       await providerInitGate;
+      if (options.provider === providerCreationFailure) {
+        throw new Error(`provider creation failed: ${options.provider}`);
+      }
+      if (options.provider === providerNullResult) {
+        return {
+          provider: null,
+          requestedProvider: options.provider,
+          providerUnavailableReason: `provider unavailable: ${options.provider}`,
+        };
+      }
       if (forceNoProvider) {
         return {
           provider: null,
@@ -91,10 +170,19 @@ vi.mock("./embeddings.js", () => {
       const providerId =
         options.provider === "gemini" ||
         options.provider === "fallback-provider" ||
+        options.provider === "batch-test" ||
+        options.provider === "batch-wide-test" ||
+        options.provider === identityAliasFixture.provider ||
         options.provider === "ollama"
           ? options.provider
           : "mock";
-      const model = options.model ?? "mock-embed";
+      const requestedModel = options.model ?? "mock-embed";
+      const model =
+        providerId === identityAliasFixture.provider &&
+        (requestedModel === identityAliasFixture.canonicalModel ||
+          requestedModel === identityAliasFixture.cacheModel)
+          ? identityAliasFixture.canonicalModel
+          : requestedModel;
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -105,12 +193,13 @@ vi.mock("./embeddings.js", () => {
             await providerCloseGate;
             if (providerCloseFailuresRemaining > 0) {
               providerCloseFailuresRemaining -= 1;
-              throw new Error("provider close failed");
+              throw providerCloseFailure;
             }
           },
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
+            embeddedBatchTexts.push(...texts);
             return texts.map(embedText);
           },
           ...(providerId === "gemini" || providerId === "fallback-provider"
@@ -144,59 +233,76 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "gemini" || providerId === "fallback-provider"
+        ...(providerId === identityAliasFixture.provider
           ? {
               runtime: {
                 id: providerId,
                 cacheKeyData: {
                   provider: providerId,
-                  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                  model,
-                  outputDimensionality: options.outputDimensionality,
-                  headers: [],
+                  model: identityAliasFixture.canonicalModel,
                 },
+                indexIdentityAliases: [
+                  {
+                    model: identityAliasFixture.cacheModel,
+                    cacheKeyData: {
+                      provider: providerId,
+                      model: identityAliasFixture.cacheModel,
+                    },
+                  },
+                ],
               },
             }
-          : {}),
+          : providerId === "batch-test" || providerId === "batch-wide-test"
+            ? {
+                runtime: {
+                  id: providerId,
+                  ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
+                  batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                    providerRuntimeActiveBatchCalls += 1;
+                    providerRuntimeMaxActiveBatchCalls = Math.max(
+                      providerRuntimeMaxActiveBatchCalls,
+                      providerRuntimeActiveBatchCalls,
+                    );
+                    try {
+                      await providerRuntimeBatchGate;
+                      providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                      if (providerRuntimeBatchErrors.length > 0) {
+                        throw providerRuntimeBatchErrors.shift();
+                      }
+                      if (providerRuntimeBatchFailuresRemaining > 0) {
+                        providerRuntimeBatchFailuresRemaining -= 1;
+                        throw new Error("provider runtime batch failed");
+                      }
+                      return batch.chunks.map((chunk) => embedText(chunk.text));
+                    } finally {
+                      providerRuntimeActiveBatchCalls -= 1;
+                    }
+                  },
+                },
+              }
+            : providerId === "gemini" || providerId === "fallback-provider"
+              ? {
+                  runtime: {
+                    id: providerId,
+                    cacheKeyData: {
+                      provider: providerId,
+                      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                      model,
+                      outputDimensionality: options.outputDimensionality,
+                      headers: [],
+                    },
+                  },
+                }
+              : {}),
       };
     },
   };
-});
-
-describe("memory embedding provider registration", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    clearRegistry();
-  });
-
-  it("registers the builtin local embedding provider", () => {
-    clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
-
-    const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
-
-    if (!adapter) {
-      throw new Error("expected local embedding provider adapter to be registered");
-    }
-    expect(adapter.id).toBe("local");
-    expect(adapter.defaultModel).toBe(DEFAULT_LOCAL_MODEL);
-    expect(adapter.transport).toBe("local");
-    expect(adapter.authProviderId).toBeUndefined();
-    expect(adapter.autoSelectPriority).toBe(10);
-  });
 });
 
 describe("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
   let memoryDir = "";
-  let indexVectorPath = "";
-  let indexMainPath = "";
-  let indexMultimodalPath = "";
 
   const managersForCleanup = new Set<MemoryIndexManager>();
 
@@ -204,9 +310,6 @@ describe("memory index", () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
-    indexMainPath = path.join(workspaceDir, "index-main.sqlite");
-    indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
-    indexMultimodalPath = path.join(workspaceDir, "index-multimodal.sqlite");
   });
 
   afterAll(async () => {
@@ -218,21 +321,31 @@ describe("memory index", () => {
     vi.useRealTimers();
     await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    resetMemoryCoreDreamingStateForTests();
     clearRegistry();
     managersForCleanup.clear();
+    restoreMemoryIndexStateDir();
   });
 
   beforeEach(async () => {
     vi.useRealTimers();
-    // Perf: most suites don't need atomic swap behavior for full reindexes.
-    // Keep atomic reindex tests on the safe path.
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
+    embeddedBatchTexts = [];
     embedBatchInputCalls = 0;
+    providerRuntimeBatchCalls = [];
+    providerRuntimeBatchGate = null;
+    providerRuntimeBatchErrors = [];
+    providerRuntimeBatchFailuresRemaining = 0;
+    providerRuntimeActiveBatchCalls = 0;
+    providerRuntimeMaxActiveBatchCalls = 0;
     providerCloseCalls = 0;
     providerCloseFailuresRemaining = 0;
+    providerCloseFailure = new Error("provider close failed");
+    providerCreationFailure = null;
+    providerNullResult = null;
     providerCloseGate = null;
     providerInitGate = null;
     providerCalls = [];
@@ -240,6 +353,8 @@ describe("memory index", () => {
 
     rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
+    setMemoryIndexStateDir(path.join(workspaceDir, ".state-memory-index"));
+    await configureMemoryCoreDreamingStateForTests();
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
       "# Log\nAlpha memory line.\nZebra memory line.",
@@ -257,27 +372,36 @@ describe("memory index", () => {
         };
       }
     ).db;
-    (manager as unknown as { resetIndex: () => void }).resetIndex();
-    const embeddingCacheTable = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("embedding_cache");
-    if (embeddingCacheTable?.name === "embedding_cache") {
-      db.exec("DELETE FROM embedding_cache");
+    for (const table of [
+      "memory_index_sources",
+      "memory_index_chunks",
+      "memory_embedding_cache",
+      "memory_index_chunks_fts",
+      "memory_index_chunks_vec",
+    ]) {
+      const existingTable = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(table);
+      if (existingTable?.name === table) {
+        db.exec(`DELETE FROM ${table}`);
+      }
     }
     (manager as unknown as { dirty: boolean }).dirty = true;
     (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
+    (manager as unknown as { sessionsDirtyFiles: Set<string> }).sessionsDirtyFiles.clear();
   }
 
   type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];
 
   function createCfg(params: {
-    storePath: string;
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
+    rememberAcrossConversations?: boolean;
     provider?: string;
     fallback?: "none" | "gemini" | "fallback-provider";
     providerAliases?: NonNullable<NonNullable<TestCfg["models"]>["providers"]>;
+    batchEnabled?: boolean;
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -289,36 +413,88 @@ describe("memory index", () => {
     cacheEnabled?: boolean;
     minScore?: number;
     onSearch?: boolean;
-    hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    hybrid?: {
+      enabled: boolean;
+      vectorWeight?: number;
+      textWeight?: number;
+      temporalDecay?: { enabled: boolean };
+    };
   }): TestCfg {
-    return {
+    return isolateMemoryManagerTestConfig({
+      memory: {
+        search: {
+          ...(params.provider !== undefined ? { provider: params.provider } : {}),
+          model: params.model ?? "mock-embed",
+          fallback: params.fallback,
+          outputDimensionality: params.outputDimensionality,
+          store: {
+            vector: params.vectorEnabled !== undefined ? { enabled: params.vectorEnabled } : {},
+          },
+          remote: params.batchEnabled
+            ? {
+                batch: { enabled: true },
+              }
+            : undefined,
+          query: { minScore: params.minScore ?? 0 },
+          cache: params.cacheEnabled ? { enabled: true } : undefined,
+          extraPaths: params.extraPaths,
+          multimodal: params.multimodal,
+          sources: params.sources,
+          rememberAcrossConversations:
+            params.rememberAcrossConversations ?? params.sessionMemory ?? false,
+        },
+      },
+
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            ...(params.provider !== undefined ? { provider: params.provider } : {}),
-            model: params.model ?? "mock-embed",
-            fallback: params.fallback,
-            outputDimensionality: params.outputDimensionality,
-            store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
-            // Perf: keep test indexes to a single chunk to reduce sqlite work.
-            chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
-            query: {
-              minScore: params.minScore ?? 0,
-              hybrid: params.hybrid ?? { enabled: false },
-            },
-            cache: params.cacheEnabled ? { enabled: true } : undefined,
-            extraPaths: params.extraPaths,
-            multimodal: params.multimodal,
-            sources: params.sources,
-            experimental: { sessionMemory: params.sessionMemory ?? false },
-          },
         },
         list: [{ id: "main", default: true }],
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
-    };
+    });
+  }
+
+  async function seedMemoryIndexSessionTranscript(params: {
+    messages: Array<{
+      content: string;
+      role: "assistant" | "user";
+      senderIsOwner?: boolean;
+      timestamp: number | string;
+    }>;
+    sessionId: string;
+    sessionKey?: string;
+  }): Promise<void> {
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
+    // Message timestamps are behavioral inputs; entry freshness only keeps the
+    // fixture out of real session-retention maintenance as wall time advances.
+    const updatedAt = Date.now();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      entry: {
+        sessionId: params.sessionId,
+        updatedAt,
+      },
+    });
+    for (const message of params.messages) {
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey,
+        storePath,
+        message: {
+          role: message.role,
+          timestamp: message.timestamp,
+          content: [{ type: "text", text: message.content }],
+          ...(message.senderIsOwner ? { __openclaw: { senderIsOwner: true } } : {}),
+        },
+      });
+    }
   }
 
   function requireManager(
@@ -347,6 +523,33 @@ describe("memory index", () => {
     return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
   }
 
+  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
+    const providerKey = hashText(
+      JSON.stringify({
+        provider: identityAliasFixture.provider,
+        model,
+      }),
+    );
+    const db = Reflect.get(manager, "db") as {
+      prepare: (sql: string) => {
+        get: (...params: unknown[]) => { value?: string } | undefined;
+        run: (...params: unknown[]) => void;
+      };
+    };
+    const metaRow = db
+      .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
+      .get("memory_index_meta_v1");
+    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
+    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
+      JSON.stringify({ ...meta, model, providerKey }),
+      "memory_index_meta_v1",
+    );
+    db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
+    db.prepare(
+      "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
+    ).run(model, providerKey, identityAliasFixture.provider);
+  }
+
   async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
     const manager = await getFreshManager(cfg);
     try {
@@ -364,14 +567,33 @@ describe("memory index", () => {
     }
   }
 
+  it("does not prepare vector deletes after in-place reset drops a missing vector table", async () => {
+    const cfg = createCfg({
+      vectorEnabled: true,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    managersForCleanup.add(manager);
+    type VectorState = { available: boolean | null; dims?: number };
+    const vector = Reflect.get(manager, "vector") as VectorState;
+    vector.available = true;
+    vector.dims = 4;
+    Reflect.set(manager, "vectorReady", Promise.resolve(true));
+
+    await expect(
+      Reflect.apply(Reflect.get(manager, "runInPlaceReindex"), manager, [
+        { reason: "test", force: true },
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
   async function getFtsSessionManager(params: {
     stateDirName: string;
-    storeFileName: string;
   }): Promise<MemoryIndexManager | null> {
     forceNoProvider = true;
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, params.stateDirName));
+    setMemoryIndexStateDir(path.join(workspaceDir, params.stateDirName));
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, params.storeFileName),
+      provider: "none",
       sources: ["memory", "sessions"],
       sessionMemory: true,
       minScore: 0,
@@ -386,7 +608,6 @@ describe("memory index", () => {
 
   it("indexes memory files and searches", async () => {
     const cfg = createCfg({
-      storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
@@ -395,6 +616,10 @@ describe("memory index", () => {
       const results = await manager.search("alpha");
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(results[0]?.provenance).toMatchObject({
+        originClass: "agent",
+        sessionKind: "unknown",
+      });
       const status = manager.status();
       expect(status.sourceCounts).toStrictEqual([
         {
@@ -408,10 +633,754 @@ describe("memory index", () => {
     }
   });
 
+  it("indexes trailing recall annotations only from curated memory files", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "# Curated entries",
+        "",
+        "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->",
+        "  Keep the alpha gateway local.",
+        "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
+        "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "USER.md"),
+      "- Prefer concise replies. <!-- trigger: writing style --> <!-- importance: 7 -->\n",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 --> <!-- project: github.com/openclaw/openclaw -->\n",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      [
+        "- Uppercase path. <!-- project: path:/Users/Alice/Repo -->",
+        "- Lowercase path. <!-- project: path:/Users/alice/repo -->",
+      ].join("\n"),
+    );
+
+    const manager = await getFreshManager(createCfg({}));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const rows = db
+        .prepare(
+          `SELECT chunk.path, chunk.start_line AS startLine, chunk.text, metadata.importance,
+                  metadata.triggers, metadata.project_key AS projectKey,
+                  provenance.origin_class AS originClass
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           JOIN memory_index_chunk_provenance AS provenance
+             ON provenance.chunk_id = chunk.id
+           WHERE chunk.source = 'memory'
+           ORDER BY chunk.path, chunk.start_line`,
+        )
+        .all() as Array<{
+        path: string;
+        startLine: number;
+        text: string;
+        importance: number | null;
+        triggers: string | null;
+        projectKey: string | null;
+        originClass: string;
+      }>;
+
+      const memoryEntries = rows.filter((row) => row.path === "MEMORY.md" && row.triggers !== null);
+      expect(memoryEntries).toHaveLength(3);
+      expect(memoryEntries).toMatchObject([
+        {
+          text: "- Alpha deploy preference.\n  Keep the alpha gateway local.",
+          importance: 4,
+          triggers: "alpha deploy",
+          projectKey: "alpha-key",
+          originClass: "agent",
+        },
+        {
+          text: "- Beta deploy preference.",
+          importance: 9,
+          triggers: "beta deploy",
+          projectKey: "beta-key",
+          originClass: "agent",
+        },
+        {
+          text: "- Global deploy preference.",
+          importance: 7,
+          triggers: "global defaults",
+          projectKey: null,
+          originClass: "agent",
+        },
+      ]);
+      expect(rows.find((row) => row.path === "USER.md")).toMatchObject({
+        importance: 7,
+        triggers: "writing style",
+        projectKey: null,
+        originClass: "agent",
+      });
+      expect(rows.find((row) => row.path === "memory/2026-01-12.md")).toMatchObject({
+        importance: null,
+        triggers: null,
+        projectKey: "github.com/openclaw/openclaw",
+        originClass: "agent",
+      });
+      expect(rows.find((row) => row.path === "memory/2026-01-13.md")).toMatchObject({
+        importance: null,
+        triggers: null,
+        projectKey: "path:/Users/Alice/Repo; path:/Users/alice/repo",
+        originClass: "agent",
+      });
+      expect(rows.every((row) => !row.text.includes("<!--"))).toBe(true);
+      expect(embeddedBatchTexts.length).toBeGreaterThan(0);
+      expect(embeddedBatchTexts.every((text) => !text.includes("<!--"))).toBe(true);
+
+      for (const query of ["trigger", "importance", "project"]) {
+        const annotationHits = await manager.search(query, {
+          lexicalOnly: true,
+          maxResults: 20,
+          minScore: 0,
+          sources: ["memory"],
+        });
+        expect(annotationHits).toEqual([]);
+      }
+
+      const bodyHits = await manager.search("Alpha deploy preference", {
+        lexicalOnly: true,
+        maxResults: 10,
+        minScore: 0,
+        sources: ["memory"],
+      });
+      expect(bodyHits[0]?.snippet).toContain("Alpha deploy preference.");
+      expect(bodyHits[0]?.snippet).not.toContain("<!--");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("round-trips mixed-case project keys through indexed recall consumers", async () => {
+    const projectKey = "github.com/OpenClaw/OpenClaw";
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      `- Follow the kraken deploy ritual. <!-- trigger: kraken deploy ritual --> <!-- importance: 8 --> <!-- project: ${projectKey} -->\n`,
+    );
+
+    const manager = await getFreshManager(createCfg({}));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        db
+          .prepare(
+            `SELECT metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+               AND metadata.triggers = 'kraken deploy ritual'`,
+          )
+          .get(),
+      ).toEqual({ projectKey });
+
+      if (!manager.listCuratedProjectCandidates || !manager.listTriggerCandidates) {
+        throw new Error("expected curated project and trigger candidate listing");
+      }
+      const activeProjectKeys = [projectKey];
+      const curated = await manager.listCuratedProjectCandidates({ activeProjectKeys });
+      const triggers = await manager.listTriggerCandidates({ activeProjectKeys });
+      expect(curated).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+      expect(triggers).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+
+      const neutral = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys: [],
+      });
+      const active = await manager.search("kraken deploy", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys,
+      });
+      const neutralHit = neutral.find((entry) => entry.projectKey === projectKey);
+      const activeHit = active.find((entry) => entry.projectKey === projectKey);
+      expect(neutralHit).toBeDefined();
+      expect(activeHit).toBeDefined();
+      if (!neutralHit || !activeHit) {
+        throw new Error("expected mixed-case project hit in neutral and active search");
+      }
+      expect(activeHit.score).toBeGreaterThan(neutralHit.score);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps invalid project annotations scoped but unsatisfiable", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "- Invalid fact. <!-- trigger: invalid fact --> <!-- project: bad< -->",
+        "- Mixed fact. <!-- trigger: mixed fact --> <!-- project: alpha-key; bad< -->",
+        "- Unterminated fact. <!-- trigger: unterminated fact --> <!-- project: alpha-key",
+        "- Global fact. <!-- trigger: global fact -->",
+      ].join("\n"),
+    );
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        db
+          .prepare(
+            `SELECT metadata.triggers, metadata.project_key AS projectKey
+             FROM memory_index_chunks AS chunk
+             LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+               ON metadata.chunk_id = chunk.id
+             WHERE chunk.path = 'MEMORY.md'
+             ORDER BY chunk.start_line`,
+          )
+          .all(),
+      ).toEqual([
+        { triggers: "invalid fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: "mixed fact", projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: null, projectKey: INVALID_PROJECT_ANNOTATION_KEY },
+        { triggers: "global fact", projectKey: null },
+      ]);
+      const activeProjectKeys = ["alpha-key"];
+      if (!manager.listTriggerCandidates) {
+        throw new Error("expected trigger candidate listing");
+      }
+      const triggerCandidates = await manager.listTriggerCandidates({ activeProjectKeys });
+      expect(triggerCandidates).toMatchObject([{ triggers: "global fact" }]);
+      const results = await manager.search("fact", {
+        minScore: 0,
+        maxResults: 10,
+        activeProjectKeys,
+      });
+      expect(
+        results.every((entry) => !/Invalid fact|Mixed fact|Unterminated fact/u.test(entry.snippet)),
+      ).toBe(true);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("inherits entry-scoped annotations across oversized curated fragments", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "- Oversized alpha entry. <!-- trigger: oversized alpha --> <!-- importance: 8 --> <!-- project: alpha-key -->",
+        `  ${"alpha-fragment-body ".repeat(400)}`,
+        "- Global neighbor. <!-- trigger: global neighbor -->",
+      ].join("\n"),
+    );
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      const settings = Reflect.get(manager, "settings") as {
+        chunking: { tokens: number; overlap: number };
+      };
+      settings.chunking = { tokens: 64, overlap: 0 };
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const rows = db
+        .prepare(
+          `SELECT chunk.text, metadata.importance, metadata.triggers,
+                  metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line, chunk.id`,
+        )
+        .all() as Array<{
+        text: string;
+        importance: number | null;
+        triggers: string | null;
+        projectKey: string | null;
+      }>;
+      const fragments = rows.filter((row) => row.triggers === "oversized alpha");
+
+      expect(fragments.length).toBeGreaterThanOrEqual(2);
+      expect(fragments.every((row) => row.projectKey === "alpha-key" && row.importance === 8)).toBe(
+        true,
+      );
+      expect(rows.find((row) => row.triggers === "global neighbor")).toMatchObject({
+        projectKey: null,
+        importance: null,
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("re-chunks unchanged curated files when the chunking version advances", async () => {
+    const curatedContent = [
+      "- Alpha entry. <!-- trigger: alpha entry --> <!-- project: alpha-key -->",
+      "- Beta entry. <!-- trigger: beta entry --> <!-- project: beta-key -->",
+      "- Global entry. <!-- trigger: global entry -->",
+    ].join("\n");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), curatedContent);
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const metaRow = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get() as { value: string };
+      const currentMeta = JSON.parse(metaRow.value) as MemoryIndexMeta;
+      const legacyMeta: MemoryIndexMeta = {
+        ...currentMeta,
+        chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+      };
+
+      db.prepare("DELETE FROM memory_index_chunks WHERE path = ? AND source = 'memory'").run(
+        "MEMORY.md",
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, '[]', ?)`,
+      ).run(
+        "legacy-curated-chunk",
+        "MEMORY.md",
+        hashText(curatedContent),
+        curatedContent,
+        Date.now(),
+      );
+      db.prepare(
+        `INSERT INTO memory_index_chunk_provenance (
+           chunk_id, origin_class, session_kind, observed_at
+         ) VALUES ('legacy-curated-chunk', 'agent', 'unknown', ?)`,
+      ).run(Date.now());
+      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+        JSON.stringify(legacyMeta),
+      );
+
+      await manager.sync({ reason: "test" });
+
+      const rows = db
+        .prepare(
+          `SELECT chunk.text, metadata.triggers, metadata.project_key AS projectKey
+           FROM memory_index_chunks AS chunk
+           LEFT JOIN memory_index_chunk_recall_metadata AS metadata
+             ON metadata.chunk_id = chunk.id
+           WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+           ORDER BY chunk.start_line`,
+        )
+        .all();
+      expect(rows).toMatchObject([
+        { triggers: "alpha entry", projectKey: "alpha-key" },
+        { triggers: "beta entry", projectKey: "beta-key" },
+        { triggers: "global entry", projectKey: null },
+      ]);
+      expect(rows).toHaveLength(3);
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      const upgradedMeta = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+        .get() as { value: string };
+      expect((JSON.parse(upgradedMeta.value) as MemoryIndexMeta).chunkingVersion).toBe(
+        MEMORY_CHUNKING_VERSION,
+      );
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps existing file index rows when chunk publication fails", async () => {
+    const cfg = createCfg({});
+    const manager = await getFreshManager(cfg);
+    try {
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+
+      await manager.sync({ reason: "test" });
+
+      const initialSource = db
+        .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
+        .get("%2026-01-12.md", "memory") as { hash: string } | undefined;
+      const initialChunk = db
+        .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
+        .get("%2026-01-12.md", "memory") as { text: string } | undefined;
+      expect(initialSource?.hash).toBeTruthy();
+      expect(initialChunk?.text).toContain("Alpha memory line.");
+
+      db.exec(`
+        CREATE TRIGGER fail_chunk_publication
+        AFTER INSERT ON memory_index_chunks
+        BEGIN
+          SELECT RAISE(FAIL, 'forced chunk publication failure');
+        END;
+      `);
+      await fs.writeFile(path.join(memoryDir, "2026-01-12.md"), "# Log\nUpdated memory line.");
+      Reflect.set(manager, "dirty", true);
+
+      await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+        "forced chunk publication failure",
+      );
+
+      expect(
+        db
+          .prepare("SELECT hash FROM memory_index_sources WHERE path LIKE ? AND source = ?")
+          .get("%2026-01-12.md", "memory"),
+      ).toEqual(initialSource);
+      expect(
+        db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
+          .get("%2026-01-12.md", "memory"),
+      ).toEqual(initialChunk);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("reindexes memory tables in place without deleting unrelated agent rows", async () => {
+    const stateDir = path.join(workspaceDir, "managed-memory-state");
+    setMemoryIndexStateDir(stateDir);
+    const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
+    agentDb.db
+      .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
+      .run("test", "keep-me", JSON.stringify({ value: "keep-me" }), 1);
+    closeOpenClawAgentDatabasesForTest();
+
+    const manager = await getFreshManager(
+      createCfg({
+        hybrid: { enabled: false },
+      }),
+    );
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().dbPath).toBe(agentDbPath);
+    } finally {
+      await manager.close?.();
+    }
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "main" });
+    expect(
+      reopened.db
+        .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+        .get("test", "keep-me"),
+    ).toEqual({
+      value_json: JSON.stringify({ value: "keep-me" }),
+    });
+  });
+
+  it("initializes agent schema metadata when memory opens the database first", async () => {
+    const manager = await getFreshManager(createCfg({}));
+    await manager.close?.();
+
+    const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
+    expect(
+      agentDb.db.prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'").get(),
+    ).toEqual({
+      role: "agent",
+      agent_id: "main",
+    });
+  });
+
+  it("batches dirty memory chunks across files", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(providerRuntimeBatchCalls[0]).toEqual([
+        "# Log\nAlpha memory line.\nZebra memory line.",
+        "# Log\nBeta memory line.",
+        "# Log\nGamma memory line.",
+      ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("maps source-wide batch fallback results to missing chunks after cache hits", async () => {
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+      providerRuntimeBatchCalls = [];
+      providerRuntimeBatchFailuresRemaining = 1;
+      embedBatchCalls = 0;
+
+      await manager.sync({ reason: "test", force: true });
+
+      expect(providerRuntimeBatchCalls).toEqual([["# Log\nBeta memory line."]]);
+      expect(embedBatchCalls).toBe(1);
+      const betaRow = (
+        manager as unknown as {
+          db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } };
+        }
+      ).db
+        .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
+        .get("%2026-01-13.md", "memory") as { embedding: string } | undefined;
+
+      expect(betaRow).toBeDefined();
+      expect(JSON.parse(betaRow?.embedding ?? "[]")).toEqual([0, 1, 0, 0]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("derives batch attempts locally instead of trusting provider error metadata", async () => {
+    providerRuntimeBatchErrors = [
+      Object.assign(new Error("provider runtime batch failed"), {
+        batchAttempts: Number.MAX_SAFE_INTEGER,
+      }),
+    ];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: true,
+        failures: 1,
+        lastError: "provider runtime batch failed",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("disables batch immediately when the provider reports it unavailable", async () => {
+    providerRuntimeBatchErrors = [
+      Object.assign(new Error("provider batch unavailable"), {
+        code: "embedding_batch_unavailable",
+      }),
+    ];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: false,
+        failures: 2,
+        lastError: "provider batch unavailable",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it.each([
+    ["frozen errors", Object.freeze(new Error("provider runtime retry failed"))],
+    ["primitive rejections", "provider runtime retry failed"],
+  ])("preserves %s while recording both attempts", async (_kind, retryError) => {
+    providerRuntimeBatchErrors = [new Error("memory embeddings batch timed out"), retryError];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: false,
+        failures: 2,
+        lastError: "provider runtime retry failed",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("resets batch failures when a timeout retry recovers", async () => {
+    providerRuntimeBatchErrors = [new Error("provider runtime batch failed")];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+      expect(manager.status().batch?.failures).toBe(1);
+
+      await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+      providerRuntimeBatchCalls = [];
+      providerRuntimeBatchErrors = [new Error("memory embeddings batch timed out")];
+      embedBatchCalls = 0;
+
+      await manager.sync({ reason: "test", force: true });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(embedBatchCalls).toBe(0);
+      expect(manager.status().batch).toMatchObject({
+        enabled: true,
+        failures: 0,
+        lastError: undefined,
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps split chunks from oversized files in one source-wide batch", async () => {
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      `# Log\n${"Long split memory line. ".repeat(1200)}`,
+    );
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nBeta memory line.");
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(combinedBatch.length).toBeGreaterThan(3);
+      expect(combinedBatch.join("\n")).toContain("Long split memory line.");
+      expect(combinedBatch).toContain("# Log\nBeta memory line.");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps custom batch runtimes per file without source-wide opt in", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(3);
+      expect(providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(true);
+      expect(providerRuntimeBatchCalls.map((call) => call[0] ?? "").toSorted()).toEqual(
+        [
+          "# Log\nAlpha memory line.\nZebra memory line.",
+          "# Log\nBeta memory line.",
+          "# Log\nGamma memory line.",
+        ].toSorted(),
+      );
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps custom batch runtimes concurrent without source-wide opt in", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+    });
+    const manager = await getFreshManager(cfg);
+    let releaseBatchGate: (() => void) | undefined;
+    providerRuntimeBatchGate = new Promise((resolve) => {
+      releaseBatchGate = resolve;
+    });
+    const syncPromise = manager.sync({ reason: "test" });
+    let waitError: Error | undefined;
+    try {
+      await vi.waitFor(() => expect(providerRuntimeMaxActiveBatchCalls).toBeGreaterThan(1));
+    } catch (err) {
+      waitError = err instanceof Error ? err : new Error(String(err));
+    } finally {
+      releaseBatchGate?.();
+      await syncPromise;
+      await manager.close?.();
+    }
+    if (waitError) {
+      throw waitError;
+    }
+  });
+
+  it("bounds source-wide memory batches", async () => {
+    const batchFileLimit = 2048;
+    for (let index = 0; index < batchFileLimit; index += 1) {
+      await fs.writeFile(
+        path.join(memoryDir, `2026-02-${String(index + 1).padStart(4, "0")}.md`),
+        `# Log\nBounded memory line ${index}.`,
+      );
+    }
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerRuntimeBatchCalls[0]).toHaveLength(batchFileLimit);
+      expect(providerRuntimeBatchCalls[1]).toHaveLength(1);
+      expect(providerRuntimeBatchCalls.flat()).toHaveLength(batchFileLimit + 1);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("batches forced memory and session indexing across files", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-alpha",
+      messages: [
+        {
+          role: "user",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Session alpha memory line.",
+        },
+      ],
+    });
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-beta",
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Session beta memory line.",
+        },
+      ],
+    });
+    const cfg = createCfg({
+      provider: "batch-wide-test",
+      batchEnabled: true,
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "cli", force: true });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      const combinedBatch = providerRuntimeBatchCalls[0] ?? [];
+      expect(combinedBatch.slice(0, 2)).toEqual([
+        "# Log\nAlpha memory line.\nZebra memory line.",
+        "# Log\nBeta memory line.",
+      ]);
+      expect(combinedBatch.join("\n")).toContain("Session alpha memory line.");
+      expect(combinedBatch.join("\n")).toContain("Session beta memory line.");
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("does not full-reindex on search when existing metadata belongs to another provider", async () => {
-    const dbPath = path.join(workspaceDir, "index-provider-cutover.sqlite");
     const oldCfg = createCfg({
-      storePath: dbPath,
       model: "old-embed",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
@@ -420,7 +1389,6 @@ describe("memory index", () => {
     await oldManager.close?.();
 
     const nextCfg = createCfg({
-      storePath: dbPath,
       provider: "gemini",
       model: "new-embed",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -459,10 +1427,71 @@ describe("memory index", () => {
     }
   });
 
+  it.each([
+    {
+      direction: "HF to exact cache path",
+      indexedModel: identityAliasFixture.canonicalModel,
+      configuredModel: identityAliasFixture.cacheModel,
+    },
+    {
+      direction: "exact cache path to HF",
+      indexedModel: identityAliasFixture.cacheModel,
+      configuredModel: identityAliasFixture.canonicalModel,
+    },
+  ])(
+    "keeps $direction indexes and embedding caches usable",
+    async ({ indexedModel, configuredModel }) => {
+      const indexedCfg = createCfg({
+        provider: identityAliasFixture.provider,
+        model: identityAliasFixture.canonicalModel,
+        cacheEnabled: true,
+        vectorEnabled: false,
+        onSearch: false,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const indexedManager = await getFreshManager(indexedCfg);
+      await indexedManager.sync({ reason: "test", force: true });
+      if (indexedModel !== identityAliasFixture.canonicalModel) {
+        rewritePersistedProviderIdentity(indexedManager, indexedModel);
+      }
+      await indexedManager.close?.();
+
+      const embedsBeforeReuse = embedBatchCalls;
+      const nextCfg = createCfg({
+        provider: identityAliasFixture.provider,
+        model: configuredModel,
+        cacheEnabled: true,
+        vectorEnabled: false,
+        onSearch: false,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      });
+      const statusManager = await getFreshManager(nextCfg, "status");
+      try {
+        expect(statusManager.status().dirty).toBe(false);
+        expect(statusManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      } finally {
+        await statusManager.close?.();
+      }
+
+      const nextManager = await getFreshManager(nextCfg);
+      try {
+        const results = await nextManager.search("zebra");
+
+        expect(results.length).toBeGreaterThan(0);
+        expect(results[0]?.path).toContain("memory/2026-01-12.md");
+        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+        await nextManager.sync({ reason: "test", force: true });
+
+        expect(embedBatchCalls).toBe(embedsBeforeReuse);
+      } finally {
+        await nextManager.close?.();
+      }
+    },
+  );
+
   it("keeps status clean when configured provider alias resolves to indexed adapter", async () => {
-    const dbPath = path.join(workspaceDir, "index-provider-alias-status.sqlite");
     const oldCfg = createCfg({
-      storePath: dbPath,
       provider: "ollama",
       model: "ollama-embed",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -472,7 +1501,6 @@ describe("memory index", () => {
     await oldManager.close?.();
 
     const aliasCfg = createCfg({
-      storePath: dbPath,
       provider: "ollama-west",
       providerAliases: {
         "ollama-west": {
@@ -496,10 +1524,8 @@ describe("memory index", () => {
   });
 
   it("keeps status clean when configured model defaults to the adapter model (#90413)", async () => {
-    const dbPath = path.join(workspaceDir, "index-default-model-status.sqlite");
     // Index under the provider's resolved default model, as provider init does.
     const indexCfg = createCfg({
-      storePath: dbPath,
       provider: "gemini",
       model: "gemini-embed",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -512,7 +1538,6 @@ describe("memory index", () => {
     // default, so identity must resolve the adapter model instead of comparing
     // meta against a blank "expected" model.
     const statusCfg = createCfg({
-      storePath: dbPath,
       provider: "gemini",
       model: "",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -528,12 +1553,11 @@ describe("memory index", () => {
     }
   });
 
-  it("does not search stale rows when index metadata is missing", async () => {
-    const dbPath = path.join(workspaceDir, "index-missing-meta-cutover.sqlite");
+  it("rebuilds missing metadata with existing chunks before search", async () => {
     const cfg = createCfg({
-      storePath: dbPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
     const oldManager = await getFreshManager(cfg);
     await oldManager.sync({ reason: "test", force: true });
     await oldManager.close?.();
@@ -545,7 +1569,7 @@ describe("memory index", () => {
         nextManager as unknown as {
           db: { exec: (sql: string) => void };
         }
-      ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+      ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "missing",
         reason: "index metadata is missing",
@@ -553,21 +1577,17 @@ describe("memory index", () => {
 
       const results = await nextManager.search("alpha");
 
-      expect(results).toStrictEqual([]);
-      expect(nextManager.status().dirty).toBe(true);
-      expect(nextManager.status().custom?.indexIdentity).toEqual({
-        status: "missing",
-        reason: "index metadata is missing",
-      });
+      expect(nextManager.status().dirty).toBe(false);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(false);
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-13.md"))).toBe(true);
     } finally {
       await nextManager.close?.();
     }
   });
 
   it("does not search stale provider rows after embeddings become unavailable", async () => {
-    const dbPath = path.join(workspaceDir, "index-provider-unavailable-cutover.sqlite");
     const oldCfg = createCfg({
-      storePath: dbPath,
       model: "semantic-embed",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
@@ -590,34 +1610,59 @@ describe("memory index", () => {
     }
   });
 
+  it("does not rebuild missing semantic metadata when embeddings are unavailable", async () => {
+    const oldCfg = createCfg({
+      model: "semantic-embed",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(oldCfg);
+    await oldManager.sync({ reason: "test", force: true });
+    await oldManager.close?.();
+
+    forceNoProvider = true;
+    const nextManager = await getFreshManager(oldCfg);
+    try {
+      const db = (
+        nextManager as unknown as {
+          db: {
+            exec: (sql: string) => void;
+            prepare: (sql: string) => {
+              get: () => { model?: string } | undefined;
+            };
+          };
+        }
+      ).db;
+      db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
+
+      await nextManager.sync({ reason: "test" });
+
+      expect(nextManager.status().dirty).toBe(true);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({
+        status: "missing",
+        reason: "index metadata is missing",
+      });
+      const row = db.prepare("SELECT model FROM memory_index_chunks LIMIT 1").get();
+      expect(row?.model).toBe("semantic-embed");
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
   it("clears dirty after sessions-only identity reindex", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-sessions-only-reindex"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "session-identity.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-identity",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Session-only identity marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-only-reindex"));
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-identity",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Session-only identity marker.",
+          },
+        ],
+      });
 
-      const dbPath = path.join(workspaceDir, "index-sessions-only-cutover.sqlite");
       const oldCfg = createCfg({
-        storePath: dbPath,
         sources: ["sessions"],
         sessionMemory: true,
         model: "old-embed",
@@ -627,7 +1672,6 @@ describe("memory index", () => {
       await oldManager.close?.();
 
       const nextCfg = createCfg({
-        storePath: dbPath,
         sources: ["sessions"],
         sessionMemory: true,
         provider: "gemini",
@@ -645,38 +1689,25 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
   it("marks sessions-only indexes dirty when metadata is missing but chunks exist", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-sessions-missing-meta"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "session-missing-meta.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-missing-meta",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Sessions missing metadata marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-missing-meta"));
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-missing-meta",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Sessions missing metadata marker.",
+          },
+        ],
+      });
 
-      const dbPath = path.join(workspaceDir, "index-sessions-missing-meta.sqlite");
       const cfg = createCfg({
-        storePath: dbPath,
         sources: ["sessions"],
         sessionMemory: true,
       });
@@ -690,7 +1721,7 @@ describe("memory index", () => {
           nextManager as unknown as {
             db: { exec: (sql: string) => void };
           }
-        ).db.exec(`DELETE FROM meta WHERE key = 'memory_index_meta_v1'`);
+        ).db.exec(`DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'`);
 
         const status = nextManager.status();
 
@@ -703,13 +1734,513 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("drains retained queued targets through the next idle sync call", async () => {
+    const markers = {
+      blocker: "BLOCKER LOCKED SYNC 729",
+      retained: "RETAINED RETRY TARGET 729",
+      trigger: "IDLE TRIGGER TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:proof:${sessionId}`;
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let lock: DatabaseSync | null = null;
+    try {
+      await manager.sync({ reason: "test-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
+        });
+      }
+
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      lock = new DatabaseSync(dbPath);
+      lock.exec("PRAGMA busy_timeout = 0");
+      lock.exec("BEGIN EXCLUSIVE");
+
+      const active = manager.sync({
+        reason: "test-locked-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "blocker",
+            sessionKey: sessionKey("blocker"),
+          },
+        ],
+      });
+      const failedQueued = manager.sync({
+        reason: "test-queued-retained",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
+      });
+      const failures = await Promise.allSettled([active, failedQueued]);
+      lock.exec("ROLLBACK");
+      lock.close();
+      lock = null;
+      const describeSqliteFailure = (failure: unknown): string => {
+        const details = [String(failure)];
+        if (failure && typeof failure === "object") {
+          const record = failure as Record<string, unknown>;
+          for (const key of ["message", "code"] as const) {
+            if (typeof record[key] === "string") {
+              details.push(record[key]);
+            }
+          }
+          if (record.cause && typeof record.cause === "object") {
+            const cause = record.cause as Record<string, unknown>;
+            for (const key of ["message", "code"] as const) {
+              if (typeof cause[key] === "string") {
+                details.push(cause[key]);
+              }
+            }
+          }
+        }
+        return details.join(" ");
+      };
+      for (const result of failures) {
+        expect(result.status).toBe("rejected");
+        if (result.status !== "rejected") {
+          throw new Error("expected SQLite-locked sync to reject");
+        }
+        expect(describeSqliteFailure(result.reason)).toMatch(
+          /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i,
+        );
+      }
+
+      const ftsMatchCount = (marker: string): number => {
+        const observer = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          return (
+            observer
+              .prepare(
+                "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+              )
+              .get(`"${marker}"`) as { count: number }
+          ).count;
+        } finally {
+          observer.close();
+        }
+      };
+
+      expect(ftsMatchCount(markers.retained)).toBe(0);
+      expect(ftsMatchCount(markers.trigger)).toBe(0);
+      const recoveryState = manager as unknown as {
+        syncing: Promise<void> | null;
+        queuedSessions: Map<string, unknown>;
+        sessionsDirtyFiles: Set<string>;
+        sessionsFullRetryDirty: boolean;
+      };
+      expect(recoveryState.syncing).toBeNull();
+      expect(recoveryState.queuedSessions.size).toBe(1);
+      expect(recoveryState.sessionsDirtyFiles.size).toBe(0);
+      expect(recoveryState.sessionsFullRetryDirty).toBe(false);
+
+      const recoveryProgress = vi.fn();
+      const recovery = manager.sync({
+        reason: "test-recovery-trigger",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
+        progress: recoveryProgress,
+      });
+      // A full sync can claim `syncing` before the retained queue owner resumes.
+      // Both owners must settle without the queue awaiting its own promise.
+      const competingFullSync = manager.sync({ reason: "test-competing-full-sync" });
+      const recoveryResults = await Promise.allSettled([recovery, competingFullSync]);
+      expect(recoveryResults.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+
+      expect(ftsMatchCount(markers.retained)).toBeGreaterThan(0);
+      expect(ftsMatchCount(markers.trigger)).toBeGreaterThan(0);
+      expect(recoveryState.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
+    } finally {
+      if (lock) {
+        try {
+          lock.exec("ROLLBACK");
+        } finally {
+          lock.close();
+        }
+      }
+      await manager.close?.();
+    }
+  });
+
+  it("drains retained queued targets from a live rejection transition", async () => {
+    const markers = {
+      retained: "LIVE REJECTION RETAINED TARGET 729",
+      transition: "LIVE REJECTION TRANSITION TARGET 729",
+      trigger: "LIVE REJECTION RECOVERY TARGET 729",
+    };
+    const sessionKey = (sessionId: string) => `agent:main:live-rejection:${sessionId}`;
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    let rejectQueuedSync: ((error: Error) => void) | undefined;
+    const queuedSyncGate = new Promise<void>((_resolve, reject) => {
+      rejectQueuedSync = reject;
+    });
+    const owner = manager as unknown as {
+      syncing: Promise<void> | null;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedSessionSync: Promise<void> | null;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSyncWithReadonlyRecovery = owner.runSyncWithReadonlyRecovery.bind(owner);
+    const runSync = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockImplementationOnce(async (params) => await runSyncWithReadonlyRecovery(params))
+      .mockImplementationOnce(async () => await activeSyncGate)
+      .mockImplementationOnce(async () => await queuedSyncGate)
+      .mockImplementation(async (params) => await runSyncWithReadonlyRecovery(params));
+    const queuedError = new Error("controlled queued rejection");
+    try {
+      await manager.sync({ reason: "test-live-rejection-baseline", force: true });
+      for (const [sessionId, marker] of Object.entries(markers)) {
+        await seedMemoryIndexSessionTranscript({
+          sessionId,
+          sessionKey: sessionKey(sessionId),
+          messages: [
+            {
+              role: "user",
+              timestamp: Date.now(),
+              content: marker,
+            },
+          ],
+        });
+      }
+
+      const active = manager.sync({
+        reason: "test-live-rejection-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "active",
+            sessionKey: sessionKey("active"),
+          },
+        ],
+      });
+      const queuedProgress = vi.fn();
+      const failedQueued = manager.sync({
+        reason: "test-live-rejection-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained",
+            sessionKey: sessionKey("retained"),
+          },
+        ],
+        force: true,
+        progress: queuedProgress,
+      });
+      const failuresPromise = Promise.allSettled([active, failedQueued]);
+      resolveActiveSync?.();
+      await vi.waitFor(() => {
+        expect(runSync).toHaveBeenCalledTimes(3);
+        expect(owner.syncing).not.toBeNull();
+        expect(owner.queuedSessionSync).not.toBeNull();
+      });
+      const rejectingQueuedSync = owner.syncing;
+      if (!rejectingQueuedSync) {
+        throw new Error("expected a live queued sync");
+      }
+
+      let resolveTransitionResult!: (result: PromiseSettledResult<void>) => void;
+      const transitionResult = new Promise<PromiseSettledResult<void>>((resolve) => {
+        resolveTransitionResult = resolve;
+      });
+      let transitionState:
+        | { syncingNull: boolean; queueOwnerLive: boolean; queuedTargets: number }
+        | undefined;
+      const transitionProgress = vi.fn();
+      void rejectingQueuedSync.catch(() => {
+        transitionState = {
+          syncingNull: owner.syncing === null,
+          queueOwnerLive: owner.queuedSessionSync !== null,
+          queuedTargets: owner.queuedSessions.size,
+        };
+        const transitionCall = manager.sync({
+          reason: "test-live-rejection-transition",
+          sessions: [
+            {
+              agentId: "main",
+              sessionId: "transition",
+              sessionKey: sessionKey("transition"),
+            },
+          ],
+          progress: transitionProgress,
+        });
+        void transitionCall.then(
+          (value) => resolveTransitionResult({ status: "fulfilled", value }),
+          (reason: unknown) => resolveTransitionResult({ status: "rejected", reason }),
+        );
+      });
+
+      rejectQueuedSync?.(queuedError);
+      const failures = await failuresPromise;
+      const transitionFailure = await transitionResult;
+      expect(failures[0]?.status).toBe("fulfilled");
+      expect(failures[1]?.status).toBe("rejected");
+      expect(transitionFailure.status).toBe("rejected");
+      if (failures[1]?.status !== "rejected" || transitionFailure.status !== "rejected") {
+        throw new Error("expected shared queued rejection");
+      }
+      expect(failures[1].reason).toBe(queuedError);
+      expect(transitionFailure.reason).toBe(queuedError);
+      expect(transitionState).toEqual({
+        syncingNull: true,
+        queueOwnerLive: true,
+        queuedTargets: 0,
+      });
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "transition",
+          sessionKey: sessionKey("transition"),
+        },
+        {
+          agentId: "main",
+          sessionId: "retained",
+          sessionKey: sessionKey("retained"),
+        },
+      ]);
+      expect(queuedProgress).not.toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
+
+      const recoveryProgress = vi.fn();
+      await manager.sync({
+        reason: "test-live-rejection-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger",
+            sessionKey: sessionKey("trigger"),
+          },
+        ],
+        progress: recoveryProgress,
+      });
+
+      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const observer = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        const indexedCount = (marker: string) =>
+          (
+            observer
+              .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE text LIKE ?")
+              .get(`%${marker}%`) as { count: number }
+          ).count;
+        expect(indexedCount(markers.retained)).toBeGreaterThan(0);
+        expect(indexedCount(markers.transition)).toBeGreaterThan(0);
+        expect(indexedCount(markers.trigger)).toBeGreaterThan(0);
+      } finally {
+        observer.close();
+      }
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(recoveryProgress).toHaveBeenCalled();
+      expect(transitionProgress).not.toHaveBeenCalled();
+    } finally {
+      resolveActiveSync?.();
+      rejectQueuedSync?.(queuedError);
+      await manager.close?.();
+      runSync.mockRestore();
+    }
+  });
+
+  it("clears retained queued targets when close interrupts a competing sync", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveFullSync: (() => void) | undefined;
+    const fullSyncGate = new Promise<void>((resolve) => {
+      resolveFullSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closing: boolean;
+      closed: boolean;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      syncAdmitted: (params?: MemorySyncParams) => Promise<void>;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const syncAdmitted = vi.spyOn(owner, "syncAdmitted");
+    const runSyncWithReadonlyRecovery = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockReturnValueOnce(fullSyncGate);
+    const progress = vi.fn();
+    owner.queuedSessions.set("retained", {
+      agentId: "main",
+      sessionId: "retained-close",
+      sessionKey: "agent:main:retained-close",
+    });
+
+    try {
+      const recovery = manager.sync({
+        reason: "test-close-recovery",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "trigger-close",
+            sessionKey: "agent:main:trigger-close",
+          },
+        ],
+        force: true,
+        progress,
+      });
+      const competingFullSync = manager.sync({ reason: "test-close-competing-full-sync" });
+
+      await vi.waitFor(() => {
+        expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      });
+      const closing = manager.close?.() ?? Promise.resolve();
+      expect(owner.closing).toBe(true);
+      resolveFullSync?.();
+
+      await expect(Promise.all([recovery, competingFullSync, closing])).resolves.toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(1);
+      expect(syncAdmitted).toHaveBeenCalledTimes(2);
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+      expect(progress).not.toHaveBeenCalled();
+    } finally {
+      resolveFullSync?.();
+      await manager.close?.();
+      runSyncWithReadonlyRecovery.mockRestore();
+      syncAdmitted.mockRestore();
+    }
+  });
+
+  it("clears retained queued targets after failure when the manager closes", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "none",
+        sources: ["sessions"],
+        sessionMemory: true,
+      }),
+    );
+    let resolveActiveSync: (() => void) | undefined;
+    const activeSyncGate = new Promise<void>((resolve) => {
+      resolveActiveSync = resolve;
+    });
+    const owner = manager as unknown as {
+      closed: boolean;
+      queuedArchiveFiles: Set<string>;
+      queuedSessions: Map<string, MemorySessionSyncTarget>;
+      queuedProgressCallbacks: Set<NonNullable<MemorySyncParams["progress"]>>;
+      queuedForce: boolean;
+      queuedSessionSync: Promise<void> | null;
+      runSyncWithReadonlyRecovery: (params?: MemorySyncParams) => Promise<void>;
+    };
+    const runSyncWithReadonlyRecovery = vi
+      .spyOn(owner, "runSyncWithReadonlyRecovery")
+      .mockReturnValueOnce(activeSyncGate)
+      .mockRejectedValueOnce(new Error("test queued failure"));
+    const progress = vi.fn();
+
+    try {
+      const active = manager.sync({
+        reason: "test-close-after-failure-owner",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "active-close-after-failure",
+            sessionKey: "agent:main:active-close-after-failure",
+          },
+        ],
+      });
+      const failedQueued = manager.sync({
+        reason: "test-close-after-failure-queued",
+        sessions: [
+          {
+            agentId: "main",
+            sessionId: "retained-close-after-failure",
+            sessionKey: "agent:main:retained-close-after-failure",
+          },
+        ],
+        archiveFiles: ["/tmp/retained-close-after-failure.jsonl"],
+        force: true,
+        progress,
+      });
+      const queuedRejection = expect(failedQueued).rejects.toThrow("test queued failure");
+
+      resolveActiveSync?.();
+      await active;
+      await queuedRejection;
+
+      expect(runSyncWithReadonlyRecovery).toHaveBeenCalledTimes(2);
+      expect(owner.queuedArchiveFiles).toEqual(
+        new Set(["/tmp/retained-close-after-failure.jsonl"]),
+      );
+      expect(Array.from(owner.queuedSessions.values())).toEqual([
+        {
+          agentId: "main",
+          sessionId: "retained-close-after-failure",
+          sessionKey: "agent:main:retained-close-after-failure",
+        },
+      ]);
+      expect(owner.queuedForce).toBe(true);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedSessionSync).toBeNull();
+
+      await manager.close?.();
+
+      expect(owner.closed).toBe(true);
+      expect(owner.queuedArchiveFiles.size).toBe(0);
+      expect(owner.queuedSessions.size).toBe(0);
+      expect(owner.queuedProgressCallbacks.size).toBe(0);
+      expect(owner.queuedForce).toBe(false);
+    } finally {
+      resolveActiveSync?.();
+      await manager.close?.();
+      runSyncWithReadonlyRecovery.mockRestore();
     }
   });
 
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-targeted-cutover"));
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-targeted-cutover"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
@@ -733,9 +2264,7 @@ describe("memory index", () => {
         "utf8",
       );
 
-      const dbPath = path.join(workspaceDir, "index-targeted-session-cutover.sqlite");
       const oldCfg = createCfg({
-        storePath: dbPath,
         sources: ["memory", "sessions"],
         sessionMemory: true,
         model: "old-embed",
@@ -745,7 +2274,6 @@ describe("memory index", () => {
       await oldManager.close?.();
 
       const nextCfg = createCfg({
-        storePath: dbPath,
         sources: ["memory", "sessions"],
         sessionMemory: true,
         provider: "gemini",
@@ -756,7 +2284,7 @@ describe("memory index", () => {
         expect(nextManager.status().dirty).toBe(true);
         embedBatchCalls = 0;
 
-        await nextManager.sync({ reason: "test", sessionFiles: [sessionFile] });
+        await nextManager.sync({ reason: "test", archiveFiles: [sessionFile] });
 
         expect(embedBatchCalls).toBe(0);
         expect(nextManager.status().dirty).toBe(true);
@@ -770,13 +2298,13 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
   it("preserves memory dirty events raised during session identity reindex", async () => {
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-dirty-during-session"));
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-dirty-during-session"));
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });
       await fs.writeFile(
@@ -799,9 +2327,7 @@ describe("memory index", () => {
         "utf8",
       );
 
-      const dbPath = path.join(workspaceDir, "index-dirty-during-session.sqlite");
       const oldCfg = createCfg({
-        storePath: dbPath,
         sources: ["memory", "sessions"],
         sessionMemory: true,
         model: "old-embed",
@@ -811,7 +2337,6 @@ describe("memory index", () => {
       await oldManager.close?.();
 
       const nextCfg = createCfg({
-        storePath: dbPath,
         sources: ["memory", "sessions"],
         sessionMemory: true,
         provider: "gemini",
@@ -821,12 +2346,12 @@ describe("memory index", () => {
       try {
         const fields = nextManager as unknown as {
           dirty: boolean;
-          syncSessionFiles: (params: unknown) => Promise<void>;
+          syncArchiveFiles: (params: unknown) => Promise<void>;
         };
-        const syncSessionFiles = fields.syncSessionFiles.bind(nextManager);
-        fields.syncSessionFiles = async (params) => {
+        const syncArchiveFiles = fields.syncArchiveFiles.bind(nextManager);
+        fields.syncArchiveFiles = async (params) => {
           fields.dirty = true;
-          await syncSessionFiles(params);
+          await syncArchiveFiles(params);
         };
 
         await nextManager.sync({ reason: "test", force: true });
@@ -837,13 +2362,12 @@ describe("memory index", () => {
         await nextManager.close?.();
       }
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
     }
   });
 
   it("closes embedding providers when memory index managers close", async () => {
     const cfg = createCfg({
-      storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
@@ -859,7 +2383,6 @@ describe("memory index", () => {
 
   it("waits for pending sync before closing embedding providers", async () => {
     const cfg = createCfg({
-      storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
@@ -870,6 +2393,7 @@ describe("memory index", () => {
     });
 
     const closePromise = manager.close();
+    const concurrentClosePromise = manager.close();
     try {
       await Promise.resolve();
       expect(providerCloseCalls).toBe(0);
@@ -884,7 +2408,7 @@ describe("memory index", () => {
     } finally {
       resolveSync();
     }
-    await closePromise;
+    await Promise.all([closePromise, concurrentClosePromise]);
     expect(providerCloseCalls).toBe(1);
   });
 
@@ -894,7 +2418,6 @@ describe("memory index", () => {
       releaseProviderInit = resolve;
     });
     const cfg = createCfg({
-      storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
@@ -905,7 +2428,7 @@ describe("memory index", () => {
           runSyncWithReadonlyRecovery: (params?: {
             reason?: string;
             force?: boolean;
-            sessionFiles?: string[];
+            archiveFiles?: string[];
             progress?: (update: unknown) => void;
           }) => Promise<void>;
         }
@@ -943,62 +2466,380 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(1);
   });
 
-  it("evicts scoped memory index managers before close settles", async () => {
+  it("waits for scoped manager close before initializing a replacement", async () => {
     let releaseProviderClose: () => void = () => {};
     providerCloseGate = new Promise<void>((resolve) => {
       releaseProviderClose = resolve;
     });
     const cfg = createCfg({
-      storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
     managersForCleanup.add(first);
     await first.probeEmbeddingAvailability();
     const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
-    let second: MemoryIndexManager | null;
+    const callsBeforeReplacement = providerCalls.length;
+    const secondPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
+    );
+    const concurrentSecondPromise = getMemorySearchManager({ cfg, agentId: "main" }).then(
+      (result) => requireManager(result),
+    );
+    const secondProbe = secondPromise.then(async (manager) => {
+      await manager.probeEmbeddingAvailability();
+    });
+    let secondSettled = false;
+    void secondPromise.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
     try {
       await vi.waitFor(() => {
         expect(providerCloseCalls).toBe(1);
       });
-
-      second = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
-      managersForCleanup.add(second);
-      expect(second).not.toBe(first);
+      await Promise.resolve();
+      expect(secondSettled).toBe(false);
+      expect(providerCalls).toHaveLength(callsBeforeReplacement);
     } finally {
       releaseProviderClose();
       providerCloseGate = null;
     }
     await closePromise;
+    const second = await secondPromise;
+    const concurrentSecond = await concurrentSecondPromise;
+    await secondProbe;
+    managersForCleanup.add(second);
+    expect(second === first).toBe(false);
+    expect(concurrentSecond).toBe(second);
 
     const third = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
     managersForCleanup.add(third);
     expect(third).toBe(second);
   });
 
-  it("closes stale default managers when provider requirement changes", async () => {
-    const storePath = path.join(workspaceDir, "index-provider-requirement-cache.sqlite");
-    const implicitCfg = createCfg({ storePath });
-    const implicit = requireManager(
-      await getMemorySearchManager({ cfg: implicitCfg, agentId: "main" }),
-    );
-    managersForCleanup.add(implicit);
-    await implicit.probeEmbeddingAvailability();
+  it("does not reuse a cached manager after direct close starts", async () => {
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
 
-    const explicitCfg = createCfg({ storePath, provider: "openai" });
-    const explicit = requireManager(
-      await getMemorySearchManager({ cfg: explicitCfg, agentId: "main" }),
+    const closePromise = first.close();
+    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
     );
-    managersForCleanup.add(explicit);
+    let replacementSettled = false;
+    void replacementPromise.then(
+      () => {
+        replacementSettled = true;
+      },
+      () => {
+        replacementSettled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+      await Promise.resolve();
+      expect(replacementSettled).toBe(false);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
 
-    expect(explicit === implicit).toBe(false);
-    expect(providerCloseCalls).toBe(1);
+    await closePromise;
+    const replacement = await replacementPromise;
+    managersForCleanup.add(replacement);
+    expect(replacement === first).toBe(false);
+  });
+
+  it("serializes concurrent acquisitions with different cache identities", async () => {
+    const firstCfg = createCfg({
+      model: "first-model",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg: firstCfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+
+    const secondPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "second-model" }),
+      agentId: "main",
+    }).then((result) => requireManager(result));
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+    const thirdPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "third-model" }),
+      agentId: "main",
+    }).then((result) => requireManager(result));
+    try {
+      await Promise.resolve();
+      expect(providerCalls).toHaveLength(1);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const [second, third] = await Promise.all([secondPromise, thirdPromise]);
+    managersForCleanup.add(second);
+    managersForCleanup.add(third);
+    expect(second === first).toBe(false);
+    expect(third === second).toBe(false);
+    expect((second as unknown as { closed: boolean }).closed).toBe(true);
+    expect((third as unknown as { closed: boolean }).closed).toBe(false);
+  });
+
+  it("canonicalizes agent ids before builtin manager acquisition", async () => {
+    const cfg = createCfg({ model: "canonical-model" });
+    const first = await RuntimeMemoryIndexManager.get({ cfg, agentId: "Main-Agent" });
+    const second = await RuntimeMemoryIndexManager.get({ cfg, agentId: "main-agent" });
+    if (!first || !second) {
+      throw new Error("Expected canonical memory index managers");
+    }
+    managersForCleanup.add(first);
+    managersForCleanup.add(second);
+    expect(second).toBe(first);
+  });
+
+  it("retires the prior builtin manager when an agent workspace changes", async () => {
+    const firstCfg = createCfg({ model: "workspace-model" });
+    const secondCfg = createCfg({ model: "workspace-model" });
+    if (!firstCfg.agents?.defaults || !secondCfg.agents?.defaults) {
+      throw new Error("Expected agent defaults");
+    }
+    firstCfg.agents.defaults.workspace = path.join(fixtureRoot, "workspace-a");
+    secondCfg.agents.defaults.workspace = path.join(fixtureRoot, "workspace-b");
+
+    const first = await RuntimeMemoryIndexManager.get({ cfg: firstCfg, agentId: "main" });
+    const second = await RuntimeMemoryIndexManager.get({ cfg: secondCfg, agentId: "main" });
+    if (!first || !second) {
+      throw new Error("Expected workspace memory index managers");
+    }
+    managersForCleanup.add(first);
+    managersForCleanup.add(second);
+    expect(second === first).toBe(false);
+    expect((first as unknown as { closed: boolean }).closed).toBe(true);
+  });
+
+  it("does not block another agent while one scope retires its manager", async () => {
+    const firstCfg = createCfg({
+      model: "first-model",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg: firstCfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+
+    const replacementPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "second-model" }),
+      agentId: "main",
+    });
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+    const otherAgentPromise = getMemorySearchManager({
+      cfg: createCfg({ model: "other-model" }),
+      agentId: "other",
+    });
+    let otherAgentSettled = false;
+    void otherAgentPromise.then(
+      () => {
+        otherAgentSettled = true;
+      },
+      () => {
+        otherAgentSettled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(otherAgentSettled).toBe(true));
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const otherAgent = requireManager(await otherAgentPromise);
+    const replacement = requireManager(await replacementPromise);
+    managersForCleanup.add(otherAgent);
+    managersForCleanup.add(replacement);
+    expect((otherAgent as unknown as { closed: boolean }).closed).toBe(false);
+  });
+
+  it("global teardown waits for an admitted builtin manager replacement", async () => {
+    const first = await RuntimeMemoryIndexManager.get({
+      cfg: createCfg({ model: "first-model" }),
+      agentId: "main",
+    });
+    if (!first) {
+      throw new Error("Expected first memory index manager");
+    }
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+
+    const replacementPromise = RuntimeMemoryIndexManager.get({
+      cfg: createCfg({ model: "second-model" }),
+      agentId: "main",
+    });
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+    const globalClosePromise = closeAllMemoryIndexManagers();
+    let globalCloseSettled = false;
+    void globalClosePromise.then(
+      () => {
+        globalCloseSettled = true;
+      },
+      () => {
+        globalCloseSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(globalCloseSettled).toBe(false);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const replacement = await replacementPromise;
+    await globalClosePromise;
+    if (!replacement) {
+      throw new Error("Expected replacement memory index manager");
+    }
+    managersForCleanup.add(replacement);
+    expect((replacement as unknown as { closed: boolean }).closed).toBe(true);
+  });
+
+  it("retains a failed scoped close owner until provider retirement succeeds", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    providerCloseFailuresRemaining = 2;
+
+    await expect(closeMemoryIndexManagersForAgent({ cfg, agentId: "main" })).rejects.toThrow(
+      "provider close failed",
+    );
+    expect(providerCloseCalls).toBe(2);
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const callsBeforeReplacement = providerCalls.length;
+    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
+    );
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(3));
+      expect(providerCalls).toHaveLength(callsBeforeReplacement);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const replacement = await replacementPromise;
+    managersForCleanup.add(replacement);
+    expect(replacement === first).toBe(false);
+  });
+
+  it("retains a failed global close owner until provider retirement succeeds", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    providerCloseFailuresRemaining = 2;
+    providerCloseFailure = undefined;
+
+    let globalCloseRejected = false;
+    await closeAllMemorySearchManagers().then(
+      () => {},
+      () => {
+        globalCloseRejected = true;
+      },
+    );
+    expect(globalCloseRejected).toBe(true);
+    expect(providerCloseCalls).toBe(2);
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const callsBeforeReplacement = providerCalls.length;
+    const replacementPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
+      requireManager(result),
+    );
+    let concurrentGlobalClose: Promise<void> = Promise.resolve();
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(3));
+      expect(providerCalls).toHaveLength(callsBeforeReplacement);
+      concurrentGlobalClose = closeAllMemorySearchManagers();
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+
+    const replacement = await replacementPromise;
+    await concurrentGlobalClose;
+    managersForCleanup.add(replacement);
+    expect(replacement === first).toBe(false);
+    expect((replacement as unknown as { closed: boolean }).closed).toBe(false);
+  });
+
+  it("does not reuse memory index managers across local-service hosts", async () => {
+    const cfg = createCfg({});
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+    const first = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: firstAcquire,
+      }),
+    );
+    managersForCleanup.add(first);
+
+    const second = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: secondAcquire,
+      }),
+    );
+    managersForCleanup.add(second);
+    const secondAgain = requireManager(
+      await getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        acquireLocalService: secondAcquire,
+      }),
+    );
+
+    expect(Object.is(second, first)).toBe(false);
+    expect(Object.is(secondAgain, second)).toBe(true);
   });
 
   it("retries embedding provider close before releasing the manager", async () => {
     providerCloseFailuresRemaining = 1;
     const cfg = createCfg({
-      storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
@@ -1016,7 +2857,6 @@ describe("memory index", () => {
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
 
     const cfg = createCfg({
-      storePath: indexMultimodalPath,
       provider: "gemini",
       model: "gemini-embedding-2-preview",
       extraPaths: [mediaDir],
@@ -1037,7 +2877,6 @@ describe("memory index", () => {
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
-        storePath: indexMainPath,
         hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
@@ -1045,7 +2884,6 @@ describe("memory index", () => {
 
   it("retries transient query embedding transport failures during search", async () => {
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-search-query-retry.sqlite"),
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
@@ -1090,7 +2928,6 @@ describe("memory index", () => {
 
   it("fails search after bounded query embedding retries are exhausted", async () => {
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-search-query-retry-exhausted.sqlite"),
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
@@ -1130,15 +2967,56 @@ describe("memory index", () => {
   it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
-        storePath: indexMainPath,
         minScore: 0.35,
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
   });
 
+  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const db = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = db.prepare.bind(db);
+    let ftsSelects = 0;
+    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (
+        sql.includes("FROM memory_index_chunks_fts") &&
+        sql.includes("WHERE memory_index_chunks_fts MATCH ?")
+      ) {
+        ftsSelects += 1;
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      const results = await manager.search(
+        "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
+        { maxResults: 5 },
+      );
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(ftsSelects).toBeGreaterThan(1);
+      expect(ftsSelects).toBeLessThanOrEqual(7);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
+
   it("reports vector availability after probe", async () => {
-    const cfg = createCfg({ storePath: indexVectorPath, vectorEnabled: true });
+    const cfg = createCfg({ vectorEnabled: true });
     const manager = await getPersistentManager(cfg);
     const available = await manager.probeVectorAvailability();
     const status = manager.status();
@@ -1149,10 +3027,55 @@ describe("memory index", () => {
     expect(status.vector?.available).toBe(available);
   });
 
+  it("rebuilds vector tables created before completeness markers", async () => {
+    const cfg = createCfg({ provider: "gemini", vectorEnabled: true });
+    const legacyManager = await getFreshManager(cfg);
+    const available = await legacyManager.probeVectorStoreAvailability?.();
+    if (!available) {
+      await legacyManager.close?.();
+      return;
+    }
+    const legacyDb = Reflect.get(legacyManager, "db") as DatabaseSync;
+    legacyDb.exec(`
+      CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
+        id TEXT PRIMARY KEY,
+        embedding FLOAT[3]
+      );
+      INSERT INTO memory_index_chunks_vec VALUES ('orphan-before-marker', '[1,0,0]');
+    `);
+    await legacyManager.close?.();
+
+    const manager = await getFreshManager(cfg);
+    try {
+      await expect(manager.probeVectorStoreAvailability?.()).resolves.toBe(false);
+      expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("drops the shipped legacy vector table and schedules a full reindex", async () => {
+    const cfg = createCfg({ vectorEnabled: true });
+    const manager = await getPersistentManager(cfg);
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
+
+    const available = await manager.probeVectorStoreAvailability?.();
+    if (!available) {
+      return;
+    }
+
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'")
+        .get(),
+    ).toBeUndefined();
+    expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+  });
+
   it("probes sqlite vector store availability without initializing embeddings", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-vector-store-only.sqlite"),
       vectorEnabled: true,
     });
     const manager = await getPersistentManager(cfg);
@@ -1167,24 +3090,11 @@ describe("memory index", () => {
     expect(status.vector?.available).toBeUndefined();
   });
 
-  it("marks older vector indexes dirty after vector store probing", async () => {
-    const dbPath = path.join(workspaceDir, "index-vector-missing-dims.sqlite");
-    const legacyCfg = createCfg({
-      storePath: dbPath,
-      provider: "gemini",
-      vectorEnabled: false,
-    });
-    const legacyManager = await getFreshManager(legacyCfg);
-    await legacyManager.sync({ reason: "test", force: true });
-    await legacyManager.close?.();
-
-    const cfg = createCfg({
-      storePath: dbPath,
-      provider: "gemini",
-      vectorEnabled: true,
-    });
+  it("keeps current vector indexes clean after vector store probing", async () => {
+    const cfg = createCfg({ provider: "gemini" });
     const manager = await getFreshManager(cfg);
     try {
+      await manager.sync({ reason: "test", force: true });
       const metaAccess = manager as unknown as {
         readMeta(): MemoryIndexMeta | null;
       };
@@ -1192,26 +3102,62 @@ describe("memory index", () => {
       if (!meta) {
         throw new Error("expected index metadata");
       }
-      expect(meta.vectorDims).toBeUndefined();
+      expect(meta.vectorDims).toBe(4);
 
       await manager.probeVectorStoreAvailability?.();
       const status = manager.status();
 
-      expect(status.dirty).toBe(true);
-      expect(status.custom?.indexIdentity).toEqual({
-        status: "mismatched",
-        reason: "index vector dimensions are missing",
-      });
+      expect(status.dirty).toBe(false);
     } finally {
       await manager.close?.();
     }
   });
 
+  it("forces a rebuild after incremental writes while vectors are disabled", async () => {
+    const enabledCfg = createCfg({ provider: "gemini", vectorEnabled: true });
+    const initialManager = await getFreshManager(enabledCfg);
+    await initialManager.sync({ reason: "test", force: true });
+    await initialManager.close?.();
+
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "# Updated\n\nvector writes were disabled for this update\n",
+    );
+    const disabledManager = await getFreshManager(
+      createCfg({ provider: "gemini", vectorEnabled: false }),
+    );
+    Reflect.set(disabledManager, "dirty", true);
+    await disabledManager.sync({ reason: "test" });
+    const disabledDb = Reflect.get(disabledManager, "db") as DatabaseSync;
+    expect(
+      disabledDb
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+        .get(),
+    ).toEqual({ value: "1" });
+    await disabledManager.close?.();
+
+    const reloadedManager = await getFreshManager(enabledCfg);
+    try {
+      await expect(reloadedManager.probeVectorStoreAvailability?.()).resolves.toBe(false);
+      expect(Reflect.get(reloadedManager, "memoryFullRetryDirty")).toBe(true);
+      expect(reloadedManager.status().dirty).toBe(true);
+
+      await reloadedManager.sync({ reason: "test" });
+      const rebuiltDb = Reflect.get(reloadedManager, "db") as DatabaseSync;
+      expect(
+        rebuiltDb
+          .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+          .get(),
+      ).toEqual({ value: "clean" });
+      await expect(reloadedManager.probeVectorStoreAvailability?.()).resolves.toBe(true);
+    } finally {
+      await reloadedManager.close?.();
+    }
+  });
+
   it("keeps empty vector indexes clean after vector store probing", async () => {
     await fs.rm(path.join(memoryDir, "2026-01-12.md"));
-    const dbPath = path.join(workspaceDir, "index-empty-vector.sqlite");
     const legacyCfg = createCfg({
-      storePath: dbPath,
       provider: "gemini",
       vectorEnabled: false,
     });
@@ -1220,7 +3166,6 @@ describe("memory index", () => {
     await legacyManager.close?.();
 
     const cfg = createCfg({
-      storePath: dbPath,
       provider: "gemini",
       vectorEnabled: true,
     });
@@ -1238,7 +3183,7 @@ describe("memory index", () => {
   });
 
   it("caches embedding probe readiness across transient status managers", async () => {
-    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-cache.sqlite") });
+    const cfg = createCfg({});
     const first = requireManager(
       await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
     );
@@ -1263,9 +3208,7 @@ describe("memory index", () => {
       typeof cachedBeforeProbe?.checkedAtMs === "number" &&
       typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
     ) {
-      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(
-        EMBEDDING_PROBE_CACHE_TTL_MS,
-      );
+      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(30_000);
     }
     await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
       ok: true,
@@ -1277,13 +3220,11 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBe(1);
 
     const cached = second.getCachedEmbeddingAvailability?.();
-    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
-      EMBEDDING_PROBE_CACHE_TTL_MS,
-    );
+    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(30_000);
   });
 
   it("clears cached embedding probe readiness when local embeddings degrade", async () => {
-    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-degraded.sqlite") });
+    const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
 
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
@@ -1319,9 +3260,792 @@ describe("memory index", () => {
     });
   });
 
+  it("waits for degraded provider shutdown before fallback initialization", async () => {
+    const cfg = createCfg({ fallback: "fallback-provider" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: (text: string) => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      } | null;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.id = "local";
+    fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+
+    const callsBeforeFallback = providerCalls.length;
+    const fallbackPromise = fields.activateFallbackProvider("local worker exited");
+    try {
+      await Promise.resolve();
+      expect(providerCalls).toHaveLength(callsBeforeFallback);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+      await fallbackPromise;
+    }
+    expect(providerCalls.slice(callsBeforeFallback).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
+  });
+
+  it("retries failed provider retirement before fallback initialization", async () => {
+    const cfg = createCfg({ fallback: "fallback-provider" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    providerCloseFailuresRemaining = 1;
+    const fields = manager as unknown as {
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+    };
+    const callsBeforeFallback = providerCalls.length;
+
+    await expect(fields.activateFallbackProvider("provider failed")).rejects.toThrow(
+      "provider close failed",
+    );
+    expect(providerCalls).toHaveLength(callsBeforeFallback);
+
+    await expect(fields.activateFallbackProvider("provider failed")).resolves.toBe(true);
+    expect(providerCloseCalls).toBe(2);
+    expect(providerCalls.slice(callsBeforeFallback).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
+  });
+
+  it("waits for provider shutdown before retry initialization", async () => {
+    const cfg = createCfg({ provider: "openai" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    (
+      manager as unknown as {
+        resetProviderInitializationForRetry: () => void;
+      }
+    ).resetProviderInitializationForRetry();
+    await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+
+    const callsBeforeProbe = providerCalls.length;
+    const probePromise = manager.probeEmbeddingAvailability();
+    try {
+      await Promise.resolve();
+      expect(providerCalls).toHaveLength(callsBeforeProbe);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+      await probePromise;
+    }
+    expect(providerCalls.slice(callsBeforeProbe).map((call) => call.provider)).toEqual(["openai"]);
+  });
+
+  it("waits for active provider shutdown before fallback initialization", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+
+    const callsBeforeSearch = providerCalls.length;
+    const searchPromise = manager.search("alpha");
+    let concurrentSearch: ReturnType<typeof manager.search> = Promise.resolve([]);
+    try {
+      await vi.waitFor(() => expect(providerCloseCalls).toBe(1));
+      concurrentSearch = manager.search("zebra");
+      let concurrentSettled = false;
+      void concurrentSearch.then(
+        () => {
+          concurrentSettled = true;
+        },
+        () => {
+          concurrentSettled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(concurrentSettled).toBe(false);
+      expect(providerCalls).toHaveLength(callsBeforeSearch);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+      await Promise.allSettled([searchPromise, concurrentSearch]);
+    }
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
+    await expect(concurrentSearch).resolves.toBeDefined();
+  });
+
+  it("leases the indexing provider generation through chunk publication", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "openai",
+        fallback: "fallback-provider",
+        cacheEnabled: true,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      }),
+      "cli",
+    );
+    managersForCleanup.add(manager);
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        model: string;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+      } | null;
+      providerKey: string;
+      computeProviderKey: () => string;
+      ensureProviderInitialized: () => Promise<void>;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
+      indexFile: (
+        entry: {
+          path: string;
+          absPath: string;
+          mtimeMs: number;
+          size: number;
+          hash: string;
+          content: string;
+        },
+        options: { source: "memory"; content: string },
+      ) => Promise<void>;
+      ensureVectorReady: (dimensions?: number) => Promise<boolean>;
+      db: {
+        prepare: (sql: string) => {
+          get: (
+            ...params: unknown[]
+          ) => { model?: string; provider?: string; provider_key?: string } | undefined;
+        };
+      };
+    };
+    await fields.ensureProviderInitialized();
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    const indexedProvider = fields.provider;
+    indexedProvider.id = "local";
+    fields.providerKey = fields.computeProviderKey();
+    const indexedProviderKey = fields.providerKey;
+    const firstContent = "# Log\nFirst memory line indexed during provider fallback.";
+    const secondContent = "# Log\nSecond memory line indexed during provider fallback.";
+
+    let releaseFirstEmbedding: () => void = () => {};
+    let releaseSecondEmbedding: () => void = () => {};
+    let markFirstEmbeddingStarted: () => void = () => {};
+    let markSecondEmbeddingStarted: () => void = () => {};
+    const firstEmbeddingGate = new Promise<void>((resolve) => {
+      releaseFirstEmbedding = resolve;
+    });
+    const secondEmbeddingGate = new Promise<void>((resolve) => {
+      releaseSecondEmbedding = resolve;
+    });
+    const firstEmbeddingStarted = new Promise<void>((resolve) => {
+      markFirstEmbeddingStarted = resolve;
+    });
+    const secondEmbeddingStarted = new Promise<void>((resolve) => {
+      markSecondEmbeddingStarted = resolve;
+    });
+    indexedProvider.embedBatch = async (texts) => {
+      if (texts.some((text) => text.includes("First"))) {
+        markFirstEmbeddingStarted();
+        await firstEmbeddingGate;
+      } else {
+        markSecondEmbeddingStarted();
+        await secondEmbeddingGate;
+      }
+      return texts.map(() => [1, 0, 0, 0]);
+    };
+    let releasePublication: () => void = () => {};
+    let markPublicationStarted: () => void = () => {};
+    const publicationGate = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    const publicationStarted = new Promise<void>((resolve) => {
+      markPublicationStarted = resolve;
+    });
+    const ensureVectorReady = fields.ensureVectorReady.bind(manager);
+    let publicationCalls = 0;
+    fields.ensureVectorReady = async (dimensions) => {
+      publicationCalls += 1;
+      if (publicationCalls === 1) {
+        return await ensureVectorReady(dimensions);
+      }
+      markPublicationStarted();
+      await publicationGate;
+      return await ensureVectorReady(dimensions);
+    };
+
+    const callsBeforeFallback = providerCalls.length;
+    const firstIndexPromise = fields.indexFile(
+      {
+        path: "memory/generation-race-first.md",
+        absPath: path.join(memoryDir, "generation-race-first.md"),
+        mtimeMs: Date.now(),
+        size: Buffer.byteLength(firstContent),
+        hash: hashText(firstContent),
+        content: firstContent,
+      },
+      { source: "memory", content: firstContent },
+    );
+    const secondIndexPromise = fields.indexFile(
+      {
+        path: "memory/generation-race-second.md",
+        absPath: path.join(memoryDir, "generation-race-second.md"),
+        mtimeMs: Date.now(),
+        size: Buffer.byteLength(secondContent),
+        hash: hashText(secondContent),
+        content: secondContent,
+      },
+      { source: "memory", content: secondContent },
+    );
+    let fallbackPromise: Promise<boolean> | null = null;
+    try {
+      await fields.withTimeout(
+        Promise.all([firstEmbeddingStarted, secondEmbeddingStarted]),
+        5_000,
+        "concurrent embeddings did not start",
+      );
+      fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+      await vi.waitFor(() => expect(fields.provider).toBeNull());
+      fallbackPromise = fields.activateFallbackProvider("local worker exited");
+      releaseFirstEmbedding();
+      await firstIndexPromise;
+      expect(providerCloseCalls).toBe(0);
+      expect(providerCalls).toHaveLength(callsBeforeFallback);
+
+      releaseSecondEmbedding();
+      await fields.withTimeout(publicationStarted, 5_000, "publication did not start");
+      expect(providerCloseCalls).toBe(0);
+      expect(providerCalls).toHaveLength(callsBeforeFallback);
+
+      releasePublication();
+      await secondIndexPromise;
+      await expect(fallbackPromise).resolves.toBe(true);
+    } finally {
+      releaseFirstEmbedding();
+      releaseSecondEmbedding();
+      releasePublication();
+      await Promise.allSettled([
+        firstIndexPromise,
+        secondIndexPromise,
+        ...(fallbackPromise ? [fallbackPromise] : []),
+      ]);
+    }
+
+    expect(providerCalls.slice(callsBeforeFallback).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
+    expect(
+      fields.db
+        .prepare("SELECT model FROM memory_index_chunks WHERE path = ?")
+        .get("memory/generation-race-second.md")?.model,
+    ).toBe(indexedProvider.model);
+    expect(
+      fields.db
+        .prepare("SELECT provider, model, provider_key FROM memory_embedding_cache LIMIT 1")
+        .get(),
+    ).toEqual({
+      provider: indexedProvider.id,
+      model: indexedProvider.model,
+      provider_key: indexedProviderKey,
+    });
+  });
+
+  it("keeps an active FTS-only generation stable while fallback activates", async () => {
+    const manager = await getFreshManager(
+      createCfg({ provider: "openai", fallback: "fallback-provider" }),
+      "cli",
+    );
+    managersForCleanup.add(manager);
+    type IndexEntry = {
+      path: string;
+      absPath: string;
+      mtimeMs: number;
+      size: number;
+      hash: string;
+      content: string;
+    };
+    const fields = manager as unknown as {
+      provider: { id: string } | null;
+      providerKey: string;
+      computeProviderKey: () => string;
+      ensureProviderInitialized: () => Promise<void>;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      beginSyncProviderGeneration: () => void;
+      endSyncProviderGeneration: () => void;
+      indexFile: (
+        entry: IndexEntry,
+        options: { source: "memory"; content: string },
+      ) => Promise<void>;
+      db: {
+        prepare: (sql: string) => {
+          get: (...params: unknown[]) => { model?: string } | undefined;
+        };
+      };
+    };
+    await fields.ensureProviderInitialized();
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.id = "local";
+    fields.providerKey = fields.computeProviderKey();
+    fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+    await vi.waitFor(() => {
+      expect(fields.provider).toBeNull();
+      expect(providerCloseCalls).toBe(1);
+    });
+
+    const createEntry = (name: string): IndexEntry => {
+      const content = `# Log\n${name} FTS-only generation.`;
+      return {
+        path: `memory/${name}.md`,
+        absPath: path.join(memoryDir, `${name}.md`),
+        mtimeMs: Date.now(),
+        size: Buffer.byteLength(content),
+        hash: hashText(content),
+        content,
+      };
+    };
+    const first = createEntry("fts-first");
+    const second = createEntry("fts-second");
+
+    fields.beginSyncProviderGeneration();
+    try {
+      await fields.indexFile(first, { source: "memory", content: first.content });
+      await expect(fields.activateFallbackProvider("local worker exited")).resolves.toBe(true);
+      await fields.indexFile(second, { source: "memory", content: second.content });
+    } finally {
+      fields.endSyncProviderGeneration();
+    }
+
+    expect(
+      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(first.path)
+        ?.model,
+    ).toBe("fts-only");
+    expect(
+      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(second.path)
+        ?.model,
+    ).toBe("fts-only");
+  });
+
+  it("waits for admitted provider users before retirement", async () => {
+    const cfg = createCfg({ provider: "openai" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+      embedQueryWithRetry: (text: string) => Promise<number[]>;
+      retireCurrentProvider: () => Promise<void>;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    let releaseFirstQuery: () => void = () => {};
+    let markFirstQueryStarted: () => void = () => {};
+    const firstQueryGate = new Promise<void>((resolve) => {
+      releaseFirstQuery = resolve;
+    });
+    const firstQueryStarted = new Promise<void>((resolve) => {
+      markFirstQueryStarted = resolve;
+    });
+    fields.provider.embedQuery = async () => {
+      markFirstQueryStarted();
+      await firstQueryGate;
+      return [1, 0, 0, 0];
+    };
+
+    const queryPromise = fields.embedQueryWithRetry("alpha");
+    await firstQueryStarted;
+    const retirementPromise = fields.retireCurrentProvider();
+    let retirementSettled = false;
+    void retirementPromise.then(
+      () => {
+        retirementSettled = true;
+      },
+      () => {
+        retirementSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(retirementSettled).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseFirstQuery();
+    }
+
+    await expect(queryPromise).resolves.toEqual([1, 0, 0, 0]);
+    await retirementPromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("uses the leased provider runtime after retirement starts", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    type QueryProvider = {
+      embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+    };
+    const fields = manager as unknown as {
+      provider: QueryProvider | null;
+      providerRuntime?: { inlineQueryTimeoutMs?: number };
+      acquireProviderUse: (provider: QueryProvider) => () => void;
+      retireCurrentProvider: () => Promise<void>;
+      embedQueryWithRetry: (
+        text: string,
+        signal: AbortSignal | undefined,
+        provider: QueryProvider,
+        markDegraded: boolean,
+        providerRuntime: { inlineQueryTimeoutMs?: number },
+      ) => Promise<number[]>;
+    };
+    await manager.probeEmbeddingAvailability();
+    const provider = fields.provider;
+    if (!provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    const providerRuntime = { inlineQueryTimeoutMs: 10 };
+    fields.providerRuntime = providerRuntime;
+    provider.embedQuery = async (_text, options) =>
+      await new Promise<number[]>((resolve, reject) => {
+        const timer = setTimeout(() => resolve([1, 0, 0, 0]), 100);
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("embedding aborted"));
+          },
+          { once: true },
+        );
+      });
+
+    const releaseProvider = fields.acquireProviderUse(provider);
+    const retirementPromise = fields.retireCurrentProvider();
+    try {
+      await vi.waitFor(() => expect(fields.provider).toBeNull());
+      await expect(
+        fields.embedQueryWithRetry("alpha", undefined, provider, false, providerRuntime),
+      ).rejects.toThrow("timed out");
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseProvider();
+    }
+
+    await retirementPromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("waits for an admitted search before manager teardown", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      searchVector: () => Promise<unknown[]>;
+      closing: boolean;
+      closed: boolean;
+    };
+    let releaseVectorSearch: () => void = () => {};
+    let markVectorSearchStarted: () => void = () => {};
+    const vectorSearchGate = new Promise<void>((resolve) => {
+      releaseVectorSearch = resolve;
+    });
+    const vectorSearchStarted = new Promise<void>((resolve) => {
+      markVectorSearchStarted = resolve;
+    });
+    fields.searchVector = async () => {
+      markVectorSearchStarted();
+      await vectorSearchGate;
+      return [];
+    };
+
+    const searchPromise = manager.search("alpha");
+    await vectorSearchStarted;
+    const closePromise = manager.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(fields.closing).toBe(true);
+      expect(fields.closed).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseVectorSearch();
+    }
+
+    await expect(searchPromise).resolves.toBeDefined();
+    await closePromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("waits for an admitted vector probe before manager teardown", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    const fields = manager as unknown as {
+      ensureVectorReady: () => Promise<boolean>;
+    };
+    let releaseProbe: () => void = () => {};
+    let markProbeStarted: () => void = () => {};
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+    fields.ensureVectorReady = async () => {
+      markProbeStarted();
+      await probeGate;
+      return true;
+    };
+
+    const probePromise = manager.probeVectorAvailability();
+    await probeStarted;
+    const closePromise = manager.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseProbe();
+    }
+
+    await expect(probePromise).resolves.toBe(true);
+    await closePromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("fails closed when fallback initialization fails for an explicit provider", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerCreationFailure = "fallback-provider";
+
+    await expect(manager.search("alpha")).rejects.toThrow(
+      /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+    );
+
+    providerCreationFailure = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+  });
+
+  it("retries the optional primary after fallback initialization fails", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerCreationFailure = "fallback-provider";
+    const callsBeforeSearch = providerCalls.length;
+
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+
+    providerCreationFailure = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+      "openai",
+    ]);
+    expect(fields.provider?.id).toBe("mock");
+  });
+
+  it("fails closed and retries a required primary after a null fallback result", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: { embedQuery: (text: string) => Promise<number[]> } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerNullResult = "fallback-provider";
+
+    await expect(manager.search("alpha")).rejects.toThrow(
+      /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+    );
+
+    providerNullResult = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+  });
+
+  it("retries an optional primary after a null fallback result", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: { id: string; embedQuery: (text: string) => Promise<number[]> } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerNullResult = "fallback-provider";
+
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+
+    providerNullResult = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+    expect(fields.provider?.id).toBe("mock");
+  });
+
+  it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+      ensureProviderInitialized: () => Promise<void>;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    const ensureProviderInitialized = fields.ensureProviderInitialized.bind(manager);
+    let providerInitializationCalls = 0;
+    fields.ensureProviderInitialized = async () => {
+      providerInitializationCalls += 1;
+      await ensureProviderInitialized();
+    };
+    providerCreationFailure = "fallback-provider";
+    let releaseProviderInit: () => void = () => {};
+    providerInitGate = new Promise<void>((resolve) => {
+      releaseProviderInit = resolve;
+    });
+
+    const callsBeforeSearch = providerCalls.length;
+    const firstSearch = manager.search("alpha");
+    await vi.waitFor(() =>
+      expect(providerCalls.some((call) => call.provider === "fallback-provider")).toBe(true),
+    );
+    const initializationCallsBeforeSecondSearch = providerInitializationCalls;
+    const secondSearch = manager.search("zebra");
+    let secondSettled = false;
+    void secondSearch.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(providerInitializationCalls).toBeGreaterThan(initializationCallsBeforeSecondSearch),
+      );
+      expect(secondSettled).toBe(false);
+      releaseProviderInit();
+      const results = await Promise.all([firstSearch, secondSearch]);
+      expect(results.every((result) => result.length > 0)).toBe(true);
+      expect(
+        providerCalls
+          .slice(callsBeforeSearch)
+          .filter((call) => call.provider === "fallback-provider"),
+      ).toHaveLength(1);
+    } finally {
+      providerInitGate = null;
+      releaseProviderInit();
+      await Promise.allSettled([firstSearch, secondSearch]);
+    }
+  });
+
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-search-degraded-fallback.sqlite"),
       fallback: "fallback-provider",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
@@ -1363,9 +4087,7 @@ describe("memory index", () => {
   });
 
   it("rebuilds with fallback provider during explicit identity repair", async () => {
-    const dbPath = path.join(workspaceDir, "index-cli-fallback-identity-repair.sqlite");
     const oldCfg = createCfg({
-      storePath: dbPath,
       model: "old-embed",
     });
     const oldManager = await getFreshManager(oldCfg);
@@ -1373,7 +4095,6 @@ describe("memory index", () => {
     await oldManager.close?.();
 
     const cfg = createCfg({
-      storePath: dbPath,
       model: "new-embed",
       fallback: "fallback-provider",
     });
@@ -1415,9 +4136,8 @@ describe("memory index", () => {
     }
   });
 
-  it("activates configured fallback after probe-time local degradation", async () => {
+  it("reinitializes the configured provider after probe-time local degradation", async () => {
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-probe-degraded-fallback.sqlite"),
       fallback: "fallback-provider",
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
@@ -1454,23 +4174,19 @@ describe("memory index", () => {
 
     const results = await manager.search("alpha");
 
-    expect(results).toStrictEqual([]);
-    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
-      "fallback-provider",
-    );
+    expect(results.length).toBeGreaterThan(0);
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain("openai");
     expect(
       (
         manager as unknown as {
           provider: { id: string } | null;
         }
       ).provider?.id,
-    ).toBe("fallback-provider");
+    ).toBe("mock");
   });
 
   it("clears identity dirty after status resolves the indexed fallback provider", async () => {
-    const dbPath = path.join(workspaceDir, "index-status-fallback-identity.sqlite");
     const indexedCfg = createCfg({
-      storePath: dbPath,
       provider: "fallback-provider",
       model: "new-embed",
     });
@@ -1479,7 +4195,6 @@ describe("memory index", () => {
     await indexedManager.close?.();
 
     const cfg = createCfg({
-      storePath: dbPath,
       fallback: "fallback-provider",
       model: "new-embed",
     });
@@ -1534,68 +4249,88 @@ describe("memory index", () => {
     }
   });
 
-  it("streams embedding cache rows during safe reindex", async () => {
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-    type EmbeddingCacheRow = {
-      provider: string;
-      model: string;
-      provider_key: string;
-      hash: string;
-      embedding: string;
-      dims: number | null;
-      updated_at: number;
-    };
-    type StatementWithAll = {
-      all: () => EmbeddingCacheRow[];
-    };
+  it("exposes already-created local runtime facts without probing embeddings", async () => {
+    const cfg = createCfg({});
+    const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
+    const manager = await getRequiredMemoryIndexManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    try {
+      const getRuntimeFacts = vi.fn(() => ({
+        engine: "llama.cpp" as const,
+        state: "ready" as const,
+        backend: "cuda" as const,
+        buildType: "prebuilt" as const,
+        deviceNames: ["NVIDIA Test GPU"],
+        offload: {
+          supported: true,
+          offloadedLayers: 24,
+          totalLayers: 24,
+        },
+        context: {
+          requestedSize: 4096,
+        },
+      }));
+      const provider = {
+        id: "local",
+        model: "test-model.gguf",
+        embedQuery: vi.fn(async () => [1, 0, 0, 0]),
+        embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [1, 0, 0, 0])),
+      };
+      Object.defineProperty(provider, Symbol.for("openclaw.localEmbeddingRuntimeFacts"), {
+        value: getRuntimeFacts,
+      });
+      const fields = manager as unknown as {
+        provider: typeof provider | null;
+      };
+      fields.provider = provider;
 
+      expect(manager.status().custom?.llamaCppRuntime).toMatchObject({
+        state: "ready",
+        backend: "cuda",
+        deviceNames: ["NVIDIA Test GPU"],
+        offload: {
+          offloadedLayers: 24,
+          totalLayers: 24,
+        },
+        context: {
+          requestedSize: 4096,
+        },
+      });
+      expect(getRuntimeFacts).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps metadata after unchanged in-place force reindex", async () => {
+    const cfg = createCfg({});
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+      await manager.sync({ reason: "cli", force: true });
+
+      expect(manager.status().dirty).toBe(false);
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("reuses embedding cache entries during in-place reindex", async () => {
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-cache-seed-stream.sqlite"),
       cacheEnabled: true,
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
-    // Safe reindex streams cache rows from the original database and writes
-    // them into a temporary database, so the SELECT spy belongs on this handle.
-    const sourceDb = (
-      manager as unknown as {
-        db: {
-          prepare: (sql: string) => unknown;
-        };
-      }
-    ).db;
-    const originalPrepare = sourceDb.prepare.bind(sourceDb);
-    const cachedRows = (
-      originalPrepare(
-        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-      ) as StatementWithAll
-    ).all();
-    expect(cachedRows.length).toBeGreaterThan(0);
-
     const beforeCalls = embedBatchCalls;
-    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
-      if (
-        sql.includes(
-          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-        )
-      ) {
-        return {
-          all: () => {
-            throw new Error("embedding cache seed must stream rows via iterate()");
-          },
-          iterate: () => cachedRows[Symbol.iterator](),
-        };
-      }
-      return originalPrepare(sql);
-    });
-
-    try {
-      (manager as unknown as { dirty: boolean }).dirty = true;
-      await manager.sync({ reason: "test", force: true });
-    } finally {
-      prepareSpy.mockRestore();
-    }
+    (manager as unknown as { dirty: boolean }).dirty = true;
+    await manager.sync({ reason: "test", force: true });
 
     expect(embedBatchCalls).toBe(beforeCalls);
   });
@@ -1604,7 +4339,7 @@ describe("memory index", () => {
     forceNoProvider = true;
 
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-fts-only.sqlite"),
+      provider: "none",
       minScore: 0.35,
       hybrid: { enabled: true },
     });
@@ -1625,12 +4360,6 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatchCalls).toBe(0);
-    expect(status.custom?.providerUnavailableReason).toBe("No API key found for provider");
-    expect(status.custom?.providerState).toEqual({
-      mode: "fts-only",
-      reason: "No API key found for provider",
-      attemptedProviderId: "openai",
-    });
 
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
@@ -1640,11 +4369,515 @@ describe("memory index", () => {
     expect(noResults.length).toBe(0);
   });
 
+  it("ranks an exact path stem ahead of a body match before applying the result limit", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0.35,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(path.join(memoryDir, "project-lantern.md"), "Unrelated exact-path body.");
+    await fs.writeFile(
+      path.join(memoryDir, "body-match.md"),
+      "Project lantern project lantern project lantern.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("project-lantern", { maxResults: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/project-lantern.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("does not let fallback-term filenames consume the candidate cap", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    for (let index = 0; index < 5; index += 1) {
+      const duplicateDir = path.join(memoryDir, `alpha-${index}`);
+      await fs.mkdir(duplicateDir, { recursive: true });
+      await fs.writeFile(path.join(duplicateDir, "alpha.md"), "Unrelated path-only candidate.");
+    }
+    await fs.writeFile(
+      path.join(memoryDir, "body-match.md"),
+      "Alpha alpha alpha alpha alpha strongest fallback body match.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("alpha gamma", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/body-match.md");
+  });
+
+  it("preserves fallback body boosts through hybrid weighting", async () => {
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const manager = await getPersistentManager(cfg);
+    type HybridKeywordHit = {
+      id: string;
+      path: string;
+      startLine: number;
+      endLine: number;
+      score: number;
+      snippet: string;
+      source: "memory";
+      textScore: number;
+      pathScore: number;
+      exactPathSpecificity: 0;
+    };
+    const internal = manager as unknown as {
+      mergeHybridResults: (params: {
+        query: string;
+        vector: [];
+        keyword: HybridKeywordHit[];
+        vectorWeight: number;
+        textWeight: number;
+      }) => Promise<Array<{ path: string; score: number; textScore: number }>>;
+    };
+
+    const results = await internal.mergeHybridResults({
+      query: "alpha gamma",
+      vector: [],
+      keyword: [
+        {
+          id: "body",
+          path: "memory/body.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.9,
+          snippet: "body",
+          source: "memory",
+          textScore: 0.1,
+          pathScore: 0,
+          exactPathSpecificity: 0,
+        },
+        {
+          id: "path",
+          path: "memory/alpha.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.5,
+          snippet: "path",
+          source: "memory",
+          textScore: 0,
+          pathScore: 0.5,
+          exactPathSpecificity: 0,
+        },
+      ],
+      vectorWeight: 0,
+      textWeight: 1,
+    });
+
+    expect(results.map((entry) => entry.path)).toEqual(["memory/body.md", "memory/alpha.md"]);
+    expect(results[0]).toMatchObject({ score: 0.9, textScore: 0.1 });
+  });
+
+  it("bounds the merged six-term fallback candidate set", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const manager = await getPersistentManager(cfg);
+    const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
+    for (const term of terms) {
+      for (let index = 0; index < 5; index += 1) {
+        await fs.writeFile(path.join(memoryDir, `${term}-${index}.md`), `${term} body ${index}`);
+      }
+    }
+    await manager.sync({ reason: "test" });
+
+    const internal = manager as unknown as {
+      searchKeywordWithFallback: (
+        query: string,
+        limit: number,
+        options: { boostFallbackRanking?: boolean },
+        sources: Array<"memory">,
+      ) => Promise<Array<{ exactPathSpecificity: number }>>;
+    };
+    const candidates = await internal.searchKeywordWithFallback(
+      terms.join(" "),
+      4,
+      { boostFallbackRanking: true },
+      ["memory"],
+    );
+
+    expect(candidates).toHaveLength(4);
+    expect(candidates.every((entry) => entry.exactPathSpecificity === 0)).toBe(true);
+  });
+
+  it("counts exact candidate headroom by distinct path instead of chunk", async () => {
+    const manager = await getPersistentManager(createCfg({ hybrid: { enabled: true } }));
+    type TestKeywordHit = {
+      id: string;
+      path: string;
+      source: "memory";
+      startLine: number;
+      endLine: number;
+      score: number;
+      textScore: number;
+      pathScore: number;
+      exactPathSpecificity: 2;
+      snippet: string;
+    };
+    const sharedPath = "memory/000/foo.md";
+    const bodyHits: TestKeywordHit[] = Array.from({ length: 4 }, (_, index) => ({
+      id: `body-${index}`,
+      path: sharedPath,
+      source: "memory",
+      startLine: index + 2,
+      endLine: index + 2,
+      score: 1 - index / 100,
+      textScore: 1 - index / 100,
+      pathScore: 0,
+      exactPathSpecificity: 2,
+      snippet: `body ${index}`,
+    }));
+    const pathHits: TestKeywordHit[] = Array.from({ length: 200 }, (_, index) => ({
+      id: `path-${index}`,
+      path: `memory/${index.toString().padStart(3, "0")}/foo.md`,
+      source: "memory",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      textScore: 0,
+      pathScore: 0,
+      exactPathSpecificity: 2,
+      snippet: `path ${index}`,
+    }));
+    const internal = manager as unknown as {
+      limitKeywordSearchHits: (hits: TestKeywordHit[], nonExactLimit: number) => TestKeywordHit[];
+    };
+
+    const limited = internal.limitKeywordSearchHits(bodyHits.concat(pathHits), 4);
+    const paths = new Set(limited.map((entry) => entry.path));
+
+    expect(limited).toHaveLength(204);
+    expect(paths.size).toBe(200);
+    expect(paths.has("memory/199/foo.md")).toBe(true);
+  });
+
+  it("uses body relevance within the same exact basename tier in FTS-only mode", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    const weakDir = path.join(memoryDir, "a");
+    const strongDir = path.join(memoryDir, "z");
+    await fs.mkdir(weakDir, { recursive: true });
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(path.join(weakDir, "foo.md"), "Unrelated weak body.");
+    await fs.writeFile(path.join(strongDir, "foo.md"), "foo md foo md foo md strong body");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("foo.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/z/foo.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("returns exact basename candidates with fixed FTS ranking", async () => {
+    forceNoProvider = true;
+    const staleDir = path.join(fixtureRoot, "decay-a-stale");
+    const freshDir = path.join(fixtureRoot, "decay-z-fresh");
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.mkdir(freshDir, { recursive: true });
+    const staleFooPath = path.join(staleDir, "foo.md");
+    const freshFooPath = path.join(freshDir, "foo.md");
+    const staleBarPath = path.join(staleDir, "bar.md");
+    await fs.writeFile(staleFooPath, "Unrelated stale candidate.");
+    await fs.writeFile(freshFooPath, "Unrelated fresh candidate.");
+    await fs.writeFile(staleBarPath, "bar md bar md bar md strongest stale body");
+    await fs.writeFile(path.join(freshDir, "bar.md"), "bar md fresh body");
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+    await Promise.all([
+      fs.utimes(staleFooPath, staleMtime, staleMtime),
+      fs.utimes(staleBarPath, staleMtime, staleMtime),
+    ]);
+    const cfg = createCfg({
+      provider: "none",
+      extraPaths: [staleDir, freshDir],
+      minScore: 0,
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await manager.sync({ reason: "test" });
+
+    for (const basename of ["foo.md", "bar.md"]) {
+      const results = await manager.search(basename, { maxResults: 1, minScore: 0 });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.score).toBe(1);
+    }
+  });
+
+  it("applies the fixed FTS candidate cap to exact paths", async () => {
+    forceNoProvider = true;
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+    const extraPaths: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
+      const extraDir = path.join(fixtureRoot, `decay-cap-${suffix}`);
+      const filePath = path.join(extraDir, "foo.md");
+      await fs.mkdir(extraDir, { recursive: true });
+      const body = index < 4 ? "foo md stale content candidate." : "Unrelated fresh candidate.";
+      await fs.writeFile(filePath, body);
+      if (index < 4) {
+        await fs.utimes(filePath, staleMtime, staleMtime);
+      }
+      extraPaths.push(extraDir);
+    }
+    const cfg = createCfg({
+      provider: "none",
+      extraPaths,
+      minScore: 0,
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("foo.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("applies the fixed hybrid candidate cap", async () => {
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+    const extraPaths: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
+      const extraDir = path.join(fixtureRoot, `hybrid-decay-cap-${suffix}`);
+      const filePath = path.join(extraDir, "alpha.md");
+      await fs.mkdir(extraDir, { recursive: true });
+      const body = index === 4 ? "Alpha beta lower-similarity candidate." : "Alpha candidate.";
+      await fs.writeFile(filePath, body);
+      if (index < 4) {
+        await fs.utimes(filePath, staleMtime, staleMtime);
+      }
+      extraPaths.push(extraDir);
+    }
+    const cfg = createCfg({
+      extraPaths,
+      minScore: 0,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("alpha.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("keeps fixed hybrid ranking when search degrades to keyword-only", async () => {
+    const staleMtime = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+    const extraPaths: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const suffix = index === 4 ? "z-fresh" : `a-stale-${index}`;
+      const extraDir = path.join(fixtureRoot, `degraded-decay-cap-${suffix}`);
+      const filePath = path.join(extraDir, "beta.md");
+      await fs.mkdir(extraDir, { recursive: true });
+      await fs.writeFile(filePath, "Beta equal content candidate.");
+      if (index < 4) {
+        await fs.utimes(filePath, staleMtime, staleMtime);
+      }
+      extraPaths.push(extraDir);
+    }
+    const cfg = createCfg({
+      extraPaths,
+      fallback: "none",
+      minScore: 0,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const degraded = manager as unknown as {
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: () => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      } | null;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+    };
+    const provider = degraded.provider;
+    if (!provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    provider.embedQuery = async () => {
+      throw createLocalWorkerExitError();
+    };
+    degraded.markLocalEmbeddingProviderDegraded = () => {
+      degraded.provider = null;
+    };
+
+    const results = await manager.search("beta.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.score).toBe(1);
+  });
+
+  it("keeps body relevance for an exact basename beyond the exact candidate cap", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    const duplicatesDir = path.join(memoryDir, "readme-dupes");
+    for (let index = 0; index < 205; index += 1) {
+      const duplicateDir = path.join(duplicatesDir, `a-${index.toString().padStart(3, "0")}`);
+      await fs.mkdir(duplicateDir, { recursive: true });
+      await fs.writeFile(path.join(duplicateDir, "README.md"), "Unrelated weak body.");
+    }
+    const strongDir = path.join(duplicatesDir, "z-strong");
+    await fs.mkdir(strongDir, { recursive: true });
+    await fs.writeFile(
+      path.join(strongDir, "README.md"),
+      "README md README md README md strongest body match.",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "readme-body-only.md"),
+      "README md body-only candidate.",
+    );
+    await fs.writeFile(path.join(memoryDir, "README.md.notes"), "Unrelated partial path.");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("README.md", { maxResults: 1, minScore: 0 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/readme-dupes/z-strong/README.md");
+    expect(results[0]?.score).toBe(1);
+
+    const internal = manager as unknown as {
+      searchKeyword: (
+        query: string,
+        limit: number,
+        options: { boostFallbackRanking?: boolean },
+        sources: Array<"memory">,
+      ) => Promise<Array<{ exactPathSpecificity: number; path: string; source: string }>>;
+    };
+    const candidates = await internal.searchKeyword(
+      "README.md",
+      4,
+      { boostFallbackRanking: true },
+      ["memory"],
+    );
+    const exactCandidates = candidates.filter((entry) => entry.exactPathSpecificity > 0);
+    const exactPathCount = new Set(exactCandidates.map((entry) => `${entry.source}:${entry.path}`))
+      .size;
+    const nonExactCount = candidates.length - exactCandidates.length;
+    expect(exactPathCount).toBe(200);
+    expect(exactCandidates.length).toBeLessThanOrEqual(204);
+    expect(nonExactCount).toBeGreaterThan(0);
+    expect(nonExactCount).toBeLessThanOrEqual(4);
+    expect(candidates.length).toBeLessThanOrEqual(208);
+  });
+
+  it("keeps boosted score ordering for non-exact FTS-only body matches", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(
+      path.join(memoryDir, "project-memory-notes.md"),
+      "Project memory notes covering workspace context and retrieval behavior.",
+    );
+    await fs.writeFile(path.join(memoryDir, "notes.md"), "Project memory context.");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("project memory context", {
+      maxResults: 1,
+      minScore: 0,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/project-memory-notes.md");
+    expect(results[0]?.score).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps an exact dated path ahead in FTS-only mode", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0.35,
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
+
+    await fs.writeFile(path.join(memoryDir, "2020-01-01.md"), "Unrelated exact-path body.");
+    await fs.writeFile(path.join(memoryDir, "body-match.md"), "2020 01 01 2020 01 01 2020 01 01");
+    await manager.sync({ reason: "test" });
+
+    const results = await manager.search("2020-01-01", { maxResults: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toContain("memory/2020-01-01.md");
+    expect(results[0]?.score).toBe(1);
+  });
+
   it("fails fast instead of searching FTS when an explicit provider is unavailable", async () => {
     forceNoProvider = true;
 
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-required-provider-missing.sqlite"),
       provider: "openai",
       minScore: 0.35,
       hybrid: { enabled: true },
@@ -1652,7 +4885,7 @@ describe("memory index", () => {
     const manager = await getFreshManager(cfg);
     try {
       await expect(manager.search("Alpha")).rejects.toThrow(
-        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=local/,
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=none/,
       );
       await expect(manager.sync({ reason: "test" })).rejects.toThrow(
         /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
@@ -1668,7 +4901,6 @@ describe("memory index", () => {
 
   it("fails fast instead of returning FTS when an explicit provider is lost at runtime", async () => {
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-required-provider-runtime-missing.sqlite"),
       provider: "openai",
       minScore: 0.35,
       hybrid: { enabled: true },
@@ -1689,12 +4921,10 @@ describe("memory index", () => {
       await manager.close?.();
     }
   });
-
   it("prefers exact session transcript hits in FTS-only mode", async () => {
     try {
       const manager = await getFtsSessionManager({
         stateDirName: ".state-session-ranking",
-        storeFileName: "index-fts-session-ranking.sqlite",
       });
       if (!manager) {
         return;
@@ -1705,37 +4935,22 @@ describe("memory index", () => {
       const staleAt = new Date("2020-01-01T00:00:00.000Z");
       await fs.utimes(memoryPath, staleAt, staleAt);
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-ranking.jsonl");
       const now = Date.parse("2026-04-07T15:25:04.113Z");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-ranking",
-            timestamp: new Date(now - 60_000).toISOString(),
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "user",
-              timestamp: new Date(now - 30_000).toISOString(),
-              content: [{ type: "text", text: "What is the current Project Nebula codename?" }],
-            },
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: new Date(now).toISOString(),
-              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-ranking",
+        messages: [
+          {
+            role: "user",
+            timestamp: new Date(now - 30_000).toISOString(),
+            content: "What is the current Project Nebula codename?",
+          },
+          {
+            role: "assistant",
+            timestamp: new Date(now).toISOString(),
+            content: "The current Project Nebula codename is ORBIT-10.",
+          },
+        ],
+      });
 
       await manager.sync({ reason: "test", force: true });
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
@@ -1745,8 +4960,50 @@ describe("memory index", () => {
 
       expect(results[0]?.source).toBe("sessions");
       expect(results[0]?.snippet).toContain("ORBIT-10");
+      expect(results[0]?.provenance).toMatchObject({
+        originClass: "untrusted",
+        sessionKind: "interactive",
+      });
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("preserves trusted per-line provenance through session indexing", async () => {
+    try {
+      const manager = await getFtsSessionManager({
+        stateDirName: ".state-session-provenance",
+      });
+      if (!manager) {
+        return;
+      }
+
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-provenance",
+        messages: [
+          {
+            role: "user",
+            senderIsOwner: true,
+            timestamp: "2026-07-01T10:00:00.000Z",
+            content: "The owner prefers green tea.",
+          },
+        ],
+      });
+
+      await manager.sync({ reason: "test", force: true });
+      const results = await manager.search("owner prefers green tea", {
+        minScore: 0,
+        maxResults: 3,
+      });
+
+      expect(results[0]?.source).toBe("sessions");
+      expect(results[0]?.provenance).toEqual({
+        originClass: "owner",
+        sessionKind: "interactive",
+        observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
+      });
+    } finally {
+      restoreMemoryIndexStateDir();
     }
   });
 
@@ -1754,34 +5011,21 @@ describe("memory index", () => {
     try {
       const manager = await getFtsSessionManager({
         stateDirName: ".state-session-bootstrap",
-        storeFileName: "index-fts-session-bootstrap.sqlite",
       });
       if (!manager) {
         return;
       }
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-bootstrap.jsonl");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-bootstrap",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-bootstrap",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "The current Project Nebula codename is ORBIT-10.",
+          },
+        ],
+      });
 
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
         minScore: 0,
@@ -1791,7 +5035,77 @@ describe("memory index", () => {
       expect(results[0]?.source).toBe("sessions");
       expect(results[0]?.snippet).toContain("ORBIT-10");
     } finally {
-      vi.unstubAllEnvs();
+      restoreMemoryIndexStateDir();
+    }
+  });
+  it("keeps remember-only session transcripts out of ordinary manager searches", async () => {
+    forceNoProvider = true;
+    setMemoryIndexStateDir(path.join(workspaceDir, ".state-remember-search-sources"));
+    try {
+      const cfg = createCfg({
+        provider: "none",
+        rememberAcrossConversations: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      });
+      const manager = await getFreshManager(cfg);
+      managersForCleanup.add(manager);
+      if (!manager.status().fts?.available) {
+        return;
+      }
+
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "remember-only",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Recall-only canary is NEBULA-47.",
+          },
+        ],
+      });
+
+      await manager.sync({ reason: "test", force: true });
+
+      await expect(
+        manager.search("Recall-only canary NEBULA-47", { minScore: 0 }),
+      ).resolves.toEqual([]);
+      const trustedResults = await manager.search("Recall-only canary NEBULA-47", {
+        minScore: 0,
+        sources: ["sessions"],
+      });
+      expect(trustedResults[0]?.source).toBe("sessions");
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("status-purpose manager detects unindexed session transcripts as dirty", async () => {
+    // Regression test for #97814: plain openclaw memory status (purpose: status)
+    // must report dirty=true when session files exist without index rows.
+    const cfg = createCfg({ sources: ["sessions"], sessionMemory: true });
+    const stateDirName = ".state-status-dirty-test";
+    setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
+    try {
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "status-dirty-test",
+        messages: [
+          {
+            role: "user",
+            timestamp: 1,
+            content: "Unindexed session transcript.",
+          },
+        ],
+      });
+
+      const manager = await getFreshManager(cfg, "status");
+      managersForCleanup.add(manager);
+
+      const result = manager.status();
+      expect(result.dirty).toBe(true);
+    } finally {
+      restoreMemoryIndexStateDir();
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,11 +2,59 @@
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { describeQwenVideo } from "./media-understanding-provider.js";
+import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
+
+const qwenProvider = buildQwenMediaUnderstandingProvider();
+const describeQwenVideo = qwenProvider.describeVideo;
+if (!describeQwenVideo) {
+  throw new Error("expected Qwen video description capability");
+}
+
+describe("qwen media understanding provider", () => {
+  it("uses a currently served multimodal default", () => {
+    expect(qwenProvider.defaultModels).toEqual({
+      image: "qwen3.6-plus",
+      video: "qwen3.6-plus",
+    });
+  });
+});
+
+function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+  wasCanceled: () => boolean;
+} {
+  const chunk = new Uint8Array(params.chunkSize);
+  let readCount = 0;
+  let canceled = false;
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= params.chunkCount) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+    getReadCount: () => readCount,
+    wasCanceled: () => canceled,
+  };
+}
 
 describe("describeQwenVideo", () => {
   it("builds the expected OpenAI-compatible video payload", async () => {
@@ -73,5 +121,43 @@ describe("describeQwenVideo", () => {
     expect(videoContent.video_url.url).toBe(
       `data:video/mp4;base64,${Buffer.from("video-bytes").toString("base64")}`,
     );
+  });
+
+  it("bounds successful Qwen video JSON bodies instead of buffering the whole response", async () => {
+    const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
+
+    await expect(
+      describeQwenVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        mime: "video/mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1",
+        fetchFn: async () => streamed.response,
+      }),
+    ).rejects.toThrow("Qwen video description failed: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(64);
+    expect(streamed.wasCanceled()).toBe(true);
+  });
+
+  it("reports malformed Qwen video JSON with a provider-owned error", async () => {
+    const response = new Response("not-json{", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    await expect(
+      describeQwenVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        mime: "video/mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1",
+        fetchFn: async () => response,
+      }),
+    ).rejects.toThrow("Qwen video description failed: malformed JSON response");
   });
 });

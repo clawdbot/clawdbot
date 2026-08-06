@@ -1,4 +1,5 @@
 /** Tests bash command aliases and chat shortcut handling. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleBashCommand } from "./commands-bash.js";
@@ -71,9 +72,14 @@ describe("handleBashCommand alias routing", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(handleBashChatCommandMock).toHaveBeenCalledTimes(1);
-    const [[bashParams]] = handleBashChatCommandMock.mock.calls as unknown as Array<
-      [{ agentId?: string; sessionKey?: string }]
-    >;
+    const [bashParams] = expectDefined(
+      (
+        handleBashChatCommandMock.mock.calls as unknown as Array<
+          [{ agentId?: string; sessionKey?: string }]
+        >
+      )[0],
+      "(handleBashChatCommandMock.mock.calls as unknown as Array<\n        [{ agentId?: string; sessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(bashParams.agentId).toBe("target");
     expect(bashParams.sessionKey).toBe("agent:target:whatsapp:direct:test-user");
   });

@@ -79,6 +79,27 @@ describe("reactSlackMessage", () => {
   });
 });
 
+describe("reactSlackMessage emoji normalization", () => {
+  it.each([
+    { input: "✅", expected: "white_check_mark" },
+    { input: ":fire:", expected: "fire" },
+    { input: "rocket", expected: "rocket" },
+    { input: "🦄", expected: "🦄" },
+    { input: "👍🏽", expected: "thumbsup::skin-tone-4" },
+    { input: "⚠️", expected: "warning" },
+  ])("normalizes $input to $expected", async ({ input, expected }) => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", input, { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: expected,
+    });
+  });
+});
+
 describe("removeSlackReaction", () => {
   it("treats no_reaction as idempotent success", async () => {
     const client = createClient();

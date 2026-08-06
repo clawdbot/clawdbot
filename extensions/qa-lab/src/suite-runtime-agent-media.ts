@@ -86,44 +86,57 @@ async function resolveGeneratedImagePath(params: {
   startedAtMs: number;
   timeoutMs: number;
 }) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline) {
     if (params.env.mock) {
-      const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
-        `${params.env.mock.baseUrl}/debug/requests`,
-      );
-      for (let index = requests.length - 1; index >= 0; index -= 1) {
-        const request = requests[index];
-        if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
-          continue;
+      try {
+        const requests = await fetchJson<Array<{ allInputText?: string; toolOutput?: string }>>(
+          `${params.env.mock.baseUrl}/debug/requests`,
+          Math.max(1, deadline - Date.now()),
+        );
+        for (const request of requests.toReversed()) {
+          if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
+            continue;
+          }
+          const mediaPath = extractMediaPathFromText(request.toolOutput);
+          if (mediaPath) {
+            const stat = await fs.stat(mediaPath).catch(() => null);
+            // Request snapshots include previous runs; only fresh, nonempty files prove this run.
+            if (stat?.isFile() && stat.size > 0 && stat.mtimeMs >= params.startedAtMs - 1_000) {
+              return mediaPath;
+            }
+          }
         }
-        const mediaPath = extractMediaPathFromText(request.toolOutput);
-        if (mediaPath) {
-          return mediaPath;
-        }
+      } catch {
+        // The mock debug endpoint is best-effort; generated media files are the durable fallback.
       }
     }
 
-    const mediaDir = path.join(
-      params.env.gateway.tempRoot,
-      "state",
-      "media",
-      "tool-image-generation",
+    // Generated media may deliver directly from tool storage or be staged outbound;
+    // either fresh owner artifact proves this run without depending on one delivery path.
+    const mediaDirs = ["outbound", "tool-image-generation"].map((subdir) =>
+      path.join(params.env.gateway.tempRoot, "state", "media", subdir),
     );
-    const entries = await fs.readdir(mediaDir).catch(() => []);
-    const candidates = await Promise.all(
-      entries.map(async (entry) => {
-        const fullPath = path.join(mediaDir, entry);
-        const stat = await fs.stat(fullPath).catch(() => null);
-        if (!stat?.isFile()) {
-          return null;
-        }
-        return {
-          fullPath,
-          mtimeMs: stat.mtimeMs,
-        };
-      }),
-    );
+    const candidates = (
+      await Promise.all(
+        mediaDirs.map(async (mediaDir) => {
+          const entries = await fs.readdir(mediaDir).catch(() => []);
+          return Promise.all(
+            entries.map(async (entry) => {
+              const fullPath = path.join(mediaDir, entry);
+              const stat = await fs.stat(fullPath).catch(() => null);
+              if (!stat?.isFile() || stat.size === 0) {
+                return null;
+              }
+              return {
+                fullPath,
+                mtimeMs: stat.mtimeMs,
+              };
+            }),
+          );
+        }),
+      )
+    ).flat();
     const match = candidates
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .filter((entry) => entry.mtimeMs >= params.startedAtMs - 1_000)
@@ -132,9 +145,12 @@ async function resolveGeneratedImagePath(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(250, remainingMs));
+      });
+    }
   }
   throw new Error(`timed out after ${params.timeoutMs}ms`);
 }
@@ -148,6 +164,8 @@ async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
       providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
       requiredPluginIds: env.transport.requiredPluginIds,
       existingPluginIds: readPluginAllow(snapshot.config),
+      forcedRuntime:
+        env.gateway?.runtimeEnv?.OPENCLAW_QA_FORCE_RUNTIME === "codex" ? "codex" : undefined,
     }),
   });
   await waitForGatewayHealthy(env);

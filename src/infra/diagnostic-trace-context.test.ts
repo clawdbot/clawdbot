@@ -1,5 +1,5 @@
 // Tests diagnostic trace context propagation and reset behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -11,7 +11,6 @@ import {
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
   parseDiagnosticTraceparent,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 
@@ -20,10 +19,6 @@ const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "7ad6b9a982deb2c9";
 
 describe("diagnostic-trace-context", () => {
-  afterEach(() => {
-    resetDiagnosticTraceContextForTest();
-  });
-
   it("validates W3C trace ids, span ids, and trace flags", () => {
     expect(isValidDiagnosticTraceId(TRACE_ID)).toBe(true);
     expect(isValidDiagnosticSpanId(SPAN_ID)).toBe(true);

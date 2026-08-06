@@ -269,11 +269,20 @@ function readConfig() {
 
 function configureRuntime() {
   const pluginId = process.env.KITCHEN_SINK_ID;
+  const personality = process.env.KITCHEN_SINK_PERSONALITY?.trim();
   const { configPath, config } = readConfig();
   config.plugins = config.plugins || {};
   config.plugins.entries = config.plugins.entries || {};
   config.plugins.entries[pluginId] = {
     ...config.plugins.entries[pluginId],
+    ...(personality
+      ? {
+          config: {
+            ...config.plugins.entries[pluginId]?.config,
+            personality,
+          },
+        }
+      : {}),
     hooks: {
       ...config.plugins.entries[pluginId]?.hooks,
       allowConversationAccess: true,
@@ -317,9 +326,10 @@ const expectMissing = (listValue, expected, field) => {
   }
 };
 
-const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);
+const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);
 const requiredFullDiagnosticCanaries = new Set([
-  "only bundled plugins can register trusted tool policies",
+  "agent tool result middleware must be a function",
+  "trusted tool policy registration requires id, description, and evaluate()",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
   'channel "kitchen-sink-channel-probe" registration missing required config helpers',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
@@ -330,14 +340,14 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const expectedErrorMessages = new Set([
     "cli registration missing explicit commands metadata",
     "only bundled plugins can register Codex app-server extension factories",
-    "only bundled plugins can register agent tool result middleware",
+    "agent tool result middleware must be a function",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
     "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "hosted media resolver registration missing resolver",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
     "node invoke policy registration missing commands",
-    "only bundled plugins can register trusted tool policies",
+    "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
@@ -634,6 +644,10 @@ function assertInstalled() {
   const installPath = resolveHomePath(record.installPath);
   if (!fs.existsSync(installPath)) {
     throw new Error(`kitchen-sink install path missing: ${record.installPath}`);
+  }
+  if (source === "clawhub") {
+    const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
+    assertRealPathInside(extensionsRoot, installPath, "kitchen-sink ClawHub install path");
   }
   if (source === "clawhub" && record.artifactKind === "npm-pack") {
     assertClawHubExternalInstallContract(installPath);

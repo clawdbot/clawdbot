@@ -1,10 +1,9 @@
 /** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-  stylePromptTitle,
-} from "../../../packages/terminal-core/src/prompt-style.js";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptTitle } from "../../../packages/terminal-core/src/prompt-style.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -15,7 +14,6 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "../../infra/parse-finite-number.js";
-import { getEnvApiKey } from "../../llm/env-api-keys.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { pad, truncate } from "./list.format.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -25,13 +23,7 @@ const MODEL_PAD = 42;
 const CTX_PAD = 8;
 
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
-  clackMultiselect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+  clackMultiselect(styleSelectParams(params));
 
 function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -152,7 +144,7 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
     );
     const ctxLabel = pad(formatTokenK(entry.contextLength), CTX_PAD);
     const paramsLabel = pad(entry.inferredParamB ? `${entry.inferredParamB}b` : "-", 8);
-    const notes = entry.modality ? `modality:${entry.modality}` : "";
+    const notes = entry.modality ? `modality:${sanitizeTerminalText(entry.modality)}` : "";
 
     runtime.log([modelLabel, toolLabel, imageLabel, ctxLabel, paramsLabel, notes].join(" "));
   }
@@ -279,6 +271,7 @@ export async function modelsScanCommand(
         },
       }),
   );
+  const sorted = sortScanResults(results);
 
   if (!probe) {
     if (!opts.json) {
@@ -287,9 +280,9 @@ export async function modelsScanCommand(
         runtime,
         autoDowngraded: requestedProbe,
       });
-      printScanTable(sortScanResults(results), runtime);
+      printScanTable(sorted, runtime);
     } else {
-      writeRuntimeJson(runtime, results);
+      writeRuntimeJson(runtime, sorted);
     }
     return;
   }
@@ -301,7 +294,6 @@ export async function modelsScanCommand(
     );
   }
 
-  const sorted = sortScanResults(results);
   const toolSorted = sortScanResults(toolOk);
   const imageOk = results.filter((entry) => entry.image.ok);
   const imageSorted = sortImageResults(imageOk);
@@ -407,7 +399,7 @@ export async function modelsScanCommand(
       selectedImages,
       setDefault: Boolean(opts.setDefault),
       setImage: Boolean(opts.setImage),
-      results,
+      results: sorted,
       warnings: [],
     });
     return;

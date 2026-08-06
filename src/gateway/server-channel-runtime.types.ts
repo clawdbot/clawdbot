@@ -7,3 +7,10 @@ export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
   channelAccounts: Partial<Record<ChannelId, Record<string, ChannelAccountSnapshot>>>;
 };
+
+export type StartChannelOptions = {
+  preserveRestartAttempts?: boolean;
+  preserveManualStop?: boolean;
+  deferAccountStartUntil?: Promise<void>;
+  manual?: boolean;
+};

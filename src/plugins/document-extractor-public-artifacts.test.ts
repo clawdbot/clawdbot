@@ -6,10 +6,7 @@ const { publicArtifactModule } = vi.hoisted(() => ({
 }));
 
 vi.mock("./public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: vi.fn(() => publicArtifactModule),
-  resolveBundledPluginPublicArtifactPath: vi.fn(
-    () => "/repo/extensions/demo/document-extractor.ts",
-  ),
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(() => publicArtifactModule),
 }));
 
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";

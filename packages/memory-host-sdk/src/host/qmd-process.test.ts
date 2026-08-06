@@ -3,7 +3,17 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../../gateway-client/src/timeouts.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -24,28 +34,66 @@ import {
   type QmdBinaryAvailability,
 } from "./qmd-process.js";
 
-function createMockChild() {
+function createMockChild(params: { pid?: number } = {}) {
   const child = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
+    pid?: number;
+    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     kill: ReturnType<typeof vi.fn>;
+    unref: ReturnType<typeof vi.fn>;
     closeWith: (code?: number | null, signal?: NodeJS.Signals | null) => void;
   };
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  child.pid = params.pid;
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  child.exitCode = null;
+  child.signalCode = null;
   child.kill = vi.fn();
+  child.unref = vi.fn();
   child.closeWith = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
+    child.exitCode = code;
+    child.signalCode = signal;
     child.emit("close", code, signal);
   };
   return child;
 }
 
+function createClosingTaskkillChild(code = 0) {
+  const child = createMockChild();
+  queueMicrotask(() => child.closeWith(code));
+  return child;
+}
+
 let fixtureRoot = "";
 let tempDir = "";
-let platformSpy: { mockRestore(): void } | null = null;
+let platformSpy: MockInstance<() => NodeJS.Platform> | null = null;
 let fixtureId = 0;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
+const originalSystemRoot = process.env.SystemRoot;
+const originalWindir = process.env.WINDIR;
+const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
+
+function runQmdCommand(overrides: Partial<Parameters<typeof runCliCommand>[0]> = {}) {
+  return runCliCommand({
+    commandSummary: "qmd query test",
+    spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+    env: process.env,
+    cwd: tempDir,
+    maxOutputChars: 10_000,
+    ...overrides,
+  });
+}
 
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
@@ -63,12 +111,19 @@ afterAll(async () => {
 beforeEach(async () => {
   tempDir = path.join(fixtureRoot, `case-${fixtureId++}`);
   await fs.mkdir(tempDir, { recursive: true });
+  process.env.SystemRoot = "C:\\Windows";
+  delete process.env.WINDIR;
+  spawnMock.mockReset();
+  spawnMock.mockImplementation(() => createClosingTaskkillChild());
 });
 
 afterEach(() => {
   vi.useRealTimers();
   process.env.PATH = originalPath;
   process.env.PATHEXT = originalPathExt;
+  restoreEnvValue("SystemRoot", originalSystemRoot);
+  restoreEnvValue("WINDIR", originalWindir);
+  platformSpy?.mockReturnValue("win32");
   spawnMock.mockReset();
   tempDir = "";
 });
@@ -150,7 +205,7 @@ describe("checkQmdBinaryAvailability", () => {
   });
 
   it("returns available when the qmd process spawns successfully", async () => {
-    const child = createMockChild();
+    const child = createMockChild({ pid: 12344 });
     spawnMock.mockImplementationOnce(() => {
       queueMicrotask(() => child.emit("spawn"));
       return child;
@@ -159,8 +214,114 @@ describe("checkQmdBinaryAvailability", () => {
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
     ).resolves.toEqual({ available: true });
-    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", String(child.pid), "/T"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows availability probes when graceful taskkill fails", async () => {
+    const child = createMockChild({ pid: 12345 });
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    });
+    spawnMock.mockImplementationOnce(() => createClosingTaskkillChild(1));
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
+    ).resolves.toEqual({ available: true });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(3));
+
+    expect(spawnMock).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(spawnMock).toHaveBeenNthCalledWith(3, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("keeps the event loop responsive and does not retry a pid after taskkill times out", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ pid: 12346 });
+    const taskkill = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    });
+    spawnMock.mockReturnValueOnce(taskkill);
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
+    ).resolves.toEqual({ available: true });
+
+    const heartbeat = vi.fn();
+    setTimeout(heartbeat, 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(heartbeat).toHaveBeenCalledOnce();
+    expect(taskkill.kill).not.toHaveBeenCalled();
+    expect(taskkill.unref).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12346", "/T"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(taskkill.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(taskkill.unref).toHaveBeenCalledOnce();
     expect(child.kill).toHaveBeenCalledWith();
+  });
+
+  it("keeps a timed-out taskkill result when kill synchronously emits an error", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ pid: 12347 });
+    const taskkill = createMockChild();
+    taskkill.kill.mockImplementationOnce(() => {
+      taskkill.emit("error", new Error("taskkill kill failed"));
+      return true;
+    });
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    });
+    spawnMock.mockReturnValueOnce(taskkill);
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
+    ).resolves.toEqual({ available: true });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(taskkill.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(child.kill).toHaveBeenCalledWith();
+  });
+
+  it("does not retry taskkill after the qmd child exits", async () => {
+    const child = createMockChild({ pid: 12348 });
+    const taskkill = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    });
+    spawnMock.mockReturnValueOnce(taskkill);
+
+    await expect(
+      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
+    ).resolves.toEqual({ available: true });
+
+    child.closeWith(0);
+    taskkill.closeWith(1);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("returns unavailable when the qmd process cannot be spawned", async () => {
@@ -193,7 +354,7 @@ describe("checkQmdBinaryAvailability", () => {
     const child = createMockChild();
     const err = Object.assign(new Error("spawn qmd ENOENT"), { code: "ENOENT" });
     spawnMock.mockImplementationOnce(() => {
-      queueMicrotask(() => child.emit("close"));
+      queueMicrotask(() => child.closeWith());
       queueMicrotask(() => child.emit("error", err));
       return child;
     });
@@ -218,6 +379,33 @@ describe("checkQmdBinaryAvailability", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
   });
+  it("kills timed-out availability probes by process group on POSIX", async () => {
+    platformSpy?.mockReturnValue("linux");
+    const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createMockChild({ pid: 4321 });
+    spawnMock.mockReturnValueOnce(child);
+
+    try {
+      await expect(
+        checkQmdBinaryAvailability({
+          command: "qmd",
+          env: process.env,
+          cwd: tempDir,
+          timeoutMs: 1,
+        }),
+      ).resolves.toEqual({
+        available: false,
+        reason: "binary",
+        error: "spawn qmd timed out after 1ms",
+      });
+
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ detached: true });
+      expect(killProcess).toHaveBeenCalledWith(-4321, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      killProcess.mockRestore();
+    }
+  });
 });
 
 describe("runCliCommand", () => {
@@ -233,13 +421,7 @@ describe("runCliCommand", () => {
     });
 
     try {
-      await runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
-      });
+      await runQmdCommand();
       throw new Error("expected runCliCommand to reject");
     } catch (err) {
       expect(err).toBeInstanceOf(Error);
@@ -254,6 +436,8 @@ describe("runCliCommand", () => {
         stderr: "ggml-metal-device.m:612",
       });
       expect(err.message).toContain("qmd query test failed (code 134)");
+      expect(child.stdout.setEncoding).toHaveBeenCalledWith("utf8");
+      expect(child.stderr.setEncoding).toHaveBeenCalledWith("utf8");
     }
   });
 
@@ -267,15 +451,7 @@ describe("runCliCommand", () => {
       return child;
     });
 
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 10_000,
-      }),
-    ).rejects.toMatchObject({
+    await expect(runQmdCommand()).rejects.toMatchObject({
       code: null,
       signal: "SIGABRT",
       stdout: "[]",
@@ -292,15 +468,7 @@ describe("runCliCommand", () => {
       return child;
     });
 
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 4,
-      }),
-    ).rejects.toThrow(/produced too much output/);
+    await expect(runQmdCommand({ maxOutputChars: 4 })).rejects.toThrow(/produced too much output/);
   });
 
   it("counts surrogate pairs as one character when capping failed command output", async () => {
@@ -313,15 +481,7 @@ describe("runCliCommand", () => {
       return child;
     });
 
-    await expect(
-      runCliCommand({
-        commandSummary: "qmd query test",
-        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-        env: process.env,
-        cwd: tempDir,
-        maxOutputChars: 2,
-      }),
-    ).rejects.toThrow(/🙂/);
+    await expect(runQmdCommand({ maxOutputChars: 2 })).rejects.toThrow(/🙂/);
   });
 
   it("caps oversized command timeouts before scheduling", async () => {
@@ -330,15 +490,151 @@ describe("runCliCommand", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     spawnMock.mockReturnValueOnce(child);
 
-    void runCliCommand({
-      commandSummary: "qmd query test",
-      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-      env: process.env,
-      cwd: tempDir,
-      maxOutputChars: 10_000,
+    void runQmdCommand({
       timeoutMs: Number.MAX_SAFE_INTEGER,
     }).catch(() => undefined);
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
+  it("kills aborted cli command process groups on POSIX and rejects with the abort reason", async () => {
+    platformSpy?.mockReturnValue("linux");
+    const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createMockChild({ pid: 7654 });
+    spawnMock.mockReturnValueOnce(child);
+    const controller = new AbortController();
+
+    try {
+      const pending = runQmdCommand({
+        commandSummary: "qmd query slow",
+        spawnInvocation: { command: "qmd", argv: ["query", "slow", "--json"] },
+        timeoutMs: 60_000,
+        signal: controller.signal,
+      });
+
+      controller.abort(new Error("memory_search timed out after 15s"));
+
+      await expect(pending).rejects.toThrow("memory_search timed out after 15s");
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ detached: true });
+      expect(killProcess).toHaveBeenCalledWith(-7654, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      killProcess.mockRestore();
+    }
+  });
+
+  it("rejects immediately without spawning when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(
+      runQmdCommand({
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("memory_search timed out after 15s");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("kills timed-out cli command process groups on POSIX", async () => {
+    platformSpy?.mockReturnValue("linux");
+    const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createMockChild({ pid: 8765 });
+    spawnMock.mockReturnValueOnce(child);
+
+    try {
+      const pending = runQmdCommand({
+        timeoutMs: 1,
+      });
+      const timeoutAssertion = expect(pending).rejects.toThrow(
+        "qmd query test timed out after 1ms",
+      );
+
+      await timeoutAssertion;
+
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ detached: true });
+      expect(killProcess).toHaveBeenCalledWith(-8765, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      killProcess.mockRestore();
+    }
+  });
+
+  it("force-kills timed-out Windows cli commands with taskkill", async () => {
+    const child = createMockChild({ pid: 12346 });
+    spawnMock.mockReturnValueOnce(child);
+
+    const pending = runQmdCommand({
+      timeoutMs: 1,
+    });
+
+    await expect(pending).rejects.toThrow("qmd query test timed out after 1ms");
+
+    expect(spawnMock).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12346", "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("falls back to direct SIGKILL when Windows taskkill times out", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ pid: 12347 });
+    const taskkill = createMockChild();
+    spawnMock.mockReturnValueOnce(child);
+    spawnMock.mockReturnValueOnce(taskkill);
+
+    const pending = runQmdCommand({
+      timeoutMs: 1,
+    });
+
+    const timeoutAssertion = expect(pending).rejects.toThrow("qmd query test timed out after 1ms");
+    await vi.advanceTimersByTimeAsync(1);
+    await timeoutAssertion;
+    expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(spawnMock).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12347", "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(taskkill.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(taskkill.unref).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects when %s stream emits an error",
+    async (streamName) => {
+      const child = createMockChild();
+      spawnMock.mockReturnValueOnce(child);
+      const streamError = new Error(`${streamName} EPIPE`);
+
+      const pending = runQmdCommand();
+
+      child[streamName].emit("error", streamError);
+
+      await expect(pending).rejects.toMatchObject({
+        message: `qmd query test ${streamName} error: ${streamName} EPIPE`,
+        cause: streamError,
+      });
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    },
+  );
+
+  it("keeps the other stream guarded after stdout error", async () => {
+    const child = createMockChild();
+    spawnMock.mockReturnValueOnce(child);
+
+    const pending = runQmdCommand();
+
+    child.stdout.emit("error", new Error("stdout EPIPE"));
+
+    expect(() => {
+      child.stderr.emit("error", new Error("stderr later"));
+    }).not.toThrow();
+
+    await expect(pending).rejects.toThrow("qmd query test stdout error: stdout EPIPE");
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 });

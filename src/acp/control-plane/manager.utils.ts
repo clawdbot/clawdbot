@@ -7,6 +7,7 @@ import {
 } from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -49,7 +50,7 @@ export function requireReadySessionMeta(resolution: AcpSessionResolution): Sessi
   if (resolution.kind === "ready") {
     return resolution.meta;
   }
-  throw toLintErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
+  throw toErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
 }
 
 function normalizeSessionKey(sessionKey: string): string {
@@ -113,13 +114,7 @@ export function createUnsupportedControlError(params: {
   );
 }
 
-export function resolveRuntimeIdleTtlMs(cfg: OpenClawConfig): number {
-  const ttlMinutes = cfg.acp?.runtime?.ttlMinutes;
-  if (typeof ttlMinutes !== "number" || !Number.isFinite(ttlMinutes) || ttlMinutes <= 0) {
-    return 0;
-  }
-  return Math.round(ttlMinutes * 60 * 1000);
-}
+export const DEFAULT_ACP_RUNTIME_IDLE_TTL_MS = 0;
 
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
   const raw = meta as Record<string, unknown>;
@@ -128,18 +123,4 @@ export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
     Object.hasOwn(raw, "agentSessionId") ||
     Object.hasOwn(raw, "sessionIdsProvisional")
   );
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

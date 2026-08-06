@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_BUNDLE="${1:-dist/OpenClaw.app}"
+APP_BUNDLE="dist/OpenClaw.app"
 IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
@@ -14,7 +14,7 @@ cleanup() {
   fi
 }
 
-if [[ "${APP_BUNDLE}" == "--help" || "${APP_BUNDLE}" == "-h" ]]; then
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<'HELP'
 Usage: scripts/codesign-mac-app.sh [app-bundle]
 
@@ -26,6 +26,20 @@ Env:
   SKIP_TEAM_ID_CHECK=1              # bypass Team ID audit
 HELP
   exit 0
+fi
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    -*) echo "ERROR: Unknown codesign option: $1" >&2; exit 1 ;;
+    *) APP_BUNDLE="$1"; shift ;;
+  esac
+fi
+if [[ "$#" -gt 0 ]]; then
+  echo "ERROR: Unexpected codesign argument: $1" >&2
+  exit 1
 fi
 
 if [ ! -d "$APP_BUNDLE" ]; then

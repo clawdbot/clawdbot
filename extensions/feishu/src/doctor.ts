@@ -9,12 +9,16 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
-  loadSessionStore,
-  resolveSessionFilePath,
+  isValidAgentHarnessSessionStoreEntry,
+  deleteSessionEntry,
+  listSessionEntries,
+  loadTranscriptEventsSync,
+  resolveSessionStoreBackupPaths,
   resolveStorePath,
-  updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -63,14 +67,14 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-export type FeishuDoctorInspection = {
+type FeishuDoctorInspection = {
   stateDir: string;
   feishuStateDir: string;
   findings: FeishuDoctorFinding[];
   sessionEntries: FeishuDoctorSessionEntry[];
 };
 
-export type FeishuDoctorRepairReport = {
+type FeishuDoctorRepairReport = {
   backupDir: string;
   stateDirRepairAttempted: boolean;
   rebuiltStateDir: boolean;
@@ -82,10 +86,6 @@ export type FeishuDoctorRepairReport = {
 
 function timestampForPath(now = new Date()): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
@@ -116,6 +116,10 @@ function existsFile(filePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function resolveFeishuAgentSessionsDir(agentId: string): string {
+  return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
 }
 
 function safeReadDir(dir: string): fs.Dirent[] {
@@ -162,7 +166,7 @@ function formatFinding(finding: FeishuDoctorFinding): string {
   return exhaustive;
 }
 
-export function isFeishuSessionStoreKey(key: string): boolean {
+function isFeishuSessionStoreKey(key: string): boolean {
   const normalized = key.trim().toLowerCase();
   return /^agent:[^:]+:feishu(?::|$)/.test(normalized) || /^feishu(?::|$)/.test(normalized);
 }
@@ -240,9 +244,11 @@ function collectFeishuSessionTargets(params: {
 }): FeishuSessionTarget[] {
   const byStorePath = new Map<string, FeishuSessionTarget>();
   const addTarget = (target: FeishuSessionTarget) => {
-    byStorePath.set(path.resolve(target.storePath), {
+    const resolvedStorePath = path.resolve(target.storePath);
+    byStorePath.set(`${normalizeAgentId(target.agentId)}\0${resolvedStorePath}`, {
       ...target,
-      storePath: path.resolve(target.storePath),
+      agentId: normalizeAgentId(target.agentId),
+      storePath: resolvedStorePath,
     });
   };
 
@@ -317,31 +323,23 @@ function resolveSessionTranscriptCandidates(params: {
 }): string[] {
   const candidates = new Set<string>();
   const sessionsDir = path.dirname(params.storePath);
-  const addSafeCandidate = (candidate: string) => {
+  const agentSessionsDir = resolveFeishuAgentSessionsDir(params.agentId);
+  const addSafeCandidate = (candidate: string): boolean => {
     const resolved = path.isAbsolute(candidate)
       ? path.resolve(candidate)
       : path.resolve(sessionsDir, candidate);
-    if (resolved === sessionsDir || !isPathWithinRoot(resolved, sessionsDir)) {
-      return;
+    const isStoreCandidate = isPathWithinRoot(resolved, sessionsDir);
+    const isAgentSessionCandidate = isPathWithinRoot(resolved, agentSessionsDir);
+    if (
+      resolved === sessionsDir ||
+      resolved === agentSessionsDir ||
+      (!isStoreCandidate && !isAgentSessionCandidate)
+    ) {
+      return false;
     }
     candidates.add(resolved);
+    return true;
   };
-
-  if (
-    typeof params.entry.sessionId === "string" &&
-    /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(params.entry.sessionId)
-  ) {
-    candidates.add(
-      resolveSessionFilePath(
-        params.entry.sessionId,
-        typeof params.entry.sessionFile === "string"
-          ? { sessionFile: params.entry.sessionFile }
-          : undefined,
-        { agentId: params.agentId, sessionsDir },
-      ),
-    );
-    return [...candidates].toSorted();
-  }
 
   if (typeof params.entry.sessionFile === "string" && params.entry.sessionFile.trim()) {
     addSafeCandidate(params.entry.sessionFile.trim());
@@ -375,6 +373,72 @@ function isUserMessage(value: unknown): boolean {
     isRecord(value.message) &&
     value.message.role === "user"
   );
+}
+
+function inspectTranscriptEntries(params: {
+  sessionKey: string;
+  storePath: string;
+  transcriptPath: string;
+  entries: unknown[];
+  allowMissingSessionHeader?: boolean;
+  malformedLines?: number;
+}): FeishuDoctorFinding | null {
+  let blankUserMessageRun = 0;
+  let maxBlankUserMessageRun = 0;
+  for (const entry of params.entries) {
+    if (isBlankUserMessage(entry)) {
+      blankUserMessageRun += 1;
+      maxBlankUserMessageRun = Math.max(maxBlankUserMessageRun, blankUserMessageRun);
+    } else if (isUserMessage(entry)) {
+      blankUserMessageRun = 0;
+    }
+  }
+
+  if (params.entries.length === 0) {
+    if (params.allowMissingSessionHeader) {
+      return null;
+    }
+    return {
+      kind: "invalid-session-transcript",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      reason: "empty transcript",
+    };
+  }
+  const firstEntry = params.entries[0];
+  if (
+    !isSessionHeader(firstEntry) &&
+    (!params.allowMissingSessionHeader ||
+      (!isUserMessage(firstEntry) && !isBlankUserMessage(firstEntry)))
+  ) {
+    return {
+      kind: "invalid-session-transcript",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      reason: "invalid session header",
+    };
+  }
+  if ((params.malformedLines ?? 0) > 0) {
+    return {
+      kind: "invalid-session-transcript",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      reason: `${params.malformedLines} malformed JSONL line(s)`,
+    };
+  }
+  if (maxBlankUserMessageRun >= BLANK_USER_MESSAGE_REPAIR_THRESHOLD) {
+    return {
+      kind: "blank-user-message-run",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      count: maxBlankUserMessageRun,
+    };
+  }
+  return null;
 }
 
 function inspectSessionTranscript(params: {
@@ -416,8 +480,6 @@ function inspectSessionTranscript(params: {
 
   const entries: unknown[] = [];
   let malformedLines = 0;
-  let blankUserMessageRun = 0;
-  let maxBlankUserMessageRun = 0;
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
@@ -425,54 +487,44 @@ function inspectSessionTranscript(params: {
     try {
       const entry = JSON.parse(line);
       entries.push(entry);
-      if (isBlankUserMessage(entry)) {
-        blankUserMessageRun += 1;
-        maxBlankUserMessageRun = Math.max(maxBlankUserMessageRun, blankUserMessageRun);
-      } else if (isUserMessage(entry)) {
-        blankUserMessageRun = 0;
-      }
     } catch {
       malformedLines += 1;
     }
   }
 
-  if (entries.length === 0) {
+  return inspectTranscriptEntries({ ...params, entries, malformedLines });
+}
+
+function inspectCanonicalSessionTranscript(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): FeishuDoctorFinding | null {
+  let entries: unknown[];
+  try {
+    entries = loadTranscriptEventsSync({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+  } catch {
     return {
       kind: "invalid-session-transcript",
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: "empty transcript",
+      path: params.storePath,
+      reason: "unreadable",
     };
   }
-  if (!isSessionHeader(entries[0])) {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: "invalid session header",
-    };
-  }
-  if (malformedLines > 0) {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: `${malformedLines} malformed JSONL line(s)`,
-    };
-  }
-  if (maxBlankUserMessageRun >= BLANK_USER_MESSAGE_REPAIR_THRESHOLD) {
-    return {
-      kind: "blank-user-message-run",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      count: maxBlankUserMessageRun,
-    };
-  }
-  return null;
+  return inspectTranscriptEntries({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    transcriptPath: params.storePath,
+    allowMissingSessionHeader: true,
+    entries,
+  });
 }
 
 function collectFeishuSessionFindings(params: {
@@ -481,6 +533,16 @@ function collectFeishuSessionFindings(params: {
   storePath: string;
   entry: FeishuSessionEntry;
 }): FeishuDoctorFinding[] {
+  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (sessionId) {
+    const finding = inspectCanonicalSessionTranscript({
+      agentId: params.agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    return finding ? [finding] : [];
+  }
   const transcriptCandidates = resolveSessionTranscriptCandidates(params);
   const existing = transcriptCandidates.filter(existsFile);
   if (transcriptCandidates.length > 0 && existing.length === 0) {
@@ -547,7 +609,7 @@ function collectRepairSessionEntries(
   );
 }
 
-export function inspectFeishuDoctorState(params: {
+function inspectFeishuDoctorState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): FeishuDoctorInspection {
@@ -558,13 +620,16 @@ export function inspectFeishuDoctorState(params: {
   const sessionEntries: FeishuDoctorInspection["sessionEntries"] = [];
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
-    const store = loadSessionStore(target.storePath, { skipCache: true });
-    for (const [key, entry] of Object.entries(store).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      if (!isFeishuSessionEntry(key, entry)) {
-        continue;
-      }
+    for (const { sessionKey: key, entry } of listSessionEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    })
+      .filter(
+        ({ sessionKey, entry: sessionEntry }) =>
+          !isValidAgentHarnessSessionStoreEntry(sessionKey, sessionEntry) &&
+          isFeishuSessionEntry(sessionKey, sessionEntry),
+      )
+      .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey))) {
       const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
@@ -625,17 +690,18 @@ function movePathToBackup(params: {
 }
 
 function copyStoreBackup(params: { storePath: string; backupDir: string; agentId: string }) {
-  if (!existsFile(params.storePath)) {
-    return;
+  const targetDir = path.join(params.backupDir, "session-stores", params.agentId);
+  for (const sourcePath of resolveSessionStoreBackupPaths({
+    agentId: params.agentId,
+    storePath: params.storePath,
+  })) {
+    if (!existsFile(sourcePath)) {
+      continue;
+    }
+    const targetPath = path.join(targetDir, path.basename(sourcePath));
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(sourcePath, resolveUniquePath(targetPath));
   }
-  const targetPath = path.join(
-    params.backupDir,
-    "session-stores",
-    params.agentId,
-    path.basename(params.storePath),
-  );
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-  fs.copyFileSync(params.storePath, resolveUniquePath(targetPath));
 }
 
 function collectSessionArtifactPaths(params: {
@@ -736,25 +802,28 @@ async function repairFeishuDoctorState(params: {
     try {
       copyStoreBackup({ storePath, backupDir, agentId: group.agentId });
       const keys = new Set(group.entries.map((entry) => entry.key));
-      const removedEntries = await updateSessionStore(
-        storePath,
-        (store) => {
-          const removed: typeof group.entries = [];
-          for (const key of keys) {
-            if (Object.hasOwn(store, key)) {
-              delete store[key];
-              const entry = group.entries.find((candidate) => candidate.key === key);
-              if (entry) {
-                removed.push(entry);
-              }
-            }
-          }
-          return removed;
-        },
-        {
-          skipMaintenance: true,
-        },
-      );
+      const removedEntries: typeof group.entries = [];
+      for (const key of keys) {
+        const currentEntry = listSessionEntries({ agentId: group.agentId, storePath }).find(
+          (candidate) => candidate.sessionKey === key,
+        )?.entry;
+        if (!currentEntry || isValidAgentHarnessSessionStoreEntry(key, currentEntry)) {
+          continue;
+        }
+        const deleted = await deleteSessionEntry({
+          agentId: group.agentId,
+          archiveTranscript: true,
+          sessionKey: key,
+          storePath,
+        });
+        if (!deleted) {
+          continue;
+        }
+        const entry = group.entries.find((candidate) => candidate.key === key);
+        if (entry) {
+          removedEntries.push(entry);
+        }
+      }
       const removed = removedEntries.length;
       removedSessionEntries += removed;
       if (removed > 0) {
@@ -838,7 +907,7 @@ function hasConfiguredFeishuChannel(cfg: OpenClawConfig): boolean {
   return Boolean(cfg.channels?.feishu);
 }
 
-export async function runFeishuDoctorSequence(params: {
+async function runFeishuDoctorSequence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
@@ -871,6 +940,9 @@ export async function runFeishuDoctorSequence(params: {
 }
 
 export const feishuDoctor: ChannelDoctorAdapter = {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
     await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

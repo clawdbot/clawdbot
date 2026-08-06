@@ -107,6 +107,17 @@ describe("extra-params: DeepSeek V4 OpenAI-compatible thinking fallback", () => 
     );
   });
 
+  it("does not inject DeepSeek-native thinking on OpenRouter auto-detected compat", () => {
+    const payload = runDeepSeekV4Case({
+      payloadExtras: { reasoning: { effort: "xhigh" } },
+      provider: "openrouter",
+      thinkingLevel: "high",
+    });
+    expect(payload.reasoning).toEqual({ effort: "xhigh" });
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
   it("does not inject thinking:disabled when thinkingFormat is openai and thinking is off", () => {
     // Even `thinking: { type: "disabled" }` is rejected by Azure Foundry, so the
     // override must suppress the parameter entirely, not just disable it.

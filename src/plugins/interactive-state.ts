@@ -1,17 +1,7 @@
 // Stores interactive plugin state and dedupe caches.
 import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import type { DedupeCache } from "../infra/dedupe.js";
-import type { PluginInteractiveHandlerRegistration } from "./types.js";
-
-/** Registered interactive handler with owning plugin metadata. */
-export type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-};
-
 type InteractiveState = {
-  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
   callbackDedupe: ReturnType<typeof createDedupeCache>;
   inflightCallbackDedupe: Set<string>;
 };
@@ -30,7 +20,6 @@ function createInteractiveCallbackDedupe(): DedupeCache {
 
 function createInteractiveState(): InteractiveState {
   return {
-    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
     callbackDedupe: createInteractiveCallbackDedupe(),
     inflightCallbackDedupe: new Set<string>(),
   };
@@ -43,10 +32,6 @@ function hydrateInteractiveState(value: unknown): InteractiveState {
       : ({} as Partial<InteractiveState>);
 
   return {
-    interactiveHandlers:
-      state.interactiveHandlers instanceof Map
-        ? state.interactiveHandlers
-        : new Map<string, RegisteredInteractiveHandler>(),
     callbackDedupe: createInteractiveCallbackDedupe(),
     inflightCallbackDedupe:
       state.inflightCallbackDedupe instanceof Set
@@ -67,11 +52,6 @@ function getState() {
   const created = createInteractiveState();
   globalStore[PLUGIN_INTERACTIVE_STATE_KEY] = created;
   return created;
-}
-
-/** Returns the process-global plugin interactive handler registry. */
-export function getPluginInteractiveHandlersState() {
-  return getState().interactiveHandlers;
 }
 
 function getPluginInteractiveCallbackDedupeState() {
@@ -117,12 +97,6 @@ export function releasePluginInteractiveCallbackDedupe(dedupeKey: string | undef
 
 /** Clears plugin interactive handlers and callback dedupe state. */
 export function clearPluginInteractiveHandlersState(): void {
-  clearPluginInteractiveHandlerRegistrationsState();
   getPluginInteractiveCallbackDedupeState().clear();
   getState().inflightCallbackDedupe.clear();
-}
-
-/** Clears only plugin interactive handler registrations. */
-export function clearPluginInteractiveHandlerRegistrationsState(): void {
-  getPluginInteractiveHandlersState().clear();
 }

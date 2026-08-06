@@ -19,7 +19,7 @@ export type ResolvedProviderAuth = {
 };
 
 /** Stable provider auth error code used by fallback/retry paths. */
-export type ProviderAuthErrorCode = "missing-api-key" | "missing-provider-auth";
+type ProviderAuthErrorCode = "missing-api-key" | "missing-provider-auth";
 
 /** Base provider auth error with a stable code for retry/fallback logic. */
 export class ProviderAuthError extends Error {

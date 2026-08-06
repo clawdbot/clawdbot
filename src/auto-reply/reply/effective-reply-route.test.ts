@@ -1,14 +1,27 @@
 // Tests effective reply route selection from context, session, and fallback state.
 import { describe, expect, it } from "vitest";
-import {
-  isSystemEventProvider,
-  resolveEffectiveReplyRoute,
-  type EffectiveReplyRouteContext,
-  type EffectiveReplyRouteEntry,
-} from "./effective-reply-route.js";
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+
+type EffectiveReplyRouteParams = Parameters<typeof resolveEffectiveReplyRoute>[0];
+type EffectiveReplyRouteContext = EffectiveReplyRouteParams["ctx"];
+type EffectiveReplyRouteEntry = NonNullable<EffectiveReplyRouteParams["entry"]>;
+type LegacyDeliveryFixture = Partial<SessionEntry> & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+};
 
 const ctx = (params: EffectiveReplyRouteContext): EffectiveReplyRouteContext => params;
-const entry = (params: EffectiveReplyRouteEntry): EffectiveReplyRouteEntry => params;
+const entry = (params: LegacyDeliveryFixture): EffectiveReplyRouteEntry =>
+  normalizeLegacySessionEntryDelivery(params as SessionEntry);
 
 describe("resolveEffectiveReplyRoute", () => {
   it("uses live origin context for normal providers", () => {
@@ -19,6 +32,7 @@ describe("resolveEffectiveReplyRoute", () => {
           OriginatingChannel: "discord",
           OriginatingTo: "channel:live",
           AccountId: "live-account",
+          ChatType: "channel",
         }),
         entry: entry({
           deliveryContext: {
@@ -35,6 +49,7 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "discord",
       to: "channel:live",
       accountId: "live-account",
+      chatType: "channel",
     });
   });
 
@@ -110,7 +125,7 @@ describe("resolveEffectiveReplyRoute", () => {
           route: {
             channel: "feishu",
             accountId: "work",
-            target: { to: "user:ou_123" },
+            target: { to: "user:ou_123", chatType: "channel" },
             thread: { id: "thread:om_123", source: "explicit" },
           },
           deliveryContext: {
@@ -126,6 +141,7 @@ describe("resolveEffectiveReplyRoute", () => {
       to: "user:ou_123",
       accountId: "work",
       threadId: "thread:om_123",
+      chatType: "channel",
       inheritedExternalRoute: true,
     });
   });
@@ -311,16 +327,15 @@ describe("resolveEffectiveReplyRoute", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({ Provider: "exec-event" }),
-        entry: entry({
-          deliveryContext: {
-            channel: "telegram",
-            to: "chat:persisted",
-            accountId: "persisted-account",
-          },
-          lastChannel: "slack",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
-        }),
+        entry: {
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "telegram",
+              to: "chat:persisted",
+              accountId: "persisted-account",
+            },
+          }),
+        },
       }),
     ).toEqual({
       channel: "telegram",
@@ -346,7 +361,7 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("fills partial exec-event route from persisted context", () => {
+  it("does not inherit an account from a different persisted channel", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({
@@ -365,7 +380,32 @@ describe("resolveEffectiveReplyRoute", () => {
     ).toEqual({
       channel: "telegram",
       to: "chat:live",
+      accountId: undefined,
+    });
+  });
+
+  it("fills a partial exec-event route from the same persisted channel", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "exec-event",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat:live",
+        }),
+        entry: entry({
+          chatType: "direct",
+          deliveryContext: {
+            channel: "telegram",
+            to: "chat:persisted",
+            accountId: "persisted-account",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "chat:live",
       accountId: "persisted-account",
+      chatType: "direct",
     });
   });
 });

@@ -2,22 +2,20 @@
 import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import { WRITER_QUEUES } from "./store-writer-state.js";
 
-/** Runs a callback under the same per-store writer queue used in production. */
-export async function withSessionStoreWriterForTest<T>(
-  storePath: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  return await runExclusiveSessionStoreWrite(storePath, fn);
-}
+type RunExclusiveSessionStoreWriteOptions = {
+  reentrant?: boolean;
+};
 
 export async function runExclusiveSessionStoreWrite<T>(
   storePath: string,
   fn: () => Promise<T>,
+  opts: RunExclusiveSessionStoreWriteOptions = {},
 ): Promise<T> {
   return await runQueuedStoreWrite({
     queues: WRITER_QUEUES,
     storePath,
     label: "runExclusiveSessionStoreWrite",
     fn,
+    reentrant: opts.reentrant,
   });
 }

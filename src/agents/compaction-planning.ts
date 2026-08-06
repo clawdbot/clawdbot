@@ -3,6 +3,10 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
+import {
+  projectCompactionPlanningMessages,
+  readCompactionPlanningOmittedChars,
+} from "./compaction-planning-projection.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -40,7 +44,7 @@ export type OversizedFallbackPlan = {
 };
 
 /** Token accounting and optional prune result for preserving context-window headroom. */
-export type HistoryPrunePlan = {
+type HistoryPrunePlan = {
   summarizableTokens: number;
   newContentTokens: number;
   maxHistoryTokens: number;
@@ -51,7 +55,23 @@ export type HistoryPrunePlan = {
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details and runtime-context transcript entries must never enter LLM-facing compaction.
   const safe = sanitizeCompactionMessages(messages);
-  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+  return safe.reduce((sum, message) => sum + estimateCompactionPlanningTokens(message), 0);
+}
+
+/**
+ * Per-original-message token estimates, aligned 1:1 to the input array. Sanitizes
+ * the full array once instead of wrapping and re-cloning each message in its own
+ * 1-element array. Runtime-context entries are not model-visible, so they estimate
+ * to 0 here just as sanitizeCompactionMessages([msg]) would drop them.
+ */
+function estimatePerMessageTokens(messages: AgentMessage[]): number[] {
+  // SECURITY: toolResult.details must never enter LLM-facing compaction; strip once for the whole array.
+  const detailStripped = stripToolResultDetails(messages);
+  // stripRuntimeContextCustomMessages filters by reference, so kept entries keep their identity.
+  const modelVisible = new Set(stripRuntimeContextCustomMessages(detailStripped));
+  return detailStripped.map((message) =>
+    modelVisible.has(message) ? estimateCompactionPlanningTokens(message) : 0,
+  );
 }
 
 /** Removes runtime-only context and tool-result details before token estimates or summaries. */
@@ -59,21 +79,108 @@ export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessa
   return stripToolResultDetails(stripRuntimeContextCustomMessages(messages));
 }
 
-/** Estimates one message using the same sanitization path as multi-message planning. */
-export function estimateCompactionMessageTokens(message: AgentMessage): number {
-  return estimateMessagesTokens([message]);
+function estimateCompactionPlanningTokens(message: AgentMessage): number {
+  return estimateTokens(message) + Math.ceil(readCompactionPlanningOmittedChars(message) / 4);
+}
+
+/** Builds a bounded planning projection that preserves token pressure accounting. */
+export function projectCompactionMessagesForPlanning(messages: AgentMessage[]): AgentMessage[] {
+  const safe = sanitizeCompactionMessages(messages);
+  return projectCompactionPlanningMessages(safe);
 }
 
 /** Clamps requested split parts to a usable count for the available messages. */
-export function normalizeCompactionParts(parts: number, messageCount: number): number {
+function normalizeCompactionParts(parts: number, messageCount: number): number {
   if (!Number.isFinite(parts) || parts <= 1) {
     return 1;
   }
   return Math.min(Math.max(1, Math.floor(parts)), Math.max(1, messageCount));
 }
 
+type CompactionMessageGroup = {
+  messages: AgentMessage[];
+  tokens: number;
+};
+
+function groupCompactionMessages(
+  messages: AgentMessage[],
+  perMessageTokens: number[],
+): CompactionMessageGroup[] {
+  const groups: CompactionMessageGroup[] = [];
+  let current: AgentMessage[] = [];
+  let currentTokens = 0;
+  let pendingToolCallIds = new Set<string>();
+
+  for (const [index, message] of messages.entries()) {
+    current.push(message);
+    currentTokens += perMessageTokens[index]!;
+
+    if (message.role === "assistant") {
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      const toolCalls =
+        stopReason === "aborted" || stopReason === "error"
+          ? []
+          : extractToolCallsFromAssistant(message);
+      pendingToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
+      const resultId = extractToolResultId(message);
+      if (resultId) {
+        pendingToolCallIds.delete(resultId);
+      } else {
+        pendingToolCallIds.clear();
+      }
+    }
+
+    // A displaced user turn still belongs to an unfinished call/result batch;
+    // splitting it would make one of the resulting provider transcripts invalid.
+    if (pendingToolCallIds.size === 0) {
+      groups.push({ messages: current, tokens: currentTokens });
+      current = [];
+      currentTokens = 0;
+    }
+  }
+
+  if (current.length > 0) {
+    groups.push({ messages: current, tokens: currentTokens });
+  }
+  return groups;
+}
+
+/** Chunks atomic tool-call groups without splitting a provider-visible call/result pair. */
+function chunkCompactionMessageGroups(
+  messages: AgentMessage[],
+  maxTokens: number,
+  perMessageTokens: number[],
+  maxChunks = Number.POSITIVE_INFINITY,
+): AgentMessage[][] {
+  const chunks: AgentMessage[][] = [];
+  let current: AgentMessage[] = [];
+  let currentTokens = 0;
+
+  for (const group of groupCompactionMessages(messages, perMessageTokens)) {
+    if (
+      current.length > 0 &&
+      chunks.length < maxChunks - 1 &&
+      currentTokens + group.tokens > maxTokens
+    ) {
+      chunks.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+
+    current.push(...group.messages);
+    currentTokens += group.tokens;
+  }
+
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
 /** Splits messages into roughly equal token-share chunks without separating active tool pairs. */
-export function splitMessagesByTokenShare(
+function splitMessagesByTokenShare(
   messages: AgentMessage[],
   parts = DEFAULT_PARTS,
 ): AgentMessage[][] {
@@ -84,133 +191,14 @@ export function splitMessagesByTokenShare(
   if (normalizedParts <= 1) {
     return [messages];
   }
-
-  const totalTokens = estimateMessagesTokens(messages);
-  const targetTokens = totalTokens / normalizedParts;
-  const chunks: AgentMessage[][] = [];
-  let current: AgentMessage[] = [];
-  let currentTokens = 0;
-
-  let pendingToolCallIds = new Set<string>();
-  let pendingChunkStartIndex: number | null = null;
-
-  const splitCurrentAtPendingBoundary = (): boolean => {
-    if (
-      pendingChunkStartIndex === null ||
-      pendingChunkStartIndex <= 0 ||
-      chunks.length >= normalizedParts - 1
-    ) {
-      return false;
-    }
-    // Keep an assistant tool_use and its following tool_result responses in the same chunk.
-    chunks.push(current.slice(0, pendingChunkStartIndex));
-    current = current.slice(pendingChunkStartIndex);
-    currentTokens = current.reduce((sum, msg) => sum + estimateCompactionMessageTokens(msg), 0);
-    pendingChunkStartIndex = 0;
-    return true;
-  };
-
-  for (const message of messages) {
-    const messageTokens = estimateCompactionMessageTokens(message);
-
-    if (
-      pendingToolCallIds.size === 0 &&
-      chunks.length < normalizedParts - 1 &&
-      current.length > 0 &&
-      currentTokens + messageTokens > targetTokens
-    ) {
-      chunks.push(current);
-      current = [];
-      currentTokens = 0;
-      pendingChunkStartIndex = null;
-    }
-
-    current.push(message);
-    currentTokens += messageTokens;
-
-    if (message.role === "assistant") {
-      const toolCalls = extractToolCallsFromAssistant(message);
-      const stopReason = (message as { stopReason?: unknown }).stopReason;
-      const keepsPending =
-        stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
-      pendingToolCallIds = new Set();
-      if (keepsPending) {
-        for (const toolCall of toolCalls) {
-          pendingToolCallIds.add(toolCall.id);
-        }
-      }
-      pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
-    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
-      const resultId = extractToolResultId(message);
-      if (!resultId) {
-        pendingToolCallIds = new Set();
-        pendingChunkStartIndex = null;
-      } else {
-        pendingToolCallIds.delete(resultId);
-      }
-      if (
-        pendingToolCallIds.size === 0 &&
-        chunks.length < normalizedParts - 1 &&
-        currentTokens > targetTokens
-      ) {
-        splitCurrentAtPendingBoundary();
-        pendingChunkStartIndex = null;
-      }
-    }
-  }
-
-  if (pendingToolCallIds.size > 0 && currentTokens > targetTokens) {
-    splitCurrentAtPendingBoundary();
-  }
-
-  if (current.length > 0) {
-    chunks.push(current);
-  }
-
-  return chunks;
-}
-
-/** Chunks messages by a max-token budget while applying the shared estimator safety margin. */
-export function chunkMessagesByMaxTokens(
-  messages: AgentMessage[],
-  maxTokens: number,
-): AgentMessage[][] {
-  if (messages.length === 0) {
-    return [];
-  }
-
-  // Apply safety margin to compensate for estimateTokens() underestimation
-  // (chars/4 heuristic misses multi-byte chars, special tokens, code tokens, etc.)
-  const effectiveMax = Math.max(1, Math.floor(maxTokens / SAFETY_MARGIN));
-
-  const chunks: AgentMessage[][] = [];
-  let currentChunk: AgentMessage[] = [];
-  let currentTokens = 0;
-
-  for (const message of messages) {
-    const messageTokens = estimateCompactionMessageTokens(message);
-    if (currentChunk.length > 0 && currentTokens + messageTokens > effectiveMax) {
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
-    }
-
-    currentChunk.push(message);
-    currentTokens += messageTokens;
-
-    if (messageTokens > effectiveMax) {
-      // Split oversized messages to avoid unbounded chunk growth.
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentTokens = 0;
-    }
-  }
-
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  return chunks;
+  const perMessageTokens = estimatePerMessageTokens(messages);
+  const totalTokens = perMessageTokens.reduce((sum, tokens) => sum + tokens, 0);
+  return chunkCompactionMessageGroups(
+    messages,
+    totalTokens / normalizedParts,
+    perMessageTokens,
+    normalizedParts,
+  );
 }
 
 /**
@@ -222,12 +210,8 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
     return BASE_CHUNK_RATIO;
   }
 
-  const totalTokens = estimateMessagesTokens(messages);
-  const avgTokens = totalTokens / messages.length;
-
-  // Apply safety margin to account for estimation inaccuracy
-  const safeAvgTokens = avgTokens * SAFETY_MARGIN;
-  const avgRatio = safeAvgTokens / contextWindow;
+  const avgRatio =
+    ((estimateMessagesTokens(messages) / messages.length) * SAFETY_MARGIN) / contextWindow;
 
   // If average message is > 10% of context, reduce chunk ratio
   if (avgRatio > 0.1) {
@@ -238,12 +222,9 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
   return BASE_CHUNK_RATIO;
 }
 
-/**
- * Check if a single message is too large to summarize.
- * If single message > 50% of context, it can't be summarized safely.
- */
+/** Returns whether one message exceeds the safe summarization context share. */
 export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateCompactionMessageTokens(msg) * SAFETY_MARGIN;
+  const tokens = estimateMessagesTokens([msg]) * SAFETY_MARGIN;
   return tokens > contextWindow * 0.5;
 }
 
@@ -254,7 +235,13 @@ export function buildSummaryChunks(params: {
 }): AgentMessage[][] {
   // SECURITY: never feed toolResult.details or runtime-context transcript entries into summarization prompts.
   const safeMessages = sanitizeCompactionMessages(params.messages);
-  return chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
+  // The estimator can undercount Unicode/code tokens; indivisible tool batches may exceed this cap.
+  const effectiveMax = Math.max(1, Math.floor(params.maxChunkTokens / SAFETY_MARGIN));
+  return chunkCompactionMessageGroups(
+    safeMessages,
+    effectiveMax,
+    estimatePerMessageTokens(safeMessages),
+  );
 }
 
 /** Separates messages too large to summarize and emits compact placeholder notes for them. */
@@ -265,15 +252,30 @@ export function buildOversizedFallbackPlan(params: {
   const smallMessages: AgentMessage[] = [];
   const oversizedNotes: string[] = [];
 
-  for (const msg of params.messages) {
-    if (isOversizedForSummary(msg, params.contextWindow)) {
-      const role = (msg as { role?: string }).role ?? "message";
-      const tokens = estimateCompactionMessageTokens(msg);
-      oversizedNotes.push(
-        `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
-      );
-    } else {
-      smallMessages.push(msg);
+  // Reuse one sanitized token estimate per message across atomic fallback groups.
+  const perMessageTokens = estimatePerMessageTokens(params.messages);
+  const oversizedThreshold = params.contextWindow * 0.5;
+  let messageIndex = 0;
+
+  for (const group of groupCompactionMessages(params.messages, perMessageTokens)) {
+    const retainedMessages: AgentMessage[] = [];
+    let omitToolBatch = false;
+    for (const message of group.messages) {
+      const tokens = perMessageTokens[messageIndex++]!;
+      if (tokens * SAFETY_MARGIN > oversizedThreshold) {
+        oversizedNotes.push(
+          `[Large ${message.role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
+        );
+        omitToolBatch ||= message.role === "assistant" || message.role === "toolResult";
+      } else {
+        retainedMessages.push(message);
+      }
+    }
+    // Displaced real user turns survive even when their surrounding tool batch cannot.
+    for (const message of retainedMessages) {
+      if (!omitToolBatch || (message.role !== "assistant" && message.role !== "toolResult")) {
+        smallMessages.push(message);
+      }
     }
   }
 
@@ -306,12 +308,11 @@ export function buildStageSplitPlan(params: {
 }
 
 /** Drops oldest token-share chunks until history fits the requested context share. */
-export function pruneHistoryForContextShare(params: {
+function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
-  maxHistoryShare?: number;
+  maxHistoryShare: number;
   parts?: number;
-  mode?: "share" | "handoff";
 }): {
   messages: AgentMessage[];
   droppedMessagesList: AgentMessage[];
@@ -321,10 +322,7 @@ export function pruneHistoryForContextShare(params: {
   keptTokens: number;
   budgetTokens: number;
 } {
-  const isHandoff = params.mode === "handoff";
-  const defaultShare = isHandoff ? 0.2 : 0.5; // Stricter budget for handoff snapshots
-  const maxHistoryShare = params.maxHistoryShare ?? defaultShare;
-  const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
+  const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * params.maxHistoryShare));
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
@@ -338,28 +336,15 @@ export function pruneHistoryForContextShare(params: {
     if (chunks.length <= 1) {
       break;
     }
-    const [dropped, ...rest] = chunks;
-    const flatRest = rest.flat();
-
-    // After dropping a chunk, repair tool_use/tool_result pairing to handle
-    // orphaned tool_results (whose tool_use was in the dropped chunk).
-    // repairToolUseResultPairing drops orphaned tool_results, preventing
-    // "unexpected tool_use_id" errors from Anthropic's API.
-    const repairReport = repairToolUseResultPairing(flatRest);
-    const repairedKept = repairReport.messages;
-
-    // Track orphaned tool_results as dropped (they were in kept but their tool_use was dropped)
-    const orphanedCount = repairReport.droppedOrphanCount;
+    const dropped = chunks[0]!;
+    // Dropping a call owner also drops orphaned results; providers reject replay without the pair.
+    const repairReport = repairToolUseResultPairing(chunks.slice(1).flat());
 
     droppedChunks += 1;
-    droppedMessages += dropped.length + orphanedCount;
+    droppedMessages += dropped.length + repairReport.droppedOrphanCount;
     droppedTokens += estimateMessagesTokens(dropped);
-    // Note: We don't have the actual orphaned messages to add to droppedMessagesList
-    // since repairToolUseResultPairing doesn't return them. This is acceptable since
-    // the dropped messages are used for summarization, and orphaned tool_results
-    // without their tool_use context aren't useful for summarization anyway.
     allDroppedMessages.push(...dropped);
-    keptMessages = repairedKept;
+    keptMessages = repairReport.messages;
   }
 
   return {
@@ -391,23 +376,16 @@ export function buildHistoryPrunePlan(params: {
     params.contextWindowTokens * params.maxHistoryShare * SAFETY_MARGIN,
   );
 
-  if (newContentTokens <= maxHistoryTokens) {
-    return {
-      summarizableTokens,
-      newContentTokens,
-      maxHistoryTokens,
-    };
-  }
-
-  return {
-    summarizableTokens,
-    newContentTokens,
-    maxHistoryTokens,
-    pruned: pruneHistoryForContextShare({
-      messages: params.messagesToSummarize,
-      maxContextTokens: params.contextWindowTokens,
-      maxHistoryShare: params.maxHistoryShare,
-      parts: params.parts,
-    }),
-  };
+  const plan = { summarizableTokens, newContentTokens, maxHistoryTokens };
+  return newContentTokens <= maxHistoryTokens
+    ? plan
+    : {
+        ...plan,
+        pruned: pruneHistoryForContextShare({
+          messages: params.messagesToSummarize,
+          maxContextTokens: params.contextWindowTokens,
+          maxHistoryShare: params.maxHistoryShare,
+          parts: params.parts,
+        }),
+      };
 }

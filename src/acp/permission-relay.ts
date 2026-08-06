@@ -35,9 +35,7 @@ function normalizeGatewayExecApprovalDecision(
 }
 
 /** Normalizes allowed Gateway exec approval decisions with a conservative fallback set. */
-export function normalizeGatewayExecApprovalDecisions(
-  value: unknown,
-): GatewayExecApprovalDecision[] {
+function normalizeGatewayExecApprovalDecisions(value: unknown): GatewayExecApprovalDecision[] {
   const normalized = Array.isArray(value)
     ? value
         .map(normalizeGatewayExecApprovalDecision)
@@ -47,7 +45,7 @@ export function normalizeGatewayExecApprovalDecisions(
 }
 
 /** Converts Gateway exec decisions into ACP permission options. */
-export function buildAcpPermissionOptions(
+function buildAcpPermissionOptions(
   decisions: readonly GatewayExecApprovalDecision[],
 ): PermissionOption[] {
   const unique = new Set<GatewayExecApprovalDecision>(decisions);
@@ -111,6 +109,7 @@ export function parseGatewayExecApprovalRequestEventPayload(
     command:
       readNonEmptyString(requestRecord.command) ?? readNonEmptyString(requestRecord.commandPreview),
     host: readNonEmptyString(requestRecord.host),
+    toolCallId: readNonEmptyString(requestRecord.toolCallId),
   };
 }
 

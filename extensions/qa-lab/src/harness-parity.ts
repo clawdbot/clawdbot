@@ -1,5 +1,5 @@
+import { compareToolCallShape, stableHash } from "./parity-shared.js";
 // Qa Lab plugin module implements harness parity behavior.
-import { createHash } from "node:crypto";
 import type {
   RuntimeId,
   RuntimeParityCell,
@@ -9,7 +9,7 @@ import type {
 } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
-export type HarnessVariant = {
+type HarnessVariant = {
   id: string;
   label: string;
   runtime?: RuntimeId;
@@ -25,7 +25,7 @@ export type HarnessParityDrift =
   | "tool-description"
   | "tool-schema";
 
-export type HarnessParityPromptStats = {
+type HarnessParityPromptStats = {
   systemPromptChars: number;
   projectContextChars: number;
   nonProjectContextChars: number;
@@ -70,7 +70,7 @@ export type HarnessRuntimeParityCell = RuntimeParityCell & {
   systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
-export type HarnessParityCell = HarnessRuntimeParityCell & {
+type HarnessParityCell = HarnessRuntimeParityCell & {
   variant: HarnessVariant;
   promptStats: HarnessParityPromptStats;
   systemPromptHash: string;
@@ -80,7 +80,7 @@ export type HarnessParityCell = HarnessRuntimeParityCell & {
   tokenUsageSource: "live-usage" | "mock-estimate";
 };
 
-export type HarnessParityResult = {
+type HarnessParityResult = {
   scenarioId: string;
   left: HarnessParityCell;
   right: HarnessParityCell;
@@ -97,20 +97,6 @@ export type HarnessParityResult = {
   tokenDeltaPercent: number;
   firstDriftTurn?: number;
 };
-
-export type HarnessParityReport = {
-  generatedAt: string;
-  providerMode: string;
-  left: HarnessVariant;
-  right: HarnessVariant;
-  results: HarnessParityResult[];
-  pass: boolean;
-  failures: string[];
-};
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 function countComparableTranscriptRecords(transcriptBytes: string) {
   let count = 0;
@@ -135,25 +121,6 @@ function countComparableTranscriptRecords(transcriptBytes: string) {
     }
   }
   return count;
-}
-
-function normalizeForStableHash(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizeForStableHash(entry));
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key])]),
-    );
-  }
-  return value;
-}
-
-function stableHash(value: unknown) {
-  return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
 }
 
 function readPositiveNumber(value: unknown) {
@@ -198,23 +165,6 @@ function estimateUsage(
 
 function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
-}
-
-function compareToolCallShape(left: RuntimeParityToolCall[], right: RuntimeParityToolCall[]) {
-  if (left.length !== right.length) {
-    return `tool call count differs (${left.length} vs ${right.length})`;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    const leftCall = left[index];
-    const rightCall = right[index];
-    if (!leftCall || !rightCall) {
-      return `tool call row ${index + 1} missing`;
-    }
-    if (leftCall.tool !== rightCall.tool || leftCall.argsHash !== rightCall.argsHash) {
-      return `tool call ${index + 1} differs (${leftCall.tool}/${leftCall.argsHash} vs ${rightCall.tool}/${rightCall.argsHash})`;
-    }
-  }
-  return undefined;
 }
 
 function compareToolResultShape(left: RuntimeParityToolCall[], right: RuntimeParityToolCall[]) {
@@ -451,42 +401,4 @@ export function buildHarnessParityResult(params: {
     promptDelta,
     tokenDeltaPercent,
   };
-}
-
-function formatPercent(value: number) {
-  const normalized = Math.abs(value) < 0.05 ? 0 : value;
-  const prefix = normalized > 0 ? "+" : "";
-  return `${prefix}${normalized.toFixed(1)}%`;
-}
-
-export function renderHarnessParityMarkdownReport(report: HarnessParityReport): string {
-  const lines = [
-    `# OpenClaw Harness Parity - ${report.left.label} vs ${report.right.label}`,
-    "",
-    `- Generated at: ${report.generatedAt}`,
-    `- Provider mode: ${report.providerMode}`,
-    `- Verdict: ${report.pass ? "pass" : "fail"}`,
-    "",
-    "| Scenario | Drift | First drift turn | Token delta | Prompt chars delta | Tool count delta | Details |",
-    "| --- | --- | ---: | ---: | ---: | ---: | --- |",
-  ];
-
-  for (const result of report.results) {
-    lines.push(
-      `| ${result.scenarioId} | ${result.drift} | ${result.firstDriftTurn ?? ""} | ${formatPercent(
-        result.tokenDeltaPercent,
-      )} | ${result.promptDelta.systemPromptChars} | ${result.promptDelta.toolCount} | ${
-        result.driftDetails ?? ""
-      } |`,
-    );
-  }
-
-  if (report.failures.length > 0) {
-    lines.push("", "## Gate Failures", "");
-    for (const failure of report.failures) {
-      lines.push(`- ${failure}`);
-    }
-  }
-
-  return `${lines.join("\n").trimEnd()}\n`;
 }

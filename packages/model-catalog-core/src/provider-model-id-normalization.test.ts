@@ -47,6 +47,27 @@ describe("provider model id policy normalization", () => {
     expect(
       normalizeConfiguredProviderCatalogModelId("anthropic", "anthropic/claude-haiku-4-5"),
     ).toBe("claude-haiku-4-5");
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus")).toBe("claude-opus-5");
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-5")).toBe("claude-opus-5");
+    // Bare family aliases track the current default for that family; pinned
+    // version aliases keep resolving to their own model.
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus")).toBe("claude-opus-5");
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-5")).toBe("claude-opus-5");
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-4.8")).toBe(
+      "claude-opus-4-8",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "sonnet")).toBe(
+      "claude-sonnet-5",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "sonnet-5")).toBe(
+      "claude-sonnet-5",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("vercel-ai-gateway", "sonnet")).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("vercel-ai-gateway", "sonnet-5")).toBe(
+      "anthropic/claude-sonnet-5",
+    );
   });
 
   it("normalizes provider-prefixed native catalog refs without stripping catalog prefixes", () => {
@@ -76,6 +97,23 @@ describe("provider model id policy normalization", () => {
     ).toBe("vercel-ai-gateway/opus-4.6");
   });
 
+  it("preserves provider-owned xAI Grok 4.20 aliases", () => {
+    expect(
+      normalizeStaticProviderModelIdWithPolicies("xai", "grok-4.20-beta-latest-reasoning"),
+    ).toBe("grok-4.20-beta-latest-reasoning");
+    expect(
+      normalizeStaticProviderModelIdWithPolicies(
+        "xai",
+        "grok-4.20-experimental-beta-0304-non-reasoning",
+      ),
+    ).toBe("grok-4.20-experimental-beta-0304-non-reasoning");
+  });
+
+  it("preserves the global xAI flagship alias without manifest metadata", () => {
+    expect(normalizeStaticProviderModelIdWithPolicies("xai", "grok-latest")).toBe("grok-latest");
+    expect(normalizeStaticProviderModelIdWithPolicies("xai", "grok-4.5-latest")).toBe("grok-4.5");
+  });
+
   it("strips self provider model prefixes before runtime provider calls", () => {
     expect(stripSelfProviderModelPrefix("google", "google/gemini-2.0-flash")).toBe(
       "gemini-2.0-flash",
@@ -87,5 +125,36 @@ describe("provider model id policy normalization", () => {
     expect(stripSelfProviderModelPrefix("vercel-ai-gateway", "vercel-ai-gateway/opus-4.6")).toBe(
       "opus-4.6",
     );
+  });
+});
+
+describe("manifest stripPrefixes matches and slices on the same normalized value", () => {
+  function stripWith(stripPrefixes: string[], modelId: string): string {
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers: {
+            openai: { stripPrefixes },
+          },
+        },
+      },
+    ]);
+    return normalizeStaticProviderModelIdWithPolicies("openai", modelId, policies);
+  }
+
+  it("strips a whitespace-free prefix exactly (control: no regression)", () => {
+    expect(stripWith(["openai/"], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix has a leading space", () => {
+    expect(stripWith([" openai/"], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix has a trailing space", () => {
+    expect(stripWith(["openai/ "], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix differs in case and spacing", () => {
+    expect(stripWith([" OpenAI/ "], "openai/gpt-4")).toBe("gpt-4");
   });
 });

@@ -1,6 +1,8 @@
 // Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
@@ -33,6 +35,7 @@ const AGENT_OUTPUT_MAX_BYTES = readPositiveIntEnv(
   1024 * 1024,
 );
 const SESSION_FILE_LIST_LIMIT = 20;
+const LIVE_PLUGIN_TOOL_SESSION_ID = "live-plugin-tool";
 const SESSION_SCAN_MAX_ENTRIES = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES",
   50_000,
@@ -60,10 +63,6 @@ function agentOutputPath() {
 
 function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
-}
-
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function readNonEmptyString(value) {
@@ -243,12 +242,12 @@ function resultLinksToolCall(call, result, targetCallCount) {
   return targetCallCount === 1;
 }
 
-function createToolEvidenceTracker(toolName, expected) {
+function createToolEvidenceTracker(toolNames, expected) {
   const calls = [];
   return {
     recordMessage(message) {
       for (const call of extractTranscriptToolCalls(message)) {
-        if (call.tool === toolName) {
+        if (toolNames.includes(call.tool)) {
           calls.push(call);
         }
       }
@@ -277,8 +276,8 @@ function transcriptMessageFromLine(line) {
   }
 }
 
-function scanFileForToolEvidence(file, toolName, expected) {
-  const tracker = createToolEvidenceTracker(toolName, expected);
+function scanFileForToolEvidence(file, toolNames, expected) {
+  const tracker = createToolEvidenceTracker(toolNames, expected);
   let stat;
   try {
     stat = fs.statSync(file);
@@ -323,7 +322,7 @@ function scanFileForToolEvidence(file, toolName, expected) {
   return false;
 }
 
-function scanSessionTranscripts(sessionsDir, toolName, expected) {
+function scanSessionTranscripts(sessionsDir, toolNames, expected) {
   const checkedFiles = [];
   let filesChecked = 0;
   let stat;
@@ -362,7 +361,7 @@ function scanSessionTranscripts(sessionsDir, toolName, expected) {
         if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
           checkedFiles.push(path.relative(sessionsDir, entryPath));
         }
-        if (scanFileForToolEvidence(entryPath, toolName, expected)) {
+        if (scanFileForToolEvidence(entryPath, toolNames, expected)) {
           return { checkedFiles, filesChecked, found: true, missingDir: false };
         }
       }
@@ -371,6 +370,41 @@ function scanSessionTranscripts(sessionsDir, toolName, expected) {
     }
   }
   return { checkedFiles, filesChecked, found: false, missingDir: false };
+}
+
+function scanSqliteSessionTranscript(databasePath, sessionId, toolNames, expected) {
+  if (!fs.existsSync(databasePath)) {
+    return { eventsChecked: 0, found: false };
+  }
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
+      .get();
+    if (!table) {
+      return { eventsChecked: 0, found: false };
+    }
+    const rows = database
+      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT ?")
+      .all(sessionId, SESSION_SCAN_MAX_ENTRIES + 1);
+    if (rows.length > SESSION_SCAN_MAX_ENTRIES) {
+      throw new Error(`session transcript scan exceeded ${SESSION_SCAN_MAX_ENTRIES} SQLite events`);
+    }
+
+    const tracker = createToolEvidenceTracker(toolNames, expected);
+    for (const row of rows) {
+      if (typeof row.event_json !== "string") {
+        continue;
+      }
+      const message = transcriptMessageFromLine(row.event_json);
+      if (message && tracker.recordMessage(message)) {
+        return { eventsChecked: rows.length, found: true };
+      }
+    }
+    return { eventsChecked: rows.length, found: false };
+  } finally {
+    database.close();
+  }
 }
 
 function realPathMaybe(filePath) {
@@ -416,7 +450,7 @@ function pluginInstallPath() {
   if (record.source !== "npm" || record.artifactKind !== "npm-pack") {
     throw new Error(`expected npm-pack install record: ${JSON.stringify(record)}`);
   }
-  return String(record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+  return (record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 }
 
 function writeFixture() {
@@ -610,13 +644,25 @@ function assertAgentTurn() {
       `live agent reply did not contain tool slug ${expected}:\nstdout tail=${tailText(stdout, ERROR_DETAIL_TAIL_BYTES)}\nstderr tail=${stderrTail}`,
     );
   }
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const scan = scanSessionTranscripts(sessionsDir, toolName, expected);
-  if (!scan.found) {
-    const checkedFiles = scan.checkedFiles.length > 0 ? scan.checkedFiles.join(", ") : "<none>";
-    const missingDir = scan.missingDir ? " sessions directory was missing." : "";
+  const agentStateDir = path.join(stateDir(), "agents", "main");
+  // Code Mode exposes plugin tools behind exec/wait, so the durable transcript can
+  // record the outer exec call while the run summary names the nested plugin tool.
+  const transcriptToolNames = [toolName, "exec", "wait"];
+  const sqliteScan = scanSqliteSessionTranscript(
+    path.join(agentStateDir, "agent", "openclaw-agent.sqlite"),
+    LIVE_PLUGIN_TOOL_SESSION_ID,
+    transcriptToolNames,
+    expected,
+  );
+  const fileScan = sqliteScan.found
+    ? { checkedFiles: [], filesChecked: 0, found: false, missingDir: false }
+    : scanSessionTranscripts(path.join(agentStateDir, "sessions"), transcriptToolNames, expected);
+  if (!sqliteScan.found && !fileScan.found) {
+    const checkedFiles =
+      fileScan.checkedFiles.length > 0 ? fileScan.checkedFiles.join(", ") : "<none>";
+    const missingDir = fileScan.missingDir ? " sessions directory was missing." : "";
     throw new Error(
-      `session transcript did not show ${toolName} returning ${expected}; missing causal tool-result evidence after checking ${scan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
+      `session transcript did not show ${toolName} returning ${expected}; missing causal tool-result evidence after checking ${sqliteScan.eventsChecked} SQLite event(s) and ${fileScan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
     );
   }
 }

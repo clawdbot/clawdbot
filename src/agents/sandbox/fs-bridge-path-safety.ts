@@ -17,7 +17,7 @@ import {
 type BoundaryAllowedType = "file" | "directory";
 
 /** Caller-provided path safety requirements for one fs bridge operation. */
-export type PathSafetyOptions = {
+type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
@@ -170,6 +170,10 @@ export class SandboxFsPathGuard {
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
+      // Follow in-mount symlink hops (fs-safe 0.5.2 rejects them by default):
+      // escaping hops still fail with fs-safe's containment error, and the
+      // canonical container path is re-checked against mounts afterwards.
+      rejectSymlinks: false,
       aliasPolicy: options?.aliasPolicy,
       allowedType: options?.allowedType,
     });

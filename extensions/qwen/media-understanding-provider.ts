@@ -13,18 +13,17 @@ import {
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
-const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
+const DEFAULT_QWEN_MEDIA_MODEL = "qwen3.6-plus";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
 
-export async function describeQwenVideo(
-  params: VideoDescriptionRequest,
-): Promise<VideoDescriptionResult> {
+async function describeQwenVideo(params: VideoDescriptionRequest): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
+  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_MEDIA_MODEL);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
   const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_QWEN_VIDEO_PROMPT);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -53,6 +52,7 @@ export async function describeQwenVideo(
       buffer: params.buffer,
     }),
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -60,7 +60,14 @@ export async function describeQwenVideo(
 
   try {
     await assertOkOrThrowHttpError(res, "Qwen video description failed");
-    const payload = (await res.json()) as OpenAiCompatibleVideoPayload;
+    // Read the success body through the shared byte-bounded JSON reader (16 MiB cap +
+    // stream cancel on overflow) so a hostile or buggy endpoint cannot force the runtime
+    // to buffer an unbounded body. Malformed JSON keeps the
+    // `Qwen video description failed: malformed JSON response` wrapping.
+    const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
+      res,
+      "Qwen video description failed",
+    );
     const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
       throw new Error("Qwen video description response missing content");
@@ -76,8 +83,8 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     id: "qwen",
     capabilities: ["image", "video"],
     defaultModels: {
-      image: "qwen-vl-max-latest",
-      video: DEFAULT_QWEN_VIDEO_MODEL,
+      image: DEFAULT_QWEN_MEDIA_MODEL,
+      video: DEFAULT_QWEN_MEDIA_MODEL,
     },
     autoPriority: {
       video: 15,

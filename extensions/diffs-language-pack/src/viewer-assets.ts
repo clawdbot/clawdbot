@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 export const VIEWER_ASSET_PREFIX = "/plugins/diffs-language-pack/assets/";
-export const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
+const VIEWER_LOADER_PATH = `${VIEWER_ASSET_PREFIX}viewer.js`;
 export const VIEWER_RUNTIME_PATH = `${VIEWER_ASSET_PREFIX}viewer-runtime.js`;
 const VIEWER_RUNTIME_RELATIVE_IMPORT_PATH = "./viewer-runtime.js";
 const VIEWER_RUNTIME_CANDIDATE_RELATIVE_PATHS = [
@@ -29,7 +29,7 @@ function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
-export async function resolveViewerRuntimeFileUrl(): Promise<URL> {
+async function resolveViewerRuntimeFileUrl(): Promise<URL> {
   let missingFileError: NodeJS.ErrnoException | null = null;
 
   for (const relativePath of VIEWER_RUNTIME_CANDIDATE_RELATIVE_PATHS) {

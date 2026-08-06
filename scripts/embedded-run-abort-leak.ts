@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as v8 from "node:v8";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
 type Abortable = <T>(signal: AbortSignal, promise: Promise<T>) => Promise<T>;
@@ -34,6 +35,24 @@ type Options = {
   quiet: boolean;
 };
 
+const VALUE_FLAGS = new Set([
+  "--iters",
+  "--batches",
+  "--snap-dir",
+  "--mode",
+  "--max-rss-growth-mb",
+  "--max-tracked-retention",
+  "--scope-bytes",
+]);
+
+function readValue(raw: string | undefined, flag: string): string {
+  const value = raw?.trim() ?? "";
+  if (!value || value.startsWith("-")) {
+    fail(`${flag} requires a value`);
+  }
+  return value;
+}
+
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
     iters: 50,
@@ -45,9 +64,16 @@ function parseArgs(argv: string[]): Options {
     scopeBytes: 2_000_000,
     quiet: false,
   };
+  const seenValueFlags = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
+    const arg = expectDefined(argv[i], `embedded abort benchmark argument at index ${i}`);
     const next = argv[i + 1];
+    if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        fail(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
+    }
     switch (arg) {
       case "--iters":
         opts.iters = parsePositiveInt(next, arg);
@@ -58,17 +84,18 @@ function parseArgs(argv: string[]): Options {
         i += 1;
         break;
       case "--snap-dir":
-        opts.snapDir = next ?? opts.snapDir;
+        opts.snapDir = readValue(next, arg);
         i += 1;
         break;
-      case "--mode":
+      case "--mode": {
+        const mode = readValue(next, arg);
         if (
-          next === "production" ||
-          next === "closure-extracted" ||
-          next === "closure-inline" ||
-          next === "synthetic-leak"
+          mode === "production" ||
+          mode === "closure-extracted" ||
+          mode === "closure-inline" ||
+          mode === "synthetic-leak"
         ) {
-          opts.mode = next;
+          opts.mode = mode;
         } else {
           fail(
             `--mode must be one of: production, closure-extracted, closure-inline, synthetic-leak`,
@@ -76,6 +103,7 @@ function parseArgs(argv: string[]): Options {
         }
         i += 1;
         break;
+      }
       case "--max-rss-growth-mb":
         opts.maxRssGrowthMb = parseNonNegativeInt(next, arg);
         i += 1;
@@ -131,6 +159,9 @@ function parseStrictInt(
   label: "positive" | "non-negative",
 ): number {
   const text = (raw ?? "").trim();
+  if (!text || text.startsWith("-")) {
+    fail(`${flag} requires a value`);
+  }
   if (!/^\d+$/u.test(text)) {
     fail(`${flag} must be a ${label} integer`);
   }

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisVisualDriver, runMantisVisualTask } from "./visual-task.runtime.js";
 
@@ -20,6 +21,14 @@ function expectArgsContainSequence(args: readonly string[], expected: readonly s
     return expected.every((value, offset) => args[index + offset] === value);
   });
   expect(startIndex).toBeGreaterThanOrEqual(0);
+}
+
+function requireArgAfter(args: readonly string[], flag: string): string {
+  const flagIndex = args.indexOf(flag);
+  if (flagIndex < 0) {
+    throw new Error(`Expected ${flag} argument`);
+  }
+  return expectDefined(args[flagIndex + 1], `${flag} argument value`);
 }
 
 describe("mantis visual task runtime", () => {
@@ -56,8 +65,8 @@ describe("mantis visual task runtime", () => {
         };
       }
       if (command === "/tmp/crabbox" && args[0] === "record") {
-        const outputPath = args[args.indexOf("--output") + 1];
-        const outputDir = args[args.indexOf("--output-dir") + 1];
+        const outputPath = requireArgAfter(args, "--output");
+        const outputDir = requireArgAfter(args, "--output-dir");
         await fs.mkdir(path.dirname(outputPath), { recursive: true });
         await fs.writeFile(outputPath, "mp4");
         await fs.writeFile(path.join(outputDir, "visual-task.png"), "png");
@@ -157,7 +166,7 @@ describe("mantis visual task runtime", () => {
         };
       }
       if (command === "/tmp/crabbox" && args[0] === "record") {
-        const outputDir = args[args.indexOf("--output-dir") + 1];
+        const outputDir = requireArgAfter(args, "--output-dir");
         await fs.mkdir(outputDir, { recursive: true });
         await fs.writeFile(path.join(outputDir, "visual-task.png"), "png");
         await fs.writeFile(
@@ -230,8 +239,8 @@ describe("mantis visual task runtime", () => {
         };
       }
       if (command === "/tmp/crabbox" && args[0] === "record") {
-        const outputPath = args[args.indexOf("--output") + 1];
-        const outputDir = args[args.indexOf("--output-dir") + 1];
+        const outputPath = requireArgAfter(args, "--output");
+        const outputDir = requireArgAfter(args, "--output-dir");
         stagedVideoPath = outputPath;
         await fs.mkdir(path.dirname(outputPath), { recursive: true });
         await fs.writeFile(outputPath, "mp4");
@@ -296,7 +305,7 @@ describe("mantis visual task runtime", () => {
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
       commands.push({ command, args });
       if (command === "/tmp/crabbox" && args[0] === "screenshot") {
-        const outputPath = args[args.indexOf("--output") + 1];
+        const outputPath = requireArgAfter(args, "--output");
         await fs.mkdir(path.dirname(outputPath), { recursive: true });
         await fs.writeFile(outputPath, "png");
       }
@@ -359,10 +368,10 @@ describe("mantis visual task runtime", () => {
     ]);
     const promptIndex = visionArgs.indexOf("--prompt");
     expect(promptIndex).toBeGreaterThanOrEqual(0);
-    expect(visionArgs[promptIndex + 1]).toContain("return only valid JSON");
+    expect(requireArgAfter(visionArgs, "--prompt")).toContain("return only valid JSON");
     const modelIndex = visionArgs.indexOf("--model");
     expect(modelIndex).toBeGreaterThanOrEqual(0);
-    expect(visionArgs[modelIndex + 1]).toBe("openai/gpt-5.4");
+    expect(requireArgAfter(visionArgs, "--model")).toBe("openai/gpt-5.4");
     expect(result.vision.assertion?.evidence).toBe('The page heading reads "Example Domain".');
     expect(result.vision.assertion?.matched).toBe(true);
     expect(result.vision.assertion?.visible).toBe(true);
@@ -371,7 +380,7 @@ describe("mantis visual task runtime", () => {
   it("fails image-describe text checks when the model gives negative evidence that quotes the target", async () => {
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
       if (command === "/tmp/crabbox" && args[0] === "screenshot") {
-        const outputPath = args[args.indexOf("--output") + 1];
+        const outputPath = requireArgAfter(args, "--output");
         await fs.mkdir(path.dirname(outputPath), { recursive: true });
         await fs.writeFile(outputPath, "png");
       }
@@ -414,7 +423,7 @@ describe("mantis visual task runtime", () => {
   it("fails metadata mode when text evidence is requested", async () => {
     const runner = vi.fn(async (command: string, args: readonly string[]) => {
       if (command === "/tmp/crabbox" && args[0] === "screenshot") {
-        const outputPath = args[args.indexOf("--output") + 1];
+        const outputPath = requireArgAfter(args, "--output");
         await fs.mkdir(path.dirname(outputPath), { recursive: true });
         await fs.writeFile(outputPath, "png");
       }

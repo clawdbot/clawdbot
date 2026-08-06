@@ -31,7 +31,9 @@ function positiveIntegerFlag(flag, key) {
         throw new Error(`${flag} requires a value`);
       }
       return {
+        flag,
         nextIndex: index + 1,
+        repeatable: false,
         apply(target) {
           target[key] = parsePositiveInteger(rawValue, flag);
         },
@@ -108,8 +110,14 @@ function listChangedPaths(opts) {
 }
 
 export function parseMaxRssBytes(output) {
-  const match = output.match(/(\d+)\s+maximum resident set size/u);
-  return match ? Number.parseInt(match[1], 10) : null;
+  const match = output.match(
+    /(?:^|\n)[^\S\r\n]*(\d+)[^\S\r\n]+maximum resident set size[^\S\r\n]*(?:\r?\n|$)/u,
+  );
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 export function formatRss(valueBytes) {

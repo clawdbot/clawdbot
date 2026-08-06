@@ -28,7 +28,7 @@ export type PortUsage = {
   errors?: string[];
 };
 
-export type PortListenerKind = "gateway" | "ssh" | "unknown";
+export type PortListenerKind = "gateway" | "ssh" | "non_gateway" | "unknown";
 
 /** Connection list for a single port probe. */
 export type PortConnections = {

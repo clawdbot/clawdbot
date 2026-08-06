@@ -12,11 +12,11 @@ Adds OpenCode Go model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/opencode-go-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/opencode-go-provider`
 
 ## Surface
 
-providers: opencode-go; contracts: mediaUnderstandingProviders
+providers: `opencode-go`; contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 

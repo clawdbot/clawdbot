@@ -2,7 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramRouteTestSessionRuntime } from "./bot-message-context.route-test-support.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
-import type { TelegramConversationBindingMode } from "./conversation-route.js";
+
+type ResolveTelegramConversationRoute =
+  typeof import("./conversation-route.js").resolveTelegramConversationRoute;
+type TelegramConversationBindingMode = ReturnType<ResolveTelegramConversationRoute>["bindingMode"];
 
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
@@ -131,6 +134,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     });
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("plugin-binding:openclaw-codex-app-server:session-1");
+    expect(ctx?.ctxPayload?.GroupRequireMention).toBe(true);
   });
 
   it("keeps mention gating for normal channel binding routes", async () => {

@@ -21,9 +21,7 @@ function formatSignedMs(value, digits = 1) {
 }
 
 function formatSignedBytesAsMb(valueBytes) {
-  return valueBytes === null || valueBytes === undefined
-    ? "n/a"
-    : `${valueBytes > 0 ? "+" : ""}${formatBytesAsMb(valueBytes)}`;
+  return `${valueBytes > 0 ? "+" : ""}${formatBytesAsMb(valueBytes)}`;
 }
 
 /**

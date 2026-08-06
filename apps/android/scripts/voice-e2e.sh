@@ -164,7 +164,7 @@ run_mode() {
     no_connect_flag=false
   fi
 
-  adb shell am broadcast \
+  adb shell run-as "$PACKAGE_NAME" am broadcast --user 0 \
     -a "$RUN_ACTION" \
     -n "$RECEIVER" \
     --es mode "$test_mode" \
@@ -224,7 +224,7 @@ adb logcat -d -v time |
   tail -250 >"$ARTIFACT_DIR/logcat.txt" || true
 
 if [[ "$CLEANUP" -eq 1 ]]; then
-  adb shell am broadcast -a "$RUN_ACTION" -n "$RECEIVER" --es mode stop >/dev/null
+  adb shell run-as "$PACKAGE_NAME" am broadcast --user 0 -a "$RUN_ACTION" -n "$RECEIVER" --es mode stop >/dev/null
 fi
 
 echo "$ARTIFACT_DIR"

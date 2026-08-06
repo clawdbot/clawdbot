@@ -1,6 +1,15 @@
 // Defines task registry records, statuses, delivery state, and parser helpers.
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+/** JSON value shape persisted with runtime-owned task detail. */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 /** Runtime family that owns a task run lifecycle. */
 export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
@@ -18,6 +27,7 @@ export type TaskDeliveryStatus =
   | "delivered"
   | "session_queued"
   | "failed"
+  | "dismissed"
   | "parent_missing"
   | "not_applicable";
 
@@ -45,6 +55,7 @@ const TASK_DELIVERY_STATUSES = new Set<TaskDeliveryStatus>([
   "delivered",
   "session_queued",
   "failed",
+  "dismissed",
   "parent_missing",
   "not_applicable",
 ]);
@@ -125,6 +136,9 @@ export type TaskRecord = {
   parentFlowId?: string;
   parentTaskId?: string;
   agentId?: string;
+  /** Agent store for requester transcripts whose session key is unscoped, such as `global`.
+   * Task authorization remains keyed by ownerKey. */
+  requesterAgentId?: string;
   runId?: string;
   label?: string;
   task: string;
@@ -136,13 +150,13 @@ export type TaskRecord = {
   endedAt?: number;
   lastEventAt?: number;
   cleanupAfter?: number;
+  /** Tool invocations observed on this run's agent-event stream. */
+  toolUseCount?: number;
+  /** Name of the most recent tool invocation observed for this run. */
+  lastToolName?: string;
   error?: string;
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
-};
-
-export type TaskRegistrySnapshot = {
-  tasks: TaskRecord[];
-  deliveryStates: TaskDeliveryState[];
+  detail?: JsonValue;
 };

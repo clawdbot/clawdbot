@@ -21,16 +21,7 @@ export type ThreadBindingRecord = {
   metadata?: Record<string, unknown>;
 };
 
-export type PersistedThreadBindingRecord = ThreadBindingRecord & {
-  sessionKey?: string;
-  /** @deprecated Legacy absolute expiry timestamp; migrated on load. */
-  expiresAt?: number;
-};
-
-export type PersistedThreadBindingsPayload = {
-  version: 1;
-  bindings: Record<string, PersistedThreadBindingRecord>;
-};
+export type PersistedThreadBindingRecord = ThreadBindingRecord;
 
 export type ThreadBindingManager = {
   accountId: string;
@@ -76,9 +67,7 @@ export type ThreadBindingManager = {
   stop: () => void;
 };
 
-export const THREAD_BINDINGS_VERSION = 1 as const;
 export const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 120_000;
 export const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h
 export const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0; // disabled
 export const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10_003;
-export const RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS = 30_000;

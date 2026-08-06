@@ -46,13 +46,14 @@ export interface HealthFinding {
   readonly fixHint?: string;
 }
 
-export type HealthCheckMode = "doctor" | "lint" | "fix";
+type HealthCheckMode = "doctor" | "lint" | "fix";
 
 /** Immutable runtime/config context passed to health check detection. */
 export interface HealthCheckContext {
   readonly mode: HealthCheckMode;
   readonly runtime: RuntimeEnv;
   readonly cfg: OpenClawConfig;
+  readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
   readonly configPath?: string;
   readonly allowExecSecretRefs?: boolean;

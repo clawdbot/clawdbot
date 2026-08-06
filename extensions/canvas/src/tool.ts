@@ -15,20 +15,31 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import {
+  addTimerTimeoutGraceMs,
+  clampPositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { readRegularFile, wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
 type CanvasToolOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentSessionKey?: string;
 };
 
 type CanvasImageSanitizationLimits = {
   maxDimensionPx?: number;
 };
+
+export const CANVAS_JSONL_MAX_BYTES = 16 * 1024 * 1024;
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
 
 function readGatewayCallOptions(params: Record<string, unknown>) {
   return {
@@ -76,7 +87,9 @@ async function readJsonlFromPath(jsonlPath: string, workspaceDir?: string): Prom
   if (!isPathInsideRoot(workspaceReal, resolvedReal)) {
     throw new Error("jsonlPath outside workspace");
   }
-  return await fs.readFile(resolvedReal, "utf8");
+  return (
+    await readRegularFile({ filePath: resolvedReal, maxBytes: CANVAS_JSONL_MAX_BYTES })
+  ).buffer.toString("utf8");
 }
 
 function resolveCanvasImageSanitizationLimits(
@@ -95,6 +108,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
   return {
     label: "Canvas",
     name: "canvas",
+    resultContentSource: "network",
     description:
       "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
     parameters: CanvasToolSchema,
@@ -102,20 +116,30 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
+      const nodeQuery = readStringParam(params, "node", { trim: true });
 
-      const nodeId = await resolveNodeId(
-        gatewayOpts,
-        readStringParam(params, "node", { trim: true }),
-        true,
-      );
-
-      const invoke = async (command: string, invokeParams?: Record<string, unknown>) =>
-        await callGatewayTool("node.invoke", gatewayOpts, {
-          nodeId,
-          command,
-          params: invokeParams,
-          idempotencyKey: randomUUID(),
-        });
+      const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
+        const nodeId = await resolveNodeId(gatewayOpts, nodeQuery, true);
+        const timeoutMs =
+          clampPositiveTimerTimeoutMs(
+            gatewayOpts.timeoutMs ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+          ) ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
+        // Preserve the node lookup budget while letting Gateway outlive node execution.
+        const transportTimeoutMs =
+          addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs;
+        return await callGatewayTool(
+          "node.invoke",
+          { ...gatewayOpts, timeoutMs: transportTimeoutMs },
+          {
+            nodeId,
+            command,
+            params: invokeParams,
+            timeoutMs,
+            idempotencyKey: randomUUID(),
+            ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+          },
+        );
+      };
 
       switch (action) {
         case "present": {
@@ -161,9 +185,16 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             payload?: { result?: string };
           };
           const result = raw?.payload?.result;
-          if (result) {
+          if (typeof result === "string") {
+            // Remote Canvas pages must not forge prompt boundaries or outbound attachments.
+            const text = result
+              ? wrapExternalContent(
+                  result.replace(/^([^\S\n]*)(MEDIA:)/gim, "$1[neutralized] $2"),
+                  { source: "browser", includeWarning: false },
+                )
+              : result;
             return {
-              content: [{ type: "text", text: result }],
+              content: [{ type: "text", text }],
               details: { result },
             };
           }
@@ -193,7 +224,8 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           return await imageResultFromFile({
             label: "canvas:snapshot",
             path: filePath,
-            details: { format: payload.format },
+            // Rendered pages are model observations, never automatic outbound attachments.
+            details: { format: payload.format, media: { outbound: false } },
             imageSanitization,
           });
         }
@@ -207,6 +239,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");
           }
+          validateSupportedA2UIJsonl(jsonl);
           await invoke("canvas.a2ui.pushJSONL", { jsonl });
           return jsonResult({ ok: true });
         }

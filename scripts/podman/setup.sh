@@ -17,6 +17,8 @@
 set -euo pipefail
 
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+source "$REPO_PATH/scripts/lib/build-metadata.sh"
+source "$REPO_PATH/scripts/lib/host-timeout.sh"
 RUN_SCRIPT_SRC="$REPO_PATH/scripts/run-openclaw-podman.sh"
 QUADLET_TEMPLATE="$REPO_PATH/scripts/podman/openclaw.container.in"
 OPENCLAW_USER="$(id -un)"
@@ -47,27 +49,11 @@ fail() {
 
 run_podman_pull() {
   local image="$1"
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-      timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"
-    else
-      timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"
-    fi
-    return
-  fi
-  podman pull "$image"
+  openclaw_host_timeout_cmd "$PODMAN_PULL_TIMEOUT" podman pull "$image"
 }
 
 run_podman_build() {
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-      timeout --kill-after=30s "$PODMAN_BUILD_TIMEOUT" podman build "$@"
-    else
-      timeout "$PODMAN_BUILD_TIMEOUT" podman build "$@"
-    fi
-    return
-  fi
-  podman build "$@"
+  openclaw_host_timeout_cmd "$PODMAN_BUILD_TIMEOUT" podman build "$@"
 }
 
 validate_single_line_value() {
@@ -388,6 +374,12 @@ ensure_private_existing_dir_owned_by_user "workspace directory" "$OPENCLAW_WORKS
 OPENCLAW_IMAGE_APT_PACKAGES="${OPENCLAW_IMAGE_APT_PACKAGES-${OPENCLAW_DOCKER_APT_PACKAGES:-}}"
 OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"
 BUILD_ARGS=()
+BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$REPO_PATH")"
+BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
+BUILD_ARGS+=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
+if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
+fi
 if [[ -n "$OPENCLAW_IMAGE_APT_PACKAGES" ]]; then
   BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}")
 fi

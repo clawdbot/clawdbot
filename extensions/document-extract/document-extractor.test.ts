@@ -55,20 +55,35 @@ describe("PDF document extractor", () => {
     });
   });
 
-  it("extracts text first and renders fallback images through clawpdf", async () => {
-    pdfDocument.extract.mockResolvedValueOnce({ text: "", images: [] }).mockResolvedValueOnce({
-      text: "",
-      images: [
-        {
-          type: "image",
-          bytes: Uint8Array.from(Buffer.from("png")),
-          mimeType: "image/png",
-          page: 1,
-          width: 10,
-          height: 10,
-        },
-      ],
-    });
+  it("extracts text first and renders each fallback page with its own pixel budget", async () => {
+    pdfDocument.extract
+      .mockResolvedValueOnce({ text: "", images: [] })
+      .mockResolvedValueOnce({
+        text: "",
+        images: [
+          {
+            type: "image",
+            bytes: Uint8Array.from(Buffer.from("png1")),
+            mimeType: "image/png",
+            page: 1,
+            width: 5,
+            height: 10,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        text: "",
+        images: [
+          {
+            type: "image",
+            bytes: Uint8Array.from(Buffer.from("png2")),
+            mimeType: "image/png",
+            page: 2,
+            width: 5,
+            height: 10,
+          },
+        ],
+      });
     const extractor = createPdfDocumentExtractor();
 
     const result = await extractor.extract(request());
@@ -82,18 +97,24 @@ describe("PDF document extractor", () => {
       maxPages: 2,
       maxTextChars: 200_000,
     });
+    // Each page renders in its own extract() call, with the aggregate pixel cap
+    // allocated across selected pages so later pages are not starved.
     expect(pdfDocument.extract).toHaveBeenNthCalledWith(2, {
       mode: "images",
-      maxPages: 2,
-      image: {
-        maxDimension: 10_000,
-        maxPixels: 100,
-        forms: true,
-      },
+      pages: [1],
+      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
+    });
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(3, {
+      mode: "images",
+      pages: [2],
+      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
     });
     expect(result).toEqual({
       text: "",
-      images: [{ type: "image", data: "cG5n", mimeType: "image/png" }],
+      images: [
+        { type: "image", data: "cG5nMQ==", mimeType: "image/png" },
+        { type: "image", data: "cG5nMg==", mimeType: "image/png" },
+      ],
     });
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
@@ -131,22 +152,46 @@ describe("PDF document extractor", () => {
     expect(pdfDocument.destroy).not.toHaveBeenCalled();
   });
 
-  it("filters selected pages before passing them to clawpdf", async () => {
+  it("filters selected pages and renders them one page per image call", async () => {
     pdfDocument.extract
+      .mockResolvedValueOnce({ text: "", images: [] })
       .mockResolvedValueOnce({ text: "", images: [] })
       .mockResolvedValueOnce({ text: "", images: [] });
     const extractor = createPdfDocumentExtractor();
 
-    await extractor.extract(request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }));
+    const result = await extractor.extract(request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }));
 
+    expect(result).toEqual({ text: "", images: [] });
     expect(pdfDocument.extract).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ pages: [2, 1] }),
+      expect.objectContaining({ mode: "text", pages: [2, 1] }),
     );
     expect(pdfDocument.extract).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ pages: [2, 1] }),
+      expect.objectContaining({ mode: "images", pages: [2] }),
     );
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ mode: "images", pages: [1] }),
+    );
+  });
+
+  it("rejects selected pages outside the PDF page count before extraction", async () => {
+    pdfDocument.pageCount = 1;
+    pdfDocument.extract.mockResolvedValueOnce({ text: "", images: [] });
+    const extractor = createPdfDocumentExtractor();
+
+    await expect(extractor.extract(request({ pageNumbers: [2] }))).rejects.toThrow(
+      "No requested PDF pages exist in this 1-page document.",
+    );
+    expect(pdfDocument.extract).not.toHaveBeenCalled();
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+
+    await expect(extractor.extract(request({ pageNumbers: [] }))).resolves.toEqual({
+      text: "",
+      images: [],
+    });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(2);
   });
 
   it("reports image fallback failures and returns extracted text", async () => {
@@ -161,6 +206,27 @@ describe("PDF document extractor", () => {
 
     expect(result).toEqual({ text: "short", images: [] });
     expect(onImageExtractionError).toHaveBeenCalledWith(failure);
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "empty", text: "", reportError: true },
+    { label: "whitespace-only", text: " \t\n", reportError: false },
+  ])("surfaces image fallback failures for $label PDF text", async ({ text, reportError }) => {
+    const { PdfBudgetError } = await vi.importActual<typeof import("clawpdf")>("clawpdf");
+    const onImageExtractionError = vi.fn();
+    const failure = new PdfBudgetError("renderPixels", 100);
+    pdfDocument.extract.mockResolvedValueOnce({ text, images: [] }).mockRejectedValueOnce(failure);
+    const overrides = reportError ? { onImageExtractionError } : {};
+
+    await expect(createPdfDocumentExtractor().extract(request(overrides))).rejects.toMatchObject({
+      message: "PDF image extraction failed with no extractable text.",
+      cause: failure,
+    });
+    expect(onImageExtractionError).toHaveBeenCalledTimes(reportError ? 1 : 0);
+    if (reportError) {
+      expect(onImageExtractionError).toHaveBeenCalledWith(failure);
+    }
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 });

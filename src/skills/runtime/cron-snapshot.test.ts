@@ -2,19 +2,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  canExecRequestNodeMock,
+  resolveNodeExecEligibilityMock,
   getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshotMock,
   resolveEffectiveAgentSkillFilterMock,
 } = vi.hoisted(() => ({
-  canExecRequestNodeMock: vi.fn().mockReturnValue(false),
+  resolveNodeExecEligibilityMock: vi.fn().mockReturnValue({ canExec: false }),
   getRemoteSkillEligibilityMock: vi.fn(),
   resolveReusableWorkspaceSkillSnapshotMock: vi.fn(),
   resolveEffectiveAgentSkillFilterMock: vi.fn(),
 }));
 
 vi.mock("./cron-snapshot.runtime.js", () => ({
-  canExecRequestNode: canExecRequestNodeMock,
+  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveReusableWorkspaceSkillSnapshot: resolveReusableWorkspaceSkillSnapshotMock,
   resolveEffectiveAgentSkillFilter: resolveEffectiveAgentSkillFilterMock,

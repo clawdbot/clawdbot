@@ -48,6 +48,11 @@ export async function invokeNodeToolPayload(input: {
 }> {
   const gatewayOpts = readGatewayCallOptions(input.params);
   const nodes: NodeListNode[] = await listNodes(gatewayOpts);
+  if (nodes.length === 0) {
+    throw new Error(
+      "no paired nodes available; file-transfer tools require a paired node from nodes status. Use local file/exec tools for local workspace paths.",
+    );
+  }
   const nodeId = resolveNodeIdFromList(nodes, input.node, false);
   const nodeMeta = nodes.find((n) => n.nodeId === nodeId);
   const nodeDisplayName = nodeMeta?.displayName ?? input.node;

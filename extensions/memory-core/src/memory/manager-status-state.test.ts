@@ -3,7 +3,6 @@ import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   collectMemoryStatusAggregate,
-  MEMORY_STATUS_AGGREGATE_SQL,
   resolveInitialMemoryDirty,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
@@ -91,12 +90,9 @@ describe("memory manager status state", () => {
       sourceFilterParams: ["memory", "sessions"],
     });
 
-    expect(calls).toEqual([
-      {
-        sql: MEMORY_STATUS_AGGREGATE_SQL.replaceAll("__FILTER__", " AND source IN (?, ?)"),
-        params: ["memory", "sessions", "memory", "sessions"],
-      },
-    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sql).toContain("source IN (?, ?)");
+    expect(calls[0]?.params).toEqual(["memory", "sessions", "memory", "sessions"]);
     expect(aggregate).toEqual({
       files: 3,
       chunks: 8,

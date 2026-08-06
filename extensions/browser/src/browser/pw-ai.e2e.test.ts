@@ -28,6 +28,7 @@ function createPage(opts: { targetId: string; snapshotFull?: string; hasAriaSnap
     context: () => context,
     locator,
     on: vi.fn(),
+    off: vi.fn(),
     url: vi.fn(() => `https://example.test/${opts.targetId}`),
     ...(opts.hasAriaSnapshot === false
       ? {}
@@ -83,6 +84,8 @@ describe("pw-ai", () => {
     expect(res.snapshot).toBe("TWO");
     expect(p1.session.detach).toHaveBeenCalled();
     expect(p2.session.detach).toHaveBeenCalled();
+    expect(p2.page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+    expect(p2.page.off).toHaveBeenCalledWith("framedetached", expect.any(Function));
   });
 
   it("registers aria refs from ai snapshots for act commands", async () => {
@@ -111,7 +114,9 @@ describe("pw-ai", () => {
   });
 
   it("truncates oversized snapshots", async () => {
-    const longSnapshot = "A".repeat(20);
+    const firstLine = "VISIBLE";
+    const marker = "[...TRUNCATED - page too large]";
+    const longSnapshot = `${firstLine}\n${"A".repeat(50)}`;
     const p1 = createPage({ targetId: "T1", snapshotFull: longSnapshot });
     const browser = createBrowser([p1.page]);
 
@@ -120,12 +125,11 @@ describe("pw-ai", () => {
     const res = await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
-      maxChars: 10,
+      maxChars: firstLine.length + 2 + marker.length,
     });
 
     expect(res.truncated).toBe(true);
-    expect(res.snapshot.startsWith("AAAAAAAAAA")).toBe(true);
-    expect(res.snapshot).toContain("TRUNCATED");
+    expect(res.snapshot).toBe(`${firstLine}\n\n${marker}`);
   });
 
   it("returns numeric ai snapshot refs in the public snapshot output", async () => {

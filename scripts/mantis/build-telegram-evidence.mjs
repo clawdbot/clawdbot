@@ -46,16 +46,43 @@ function formatMessageText(message) {
   return mediaKinds.length > 0 ? `[${mediaKinds.join(", ")}]` : "[no text]";
 }
 
+function evidenceEntries(summary) {
+  return Array.isArray(summary.entries) ? summary.entries : [];
+}
+
+function evidenceCounts(summary) {
+  const entries = evidenceEntries(summary);
+  const failed = entries.filter((entry) => entry?.result?.status !== "pass").length;
+  return {
+    total: entries.length,
+    passed: entries.length - failed,
+    failed,
+  };
+}
+
+function evidenceCredentialSource(summary) {
+  const entry = evidenceEntries(summary)[0];
+  return (
+    entry?.execution?.provider?.auth ??
+    entry?.execution?.provider?.fixture ??
+    entry?.execution?.packageSource?.kind ??
+    "unknown"
+  );
+}
+
 function renderScenarioList(summary) {
-  const scenarios = Array.isArray(summary.scenarios) ? summary.scenarios : [];
-  if (scenarios.length === 0) {
-    return "<li>No scenarios recorded.</li>";
+  const entries = evidenceEntries(summary);
+  if (entries.length === 0) {
+    return "<li>No evidence entries recorded.</li>";
   }
-  return scenarios
-    .map((scenario) => {
-      const statusClass = scenario.status === "pass" ? "pass" : "fail";
-      const rtt = typeof scenario.rttMs === "number" ? `, ${Math.round(scenario.rttMs)}ms RTT` : "";
-      return `<li><span class="status ${statusClass}">${escapeHtml(scenario.status ?? "unknown")}</span> <strong>${escapeHtml(scenario.title ?? scenario.id)}</strong><span class="muted"> ${escapeHtml(scenario.id ?? "")}${rtt}</span><p>${escapeHtml(scenario.details ?? "")}</p></li>`;
+  return entries
+    .map((entry) => {
+      const status = entry?.result?.status ?? "unknown";
+      const statusClass = status === "pass" ? "pass" : "fail";
+      const timing = entry?.result?.timing;
+      const rttMs = timing?.p50Ms ?? timing?.rttMs;
+      const rtt = typeof rttMs === "number" ? `, ${Math.round(rttMs)}ms RTT` : "";
+      return `<li><span class="status ${statusClass}">${escapeHtml(status)}</span> <strong>${escapeHtml(entry?.test?.title ?? entry?.test?.id)}</strong><span class="muted"> ${escapeHtml(entry?.test?.id ?? "")}${rtt}</span><p>${escapeHtml(entry?.result?.failure?.reason ?? "")}</p></li>`;
     })
     .join("\n");
 }
@@ -93,7 +120,7 @@ function renderObservedMessages(observedMessages) {
  * Renders a self-contained Telegram evidence HTML report.
  */
 export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
-  const counts = summary.counts ?? {};
+  const counts = evidenceCounts(summary);
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
   return `<!doctype html>
 <html lang="en">
@@ -217,7 +244,7 @@ export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
         <span class="pill">total: ${escapeHtml(counts.total ?? 0)}</span>
         <span class="pill">passed: ${escapeHtml(counts.passed ?? 0)}</span>
         <span class="pill">failed: ${escapeHtml(counts.failed ?? 0)}</span>
-        <span class="pill">credentials: ${escapeHtml(summary.credentials?.source ?? "unknown")}</span>
+        <span class="pill">credentials: ${escapeHtml(evidenceCredentialSource(summary))}</span>
       </div>
     </header>
     <section>
@@ -241,14 +268,16 @@ export function renderTelegramEvidenceHtml({ observedMessages, summary }) {
 export function buildTelegramEvidenceManifest({
   candidateRef,
   candidateSha,
+  hasObservedMessages = true,
   scenarioLabel,
   summary,
+  summaryArtifactPath = "qa-evidence.json",
 }) {
-  const counts = summary.counts ?? {};
+  const counts = evidenceCounts(summary);
   const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
-  const scenarioNames = Array.isArray(summary.scenarios)
-    ? summary.scenarios.map((scenario) => scenario.id).filter(Boolean)
-    : [];
+  const scenarioNames = evidenceEntries(summary)
+    .map((entry) => entry?.test?.id)
+    .filter(Boolean);
   const scenario = scenarioLabel || scenarioNames.join(",") || "telegram-live";
   const status = pass ? "pass" : "fail";
   const artifacts = [
@@ -293,17 +322,21 @@ export function buildTelegramEvidenceManifest({
     {
       kind: "metadata",
       lane: "run",
-      label: "Telegram QA summary",
-      path: "telegram-qa-summary.json",
+      label: "Telegram QA evidence summary",
+      path: summaryArtifactPath,
       targetPath: "summary.json",
     },
-    {
-      kind: "metadata",
-      lane: "run",
-      label: "Telegram observed messages",
-      path: "telegram-qa-observed-messages.json",
-      targetPath: "observed-messages.json",
-    },
+    ...(hasObservedMessages
+      ? [
+          {
+            kind: "metadata",
+            lane: "run",
+            label: "Telegram observed messages",
+            path: "telegram-qa-observed-messages.json",
+            targetPath: "observed-messages.json",
+          },
+        ]
+      : []),
     {
       kind: "metadata",
       lane: "run",
@@ -331,7 +364,7 @@ export function buildTelegramEvidenceManifest({
       kind: "report",
       lane: "run",
       label: "Telegram QA report",
-      path: "telegram-qa-report.md",
+      path: "qa-suite-report.md",
       targetPath: "report.md",
     },
   ];
@@ -363,31 +396,29 @@ export function writeTelegramEvidence(rawArgs = process.argv.slice(2)) {
   }
   const outputDir = path.resolve(args.output_dir);
   mkdirSync(outputDir, { recursive: true });
-  const summaryPath = path.join(outputDir, "telegram-qa-summary.json");
-  const observedPath = path.join(outputDir, "telegram-qa-observed-messages.json");
-  const reportPath = path.join(outputDir, "telegram-qa-report.md");
-  if (!existsSync(summaryPath)) {
-    throw new Error(`Missing Telegram QA summary: ${summaryPath}`);
+  const evidenceSummaryPath = path.join(outputDir, "qa-evidence.json");
+  const reportPath = path.join(outputDir, "qa-suite-report.md");
+  if (!existsSync(evidenceSummaryPath)) {
+    throw new Error(`Missing Telegram QA evidence summary: ${evidenceSummaryPath}`);
   }
-  if (!existsSync(observedPath)) {
-    throw new Error(`Missing Telegram observed messages: ${observedPath}`);
-  }
-  const summary = readJson(summaryPath);
-  const pass = summary.counts?.failed === 0 && Number(summary.counts?.total ?? 0) > 0;
+  const summary = readJson(evidenceSummaryPath);
+  const counts = evidenceCounts(summary);
+  const pass = counts.failed === 0 && Number(counts.total ?? 0) > 0;
   if (!existsSync(reportPath)) {
     if (pass) {
       throw new Error(`Missing Telegram QA report for passing summary: ${reportPath}`);
     }
     writeFileSync(reportPath, "# Mantis Telegram Live QA\n\nTelegram QA report was unavailable.\n");
   }
-  const observedMessages = readJson(observedPath);
-  const transcriptHtml = renderTelegramEvidenceHtml({ observedMessages, summary });
+  const transcriptHtml = renderTelegramEvidenceHtml({ observedMessages: [], summary });
   writeFileSync(path.join(outputDir, "telegram-live-transcript.html"), transcriptHtml, "utf8");
   const manifest = buildTelegramEvidenceManifest({
     candidateRef: args.candidate_ref,
     candidateSha: args.candidate_sha,
+    hasObservedMessages: false,
     scenarioLabel: args.scenario_label,
     summary,
+    summaryArtifactPath: path.basename(evidenceSummaryPath),
   });
   writeFileSync(
     path.join(outputDir, "mantis-evidence.json"),

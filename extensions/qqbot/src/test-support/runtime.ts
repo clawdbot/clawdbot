@@ -6,7 +6,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { resetQQBotRuntimeForTest, setQQBotRuntime } from "../bridge/runtime.js";
+import { setQQBotRuntime } from "../bridge/runtime.js";
 
 function stateEnv(stateDir: string, env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
@@ -39,6 +39,17 @@ export function installQQBotRuntimeForStateTests(stateDir: string): void {
 }
 
 export function resetQQBotStateTestRuntime(): void {
-  resetQQBotRuntimeForTest();
   resetPluginStateStoreForTests();
+  const unavailable = (): never => {
+    throw new Error("QQBot state test runtime is not installed");
+  };
+  setQQBotRuntime({
+    version: "test",
+    state: {
+      resolveStateDir: unavailable,
+      openKeyedStore: unavailable,
+      openSyncKeyedStore: unavailable,
+      openChannelIngressQueue: unavailable,
+    },
+  } as unknown as PluginRuntime);
 }

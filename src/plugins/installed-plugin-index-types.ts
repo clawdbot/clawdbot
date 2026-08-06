@@ -7,7 +7,7 @@ import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { PluginPackageChannel } from "./manifest.js";
+import type { OpenClawPackageBuild, PluginPackageChannel } from "./manifest.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -29,7 +29,6 @@ export type InstalledPluginIndexRefreshReason =
 export type InstalledPluginStartupInfo = {
   sidecar: boolean;
   memory: boolean;
-  deferConfiguredChannelFullLoadUntilAfterListen: boolean;
   agentHarnesses: readonly string[];
   /**
    * Manifest activation.onConfigPaths copied into the installed index for
@@ -68,6 +67,14 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+  | "clawhubTrustDisposition"
+  | "clawhubTrustScanStatus"
+  | "clawhubTrustModerationState"
+  | "clawhubTrustReasons"
+  | "clawhubTrustPending"
+  | "clawhubTrustStale"
+  | "clawhubTrustCheckedAt"
+  | "clawhubTrustAcknowledgedAt"
   | "artifactKind"
   | "artifactFormat"
   | "npmIntegrity"
@@ -105,8 +112,12 @@ export type InstalledPluginIndexRecord = {
    */
   packageInstall?: PluginInstallSourceInfo;
   packageChannel?: InstalledPluginPackageChannelInfo;
+  packageBuild?: OpenClawPackageBuild;
   manifestPath: string;
   manifestHash: string;
+  /** Hash of the doctor-contract artifact selected by the runtime resolver. */
+  doctorContractHash?: string;
+  doctorContractFile?: InstalledPluginFileSignature;
   manifestFile?: InstalledPluginFileSignature;
   format?: PluginManifestRecord["format"];
   bundleFormat?: PluginManifestRecord["bundleFormat"];

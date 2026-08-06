@@ -1,4 +1,5 @@
 /** Tests ACP turn terminal results and detached-task progress outcomes. */
+import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it, vi } from "vitest";
 import {
   requireTaskByRunId,
@@ -14,6 +15,7 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockParentedAcpSessionEntries,
   mockCallArg,
   readySessionMeta,
   resetAcpSessionManagerForTests,
@@ -82,6 +84,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "Investigate and report back",
@@ -167,6 +170,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Print the current directory",
@@ -250,6 +254,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -325,6 +330,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -400,6 +406,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -475,6 +482,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -548,6 +556,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Produce a final result",
@@ -641,6 +650,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Investigate and report back",
@@ -661,50 +671,57 @@ describe("AcpSessionManager turn results", () => {
   });
 
   it("keeps startTurn cancelled results as non-error terminal turns", async () => {
-    const runtimeState = createRuntime();
-    const closeStream = vi.fn(async () => {});
-    runtimeState.runtime.startTurn = vi.fn((input) => ({
-      requestId: input.requestId,
-      events: (async function* () {
-        yield { type: "text_delta" as const, stream: "output" as const, text: "stopping" };
-      })(),
-      result: Promise.resolve({
-        status: "cancelled" as const,
-        stopReason: "manual-cancel",
-      }),
-      cancel: vi.fn(async () => {}),
-      closeStream,
-    }));
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const closeStream = vi.fn(async () => {});
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield { type: "text_delta" as const, stream: "output" as const, text: "stopping" };
+        })(),
+        result: Promise.resolve({
+          status: "cancelled" as const,
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream,
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
 
-    const events: string[] = [];
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "long task",
-      mode: "prompt",
-      requestId: "run-1",
-      onEvent: (event) => {
-        events.push(event.type);
-      },
-    });
+      const events: AcpRuntimeEvent[] = [];
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "long task",
+        mode: "prompt",
+        requestId: "run-1",
+        onEvent: (event) => {
+          events.push(event);
+        },
+      });
 
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
-    expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
-    expect(events).toEqual(["text_delta", "done"]);
-    const states = extractStatesFromUpserts();
-    expect(states).toContain("running");
-    expect(states).toContain("idle");
-    expect(states).not.toContain("error");
+      expect(runtimeState.runTurn).not.toHaveBeenCalled();
+      expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
+      expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
+      expect(events.at(-1)).toEqual({ type: "done", status: "cancelled" });
+      expectRecordFields(requireTaskByRunId("run-1"), {
+        ownerKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "cancelled",
+      });
+      const states = extractStatesFromUpserts();
+      expect(states).toContain("running");
+      expect(states).toContain("idle");
+      expect(states).not.toContain("error");
+    });
   });
 
   it("fails immediately when startTurn events fail before terminal result settles", async () => {
@@ -733,6 +750,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -819,6 +837,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "Investigate and report back",
@@ -856,6 +875,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -892,6 +912,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -936,6 +957,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-1",
           text: "do work",
@@ -955,7 +977,11 @@ describe("AcpSessionManager turn results", () => {
     }
   });
 
-  it("retries once with a fresh persistent session after an early missing-session turn failure", async () => {
+  // Drives a thread-bound persistent ACP session whose first turn fails because
+  // the backend can no longer resume the stale session id, then a clean second
+  // turn. Returns observers so each case can assert whether the manager
+  // discarded the stale identity and retried fresh (#87830).
+  function setupStaleResumeScenario(firstTurn: () => AsyncIterable<AcpRuntimeEvent>) {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -963,9 +989,7 @@ describe("AcpSessionManager turn results", () => {
     });
     const sessionKey = "agent:claude:acp:binding:discord:default:retry-no-session";
     let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta({
-        agent: "claude",
-      }),
+      ...readySessionMeta({ agent: "claude" }),
       runtimeSessionName: sessionKey,
       identity: {
         state: "resolved",
@@ -976,11 +1000,7 @@ describe("AcpSessionManager turn results", () => {
     };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: currentMeta,
-      };
+      return { sessionKey: key, storeSessionKey: key, acp: currentMeta };
     });
     hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {
@@ -993,11 +1013,7 @@ describe("AcpSessionManager turn results", () => {
       if (next) {
         currentMeta = next;
       }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
+      return { sessionId: "session-1", updatedAt: Date.now(), acp: currentMeta };
     });
     runtimeState.ensureSession.mockImplementation(async (inputUnknown: unknown) => {
       const input = inputUnknown as {
@@ -1018,44 +1034,92 @@ describe("AcpSessionManager turn results", () => {
       details: { status: "alive" },
     });
     runtimeState.runTurn
-      .mockImplementationOnce(async function* () {
-        yield {
-          type: "error" as const,
-          code: "NO_SESSION",
-          message:
-            "Persistent ACP session acpx-sid-stale could not be resumed: Resource not found: acpx-sid-stale",
-        };
-      })
+      .mockImplementationOnce(firstTurn)
       .mockImplementationOnce(async function* () {
         yield { type: "done" as const };
       });
-
     const manager = new AcpSessionManager();
-    await expect(
+    const runTurn = () =>
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey,
         text: "do work",
         mode: "prompt",
         requestId: "run-no-session",
-      }),
-    ).resolves.toBeUndefined();
+      });
+    return { runtimeState, sessionKey, runTurn, getMeta: () => currentMeta };
+  }
 
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey,
+  function expectFreshRetry(scenario: ReturnType<typeof setupStaleResumeScenario>) {
+    expect(scenario.runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey: scenario.sessionKey,
     });
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(scenario.runtimeState.ensureSession), {
+      sessionKey: scenario.sessionKey,
       resumeSessionId: "acpx-sid-stale",
     });
-    const retryInput = mockCallArg(runtimeState.ensureSession, 1);
-    expect(retryInput.resumeSessionId).toBeUndefined();
-    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
-    expect(currentMeta.identity?.state).toBe("resolved");
+    expect(mockCallArg(scenario.runtimeState.ensureSession, 1).resumeSessionId).toBeUndefined();
+    expect(scenario.getMeta().identity?.acpxSessionId).toBe("acpx-sid-fresh");
+    expect(scenario.getMeta().identity?.state).toBe("resolved");
     const states = extractStatesFromUpserts();
     expect(states).toContain("running");
     expect(states).toContain("idle");
     expect(states).not.toContain("error");
+  }
+
+  // The structured SESSION_RESUME_REQUIRED detail code drives recovery
+  // regardless of the backend's human-readable reason. Claude reports
+  // "Resource not found"; Kiro reports "Internal error" (RequestError -32603) —
+  // both must discard the stale persistent id and retry fresh (#87830).
+  it.each([
+    ["Resource not found", "Resource not found: acpx-sid-stale"],
+    ["Internal error (Kiro RequestError -32603)", "Internal error"],
+  ])(
+    "retries with a fresh persistent session on a resume-required error: %s",
+    async (_label, reason) => {
+      const scenario = setupStaleResumeScenario(async function* () {
+        yield {
+          type: "error" as const,
+          code: "NO_SESSION",
+          detailCode: "SESSION_RESUME_REQUIRED",
+          message: `Persistent ACP session acpx-sid-stale could not be resumed: ${reason}`,
+        };
+      });
+      await expect(scenario.runTurn()).resolves.toBeUndefined();
+      expectFreshRetry(scenario);
+    },
+  );
+
+  it("recovers when the resume-required error is wrapped as a thrown cause", async () => {
+    const scenario = setupStaleResumeScenario(
+      // eslint-disable-next-line require-yield -- an async generator that only throws is a valid empty stream.
+      async function* () {
+        const error = new Error(
+          "Persistent ACP session acpx-sid-stale could not be resumed: Internal error",
+        ) as Error & { detailCode?: string };
+        error.detailCode = "SESSION_RESUME_REQUIRED";
+        throw error;
+      },
+    );
+    await expect(scenario.runTurn()).resolves.toBeUndefined();
+    expectFreshRetry(scenario);
+  });
+
+  it("does not retry a generic Internal error that is not a resume-required failure", async () => {
+    const scenario = setupStaleResumeScenario(async function* () {
+      // No SESSION_RESUME_REQUIRED detail code: a generic backend failure must
+      // surface, not silently discard the persistent session and retry.
+      yield {
+        type: "error" as const,
+        code: "ACP_TURN_FAILED",
+        message: "Internal error",
+      };
+    });
+    await expect(scenario.runTurn()).rejects.toThrow();
+    expect(scenario.runtimeState.prepareFreshSession).not.toHaveBeenCalled();
+    expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

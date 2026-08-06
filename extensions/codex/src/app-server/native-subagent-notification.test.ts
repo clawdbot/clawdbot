@@ -1,9 +1,9 @@
 // Codex tests cover native subagent notification plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  extractCodexNativeSubagentCompletions,
-  extractCodexNativeSubagentCompletionsFromText,
-} from "./native-subagent-notification.js";
+import { codexNativeSubagentNotifications } from "./native-subagent-notification.js";
+
+const extractCodexNativeSubagentCompletions = codexNativeSubagentNotifications.fromNotification;
+const extractCodexNativeSubagentCompletionsFromText = codexNativeSubagentNotifications.fromText;
 
 function trustedInterAgentNotification(params: {
   agentPath: string;

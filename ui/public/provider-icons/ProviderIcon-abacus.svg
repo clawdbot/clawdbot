@@ -1,0 +1,17 @@
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Abacus AI logo: stylized vertical lines with dots -->
+    <g transform="translate(15, 10)">
+        <!-- Vertical lines -->
+        <rect x="0" y="0" width="4" height="80" rx="2" fill="white"/>
+        <rect x="17.5" y="0" width="4" height="80" rx="2" fill="white"/>
+        <rect x="35" y="0" width="4" height="80" rx="2" fill="white"/>
+        <rect x="52.5" y="0" width="4" height="80" rx="2" fill="white"/>
+        <rect x="66" y="0" width="4" height="80" rx="2" fill="white"/>
+        <!-- Dots on the lines (beads on an abacus) -->
+        <circle cx="2" cy="20" r="7" fill="white"/>
+        <circle cx="19.5" cy="45" r="7" fill="white"/>
+        <circle cx="37" cy="30" r="7" fill="white"/>
+        <circle cx="54.5" cy="60" r="7" fill="white"/>
+        <circle cx="68" cy="40" r="7" fill="white"/>
+    </g>
+</svg>

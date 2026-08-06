@@ -4,13 +4,14 @@ import type {
   ChannelMessagingAdapter,
   ChannelPlugin,
   ChannelThreadingAdapter,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
@@ -44,34 +45,7 @@ const routeReply = (
   params: Omit<RouteReplyParams, "replyKind"> & { replyKind?: RouteReplyParams["replyKind"] },
 ) => routeReplyRuntime({ replyKind: "final", ...params });
 
-function compileSlackInteractiveRepliesForTest(
-  payload: Parameters<NonNullable<ChannelMessagingAdapter["transformReplyPayload"]>>[0]["payload"],
-) {
-  const text = payload.text ?? "";
-  if (!text.includes("[[slack_select:") && !text.includes("[[slack_buttons:")) {
-    return payload;
-  }
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      slack: {
-        ...(payload.channelData?.slack as Record<string, unknown> | undefined),
-        blocks: [{ type: "section", text }],
-      },
-    },
-  };
-}
-
 const slackMessaging: ChannelMessagingAdapter = {
-  transformReplyPayload: ({ payload, cfg }) =>
-    (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
-      ?.capabilities?.interactiveReplies === true
-      ? compileSlackInteractiveRepliesForTest(payload)
-      : payload,
-  enableInteractiveReplies: ({ cfg }) =>
-    (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
-      ?.capabilities?.interactiveReplies === true,
   hasStructuredReplyPayload: ({ payload }) => {
     const blocks = (payload.channelData?.slack as { blocks?: unknown } | undefined)?.blocks;
     if (typeof blocks === "string") {
@@ -82,10 +56,16 @@ const slackMessaging: ChannelMessagingAdapter = {
 };
 
 const slackThreading: ChannelThreadingAdapter = {
-  resolveReplyTransport: ({ threadId, replyToId }) => ({
-    replyToId: resolveSlackThreadTsCandidate(replyToId) ?? resolveSlackThreadTsCandidate(threadId),
-    threadId: null,
-  }),
+  resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+    const resolvedReplyToId =
+      resolveSlackThreadTsCandidate(replyDelivery?.replyToMode === "off" ? undefined : replyToId) ??
+      resolveSlackThreadTsCandidate(threadId);
+    return {
+      replyToId:
+        replyDelivery?.replyToMode === "off" && !resolvedReplyToId ? null : resolvedReplyToId,
+      threadId: null,
+    };
+  },
 };
 
 function resolveSlackThreadTsCandidate(value?: string | number | null): string | undefined {
@@ -97,10 +77,21 @@ function resolveSlackThreadTsCandidate(value?: string | number | null): string |
 }
 
 const mattermostThreading: ChannelThreadingAdapter = {
-  resolveReplyTransport: ({ threadId, replyToId }) => ({
-    replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
-    threadId,
-  }),
+  resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
+    const ambientThreadId = threadId != null && threadId !== "" ? String(threadId) : undefined;
+    const resolvedThreadId =
+      replyDelivery?.chatType === "direct"
+        ? undefined
+        : replyToIsExplicit
+          ? (replyToId ?? ambientThreadId)
+          : replyDelivery
+            ? (ambientThreadId ?? replyToId ?? undefined)
+            : (replyToId ?? ambientThreadId);
+    return {
+      replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
+      threadId: resolvedThreadId ?? null,
+    };
+  },
 };
 
 function createChannelPlugin(
@@ -250,7 +241,13 @@ describe("routeReply", () => {
   });
 
   it("suppresses reasoning payloads", async () => {
-    await expectSlackNoDelivery({ text: "step", isReasoning: true });
+    await expect(expectSlackNoDelivery({ text: "step", isReasoning: true })).resolves.toMatchObject(
+      {
+        delivered: false,
+        suppressed: true,
+        reason: "reasoning_payload_not_external",
+      },
+    );
   });
 
   it("drops silent token payloads", async () => {
@@ -302,6 +299,204 @@ describe("routeReply", () => {
       },
     });
     expect(lastDelivery()).not.toHaveProperty("skipMessageSendingHooks");
+  });
+
+  it("uses payload reply policy when resolving the final Slack transport", async () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "hello", replyToId: "999.000" },
+      {
+        replyDelivery: {
+          chatType: "channel",
+          replyToMode: "off",
+        },
+      },
+    );
+
+    const res = await routeReply({
+      payload,
+      channel: "slack",
+      to: "channel:C123",
+      threadId: "111.000",
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: "111.000",
+      threadId: null,
+    });
+    expect(lastDeliveryPayload().replyToId).toBe("111.000");
+  });
+
+  it("keeps fresh payload reply mode for the same destination policy route", async () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "hello", replyToId: "999.000" },
+      {
+        replyDelivery: {
+          chatType: "channel",
+          replyToMode: "all",
+        },
+        replyDeliverySource: {
+          channel: "slack",
+          accountId: "primary",
+        },
+      },
+    );
+
+    const res = await routeReply({
+      payload,
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "primary",
+      replyDelivery: {
+        chatType: "channel",
+        replyToMode: "off",
+      },
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: "999.000",
+      threadId: null,
+    });
+    expect(lastDeliveryPayload().replyToId).toBe("999.000");
+  });
+
+  it("uses destination reply policy when payload policy came from another route", async () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "hello", replyToId: "999.000" },
+      {
+        replyDelivery: {
+          chatType: "direct",
+          replyToMode: "all",
+        },
+        replyDeliverySource: {
+          channel: "webchat",
+        },
+      },
+    );
+
+    const res = await routeReply({
+      payload,
+      channel: "slack",
+      to: "channel:C123",
+      replyDelivery: {
+        chatType: "channel",
+        replyToMode: "off",
+      },
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: null,
+      threadId: null,
+    });
+    expect(lastDeliveryPayload().replyToId).toBeUndefined();
+  });
+
+  it("uses explicit reply policy when routed blocks have no payload metadata", async () => {
+    const res = await routeReply({
+      payload: { text: "hello", replyToId: "999.000" },
+      channel: "slack",
+      to: "channel:C123",
+      threadId: "111.000",
+      replyDelivery: {
+        chatType: "channel",
+        replyToMode: "off",
+      },
+      cfg: {} as never,
+      replyKind: "block",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: "111.000",
+      threadId: null,
+    });
+  });
+
+  it("honors Slack policy that clears a top-level reply target", async () => {
+    const res = await routeReply({
+      payload: { text: "hello", replyToId: "999.000" },
+      channel: "slack",
+      to: "channel:C123",
+      replyDelivery: {
+        chatType: "channel",
+        replyToMode: "off",
+      },
+      cfg: {} as never,
+      replyKind: "block",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: null,
+      threadId: null,
+    });
+    expect(lastDeliveryPayload().replyToId).toBeUndefined();
+  });
+
+  it("honors Mattermost policy that clears direct-message reply targets", async () => {
+    const res = await routeReply({
+      payload: { text: "hello", replyToId: "post-1" },
+      channel: "mattermost",
+      to: "user:U123",
+      replyDelivery: {
+        chatType: "direct",
+        replyToMode: "all",
+      },
+      cfg: {} as never,
+      replyKind: "block",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: null,
+      threadId: null,
+    });
+    expect(lastDeliveryPayload().replyToId).toBeUndefined();
+  });
+
+  it("preserves explicit Mattermost reply targets over the ambient thread", async () => {
+    const res = await routeReply({
+      payload: {
+        text: "hello",
+        replyToId: "other-root",
+        replyToTag: true,
+      },
+      channel: "mattermost",
+      to: "channel:C123",
+      threadId: "ambient-root",
+      replyDelivery: {
+        chatType: "channel",
+        replyToMode: "all",
+      },
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: "other-root",
+      threadId: "other-root",
+    });
+    expect(lastDeliveryPayload().replyToId).toBe("other-root");
+  });
+
+  it("preserves reply targets when an adapter returns undefined", async () => {
+    const res = await routeReply({
+      payload: { text: "hello", replyToId: "msg-internal-1" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDeliveryFields({
+      replyToId: "msg-internal-1",
+      threadId: null,
+    });
   });
 
   it("leaves message_sending enforcement to routed durable delivery", async () => {
@@ -357,6 +552,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
@@ -396,6 +592,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
@@ -427,6 +624,7 @@ describe("routeReply", () => {
 
     expect(res).toEqual({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "empty_after_reply_payload_sending_hook",
     });
@@ -487,7 +685,7 @@ describe("routeReply", () => {
 
   it("applies responsePrefix when routing", async () => {
     const cfg = {
-      messages: { responsePrefix: "[openclaw]" },
+      channels: { slack: { responsePrefix: "[openclaw]" } },
     } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
@@ -498,21 +696,30 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload().text).toBe("[openclaw] hi");
   });
 
-  it("routes directive-only Slack replies when interactive replies are enabled", async () => {
+  it("interpolates responsePrefix from the routed channel and account", async () => {
     const cfg = {
       channels: {
         slack: {
-          capabilities: { interactiveReplies: true },
+          responsePrefix: "[slack]",
+          accounts: {
+            support: { responsePrefix: "[{modelFull} think:{thinkingLevel}]" },
+          },
         },
       },
     } as unknown as OpenClawConfig;
     await routeReply({
-      payload: { text: "[[slack_select: Choose one | Alpha:alpha]]" },
+      payload: { text: "hi" },
       channel: "slack",
       to: "channel:C123",
+      accountId: "support",
+      sessionKey: "agent:main:main",
+      responsePrefixContext: {
+        modelFull: "anthropic/claude-opus-4-6",
+        thinkingLevel: "high",
+      },
       cfg,
     });
-    expect(lastDeliveryPayload().text).toBe("[[slack_select: Choose one | Alpha:alpha]]");
+    expect(lastDeliveryPayload().text).toBe("[anthropic/claude-opus-4-6 think:high] hi");
   });
 
   it("does not bypass the empty-reply guard for invalid Slack blocks", async () => {

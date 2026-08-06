@@ -10,6 +10,9 @@ const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
     "usage.status",
     "usage.cost",
     "gateway.restart.request",
+    "gateway.suspend.prepare",
+    "gateway.suspend.status",
+    "gateway.suspend.resume",
   ],
   discovery: ["commands.list"],
   config: [

@@ -1,10 +1,30 @@
 // Status scan shared tests cover gateway probe snapshots, Tailscale URLs, and shared scan helpers.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { parseStatusRouteArgs } from "../cli/program/route-args.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  parseMinimalGatewayRequestFrame,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../gateway/minimal-gateway.test-helpers.js";
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
+});
 
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
@@ -279,7 +299,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbeAuthWarning).toBe("warn");
   });
 
-  it("keeps the local status RPC fallback timeout aligned with configured handshake timeout", async () => {
+  it("uses built-in probe defaults for the local status RPC fallback", async () => {
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",
       gatewayMode: "local",
@@ -304,51 +324,130 @@ describe("resolveGatewayProbeSnapshot", () => {
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     await resolveGatewayProbeSnapshot({
-      cfg: { gateway: { handshakeTimeoutMs: 30_000 } },
+      cfg: {},
       opts: {},
     });
 
     const probeCall = readProbeCall();
-    expect(probeCall.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(probeCall.timeoutMs).toBe(30_000);
+    expect(probeCall).not.toHaveProperty("preauthHandshakeTimeoutMs");
+    expect(probeCall.timeoutMs).toBe(2500);
     const gatewayCall = readGatewayCall();
-    expect(gatewayCall.config).toEqual({ gateway: { handshakeTimeoutMs: 30_000 } });
-    expect(gatewayCall.timeoutMs).toBe(30_000);
+    expect(gatewayCall.config).toEqual({});
+    expect(gatewayCall.timeoutMs).toBe(2000);
   });
 
-  it("does not raise an explicit local status RPC fallback timeout", async () => {
+  it.each([1, 50, 999, 1000, 2000, 8000])(
+    "does not raise an explicit local status RPC fallback timeout (%i ms)",
+    async (timeoutMs) => {
+      mocks.resolveGatewayProbeTarget.mockReturnValue({
+        mode: "local",
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+      });
+      mocks.probeGateway.mockResolvedValue({
+        ok: false,
+        url: "ws://127.0.0.1:18789",
+        connectLatencyMs: null,
+        error: "timeout",
+        close: null,
+        auth: {
+          role: null,
+          scopes: [],
+          capability: "unknown",
+        },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      });
+      mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+      await resolveGatewayProbeSnapshot({
+        cfg: {},
+        opts: { timeoutMs },
+      });
+
+      const probeCall = readProbeCall();
+      expect(probeCall).not.toHaveProperty("preauthHandshakeTimeoutMs");
+      expect(probeCall.timeoutMs).toBe(timeoutMs);
+      expect(readGatewayCall().timeoutMs).toBe(Math.min(2000, timeoutMs));
+    },
+  );
+
+  it("enforces an explicit CLI timeout against a real local fallback status RPC", async () => {
+    const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(gateway, "listening");
+    const address = gateway.address() as AddressInfo;
+    const url = `ws://127.0.0.1:${address.port}`;
+    const observedMethods: string[] = [];
+    gateway.on("connection", (socket) => {
+      sendMinimalGatewayConnectChallenge(socket);
+      socket.on("message", (data) => {
+        const frame = parseMinimalGatewayRequestFrame(data);
+        if (frame.type !== "req" || !frame.id || !frame.method) {
+          return;
+        }
+        const requestId = frame.id;
+        if (frame.method === "connect") {
+          sendMinimalGatewayResponse(
+            socket,
+            requestId,
+            buildMinimalGatewayHelloOkPayload({
+              methods: ["system-presence", "status"],
+              auth: { role: "operator", scopes: ["operator.read"] },
+            }),
+          );
+          return;
+        }
+        observedMethods.push(frame.method);
+        if (frame.method === "status") {
+          const responseTimer = setTimeout(() => {
+            if (socket.readyState === socket.OPEN) {
+              sendMinimalGatewayResponse(socket, requestId, { sessions: 1 });
+            }
+          }, 400);
+          responseTimer.unref();
+        }
+      });
+    });
+
+    mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
+      url,
+      urlSource: "local loopback",
+      message: `Gateway target: ${url}`,
+    });
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",
       gatewayMode: "local",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
+    mocks.probeGateway.mockImplementation(async (...args: unknown[]) => {
+      const { probeGateway } =
+        await vi.importActual<typeof import("../gateway/probe.js")>("../gateway/probe.js");
+      return await probeGateway(...(args as Parameters<typeof probeGateway>));
     });
-    mocks.callGateway.mockResolvedValue({ sessions: 1 });
-
-    await resolveGatewayProbeSnapshot({
-      cfg: { gateway: { handshakeTimeoutMs: 30_000 } },
-      opts: { timeoutMs: 1000 },
+    mocks.callGateway.mockImplementation(async (...args: unknown[]) => {
+      const { callGateway } =
+        await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
+      return await callGateway(...(args as Parameters<typeof callGateway>));
     });
+    const parsed = parseStatusRouteArgs(["node", "openclaw", "status", "--timeout", "250"]);
+    expect(parsed?.timeoutMs).toBe(250);
 
-    const probeCall = readProbeCall();
-    expect(probeCall.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(probeCall.timeoutMs).toBe(1000);
-    expect(readGatewayCall().timeoutMs).toBe(1000);
+    try {
+      const result = await resolveGatewayProbeSnapshot({
+        cfg: { gateway: { auth: { mode: "none" } } },
+        opts: { timeoutMs: parsed?.timeoutMs },
+      });
+
+      expect(readProbeCall().timeoutMs).toBe(250);
+      expect(readGatewayCall().timeoutMs).toBe(250);
+      expect(observedMethods).toEqual(["system-presence", "status"]);
+      expect(result.gatewayProbe?.ok).toBe(false);
+      expect(result.gatewayProbe?.error).toContain("timeout");
+    } finally {
+      await closeMinimalGatewayServer(gateway);
+    }
   });
 
   it("lets callGateway reuse paired-device auth for local status RPC fallback", async () => {
@@ -452,6 +551,51 @@ describe("buildTailscaleHttpsUrl", () => {
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  it.each([
+    {
+      name: "top-level defaults",
+      cfg: { memory: { search: { provider: "local" } } },
+    },
+    {
+      name: "per-agent overrides",
+      cfg: {
+        agents: {
+          entries: { main: { memory: { search: { provider: "local" } } } },
+        },
+      },
+    },
+  ])("inspects explicitly configured memory from $name", async ({ cfg }) => {
+    const manager = {
+      probeVectorStoreAvailability: vi.fn(async () => true),
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "local",
+        files: 0,
+        chunks: 0,
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const resolveMemoryConfig = vi.fn(() => ({
+      store: { databasePath: `/tmp/openclaw-missing-memory-${process.pid}.sqlite` },
+    }));
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg,
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig,
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () =>
+        `/tmp/openclaw-missing-default-memory-${process.pid}.sqlite`,
+    });
+
+    expect(resolveMemoryConfig).toHaveBeenCalledOnce();
+    expect(getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(result?.provider).toBe("local");
+  });
+
   it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
     const manager = {
       probeVectorStoreAvailability: vi.fn(async () => true),
@@ -468,28 +612,30 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     };
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
-    const requireDefaultStore = vi.fn(() => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`);
+    const requireDefaultDatabasePath = vi.fn(
+      () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
+    );
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: {
         plugins: {
           slots: { memory: "memory-lancedb-pro" },
         },
+        memory: { search: { enabled: false } },
+
         agents: {
-          defaults: {
-            memorySearch: { enabled: false },
-          },
+          defaults: {},
         },
       },
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
       getMemorySearchManager,
-      requireDefaultStore,
+      requireDefaultDatabasePath,
     });
 
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
-    expect(requireDefaultStore).not.toHaveBeenCalled();
+    expect(requireDefaultDatabasePath).not.toHaveBeenCalled();
     expect(getMemorySearchManager).toHaveBeenCalledOnce();
     const managerCalls = getMemorySearchManager.mock.calls as unknown as Array<
       [MemorySearchManagerCall]
@@ -534,7 +680,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "qmd" },
       resolveMemoryConfig: vi.fn(() => null),
       getMemorySearchManager,
-      requireDefaultStore: vi.fn(),
+      requireDefaultDatabasePath: vi.fn(),
     });
 
     expect(manager.probeVectorStoreAvailability).not.toHaveBeenCalled();
@@ -559,11 +705,96 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig,
       getMemorySearchManager,
-      requireDefaultStore: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
+      requireDefaultDatabasePath: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
     });
 
     expect(result).toBeNull();
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it("recognizes shipped memory tables before the manager migrates them", async () => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-status-memory-");
+    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE files (
+        path TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'memory',
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL
+      );
+      CREATE TABLE chunks (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'memory',
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        text TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
+    `);
+    db.close();
+    const manager = {
+      probeVectorStoreAvailability: vi.fn(async () => true),
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "openai",
+        files: 1,
+        chunks: 0,
+        vector: { enabled: true, available: true },
+        fts: { enabled: true, available: true },
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: {},
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () => databasePath,
+    });
+
+    expect(getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(result?.files).toBe(1);
+  });
+
+  it("does not initialize memory status for an agent database owned by another feature", async () => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-status-memory-");
+    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE cache_entries (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
+    `);
+    db.close();
+    const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: {},
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig: vi.fn(() => ({ store: { databasePath } })),
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () => databasePath,
+    });
+
+    expect(result).toBeNull();
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 });

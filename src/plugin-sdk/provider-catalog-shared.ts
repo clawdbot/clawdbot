@@ -1,6 +1,7 @@
 // Provider catalog helpers normalize, hash, and expose model catalogs for provider plugins.
 import { createHash } from "node:crypto";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalogCost,
   ModelCatalogMediaInputConfig,
@@ -12,10 +13,13 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -86,12 +90,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
   if (expiresAt !== undefined) {
     // Auth-scoped live provider catalogs can vary by token; keep this
     // process-local cache bounded so discovery cannot grow without limit.
-    if (liveCatalogCache.size >= LIVE_CATALOG_CACHE_MAX_ENTRIES) {
-      const oldestKey = liveCatalogCache.keys().next();
-      if (!oldestKey.done) {
-        liveCatalogCache.delete(oldestKey.value);
-      }
-    }
+    pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
     liveCatalogCache.set(key, {
       expiresAt,
       value,
@@ -123,6 +122,19 @@ function countRawManifestCatalogModels(catalog: unknown): number | undefined {
   }
   const models = (catalog as { models?: unknown }).models;
   return Array.isArray(models) ? models.length : undefined;
+}
+
+/** Reads a provider's normalized manifest default as a fully qualified model ref. */
+export function readManifestProviderDefaultModelRef(
+  manifest: unknown,
+  providerId: string,
+): string | undefined {
+  const catalog = (manifest as { modelCatalog?: { providers?: Record<string, unknown> } })
+    ?.modelCatalog?.providers?.[providerId];
+  const defaultModel = normalizeOptionalString(
+    (catalog as { defaultModel?: unknown })?.defaultModel,
+  );
+  return defaultModel ? buildModelCatalogRef(providerId, defaultModel) : undefined;
 }
 
 function cloneManifestCatalogTieredCost(
@@ -193,6 +205,7 @@ function buildManifestCatalogModel(
     contextWindow: model.contextWindow,
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     maxTokens: model.maxTokens,
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
     ...(model.compat ? { compat: { ...model.compat } } : {}),
     ...(model.mediaInput ? { mediaInput: cloneManifestCatalogMediaInput(model.mediaInput) } : {}),
@@ -227,6 +240,97 @@ export function buildManifestModelProviderConfig(params: {
     ...(catalog.api ? { api: catalog.api } : {}),
     ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
     models: catalog.models.map((model) => buildManifestCatalogModel(params.providerId, model)),
+  };
+}
+
+export type ManifestProviderCatalogSurface = {
+  id: string;
+  label: string;
+  catalog: unknown;
+};
+
+export type ManifestProviderCatalogEntry = {
+  id: string;
+  label: string;
+  baseUrl: string;
+  models: ModelProviderConfig["models"];
+  buildProvider: () => ModelProviderConfig;
+};
+
+/** Projects an ordered family of manifest catalogs into static provider and model surfaces. */
+export function buildManifestProviderCatalogFamily(params: {
+  surfaces: readonly ManifestProviderCatalogSurface[];
+  docsPath?: string;
+}) {
+  const entries: ManifestProviderCatalogEntry[] = params.surfaces.map((surface) => {
+    const buildProvider = () =>
+      buildManifestModelProviderConfig({
+        providerId: surface.id,
+        catalog: surface.catalog,
+      });
+    const provider = buildProvider();
+    return {
+      id: surface.id,
+      label: surface.label,
+      baseUrl: provider.baseUrl,
+      models: provider.models,
+      buildProvider,
+    };
+  });
+  const staticDiscovery: ProviderPlugin[] = entries.map(({ id, label, buildProvider }) => ({
+    id,
+    label,
+    docsPath: params.docsPath ?? "/providers/models",
+    auth: [],
+    staticCatalog: {
+      order: "simple",
+      run: async () => ({ provider: buildProvider() }),
+    },
+  }));
+
+  return {
+    entries,
+    staticDiscovery,
+    staticCatalog: async () => ({
+      providers: Object.fromEntries(entries.map(({ id, buildProvider }) => [id, buildProvider()])),
+    }),
+    augmentModelCatalog: () =>
+      entries.flatMap(({ id: provider, models }) =>
+        models.map((entry) => ({
+          provider,
+          id: entry.id,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          input: [...entry.input],
+          contextWindow: entry.contextWindow,
+        })),
+      ),
+  };
+}
+
+/** Builds one normalized runtime model row from a provider manifest catalog entry. */
+export function buildManifestModelDefinition(params: {
+  /** Provider id that owns the manifest catalog row. */
+  providerId: string;
+  /** Raw manifest modelCatalog provider block that contains the row. */
+  catalog: unknown;
+  /** Optional provider policy applied after manifest normalization. */
+  decorate?: (model: ModelDefinitionConfig) => ModelDefinitionConfig;
+}): (model: unknown) => ModelDefinitionConfig {
+  if (!params.catalog || typeof params.catalog !== "object" || Array.isArray(params.catalog)) {
+    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
+  }
+  const catalog = params.catalog;
+  return (rawModel) => {
+    const provider = buildManifestModelProviderConfig({
+      providerId: params.providerId,
+      catalog: { ...catalog, models: [rawModel] },
+    });
+    const model = provider.models[0];
+    if (!model) {
+      throw new Error(`Missing modelCatalog.providers.${params.providerId}.models[0]`);
+    }
+    return params.decorate?.(model) ?? model;
   };
 }
 

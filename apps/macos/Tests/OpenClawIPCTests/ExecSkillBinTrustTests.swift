@@ -51,6 +51,72 @@ struct ExecSkillBinTrustTests {
         #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
 
+    @Test func `skill auto allow rejects path scoped invocation`() throws {
+        let fixture = try Self.makeExecutable(named: "jq")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let trust = SkillBinsCache._testBuildTrustIndex(
+            report: Self.makeReport(bins: ["jq"]),
+            searchPaths: [fixture.root.path])
+        let resolution = ExecCommandResolution(
+            rawExecutable: fixture.path,
+            resolvedPath: fixture.path,
+            resolvedRealPath: fixture.path,
+            executableName: "jq",
+            cwd: nil)
+
+        #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+    }
+
+    @Test func `skill auto allow rejects retargeted PATH symlink`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-skill-symlink-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let first = root.appendingPathComponent("first")
+        let second = root.appendingPathComponent("second")
+        let alias = root.appendingPathComponent("jq")
+        try "#!/bin/sh\nexit 0\n".write(to: first, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexit 0\n".write(to: second, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: first.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: second.path)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: first)
+
+        let trust = SkillBinsCache._testBuildTrustIndex(
+            report: Self.makeReport(bins: ["jq"]),
+            searchPaths: [root.path])
+        try FileManager.default.removeItem(at: alias)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: second)
+        let resolution = try #require(ExecCommandResolution.resolve(
+            command: ["jq"],
+            cwd: nil,
+            env: ["PATH": root.path]))
+
+        #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+    }
+
+    @Test func `skill auto allow rejects an alias to a shell carrier`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-skill-shell-alias-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let alias = root.appendingPathComponent("skill-shell")
+        try FileManager.default.createSymbolicLink(
+            at: alias,
+            withDestinationURL: URL(fileURLWithPath: "/bin/sh"))
+
+        let trust = SkillBinsCache._testBuildTrustIndex(
+            report: Self.makeReport(bins: ["skill-shell"]),
+            searchPaths: [root.path])
+        let resolution = try #require(ExecCommandResolution.resolve(
+            command: ["skill-shell", "-c", "/usr/bin/printf ok"],
+            cwd: nil,
+            env: ["PATH": root.path]))
+
+        #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+    }
+
     private static func makeExecutable(named name: String) throws -> (root: URL, path: String) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-skill-bin-\(UUID().uuidString)", isDirectory: true)

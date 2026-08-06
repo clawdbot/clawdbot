@@ -60,6 +60,45 @@ function expectLastStatusFields(
 }
 
 describe("createMatrixMonitorSyncLifecycle", () => {
+  it("publishes blocked for an invalidated token and preserves it through cleanup", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+    const tokenError = Object.assign(new Error("Unknown token"), {
+      statusCode: 401,
+      data: { errcode: "M_UNKNOWN_TOKEN" },
+    });
+
+    statusController.noteSyncState("RECONNECTING", tokenError);
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+    });
+
+    statusController.noteUnexpectedError(new Error("startup readiness timed out"));
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "Unknown token",
+    });
+
+    statusController.markStopped();
+    expectLastStatusFields(setStatus, {
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+    });
+
+    statusController.noteSyncState("SYNCING", undefined);
+    expectLastStatusFields(setStatus, {
+      lifecycle: "ready",
+      terminalDisconnect: undefined,
+    });
+  });
+
+  it("publishes recovering for transient disconnects", () => {
+    const { setStatus, statusController } = createSyncLifecycleHarness();
+    statusController.noteSyncState("RECONNECTING", new Error("network reset"));
+    expectLastStatusFields(setStatus, { lifecycle: "recovering" });
+  });
+
   it("rejects the channel wait on unexpected sync errors", async () => {
     const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
 
@@ -72,6 +111,29 @@ describe("createMatrixMonitorSyncLifecycle", () => {
       healthState: "error",
       lastError: "sync exploded",
     });
+  });
+
+  it("treats missing-key-shaped unexpected sync errors as fatal", async () => {
+    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
+
+    const waitPromise = lifecycle.waitForFatalStop();
+    const error = new Error(
+      "Error decrypting event (id=$event type=m.room.encrypted): DecryptionError[msg: The sender's device has not sent us the keys for this message.]",
+    );
+    try {
+      client.emit("sync.unexpected_error", error);
+      await Promise.resolve();
+
+      expectLastStatusFields(setStatus, {
+        accountId: "default",
+        healthState: "error",
+        lastError: error.message,
+      });
+      await expect(waitPromise).rejects.toThrow(error.message);
+    } finally {
+      lifecycle.dispose();
+      await waitPromise.catch(() => undefined);
+    }
   });
 
   it("ignores STOPPED emitted during intentional shutdown", async () => {

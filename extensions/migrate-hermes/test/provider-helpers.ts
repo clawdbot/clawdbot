@@ -88,6 +88,8 @@ export function makeContext(params: {
   config?: OpenClawConfig;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  itemKinds?: string[];
+  targetAgentId?: string;
   model?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
   reportDir?: string;
   runtime?: MigrationProviderContext["runtime"];
@@ -108,6 +110,8 @@ export function makeContext(params: {
     source: params.source,
     includeSecrets: params.includeSecrets,
     overwrite: params.overwrite,
+    itemKinds: params.itemKinds,
+    targetAgentId: params.targetAgentId,
     reportDir: params.reportDir,
     runtime: params.runtime,
     logger,

@@ -1,7 +1,9 @@
 // Telegram tests cover delivery plugin behavior.
 import type { Bot } from "grammy";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -9,6 +11,7 @@ const { probeVideoDimensions } = vi.hoisted(() => ({
   probeVideoDimensions: vi.fn(),
 }));
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
+const recordSentMessage = vi.hoisted(() => vi.fn());
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
   runMessageSending: vi.fn(),
@@ -56,8 +59,14 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("../sent-message-cache.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sent-message-cache.js")>();
+  return { ...actual, recordSentMessage };
+});
+
 vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
+const { sendTelegramText } = await import("./delivery.send.js");
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -67,7 +76,7 @@ vi.mock("grammy", () => ({
   InputFile: class {
     constructor(
       public buffer: Buffer,
-      public fileName?: string,
+      public filename?: string,
     ) {}
   },
   GrammyError: class GrammyError extends Error {
@@ -84,11 +93,57 @@ function createRuntime(withLog = true): RuntimeStub {
 }
 
 function createBot(api: Record<string, unknown> = {}): Bot {
-  return { api } as unknown as Bot;
+  const raw = {
+    sendRichMessage: vi.fn(
+      (params: {
+        chat_id: string | number;
+        rich_message: {
+          blocks?: unknown[];
+          markdown?: string;
+          html?: string;
+          skip_entity_detection?: boolean;
+        };
+        [key: string]: unknown;
+      }) => {
+        const sendMessage = api.sendMessage;
+        if (typeof sendMessage !== "function") {
+          throw new Error("sendMessage mock missing");
+        }
+        const { chat_id, rich_message, ...richParams } = params;
+        const sendParams: Record<string, unknown> = {
+          parse_mode: "HTML",
+          ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
+          ...richParams,
+        };
+        const text = Array.isArray(rich_message.blocks)
+          ? rich_message.blocks
+              .map((block) => {
+                const blockText = (block as { text?: unknown }).text;
+                return typeof blockText === "string" ? blockText : "";
+              })
+              .join("\n")
+          : (rich_message.markdown ?? rich_message.html ?? "");
+        const replyParameters = sendParams.reply_parameters;
+        if (
+          replyParameters &&
+          typeof replyParameters === "object" &&
+          !("quote" in replyParameters) &&
+          typeof (replyParameters as { message_id?: unknown }).message_id === "number"
+        ) {
+          sendParams.reply_to_message_id = (replyParameters as { message_id: number }).message_id;
+          sendParams.allow_sending_without_reply = true;
+          delete sendParams.reply_parameters;
+        }
+        const options = sendParams;
+        return sendMessage(chat_id, text, options);
+      },
+    ),
+  };
+  return { api: { ...api, raw } } as unknown as Bot;
 }
 
 async function deliverWith(params: DeliverWithParams) {
-  await deliverReplies({
+  return await deliverReplies({
     ...baseDeliveryParams,
     ...params,
     mediaLoader: params.mediaLoader ?? loadWebMedia,
@@ -100,6 +155,19 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
     buffer: Buffer.from(data),
     contentType,
     fileName,
+  });
+}
+
+function createObservedPromptContextSequence(
+  record: (value: unknown) => void,
+  source?: { transcriptMessageId: string },
+) {
+  return createTelegramPromptContextProjectionSequence({
+    ...(source ? { source } : {}),
+    record: async (value) => {
+      record(value);
+      return true;
+    },
   });
 }
 
@@ -132,10 +200,11 @@ function firstSendText(mock: ReturnType<typeof vi.fn>) {
   return text as string;
 }
 
-function createSendMessageHarness(messageId = 4) {
+function createSendMessageHarness(messageId = 4, messageThreadId?: number) {
   const runtime = createRuntime();
   const sendMessage = vi.fn().mockResolvedValue({
     message_id: messageId,
+    ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
     chat: { id: "123" },
   });
   const bot = createBot({ sendMessage });
@@ -148,10 +217,24 @@ function createVoiceMessagesForbiddenError() {
   );
 }
 
+function createEmptyTextError() {
+  return new Error("Bad Request: text must be non-empty");
+}
+
+function createCaptionTooLongError() {
+  return new Error(
+    "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: caption is too long)",
+  );
+}
+
 function createThreadNotFoundError(operation = "sendMessage") {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
   );
+}
+
+function createChunkRejection(message = "chunk content rejected"): Error {
+  return Object.assign(new Error(`400: Bad Request: ${message}`), { error_code: 400 });
 }
 
 function createQuoteNotFoundError(operation = "sendMessage") {
@@ -172,9 +255,28 @@ function createNormalizedQuoteTextInvalidError(operation = "sendMessage") {
   );
 }
 
-function createWrappedPreConnectHttpError(operation = "sendMessage") {
-  const root = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
-    code: "ENOTFOUND",
+function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_${entity}_INVALID)`,
+  );
+}
+
+function createRichContentRequiredError(operation = "sendRichMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_CONTENT_REQUIRED)`,
+  );
+}
+
+function createHtmlParseError(operation = "sendMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
+  );
+}
+
+function createWrappedConnectTimeoutHttpError(operation = "sendMessage") {
+  const root = Object.assign(new Error("Connect Timeout Error"), {
+    name: "ConnectTimeoutError",
+    code: "UND_ERR_CONNECT_TIMEOUT",
   });
   const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
   return Object.assign(new Error(`Network request for '${operation}' failed!`), {
@@ -209,6 +311,7 @@ describe("deliverReplies", () => {
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
     triggerInternalHook.mockReset();
+    recordSentMessage.mockReset();
     messageHookRunner.hasHooks.mockReset();
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSending.mockReset();
@@ -241,6 +344,144 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 1)).toBe("hello");
+  });
+
+  it("keeps native-command tables visible in non-rich block-mode replies", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+
+    await deliverWith({
+      replies: [{ text: `Before\n\n${table}\n\nAfter` }],
+      runtime,
+      bot,
+      tableMode: "block",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const sent = firstSendText(sendMessage);
+    expect(sent).toContain("Before");
+    expect(sent).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(sent).toContain("After");
+    expectRecordFields(firstMockCallArg(sendMessage, 2), { parse_mode: "HTML" });
+  });
+
+  it("delivers prepared HTML without reparsing visible syntax as Markdown", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const records: unknown[] = [];
+    const promptContextSequence = createObservedPromptContextSequence((record) =>
+      records.push(record),
+    );
+
+    await deliverWith({
+      replies: [{ text: "<code>&lt;b&gt;x&lt;/b&gt;</code>" }],
+      runtime,
+      bot: createBot({ sendMessage }),
+      textMode: "html",
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe("<code>&lt;b&gt;x&lt;/b&gt;</code>");
+    expectRecordFields(firstMockCallArg(sendMessage, 2), { parse_mode: "HTML" });
+    expect(records).toEqual([{ messageId: 1, text: "<b>x</b>" }]);
+  });
+
+  it("applies reaction-only replies without logging missing text/media", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockResolvedValue(true);
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    await deliverWith({
+      replies: [
+        {
+          replyToId: "456",
+          channelData: {
+            telegram: {
+              reaction: { emoji: "🔥" },
+            },
+          },
+        },
+      ],
+      replyToMode: "all",
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "🔥" }]);
+  });
+
+  it("does not mark rejected reaction-only replies as delivered", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockRejectedValue(new Error("REACTION_INVALID"));
+    const bot = createBot({ sendMessage: vi.fn(), setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          replyToId: "456",
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+      ],
+      replyToMode: "all",
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: false });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Reaction unavailable"));
+  });
+
+  it("does not send text when a reaction reply has no target", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn();
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          text: "Done",
+          replyToId: "456",
+          channelData: { telegram: { reaction: { emoji: "🔥" } } },
+        },
+      ],
+      replyToMode: "off",
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: false });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("requires a reply target"));
+    expect(setMessageReaction).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not send text when Telegram rejects the reaction", async () => {
+    const runtime = createRuntime(false);
+    const setMessageReaction = vi.fn().mockRejectedValue(new Error("REACTION_INVALID"));
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage, setMessageReaction });
+
+    const result = await deliverWith({
+      replies: [
+        {
+          text: "Done",
+          replyToId: "456",
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+      ],
+      replyToMode: "all",
+      runtime,
+      bot,
+    });
+
+    expect(result).toEqual({ delivered: false });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Reaction unavailable"));
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("mirrors delivered replies once after successful sends", async () => {
@@ -302,6 +543,32 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("keeps first-chunk buttons on a later reply payload", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 2, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 3, chat: { id: "123" } });
+
+    await deliverWith({
+      replies: [
+        { text: "Earlier reply" },
+        {
+          text: "Approve?",
+          channelData: {
+            telegram: { buttons: [[{ text: "Allow", callback_data: "allow" }]] },
+          },
+        },
+      ],
+      runtime,
+      bot: createBot({ sendMessage }),
+    });
+
+    expectRecordFields(mockCallArg(sendMessage, 1, 2), {
+      reply_markup: { inline_keyboard: [[{ text: "Allow", callback_data: "allow" }]] },
+    });
+  });
+
   it("uses interactive button labels as fallback text for button-only replies", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
@@ -329,7 +596,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("uses presentation button labels as fallback text for presentation-only replies", async () => {
+  it("keeps presentation-only controls deliverable without duplicating button labels", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 4, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -348,12 +615,72 @@ describe("deliverReplies", () => {
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
-    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Choose an option.");
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_markup: {
         inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
       },
     });
+  });
+
+  it("keeps native Telegram button-only replies deliverable", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Choose an option.");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
+  });
+
+  it("appends presentation tables to top-level text exactly once", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Quarterly results",
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: [["Acme", "Won"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe(
+      "Quarterly results\n\nFY25 outlook\n\nPipeline (table)\n\n• Account: Acme; Stage: Won",
+    );
   });
 
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
@@ -591,7 +918,11 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
 
     const runtime = createRuntime(false);
-    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 3,
+      message_thread_id: 42,
+      chat: { id: "123" },
+    });
     const bot = createBot({ sendMessage });
 
     await deliverWith({
@@ -671,6 +1002,351 @@ describe("deliverReplies", () => {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
     });
+  });
+
+  it.each([
+    { contentType: "image/png", filename: "image.png", method: "sendPhoto" },
+    { contentType: "video/quicktime", filename: "video.mov", method: "sendVideo" },
+    { contentType: "audio/mpeg", filename: "audio.mp3", method: "sendAudio" },
+    { contentType: "application/pdf", filename: "file.pdf", method: "sendDocument" },
+    { contentType: "image/gif", filename: "animation.gif", method: "sendAnimation" },
+    { contentType: "application/x-custom", filename: "file.bin", method: "sendDocument" },
+  ])("preserves MIME-derived filenames for streaming $contentType", async (testCase) => {
+    const sendMedia = vi.fn().mockResolvedValue({
+      message_id: 2,
+      chat: { id: "123" },
+    });
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("media"),
+      contentType: testCase.contentType,
+    });
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/media", text: "caption" }],
+      runtime: createRuntime(),
+      bot: createBot({ [testCase.method]: sendMedia }),
+    });
+
+    expect(firstMockCallArg(sendMedia, 1)).toMatchObject({ filename: testCase.filename });
+  });
+
+  it("keeps formatted media replies within Telegram's parsed-caption limit", async () => {
+    const runtime = createRuntime();
+    const visibleCaption = "x".repeat(1022);
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendPhoto, sendMessage });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: `**${visibleCaption}**` }],
+      runtime,
+      bot,
+    });
+
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
+      caption: `<b>${visibleCaption}</b>`,
+      parse_mode: "HTML",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("stops a media follow-up when the provider returns the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 51,
+      message_thread_id: 43,
+      chat: { id: "123", type: "supergroup" },
+    });
+    const sendMessage = vi.fn();
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "x".repeat(1025) }],
+        runtime,
+        bot: createBot({ sendPhoto, sendMessage }),
+        thread: { id: 42, scope: "forum" },
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendPhoto).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(observed.deliveryResult.messageIds).toEqual(["51"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).not.toHaveBeenCalled();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps earlier media ids when a later item lands in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 61,
+        message_thread_id: 42,
+        chat: { id: "123", type: "supergroup" },
+      })
+      .mockResolvedValueOnce({
+        message_id: 62,
+        message_thread_id: 43,
+        chat: { id: "123", type: "supergroup" },
+      });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("one.jpg", "image/jpeg", "one");
+    mockMediaLoad("two.jpg", "image/jpeg", "two");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"] }],
+        runtime,
+        bot: createBot({ sendPhoto }),
+        thread: { id: 42, scope: "forum" },
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(observed.deliveryResult.messageIds).toEqual(["61", "62"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).toHaveBeenCalledOnce();
+    expect(recordSentMessage).toHaveBeenCalledOnce();
+  });
+
+  it("does not mirror media follow-up text that Telegram rejects as empty", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const invisibleText = "\u200B".repeat(1025);
+    const emptyError = createEmptyTextError();
+    const mediaUrl = "https://example.com/photo.jpg";
+    const sendPhoto = vi.fn().mockResolvedValueOnce({ message_id: 82, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockRejectedValue(emptyError);
+    const transcriptMirror = vi.fn();
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl, text: invisibleText }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto, sendMessage }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).resolves.toEqual({ delivered: true });
+
+    expect(sendPhoto).toHaveBeenCalledOnce();
+    expect(mockCallArg(sendPhoto, 0, 2)).toHaveProperty("caption", undefined);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(recordSentMessage.mock.calls).toEqual([["123", 82, undefined]]);
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: undefined, mediaUrls: [mediaUrl] });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: true,
+      content: "",
+    });
+  });
+
+  it("retries media without a caption when Telegram renders it empty", async () => {
+    const invisibleText = "\u200B".repeat(1024);
+    const emptyError = createEmptyTextError();
+    const mediaUrl = "https://example.com/photo.jpg";
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(emptyError)
+      .mockResolvedValueOnce({ message_id: 83, chat: { id: "123" } });
+    const transcriptMirror = vi.fn();
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl, text: invisibleText }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).resolves.toEqual({ delivered: true });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), { caption: invisibleText });
+    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("caption");
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: undefined, mediaUrls: [mediaUrl] });
+  });
+
+  it.each([
+    {
+      kind: "ordinary Markdown",
+      caption: "hi **boss**",
+      htmlCaption: "hi <b>boss</b>",
+      plainCaption: "hi **boss**",
+    },
+    {
+      kind: "markup-heavy Markdown",
+      caption: `**${"x".repeat(1022)}**`,
+      htmlCaption: `<b>${"x".repeat(1022)}</b>`,
+      plainCaption: "x".repeat(1022),
+    },
+  ])(
+    "falls back to a valid $kind media caption when Telegram rejects HTML",
+    async ({ caption, htmlCaption, plainCaption }) => {
+      const runtime = createRuntime();
+      const sendPhoto = vi
+        .fn()
+        .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
+        .mockResolvedValueOnce({
+          message_id: 3,
+          chat: { id: "123" },
+        });
+      const bot = createBot({ sendPhoto });
+
+      mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+      await deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg", text: caption }],
+        runtime,
+        bot,
+      });
+
+      expect(sendPhoto).toHaveBeenCalledTimes(2);
+      expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
+        caption: htmlCaption,
+        parse_mode: "HTML",
+      });
+      expectRecordFields(mockCallArg(sendPhoto, 1, 2), {
+        caption: plainCaption,
+      });
+      expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("parse_mode");
+    },
+  );
+
+  it.each(["PHOTO_INVALID_DIMENSIONS", "PHOTO_TOO_BIG"])(
+    "falls back to a document when Telegram rejects a photo with %s",
+    async (providerReason) => {
+      const runtime = createRuntime();
+      const sendPhoto = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new Error(
+            `GrammyError: Call to 'sendPhoto' failed! (400: Bad Request: ${providerReason})`,
+          ),
+        );
+      const sendDocument = vi.fn().mockResolvedValue({
+        message_id: 9,
+        message_thread_id: 42,
+        chat: { id: "123" },
+      });
+      const bot = createBot({ sendPhoto, sendDocument });
+      const records: unknown[] = [];
+      const promptContextSequence = createObservedPromptContextSequence((record) =>
+        records.push(record),
+      );
+
+      mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+      await deliverWith({
+        replies: [
+          {
+            mediaUrl: "https://example.com/photo.jpg",
+            text: "hi **boss**",
+            replyToId: "512",
+            channelData: {
+              telegram: {
+                buttons: [[{ text: "Retry", callback_data: "retry" }]],
+              },
+            },
+          },
+        ],
+        runtime,
+        bot,
+        replyToMode: "all",
+        thread: { id: 42, scope: "forum" },
+        promptContextSequence,
+      });
+      await promptContextSequence.finish();
+
+      expect(sendPhoto).toHaveBeenCalledOnce();
+      expect(sendDocument).toHaveBeenCalledOnce();
+      expectRecordFields(mockCallArg(sendDocument, 0, 2), {
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+        message_thread_id: 42,
+        reply_to_message_id: 512,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Retry", callback_data: "retry" }]],
+        },
+      });
+      expect(records).toEqual([expect.objectContaining({ messageId: 9, text: "hi **boss**" })]);
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps recovered photo-limit failures quiet after a plain-caption retry", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
+      .mockRejectedValueOnce(
+        new Error(
+          "GrammyError: Call to 'sendPhoto' failed! (400: Bad Request: PHOTO_INVALID_DIMENSIONS)",
+        ),
+      );
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 9,
+      chat: { id: "123" },
+    });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "hi **boss**" }],
+      runtime,
+      bot: createBot({ sendPhoto, sendDocument }),
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(sendPhoto, 1, 2), { caption: "hi **boss**" });
+    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("parse_mode");
+    expect(sendDocument).toHaveBeenCalledOnce();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to a document for unrelated Telegram photo failures", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockRejectedValueOnce(createThreadNotFoundError("sendPhoto"));
+    const sendDocument = vi.fn();
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "caption" }],
+        runtime,
+        bot: createBot({ sendPhoto, sendDocument }),
+        thread: { id: 42, scope: "forum" },
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendPhoto).toHaveBeenCalledOnce();
+    expect(sendDocument).not.toHaveBeenCalled();
   });
 
   it("passes probed dimensions to video reply sends", async () => {
@@ -779,7 +1455,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("includes link_preview_options when linkPreview is false", async () => {
+  it("disables link previews without rich-only entity flags", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 3,
@@ -799,10 +1475,11 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       link_preview_options: { is_disabled: true },
     });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("skip_entity_detection");
   });
 
   it("includes message_thread_id for DM topics", async () => {
-    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const { runtime, sendMessage, bot } = createSendMessageHarness(4, 42);
 
     await deliverWith({
       replies: [{ text: "Hello" }],
@@ -853,12 +1530,91 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
-  it("retries final text sends for wrapped pre-connect grammY HttpError envelopes", async () => {
+  it("stops streamed text after the first provider topic mismatch", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 31,
+      message_thread_id: 43,
+      chat: { id: "123", type: "supergroup" },
+    });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        thread: { id: 42, scope: "forum" },
+        textLimit: 12,
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(observed.deliveryResult.messageIds).toEqual(["31"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).not.toHaveBeenCalled();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps earlier streamed text ids when a later chunk lands in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message_id: 41,
+        message_thread_id: 42,
+        chat: { id: "123", type: "supergroup" },
+      })
+      .mockResolvedValueOnce({
+        message_id: 42,
+        message_thread_id: 43,
+        chat: { id: "123", type: "supergroup" },
+      });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two\n\nchunk-three" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        thread: { id: 42, scope: "forum" },
+        textLimit: 12,
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(observed.deliveryResult.messageIds).toEqual(["41", "42"]);
+    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observer).toHaveBeenCalledOnce();
+    expect(recordSentMessage).toHaveBeenCalledOnce();
+  });
+
+  it("retries final text sends for wrapped Undici connect timeouts", async () => {
     vi.useFakeTimers();
     const runtime = createRuntime();
     const sendMessage = vi
       .fn()
-      .mockRejectedValueOnce(createWrappedPreConnectHttpError("sendMessage"))
+      .mockRejectedValueOnce(createWrappedConnectTimeoutHttpError("sendMessage"))
       .mockResolvedValueOnce({
         message_id: 12,
         chat: { id: "123" },
@@ -929,36 +1685,7 @@ describe("deliverReplies", () => {
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     firstSendText(sendMessage);
     expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("link_preview_options");
-  });
-
-  it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
-    const runtime = createRuntime();
-    const sendMessage = vi.fn(async (_chatId: string, text: string, _options?: unknown) => {
-      if (text === "") {
-        throw new Error("400: Bad Request: message text is empty");
-      }
-      return {
-        message_id: 6,
-        chat: { id: "123" },
-      };
-    });
-    const bot = { api: { sendMessage } } as unknown as Bot;
-
-    await deliverReplies({
-      replies: [{ text: ">" }],
-      chatId: "123",
-      token: "tok",
-      runtime,
-      bot,
-      replyToMode: "off",
-      textLimit: 4000,
-      thread: { id: 42, scope: "forum" },
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
-    expect(firstMockCallArg(sendMessage, 1)).toBe(">");
-    expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("skip_entity_detection");
   });
 
   it("skips whitespace-only text replies without calling Telegram", async () => {
@@ -978,6 +1705,28 @@ describe("deliverReplies", () => {
       }),
     ).resolves.toEqual({ delivered: false });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("records no delivery when Telegram rejects rendered-empty HTML", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(new Error("Bad Request: text must be non-empty"));
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "<i></i>" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        textMode: "html",
+      }),
+    ).rejects.toThrow("text must be non-empty");
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: false,
+      content: "<i></i>",
+    });
   });
 
   it("uses reply_parameters when quote text is provided", async () => {
@@ -1094,6 +1843,247 @@ describe("deliverReplies", () => {
     }
   });
 
+  it("retries rich messages without converting reply parameters to legacy fields", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 11,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Hello there", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      replyQuoteMessageId: 500,
+      replyQuoteText: " quoted text\n",
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const { sendRichMessage } = raw;
+    expect(sendRichMessage).toHaveBeenCalledTimes(2);
+    expectRecordFields(firstMockCallArg(sendRichMessage, 0), {
+      reply_parameters: {
+        message_id: 500,
+        quote: " quoted text\n",
+        allow_sending_without_reply: true,
+      },
+    });
+    expectRecordFields(mockCallArg(sendRichMessage, 1, 0), {
+      reply_parameters: {
+        message_id: 500,
+        allow_sending_without_reply: true,
+      },
+    });
+    expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("skips rich entity detection for reply text with provider-prefixed email addresses", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    const oauthProfileText =
+      "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)";
+
+    await deliverWith({
+      replies: [{ text: oauthProfileText }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage).toEqual({
+      blocks: [{ type: "paragraph", text: oauthProfileText }],
+      skip_entity_detection: true,
+    });
+  });
+
+  it("falls back to plain text when a rich message is rejected for an invalid entity", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichEntityInvalidError("EMAIL"));
+    const text = "Status includes openai:owner@example.com";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe(text);
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+  });
+
+  it("does not plain-fallback after Telegram accepts a rich message in the wrong topic", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage });
+    const sendRichMessage = vi.fn().mockResolvedValue({
+      message_id: 31,
+      message_thread_id: 43,
+      chat: { id: "123", type: "supergroup" },
+    });
+    Object.assign(bot.api.raw, { sendRichMessage });
+
+    let observed: unknown;
+    try {
+      await sendTelegramText(bot, "123", "Rich reply", runtime, {
+        richMessages: true,
+        thread: { id: 42, scope: "forum" },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    expect(sendRichMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain text when a rich message is rejected for empty rich content", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 15,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichContentRequiredError());
+    const text = "delivery continues as plain text";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe(text);
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+  });
+
+  it("falls back to plain text before raw rich send when rich markdown renders empty", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 16,
+      chat: { id: "123" },
+    });
+    const sendRichMessage = vi.fn();
+    const bot = createBot({ sendMessage });
+    Object.assign(bot.api.raw, { sendRichMessage });
+
+    const messageId = await sendTelegramText(bot, "123", "#", runtime, {
+      richMessages: true,
+      textMode: "markdown",
+    });
+
+    expect(messageId).toBe(16);
+    expect(sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("#");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+  });
+
+  it("uses table-aware plain text when rich reply fallback sends", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichEntityInvalidError("URL"));
+    const text = "| Rank | Model | Score |\n| --- | --- | --- |\n| 4 | Claude Opus | 78.16% |";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Rank | Model | Score\n4 | Claude Opus | 78.16%");
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+    );
+  });
+
+  it("falls back to plain text for other invalid rich entity validation errors", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichEntityInvalidError("URL"));
+    const text = "Status with a rejected URL entity";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toBe(text);
+  });
+
+  it("does not fall back to plain text for non-validation rich message errors", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 14,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(new Error("network error"));
+    const text = "Status text";
+
+    await expect(
+      deliverWith({
+        replies: [{ text }],
+        runtime,
+        bot,
+        richMessages: true,
+      }),
+    ).rejects.toThrow("network error");
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses legacy reply id when selected reply target differs from quote source", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -1194,6 +2184,69 @@ describe("deliverReplies", () => {
     if (firstMockCallArg(sendMessage, 2) === undefined) {
       throw new Error("Expected Telegram fallback text options");
     }
+  });
+
+  it("does not account for a voice fallback that Telegram rejects as empty", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const emptyError = createEmptyTextError();
+    const sendVoice = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const sendMessage = vi.fn().mockRejectedValue(emptyError);
+    const transcriptMirror = vi.fn();
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await expect(
+      deliverWith({
+        replies: [
+          { mediaUrl: "https://example.com/note.ogg", text: "<i></i>", audioAsVoice: true },
+        ],
+        runtime: createRuntime(),
+        bot: createBot({ sendVoice, sendMessage }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).rejects.toBe(emptyError);
+
+    expect(sendVoice).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(recordSentMessage).not.toHaveBeenCalled();
+    expect(transcriptMirror).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: false,
+      content: "<i></i>",
+    });
+  });
+
+  it("does not mirror caption text when the caption fallback is empty", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const invisibleText = "\u200B".repeat(1024);
+    const emptyError = createEmptyTextError();
+    const sendVoice = vi
+      .fn()
+      .mockRejectedValueOnce(createCaptionTooLongError())
+      .mockResolvedValueOnce({ message_id: 81, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockRejectedValue(emptyError);
+    const transcriptMirror = vi.fn();
+    const mediaUrl = "https://example.com/note.ogg";
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl, text: invisibleText, audioAsVoice: true }],
+        runtime: createRuntime(),
+        bot: createBot({ sendVoice, sendMessage }),
+        textMode: "html",
+        transcriptMirror,
+      }),
+    ).resolves.toEqual({ delivered: true });
+
+    expect(sendVoice).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(recordSentMessage.mock.calls).toEqual([["123", 81, undefined]]);
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: undefined, mediaUrls: [mediaUrl] });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: true,
+      content: "",
+    });
   });
 
   it("uses spokenText only after voice rejection", async () => {
@@ -1312,7 +2365,7 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
-  it("voice fallback applies reply-to only on first chunk when replyToMode is first", async () => {
+  it("voice fallback avoids native replies for chunked first-mode fallback text", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),
       sendMessageResult: {
@@ -1348,15 +2401,12 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
-      reply_parameters: {
-        message_id: 77,
-        quote: "quoted context",
-        allow_sending_without_reply: true,
-      },
       reply_markup: {
         inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
       },
     });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_to_message_id");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_parameters");
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id", 77);
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_parameters");
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_markup");
@@ -1383,7 +2433,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("replyToMode 'first' only applies reply-to to the first text chunk", async () => {
+  it("replyToMode 'first' keeps native reply-to for a single text chunk", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 20,
@@ -1391,9 +2441,36 @@ describe("deliverReplies", () => {
     });
     const bot = createBot({ sendMessage });
 
+    await deliverReplies({
+      replies: [{ text: "one chunk", replyToId: "700" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_to_message_id: 700,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it("replyToMode 'first' avoids native reply-to for chunked text", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 20, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 21, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+    const cfg = { session: { store: "/tmp/telegram-custom-store.json" } } as const;
+
     // Use a small textLimit to force multiple chunks
     await deliverReplies({
       replies: [{ text: "chunk-one\n\nchunk-two", replyToId: "700" }],
+      cfg,
       chatId: "123",
       token: "tok",
       runtime,
@@ -1403,13 +2480,36 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
-    // First chunk should have reply_to_message_id
-    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
-      reply_to_message_id: 700,
-      allow_sending_without_reply: true,
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).not.toHaveProperty("reply_to_message_id");
+      expect(call[2]).not.toHaveProperty("reply_parameters");
+    }
+    expect(recordSentMessage.mock.calls).toEqual([
+      ["123", 20, cfg],
+      ["123", 21, cfg],
+    ]);
+  });
+
+  it("clamps reply chunks to Telegram rich message limit", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 21,
+      chat: { id: "123" },
     });
-    // Second chunk should NOT have reply_to_message_id
-    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "A".repeat(40_000) }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 100_000,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessage.mock.calls.every((call) => String(call[1]).length <= 32_768)).toBe(true);
   });
 
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {
@@ -1547,4 +2647,140 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it("detaches prompt-context provenance when message_sending rewrites content", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "rewritten" });
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 304, chat: { id: "123" } });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer, {
+      transcriptMessageId: "assistant-1",
+    });
+
+    await deliverWith({
+      replies: [{ text: "original" }],
+      runtime,
+      bot: createBot({ sendMessage }),
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstSendText(sendMessage)).toBe("rewritten");
+    expect(observer).toHaveBeenCalledWith({ messageId: 304, text: "rewritten" });
+  });
+
+  it("continues streamed replies after a rejected middle chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 301, chat: { id: "123" } })
+      .mockRejectedValueOnce(createChunkRejection())
+      .mockResolvedValueOnce({ message_id: 303, chat: { id: "123" } });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    const cfg = { session: { store: "/tmp/telegram-partial-store.json" } } as const;
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two\n\nchunk-three" }],
+        cfg,
+        runtime,
+        bot: createBot({ sendMessage }),
+        textLimit: 12,
+        promptContextSequence,
+      });
+    } catch (error) {
+      observed = error;
+    }
+    await promptContextSequence.fail();
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["301", "303"]);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(observer).toHaveBeenCalledTimes(2);
+    expect(observer).toHaveBeenNthCalledWith(1, { messageId: 301, text: "chunk-one\n\n" });
+    expect(observer).toHaveBeenNthCalledWith(2, { messageId: 303, text: "chunk-three" });
+    expect(recordSentMessage).toHaveBeenCalledTimes(2);
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 301, cfg);
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 303, cfg);
+  });
+
+  it("fails streamed replies when every chunk is rejected", async () => {
+    const rejection = createChunkRejection();
+    const sendMessage = vi.fn().mockRejectedValue(rejection);
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two\n\nchunk-three" }],
+        runtime: createRuntime(),
+        bot: createBot({ sendMessage }),
+        textLimit: 12,
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(recordSentMessage).not.toHaveBeenCalled();
+  });
+
+  it("records the concrete Telegram media message", async () => {
+    const runtime = createRuntime();
+    const message = {
+      message_id: 302,
+      date: 1_779_425_460,
+      chat: { id: "123", type: "private" },
+      photo: [{ file_id: "photo-file", file_unique_id: "photo-unique", width: 10, height: 10 }],
+    };
+    const sendPhoto = vi.fn().mockResolvedValue(message);
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    const cfg = { session: { store: "/tmp/telegram-media-store.json" } } as const;
+    mockMediaLoad("photo.jpg", "image/jpeg", "photo");
+
+    await deliverWith({
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      cfg,
+      runtime,
+      bot: createBot({ sendPhoto }),
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(observer).toHaveBeenCalledWith({ messageId: 302, message, text: "caption" });
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 302, cfg);
+  });
+
+  it("records voice fallback text after the fallback send succeeds", async () => {
+    const { runtime, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: { message_id: 303, chat: { id: "123" } },
+    });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    const cfg = { session: { store: "/tmp/telegram-voice-fallback-store.json" } } as const;
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Voice fallback",
+        },
+      ],
+      cfg,
+      runtime,
+      bot,
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
+    expect(recordSentMessage).toHaveBeenCalledWith("123", 303, cfg);
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

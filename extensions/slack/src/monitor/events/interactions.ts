@@ -2,10 +2,8 @@
 import { truncateSlackText } from "../../truncate.js";
 import type { SlackMonitorContext } from "../context.js";
 import { registerSlackBlockActionHandler, summarizeAction } from "./interactions.block-actions.js";
-import {
-  registerModalLifecycleHandler,
-  type RegisterSlackModalHandler,
-} from "./interactions.modal.js";
+import { registerModalLifecycleHandler } from "./interactions.modal.js";
+import { registerSlackShortcutHandler } from "./interactions.shortcuts.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
@@ -99,11 +97,14 @@ function buildCompactSlackInteractionPayload(
     actionId: payload.actionId,
     callbackId: payload.callbackId,
     actionType: payload.actionType,
+    actionTs: payload.actionTs,
     userId: payload.userId,
     teamId: payload.teamId,
     channelId: payload.channelId ?? payload.routedChannelId,
     messageTs: payload.messageTs,
     threadTs: payload.threadTs,
+    messageUserId: payload.messageUserId,
+    messageText: payload.messageText,
     viewId: payload.viewId,
     isCleared: payload.isCleared,
     selectedValues: payload.selectedValues,
@@ -188,42 +189,32 @@ export function registerSlackInteractionEvents(params: {
     trackEvent,
     formatSystemEvent: formatSlackInteractionSystemEvent,
   });
+  registerSlackShortcutHandler({
+    ctx,
+    trackEvent,
+    formatSystemEvent: formatSlackInteractionSystemEvent,
+  });
 
   if (typeof ctx.app.view !== "function") {
     return;
   }
   const modalMatcher = /.*/;
 
-  // Handle OpenClaw-routed modals; metadata/auth checks below drop unrelated payloads.
-  registerModalLifecycleHandler({
-    register: (matcher, handler) => ctx.app.view(matcher, handler),
-    matcher: modalMatcher,
-    ctx,
-    trackEvent,
-    interactionType: "view_submission",
-    contextPrefix: "slack:interaction:view",
-    summarizeViewState,
-    formatSystemEvent: formatSlackInteractionSystemEvent,
-  });
-
-  const viewClosed = (
-    ctx.app as unknown as {
-      viewClosed?: RegisterSlackModalHandler;
-    }
-  ).viewClosed;
-  if (typeof viewClosed !== "function") {
-    return;
+  // Bolt routes both modal lifecycles through view constraints; there is no viewClosed API.
+  for (const [interactionType, contextPrefix] of [
+    ["view_submission", "slack:interaction:view"],
+    ["view_closed", "slack:interaction:view-closed"],
+  ] as const) {
+    registerModalLifecycleHandler({
+      register: (matcher, handler) =>
+        ctx.app.view({ callback_id: matcher, type: interactionType }, handler),
+      matcher: modalMatcher,
+      ctx,
+      trackEvent,
+      interactionType,
+      contextPrefix,
+      summarizeViewState,
+      formatSystemEvent: formatSlackInteractionSystemEvent,
+    });
   }
-
-  // Handle modal close events so agent workflows can react to cancelled forms.
-  registerModalLifecycleHandler({
-    register: viewClosed,
-    matcher: modalMatcher,
-    ctx,
-    trackEvent,
-    interactionType: "view_closed",
-    contextPrefix: "slack:interaction:view-closed",
-    summarizeViewState,
-    formatSystemEvent: formatSlackInteractionSystemEvent,
-  });
 }

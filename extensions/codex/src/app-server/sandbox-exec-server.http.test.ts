@@ -1,9 +1,7 @@
 // Codex tests cover sandbox exec server.http plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  closeCodexSandboxExecServersForTests,
-  ensureCodexSandboxExecServerEnvironment,
-} from "./sandbox-exec-server.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
+import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   collectNotifications,
   createClient,
@@ -13,17 +11,52 @@ import {
   rpc,
   waitForHttpBodyDeltas,
 } from "./sandbox-exec-server.test-helpers.js";
-import { SANDBOX_HTTP_STREAM_LINE_MAX_CHARS } from "./sandbox-exec-server/http.js";
+const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await closeCodexSandboxExecServersForTests();
+  await sandboxExecServerRegistry.closeAll();
 });
 
 function testExecEnv(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
   };
+}
+
+async function openSandboxHttpSocket(sandbox: ReturnType<typeof createSandboxContext>) {
+  const client = createClient();
+  await ensureCodexSandboxExecServerEnvironment({
+    client: client as never,
+    sandbox,
+  });
+  return openSocket(execServerUrlFromClient(client));
+}
+
+function splitUtf8ChildScript(params: {
+  stream: "stdout" | "stderr";
+  value: string;
+  stdoutPrefix?: string;
+  exitCode?: number;
+}): string {
+  const target = `process.${params.stream}`;
+  const finish =
+    params.exitCode === undefined
+      ? `${target}.end(rest);`
+      : `${target}.write(rest, () => process.exit(${params.exitCode}));`;
+  return [
+    `const value = Buffer.from(${JSON.stringify(params.value)});`,
+    'const marker = Buffer.from("猫");',
+    "const splitAt = value.indexOf(marker) + 1;",
+    ...(params.stdoutPrefix
+      ? [`process.stdout.write(${JSON.stringify(params.stdoutPrefix)});`]
+      : []),
+    `${target}.write(value.subarray(0, splitAt));`,
+    "setTimeout(() => {",
+    "  const rest = value.subarray(splitAt);",
+    `  ${finish}`,
+    "}, 25);",
+  ].join("\n");
 }
 
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
@@ -40,12 +73,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       code: 0,
     }));
     const sandbox = createSandboxContext({ runShellCommand });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -68,6 +96,51 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
         stdin: expect.stringContaining("https://example.test/mcp"),
       }),
     );
+    socket.close();
+  });
+
+  it("blocks private HTTP targets before starting the sandbox backend", async () => {
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const sandbox = createSandboxContext({ runShellCommand });
+    const socket = await openSandboxHttpSocket(sandbox);
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-private",
+        method: "GET",
+        url: "http://127.0.0.1:6379/",
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal IP");
+    expect(runShellCommand).not.toHaveBeenCalled();
+    socket.close();
+  });
+
+  it("blocks metadata HTTP targets before starting the streaming sandbox backend", async () => {
+    const buildExecSpec = vi.fn(async () => ({
+      argv: [process.execPath, "-e", ""],
+      env: testExecEnv(),
+      stdinMode: "pipe-closed" as const,
+    }));
+    const sandbox = createSandboxContext({ buildExecSpec });
+    const socket = await openSandboxHttpSocket(sandbox);
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-metadata",
+        method: "GET",
+        url: "http://metadata.google.internal/",
+        streamResponse: true,
+      }),
+    ).rejects.toThrow("Blocked hostname or private/internal IP");
+    expect(buildExecSpec).not.toHaveBeenCalled();
     socket.close();
   });
 
@@ -106,12 +179,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       code: 0,
     }));
     const sandbox = createSandboxContext({ buildExecSpec, runShellCommand });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     const notifications = collectNotifications(socket);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
@@ -155,6 +223,90 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     socket.close();
   });
 
+  it("preserves split UTF-8 in streaming HTTP response headers", async () => {
+    const headerLine = `${JSON.stringify({
+      type: "headers",
+      status: 200,
+      headers: [{ name: "X-Test", value: "猫-value" }],
+    })}\n`;
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          splitUtf8ChildScript({ stream: "stdout", value: headerLine }),
+        ],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed",
+      }),
+    });
+    const socket = await openSandboxHttpSocket(sandbox);
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-split-stdout",
+        method: "GET",
+        url: "https://example.test/sse",
+        streamResponse: true,
+      }),
+    ).resolves.toEqual({
+      status: 200,
+      headers: [{ name: "X-Test", value: "猫-value" }],
+      bodyBase64: "",
+    });
+    socket.close();
+  });
+
+  it("preserves split UTF-8 in streaming HTTP failure diagnostics", async () => {
+    const headerLine = `${JSON.stringify({
+      type: "headers",
+      status: 200,
+      headers: [],
+    })}\n`;
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          splitUtf8ChildScript({
+            stream: "stderr",
+            value: "sandbox failed: 猫 not found\n",
+            stdoutPrefix: headerLine,
+            exitCode: 17,
+          }),
+        ],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed",
+      }),
+    });
+    const socket = await openSandboxHttpSocket(sandbox);
+    const notifications = collectNotifications(socket);
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-split-stderr",
+        method: "GET",
+        url: "https://example.test/sse",
+        streamResponse: true,
+      }),
+    ).resolves.toEqual({ status: 200, headers: [], bodyBase64: "" });
+
+    await expect(waitForHttpBodyDeltas(notifications, 1)).resolves.toEqual([
+      {
+        requestId: "http-split-stderr",
+        seq: 1,
+        deltaBase64: "",
+        done: true,
+        error: "sandbox failed: 猫 not found",
+      },
+    ]);
+    socket.close();
+  });
+
   it("terminates streaming HTTP subprocesses when the exec-server socket closes", async () => {
     const finalizeExec = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({
@@ -180,12 +332,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
       finalizeExec,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -233,12 +380,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
       finalizeExec,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
+    const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
 

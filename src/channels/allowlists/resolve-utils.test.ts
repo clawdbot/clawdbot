@@ -22,6 +22,16 @@ describe("buildAllowlistResolutionSummary", () => {
     expect(result.unresolved).toEqual(["b", "c"]);
   });
 
+  it("omits identity lookups from the logged mapping but keeps their additions", () => {
+    const resolvedUsers = [
+      { input: "42", resolved: true, id: "42" },
+      { input: "alice", resolved: true, id: "1" },
+    ];
+    const result = buildAllowlistResolutionSummary(resolvedUsers);
+    expect(result.mapping).toEqual(["alice→1"]);
+    expect(result.additions).toEqual(["42", "1"]);
+  });
+
   it("supports custom resolved formatting", () => {
     const resolvedUsers = [{ input: "a", resolved: true, id: "1", note: "x" }];
     const result = buildAllowlistResolutionSummary(resolvedUsers, {
@@ -108,9 +118,12 @@ describe("summarizeMapping", () => {
 
     summarizeMapping("demo allowlist", ["a", "b", "c", "d", "e", "f", "g"], ["x", "y"], runtime);
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      "demo allowlist resolved: a, b, c, d, e, f (+1)\ndemo allowlist unresolved: x, y",
+    // Separate calls per line so each gets its own timestamp/subsystem prefix.
+    expect(runtime.log).toHaveBeenNthCalledWith(
+      1,
+      "demo allowlist resolved: a, b, c, d, e, f (+1)",
     );
+    expect(runtime.log).toHaveBeenNthCalledWith(2, "demo allowlist unresolved: x, y");
   });
 
   it("skips logging when both lists are empty", () => {

@@ -1,7 +1,8 @@
 // Mattermost tests cover accounts plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
+  inspectMattermostAccount,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -76,6 +77,70 @@ describe("resolveDefaultMattermostAccountId", () => {
     expect(listMattermostAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
   });
+
+  it("inherits top-level access policy for named accounts before doctor migration", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          allowFrom: ["*"],
+          groupAllowFrom: ["*"],
+          accounts: {
+            tony: {
+              botToken: "tok-tony",
+              baseUrl: "https://chat.example.com",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "tony" });
+
+    expect(account.config.dmPolicy).toBe("open");
+    expect(account.config.groupPolicy).toBe("open");
+    expect(account.config.allowFrom).toEqual(["*"]);
+    expect(account.config.groupAllowFrom).toEqual(["*"]);
+  });
+});
+
+describe("Mattermost account SecretRef inspection", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const unresolvedRef = {
+    source: "env" as const,
+    provider: "default",
+    id: "OPENCLAW_TEST_MISSING_MATTERMOST_TOKEN",
+  };
+
+  it("keeps direct account resolution strict", () => {
+    expect(() =>
+      resolveMattermostAccount({
+        cfg: {
+          channels: {
+            mattermost: { botToken: unresolvedRef, baseUrl: "https://mm.example.com" },
+          },
+        },
+      }),
+    ).toThrow(/unresolved SecretRef/);
+  });
+
+  it("does not fall through an unavailable configured ref to the environment", () => {
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "lower-precedence-token");
+    const account = inspectMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: { botToken: unresolvedRef, baseUrl: "https://mm.example.com" },
+        },
+      },
+    });
+    expect(account).toMatchObject({
+      botToken: undefined,
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
+    });
+  });
 });
 
 describe("resolveMattermostReplyToMode", () => {
@@ -114,7 +179,7 @@ describe("resolveMattermostReplyToMode", () => {
     expect(resolveMattermostReplyToMode(account, "group")).toBe("all");
   });
 
-  it("keeps direct messages off even when replyToMode is enabled", () => {
+  it("keeps direct messages off by default even when replyToMode is enabled", () => {
     const cfg: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -125,6 +190,25 @@ describe("resolveMattermostReplyToMode", () => {
 
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "direct")).toBe("off");
+  });
+
+  it("uses per-chat-type overrides before the channel and group default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "all",
+          replyToModeByChatType: {
+            direct: "first",
+            channel: "off",
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    expect(resolveMattermostReplyToMode(account, "direct")).toBe("first");
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
+    expect(resolveMattermostReplyToMode(account, "group")).toBe("all");
   });
 
   it("defaults to off when replyToMode is unset", () => {
@@ -164,10 +248,10 @@ describe("resolveMattermostReplyToMode", () => {
       cfg: {
         channels: {
           mattermost: {
-            streaming: "partial",
+            streaming: { mode: "partial" },
             accounts: {
               work: {
-                streaming: "off",
+                streaming: { mode: "off" },
               },
             },
           },

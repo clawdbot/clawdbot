@@ -11,12 +11,6 @@ import {
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
 const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
 
-type TrustedSafeBinDirsParams = {
-  baseDirs?: readonly string[];
-  extraDirs?: readonly string[];
-  safeBins?: readonly string[];
-};
-
 type TrustedSafeBinPathParams = {
   resolvedPath: string;
   trustedDirs?: ReadonlySet<string>;
@@ -164,19 +158,6 @@ function buildTrustedSafeBinCacheKey(
   const binsKey = normalizeSortedUniqueStringEntries(safeBins).join("\u0001");
   const targetDirsKey = targetDirs.join("\u0001");
   return `${dirsKey}\u0002${binsKey}\u0002${targetDirsKey}`;
-}
-
-export function buildTrustedSafeBinDirs(params: TrustedSafeBinDirsParams = {}): Set<string> {
-  const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
-  const extraDirs = params.extraDirs ?? [];
-  const safeBins = params.safeBins ?? [];
-  // Trust is explicit only. Do not derive from PATH, which is user/environment controlled.
-  const entries = [
-    ...normalizeTrustedSafeBinDirs(baseDirs),
-    ...normalizeTrustedSafeBinDirs(extraDirs),
-  ];
-  const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);
-  return new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
 }
 
 export function getTrustedSafeBinDirs(

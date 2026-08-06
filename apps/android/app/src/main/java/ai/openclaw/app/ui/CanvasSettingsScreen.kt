@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,11 +27,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** Settings detail surface for live canvas status, refresh, and embedded preview. */
+/** Settings detail surface for live canvas status, refresh, and presentation. */
 @Composable
 internal fun CanvasSettingsScreen(
   viewModel: MainViewModel,
@@ -43,41 +42,40 @@ internal fun CanvasSettingsScreen(
   val rehydratePending by viewModel.canvasRehydratePending.collectAsState()
   val rehydrateErrorText by viewModel.canvasRehydrateErrorText.collectAsState()
   val hasLivePage = currentUrl?.isNotBlank() == true
-  val showCanvasSurface = isConnected
-  val canvasLabel = if (hasLivePage) "Live page" else "Home canvas"
+  val canvasLabel = if (hasLivePage) nativeString("Live page") else nativeString("Home canvas")
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
-      // Refresh once when the gateway comes online so the settings preview is
+      // Refresh once when the gateway comes online so current Canvas status is
       // populated before the user manually asks for a rehydrate.
       viewModel.refreshHomeCanvasOverviewIfConnected()
     }
   }
 
   SettingsDetailFrame(
-    title = "Canvas",
-    subtitle = "Current screen output and interactive app surface.",
+    title = nativeString("Canvas"),
+    subtitle = nativeString("Current screen output and interactive app surface."),
     icon = Icons.AutoMirrored.Filled.ScreenShare,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Connection", if (isConnected) "Online" else "Offline"),
-          SettingsMetric("Surface", canvasLabel),
-          SettingsMetric("Bridge", if (hasLivePage && hydrated) "Ready" else "Standby"),
+          SettingsMetric(nativeString("Connection"), if (isConnected) nativeString("Online") else nativeString("Offline")),
+          SettingsMetric(nativeString("Surface"), canvasLabel),
+          SettingsMetric(nativeString("Bridge"), if (hasLivePage && hydrated) nativeString("Ready") else nativeString("Standby")),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawPrimaryButton(
-        text = if (rehydratePending) "Refreshing" else "Refresh Screen",
+        text = if (rehydratePending) nativeString("Refreshing") else nativeString("Refresh Screen"),
         onClick = { viewModel.requestCanvasRehydrate(source = "settings_canvas") },
         enabled = isConnected && !rehydratePending,
         modifier = Modifier.weight(1f),
       )
       ClawSecondaryButton(
-        text = "Reconnect",
-        onClick = viewModel::refreshGatewayConnection,
+        text = if (isConnected) nativeString("Open Screen") else nativeString("Reconnect"),
+        onClick = if (isConnected) viewModel::showCanvas else viewModel::refreshGatewayConnection,
         modifier = Modifier.weight(1f),
       )
     }
@@ -86,23 +84,10 @@ internal fun CanvasSettingsScreen(
         Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
-    ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ClawPanel(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = canvasLabel, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Surface(
-          modifier = Modifier.fillMaxWidth().height(520.dp).clip(RoundedCornerShape(ClawTheme.radii.panel)),
-          shape = RoundedCornerShape(ClawTheme.radii.panel),
-          color = ClawTheme.colors.canvas,
-          border = BorderStroke(1.dp, ClawTheme.colors.border),
-        ) {
-          Box {
-            if (showCanvasSurface) {
-              CanvasScreen(viewModel = viewModel, visible = true, modifier = Modifier.fillMaxWidth().height(520.dp))
-            } else {
-              CanvasStandbyPanel(isConnected = isConnected)
-            }
-          }
-        }
+        CanvasStandbyPanel(isConnected = isConnected)
       }
     }
   }
@@ -111,7 +96,7 @@ internal fun CanvasSettingsScreen(
 @Composable
 private fun CanvasStandbyPanel(isConnected: Boolean) {
   Column(
-    modifier = Modifier.fillMaxWidth().height(520.dp).padding(horizontal = 24.dp),
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 28.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.Center,
   ) {
@@ -127,13 +112,13 @@ private fun CanvasStandbyPanel(isConnected: Boolean) {
       }
     }
     Text(
-      text = if (isConnected) "Screen surface ready" else "Connect the gateway",
+      text = if (isConnected) nativeString("Screen surface ready") else nativeString("Connect the gateway"),
       style = ClawTheme.type.title,
       color = ClawTheme.colors.text,
       modifier = Modifier.padding(top = 18.dp),
     )
     Text(
-      text = if (isConnected) "Canvas output appears here when OpenClaw opens an app surface." else "Canvas output needs an active gateway connection.",
+      text = if (isConnected) nativeString("Open the current Canvas surface to inspect or interact with it.") else nativeString("Canvas output needs an active gateway connection."),
       style = ClawTheme.type.body,
       color = ClawTheme.colors.textMuted,
       modifier = Modifier.padding(top = 6.dp),

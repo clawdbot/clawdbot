@@ -70,5 +70,5 @@ export function expectXaiFastToolStreamShaping(
   expect(capturedPayload).toMatchObject({ tool_stream: true });
   expect(capturedPayload).not.toHaveProperty("reasoning");
   const payloadTools = capturedPayload?.tools as XaiToolPayloadFunction[] | undefined;
-  expect(payloadTools?.[0]?.function).not.toHaveProperty("strict");
+  expect(payloadTools?.[0]?.function).toHaveProperty("strict", true);
 }

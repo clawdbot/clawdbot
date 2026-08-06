@@ -24,6 +24,7 @@ export default definePluginEntry({
       manager: createOpenShellSandboxBackendManager({
         pluginConfig,
       }),
+      resolveWorkdir: () => pluginConfig.remoteWorkspaceDir,
     });
   },
 });

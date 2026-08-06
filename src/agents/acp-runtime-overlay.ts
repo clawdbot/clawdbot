@@ -5,12 +5,11 @@ import { isAcpSessionKey } from "../routing/session-key.js";
  * Leaf type for agent runtime classification. Defined here so that
  * agent-runtime-metadata.ts can import applyAcpRuntimeOverlay without
  * creating a circular dependency (agent-runtime-metadata → acp-runtime-overlay
- * → agent-runtime-metadata).  agent-runtime-metadata.ts re-exports this type
- * so all existing consumers remain unaffected.
+ * → agent-runtime-metadata).
  */
 export type AgentRuntimeMetadata = {
   id: string;
-  source: "implicit" | "model" | "provider" | "session-key";
+  source: "implicit" | "model" | "provider" | "session" | "session-key";
 };
 
 /**

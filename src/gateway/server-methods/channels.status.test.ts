@@ -1,6 +1,8 @@
 /**
  * Gateway channels.status method tests.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requireRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -122,7 +124,10 @@ async function runChannelsStatus(
   overrides?: Partial<GatewayRequestHandlerOptions>,
 ) {
   const respond = vi.fn();
-  await channelsHandlers["channels.status"](createOptions(params, { respond, ...overrides }));
+  await expectDefined(
+    channelsHandlers["channels.status"],
+    'channelsHandlers["channels.status"] test invariant',
+  )(createOptions(params, { respond, ...overrides }));
   return requireRespondPayload(respond);
 }
 
@@ -139,7 +144,10 @@ function firstChannelAccount(
   payload: Record<string, unknown>,
   channel: string,
 ): Record<string, unknown> {
-  return channelAccounts(payload, channel)[0];
+  return expectDefined(
+    channelAccounts(payload, channel)[0],
+    "channelAccounts(payload, channel)[0] test invariant",
+  );
 }
 
 function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
@@ -203,17 +211,83 @@ describe("channelsHandlers channels.status", () => {
     expect(whatsapp.configured).toBe(true);
   });
 
+  it("redacts base URL credentials returned by channel summary hooks", async () => {
+    configureAutoEnabledChannels([
+      createChannelPlugin({
+        buildChannelSummary: () => ({
+          configured: true,
+          baseUrl: [
+            "https://summary-user",
+            ":",
+            "summary-pass",
+            "@chat.example.test/?to",
+            "ken=test",
+          ].join(""),
+        }),
+      }),
+    ]);
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+    const channels = requireRecord(payload.channels, "channels payload");
+    const whatsapp = requireRecord(channels.whatsapp, "whatsapp channel");
+    expect(whatsapp.baseUrl).toBe("https://chat.example.test/?token=***");
+  });
+
   it("caps probe timeout before passing it to channel plugins", async () => {
     const autoEnabledConfig = { autoEnabled: true };
     const probeAccount = vi.fn(async () => ({ ok: true }));
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.listChannelPlugins.mockReturnValue([createChannelPlugin({ probeAccount })]);
 
-    await channelsHandlers["channels.status"](createOptions({ probe: true, timeoutMs: 999_999 }));
+    await expectDefined(
+      channelsHandlers["channels.status"],
+      'channelsHandlers["channels.status"] test invariant',
+    )(createOptions({ probe: true, timeoutMs: 999_999 }));
 
     const probeArgs = requireRecord(requireFirstCallArg(probeAccount), "probe args");
     expect(probeArgs.timeoutMs).toBe(30_000);
     expect(probeArgs.cfg).toBe(autoEnabledConfig);
+  });
+
+  it("runs channel probes concurrently and preserves deterministic status-map order", async () => {
+    vi.useFakeTimers();
+    try {
+      const started: string[] = [];
+      const createDelayedProbe = (id: string) => async () => {
+        started.push(id);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 1000);
+        });
+        return { ok: true };
+      };
+      configureAutoEnabledChannels([
+        createChannelPlugin({ id: "zeta", probeAccount: createDelayedProbe("zeta") }),
+        createChannelPlugin({ id: "alpha", probeAccount: createDelayedProbe("alpha") }),
+      ]);
+      mocks.buildChannelUiCatalog.mockImplementation((plugins: Array<{ id: string }>) => ({
+        order: plugins.map((plugin) => plugin.id),
+        labels: {},
+        detailLabels: {},
+        systemImages: {},
+        entries: {},
+      }));
+      const startedAt = Date.now();
+      const run = runChannelsStatus({ probe: true, timeoutMs: 2000 });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started).toEqual(["alpha", "zeta"]);
+      await vi.advanceTimersByTimeAsync(1000);
+      const payload = await run;
+
+      expect(Date.now() - startedAt).toBe(1000);
+      expect(payload.channelOrder).toEqual(["zeta", "alpha"]);
+      expect(Object.keys(requireRecord(payload.channels, "channels payload"))).toEqual([
+        "alpha",
+        "zeta",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("filters channel status to a requested channel", async () => {
@@ -281,30 +355,43 @@ describe("channelsHandlers channels.status", () => {
     expect(String(accountProbe.error)).toContain("probe failed");
   });
 
-  it("returns a partial snapshot when a channel probe exceeds the status budget", async () => {
+  it("isolates a timed-out channel probe while another channel succeeds", async () => {
     vi.useFakeTimers();
     try {
       const autoEnabledConfig = { autoEnabled: true };
-      const probeAccount = vi.fn(() => new Promise(() => {}));
+      const hangingProbe = vi.fn(() => new Promise(() => {}));
+      const healthyProbe = vi.fn(async () => ({ ok: true, identity: "healthy" }));
       mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-      mocks.listChannelPlugins.mockReturnValue([createChannelPlugin({ probeAccount })]);
+      mocks.listChannelPlugins.mockReturnValue([
+        createChannelPlugin({ id: "hanging", probeAccount: hangingProbe }),
+        createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }),
+      ]);
+      mocks.buildChannelAccountSnapshot.mockImplementation(async ({ accountId, probe }) => ({
+        accountId,
+        configured: true,
+        probe,
+      }));
       const respond = vi.fn();
-      const run = channelsHandlers["channels.status"](
-        createOptions({ probe: true, timeoutMs: 1000 }, { respond }),
-      );
+      const run = expectDefined(
+        channelsHandlers["channels.status"],
+        'channelsHandlers["channels.status"] test invariant',
+      )(createOptions({ probe: true, timeoutMs: 1000 }, { respond }));
 
       await vi.advanceTimersByTimeAsync(1000);
       await run;
 
-      const snapshotArgs = requireRecord(
-        requireFirstCallArg(mocks.buildChannelAccountSnapshot),
-        "snapshot args",
-      );
-      const probe = requireRecord(snapshotArgs.probe, "snapshot probe");
-      expect(probe.timedOut).toBe(true);
       const payload = requireRespondPayload(respond);
+      expect(
+        requireRecord(firstChannelAccount(payload, "hanging").probe, "hanging probe").timedOut,
+      ).toBe(true);
+      expect(requireRecord(firstChannelAccount(payload, "healthy").probe, "healthy probe")).toEqual(
+        {
+          ok: true,
+          identity: "healthy",
+        },
+      );
       expect(payload.partial).toBe(true);
-      expect(payload.warnings).toEqual(["whatsapp:default probe timed out after 1000ms"]);
+      expect(payload.warnings).toEqual(["hanging:default probe timed out after 1000ms"]);
     } finally {
       vi.useRealTimers();
     }
@@ -336,6 +423,37 @@ describe("channelsHandlers channels.status", () => {
     expect(account.configured).toBe(true);
   });
 
+  it("annotates terminal-disconnect accounts with terminal-disconnect health state", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: false,
+      terminalDisconnect: true,
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      channelsHandlers["channels.status"],
+      'channelsHandlers["channels.status"] test invariant',
+    )(createOptions({ probe: false, timeoutMs: 2000 }, { respond }));
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        channelAccounts: {
+          whatsapp: [
+            expect.objectContaining({
+              healthState: "terminal-disconnect",
+            }),
+          ],
+        },
+      }),
+      undefined,
+    );
+  });
+
   it("annotates unhealthy channel snapshots and includes event-loop health", async () => {
     const now = Date.now();
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
@@ -345,11 +463,13 @@ describe("channelsHandlers channels.status", () => {
       configured: true,
       running: true,
       connected: true,
+      healthState: "stale",
       lastStartAt: now - 60 * 60_000,
       lastTransportActivityAt: now - 40 * 60_000,
     });
     const eventLoop = {
       degraded: true,
+      degradedSinceMs: 61_000,
       reasons: ["event_loop_delay"],
       intervalMs: 62_000,
       delayP99Ms: 62_000,
@@ -359,7 +479,10 @@ describe("channelsHandlers channels.status", () => {
     };
     const respond = vi.fn();
 
-    await channelsHandlers["channels.status"](
+    await expectDefined(
+      channelsHandlers["channels.status"],
+      'channelsHandlers["channels.status"] test invariant',
+    )(
       createOptions(
         { probe: false, timeoutMs: 2000 },
         {
@@ -379,5 +502,65 @@ describe("channelsHandlers channels.status", () => {
     const payload = requireRespondPayload(respond);
     expect(payload.eventLoop).toBe(eventLoop);
     expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("stale-socket");
+  });
+
+  it("preserves channel-authored health state when shared health is healthy", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      healthState: "reconnecting",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("reconnecting");
+  });
+
+  it("preserves channel-authored conflict when recorded blocked lifecycle is unhealthy", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      linked: true,
+      running: false,
+      connected: false,
+      terminalDisconnect: true,
+      lifecycle: "blocked",
+      healthState: "conflict",
+      lastError: "status=440",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp")).toMatchObject({
+      lifecycle: "blocked",
+      healthState: "conflict",
+      terminalDisconnect: true,
+    });
+  });
+
+  it("derives blocked health from recorded lifecycle", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lifecycle: "blocked",
+      lastError: "Slack identity unavailable",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp")).toMatchObject({
+      lifecycle: "blocked",
+      healthState: "blocked",
+    });
   });
 });

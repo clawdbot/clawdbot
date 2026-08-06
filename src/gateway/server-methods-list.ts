@@ -11,7 +11,7 @@ type GatewayMethodChannelPlugin = {
 };
 
 /** Lists core methods intentionally advertised to gateway clients. */
-export function listCoreGatewayMethods(): string[] {
+function listCoreGatewayMethods(): string[] {
   return listCoreAdvertisedGatewayMethodNames();
 }
 
@@ -40,10 +40,17 @@ export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
   "chat",
+  "ui.command",
+  "session.approval",
   "session.message",
+  "session.observer",
   "session.operation",
+  "session.sharing",
+  "session.suggestion",
+  "session.typing",
   "session.tool",
   "sessions.changed",
+  "controlUi.sessionPullRequests.changed",
   "presence",
   "tick",
   "talk.mode",
@@ -52,16 +59,28 @@ export const GATEWAY_EVENTS = [
   "health",
   "heartbeat",
   "cron",
+  "task",
+  "task.suggestion",
   "node.pair.requested",
   "node.pair.resolved",
+  "node.presence",
+  "node.invoke.cancel",
+  "node.invoke.input",
   "node.invoke.request",
   "device.pair.requested",
   "device.pair.resolved",
+  "skills.changed",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "question.requested",
+  "question.resolved",
   "plugin.approval.requested",
   "plugin.approval.resolved",
+  "openclaw.approval.requested",
+  "openclaw.approval.resolved",
+  "terminal.data",
+  "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

@@ -102,39 +102,17 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
-
-  const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
-  if (topicMatch) {
-    const messageThreadId = parseStrictNonNegativeInteger(topicMatch[2]);
-    if (messageThreadId === undefined) {
-      return {
-        chatId: normalized,
-        chatType: resolveTelegramChatType(normalized),
-      };
+  const match = /^(.+?):topic:(\d+)$/.exec(normalized) ?? /^(.+):(\d+)$/.exec(normalized);
+  if (match) {
+    const chatId = match[1];
+    const threadIdText = match[2];
+    if (chatId !== undefined && threadIdText !== undefined) {
+      const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
+      if (messageThreadId !== undefined) {
+        return { chatId, messageThreadId, chatType: resolveTelegramChatType(chatId) };
+      }
     }
-    return {
-      chatId: topicMatch[1],
-      messageThreadId,
-      chatType: resolveTelegramChatType(topicMatch[1]),
-    };
   }
-
-  const colonMatch = /^(.+):(\d+)$/.exec(normalized);
-  if (colonMatch) {
-    const messageThreadId = parseStrictNonNegativeInteger(colonMatch[2]);
-    if (messageThreadId === undefined) {
-      return {
-        chatId: normalized,
-        chatType: resolveTelegramChatType(normalized),
-      };
-    }
-    return {
-      chatId: colonMatch[1],
-      messageThreadId,
-      chatType: resolveTelegramChatType(colonMatch[1]),
-    };
-  }
-
   return {
     chatId: normalized,
     chatType: resolveTelegramChatType(normalized),

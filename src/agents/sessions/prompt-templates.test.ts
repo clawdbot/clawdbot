@@ -1,33 +1,49 @@
-// Prompt template tests cover command argument parsing and bounded positional
-// substitutions for agent prompt snippets.
-import { describe, expect, it } from "vitest";
-import { parseCommandArgs, substituteArgs } from "./prompt-templates.js";
+// Prompt template tests cover markdown discovery and fallback metadata.
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { loadPromptTemplates } from "./prompt-templates.js";
 
-describe("prompt template argument substitution", () => {
-  it("parses quoted and multiline arguments", () => {
-    expect(parseCommandArgs(`alpha "beta gamma"\ndelta 'echo one two'`)).toEqual([
-      "alpha",
-      "beta gamma",
-      "delta",
-      "echo one two",
-    ]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("loadPromptTemplates", () => {
+  it("keeps fallback descriptions on a UTF-16 boundary", async () => {
+    const root = tempDirs.make("openclaw-prompt-templates-");
+    const promptsDir = join(root, "prompts");
+    await mkdir(promptsDir, { recursive: true });
+    await writeFile(join(promptsDir, "emoji.md"), `${"a".repeat(59)}🚀tail\n`, "utf-8");
+
+    const templates = loadPromptTemplates({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      promptPaths: [promptsDir],
+      includeDefaults: false,
+    });
+
+    expect(templates).toHaveLength(1);
+    expect(templates[0]?.description).toBe(`${"a".repeat(59)}...`);
   });
 
-  it("rejects unsafe positional placeholders", () => {
-    expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
-  });
+  it("preserves dash-prefixed Markdown as prompt content", async () => {
+    const root = tempDirs.make("openclaw-prompt-templates-");
+    const promptsDir = join(root, "prompts");
+    await mkdir(promptsDir, { recursive: true });
+    const content = "----\nname: bogus\ndescription: must remain Markdown\n---\n# Body\n";
+    await writeFile(join(promptsDir, "dash-prefix.md"), content, "utf-8");
 
-  it("rejects unsafe slice starts and lengths", () => {
-    // Huge indices should fail closed instead of coercing into surprising array
-    // slices or allocating large intermediate ranges.
-    const args = ["alpha", "beta", "gamma"];
+    const templates = loadPromptTemplates({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      promptPaths: [promptsDir],
+      includeDefaults: false,
+    });
 
-    expect(substituteArgs("${@:9007199254740992}", args)).toBe("");
-    expect(substituteArgs("${@:1:9007199254740992}", args)).toBe("");
-  });
-
-  it("preserves zero slice compatibility", () => {
-    expect(substituteArgs("${@:0:0}", ["alpha", "beta"])).toBe("");
-    expect(substituteArgs("${@:0:1}", ["alpha", "beta"])).toBe("alpha");
+    expect(templates).toHaveLength(1);
+    expect(templates[0]).toMatchObject({
+      name: "dash-prefix",
+      description: "----",
+      content,
+    });
   });
 });

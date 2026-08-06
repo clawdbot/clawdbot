@@ -1,0 +1,46 @@
+title: Telegram whoami command reply
+
+scenario:
+  id: telegram-whoami-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - telegram.built-in-commands
+  objective: Verify Telegram command identity includes the active channel context.
+  successCriteria:
+    - The whoami command returns an identity block.
+    - The reply names Telegram as the active channel on Telegram-backed transports.
+  codeRefs:
+    - src/auto-reply/reply/commands-whoami.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    kind: flow
+    channel: telegram
+    summary: Run whoami and verify channel identity context.
+
+flow:
+  steps:
+    - name: whoami includes channel identity
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /whoami
+            nativeCommand: { name: whoami }
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: Identity
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "reply.text.includes(`Channel: ${transport.id === 'qa-channel' ? 'qa-channel' : 'telegram'}`)"
+            message:
+              expr: "`whoami reply missing channel identity: ${reply.text}`"
+      detailsExpr: reply.text

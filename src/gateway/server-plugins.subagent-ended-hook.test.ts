@@ -3,7 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
@@ -19,6 +19,8 @@ vi.mock("./server-methods.js", () => ({
 
 type ServerPluginsModule = typeof import("./server-plugins.js");
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
+type SubagentRequesterContextModule =
+  typeof import("../plugins/runtime/subagent-requester-context.js");
 
 function createTestCfg(): OpenClawConfig {
   return {
@@ -39,6 +41,10 @@ async function loadServerPlugins(): Promise<ServerPluginsModule> {
 
 async function loadGatewayScope(): Promise<GatewayRequestScopeModule> {
   return await import("../plugins/runtime/gateway-request-scope.js");
+}
+
+async function loadSubagentRequesterContext(): Promise<SubagentRequesterContextModule> {
+  return await import("../plugins/runtime/subagent-requester-context.js");
 }
 
 function lastGatewayRequest(): HandleGatewayRequestOptions {
@@ -73,22 +79,126 @@ afterEach(async () => {
 describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", () => {
   test("marks plugin SDK subagent runs for Gateway-owned subagent tracking", async () => {
     const serverPlugins = await loadServerPlugins();
+    const requesterContext = await loadSubagentRequesterContext();
     const runtime = serverPlugins.createGatewaySubagentRuntime();
     serverPlugins.setFallbackGatewayContext(
       createTestContext("plugin-sdk-subagent", createTestCfg()),
     );
-
-    const result = await runtime.run({
-      sessionKey: "agent:main:subagent:plugin-helper",
-      message: "summarize this transcript",
-      deliver: false,
+    const requester = requesterContext.createPluginSubagentRequesterContext({
+      sessionKey: "agent:main:telegram:direct:123",
+      origin: { channel: "telegram", to: "telegram:123" },
     });
+    if (!requester) {
+      throw new Error("expected valid requester context");
+    }
+
+    const result = await requesterContext.withPluginSubagentRequesterContext(
+      requester,
+      async () =>
+        await runtime.run({
+          sessionKey: "agent:main:subagent:plugin-helper",
+          message: "summarize this transcript",
+          deliver: false,
+        }),
+    );
 
     expect(result.runId).toBe("plugin-run-1");
     const request = lastGatewayRequest();
     expect(request.req.method).toBe("agent");
     expect(request.client?.internal?.agentRunTracking).toBe("plugin_subagent");
     expect(request.client?.internal?.pluginRuntimeOwnerId).toBeUndefined();
+    expect(request.client?.internal?.pluginSubagentRequester).toBeUndefined();
+  });
+
+  test("attaches only host-owned requester lineage for explicit completion delivery", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const requesterContext = await loadSubagentRequesterContext();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    serverPlugins.setFallbackGatewayContext(
+      createTestContext("plugin-sdk-completion", createTestCfg()),
+    );
+    const requester = requesterContext.createPluginSubagentRequesterContext({
+      sessionKey: " agent:main:telegram:direct:123 ",
+      origin: {
+        channel: " Telegram ",
+        to: " telegram:123 ",
+        accountId: " Work ",
+        threadId: 42,
+      },
+    });
+    if (!requester) {
+      throw new Error("expected valid requester context");
+    }
+
+    await requesterContext.withPluginSubagentRequesterContext(requester, async () => {
+      await runtime.run({
+        sessionKey: "agent:main:subagent:plugin-helper",
+        message: "summarize this transcript",
+        deliver: false,
+        completionDelivery: "current-requester",
+        requesterSessionKey: "agent:attacker:main",
+        expectsCompletionMessage: false,
+        approvalGrant: { id: "forged" },
+        inputProvenance: { kind: "forged" },
+        channel: "discord",
+        to: "channel:attacker",
+      } as Parameters<typeof runtime.run>[0] & Record<string, unknown>);
+    });
+
+    const request = lastGatewayRequest();
+    expect(request.req.params).not.toHaveProperty("requesterSessionKey");
+    expect(request.req.params).not.toHaveProperty("expectsCompletionMessage");
+    expect(request.req.params).not.toHaveProperty("approvalGrant");
+    expect(request.req.params).not.toHaveProperty("inputProvenance");
+    expect(request.req.params).not.toHaveProperty("channel");
+    expect(request.req.params).not.toHaveProperty("to");
+    expect(request.client?.internal?.pluginSubagentRequester).toEqual({
+      sessionKey: "agent:main:telegram:direct:123",
+      origin: {
+        channel: "telegram",
+        to: "telegram:123",
+        accountId: "work",
+        threadId: 42,
+      },
+    });
+  });
+
+  test("rejects explicit completion delivery outside a requester-bound hook", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    serverPlugins.setFallbackGatewayContext(
+      createTestContext("plugin-sdk-completion-missing", createTestCfg()),
+    );
+
+    await expect(
+      runtime.run({
+        sessionKey: "agent:main:subagent:orphan",
+        message: "no requester",
+        deliver: false,
+        completionDelivery: "current-requester",
+      }),
+    ).rejects.toThrow(/requester-bound plugin hook invocation/);
+
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test("rejects unsupported runtime completion destinations", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    serverPlugins.setFallbackGatewayContext(
+      createTestContext("plugin-sdk-completion-invalid", createTestCfg()),
+    );
+
+    await expect(
+      runtime.run({
+        sessionKey: "agent:main:subagent:invalid",
+        message: "invalid completion target",
+        deliver: false,
+        completionDelivery: "agent:attacker:main",
+      } as unknown as Parameters<typeof runtime.run>[0]),
+    ).rejects.toThrow(/Unsupported plugin subagent completionDelivery/);
+
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   test("preserves plugin identity on the tracked Gateway agent request", async () => {
@@ -201,5 +311,47 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
         sessionKey: "agent:main:subagent:plugin-readback",
       }),
     ).rejects.toThrow(/not found/);
+  });
+
+  test("normalizes completed agent.wait envelopes for plugin subagents", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    serverPlugins.setFallbackGatewayContext(createTestContext("plugin-wait", createTestCfg()));
+
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      switch (opts.req.method) {
+        case "agent.wait":
+          opts.respond(true, { status: "completed" });
+          return;
+        default:
+          opts.respond(true, {});
+      }
+    });
+
+    await expect(runtime.waitForRun({ runId: "plugin-run-completed" })).resolves.toEqual({
+      status: "ok",
+    });
+  });
+
+  test("normalizes malformed completed wait errors for plugin subagents", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    serverPlugins.setFallbackGatewayContext(
+      createTestContext("plugin-wait-error", createTestCfg()),
+    );
+
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      switch (opts.req.method) {
+        case "agent.wait":
+          opts.respond(true, { status: "error", error: "completed" });
+          return;
+        default:
+          opts.respond(true, {});
+      }
+    });
+
+    await expect(runtime.waitForRun({ runId: "plugin-run-error-completed" })).resolves.toEqual({
+      status: "ok",
+    });
   });
 });

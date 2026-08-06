@@ -1,5 +1,8 @@
 // Covers Codex-native web search activation and payload projection.
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   buildCodexNativeWebSearchTool,
   describeCodexNativeWebSearch,
@@ -111,6 +114,162 @@ describe("resolveCodexNativeSearchActivation", () => {
 
     expect(result.state).toBe("managed_only");
     expect(result.inactiveReason).toBe("globally_disabled");
+  });
+
+  it("keeps native injection disabled when the session disables web search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: baseConfig,
+      webSearchEnabled: false,
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("globally_disabled");
+  });
+
+  it("keeps native search inactive when the agent denies web_search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["web_search"] },
+            },
+          ],
+        },
+      },
+      agentId: "main",
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when the agent denies group:web via session key", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["group:web"] },
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:main",
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when provider policy denies web_search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        tools: {
+          ...baseConfig.tools,
+          byProvider: {
+            "gateway/gpt-5.5": { deny: ["web_search"] },
+          },
+        },
+      },
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when sender policy denies web_search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        tools: {
+          ...baseConfig.tools,
+          toolsBySender: {
+            "channel:msteams:alice": { deny: ["web_search"] },
+          },
+        },
+      },
+      messageProvider: "teams",
+      senderId: "alice",
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when sandbox policy denies group:web", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: baseConfig,
+      sandboxToolPolicy: { deny: ["group:web"] },
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
+  });
+
+  it("keeps native search inactive when inherited session policy denies web_search", async () => {
+    const agentId = `native-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-native-inherited-deny-${agentId}`,
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry(
+      {
+        sessionKey,
+        storePath,
+      },
+      {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolDeny: ["web_search"],
+      },
+    );
+
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        session: {
+          store: storePath,
+        },
+      },
+      sessionKey,
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("tool_policy_denied");
   });
 });
 
@@ -228,6 +387,28 @@ describe("shouldSuppressManagedWebSearchTool", () => {
         config: baseConfig,
         modelProvider: "openai",
         modelApi: "openai-responses",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress managed web_search when native search is blocked by policy", () => {
+    expect(
+      shouldSuppressManagedWebSearchTool({
+        config: {
+          ...baseConfig,
+          agents: {
+            list: [
+              {
+                id: "main",
+                tools: { deny: ["group:web"] },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        modelProvider: "gateway",
+        modelApi: "openai-chatgpt-responses",
+        modelId: "gpt-5.5",
       }),
     ).toBe(false);
   });

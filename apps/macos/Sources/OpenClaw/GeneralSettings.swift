@@ -1,7 +1,7 @@
 import AppKit
+import KeyboardShortcuts
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import OpenClawKit
 import SwiftUI
 
@@ -16,6 +16,7 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = true
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -25,6 +26,7 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var computerControlPermissions = ComputerControlPermissionSnapshot.probe()
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -59,6 +61,19 @@ struct GeneralSettings: View {
                 CanvasManager.shared.hideAll()
             }
         }
+        .onChange(of: self.state.quickChatEnabled) { _, enabled in
+            QuickChatController.shared.setEnabled(enabled)
+        }
+        .onChange(of: self.computerControlEnabled) { _, _ in
+            // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
+            self.state.applyPeekabooBridgeHostState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.refreshComputerControlPermissions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawPermissionsChanged)) { _ in
+            self.refreshComputerControlPermissions()
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
 
@@ -73,19 +88,37 @@ struct GeneralSettings: View {
             SettingsCardGroup("App") {
                 SettingsCardToggleRow(
                     title: "Launch at login",
-                    subtitle: "Automatically start OpenClaw after you sign in.",
+                    subtitle: self.state.bundleLocationAllowsPersistentIntegration
+                        ? "Automatically start OpenClaw after you sign in."
+                        : "Move OpenClaw to Applications before enabling launch at login.",
                     binding: self.$state.launchAtLogin)
+                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",
-                    subtitle: "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
+                    subtitle: """
+                    Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.
+                    """,
                     binding: self.$state.showDockIcon)
 
                 SettingsCardToggleRow(
                     title: "Play menu bar icon animations",
                     subtitle: "Enable idle blinks and wiggles on the status icon.",
-                    binding: self.$state.iconAnimationsEnabled,
+                    binding: self.$state.iconAnimationsEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Quick Chat",
+                    subtitle: "Show a floating composer for quick messages, summoned with a global shortcut.",
+                    binding: self.$state.quickChatEnabled)
+
+                SettingsCardRow(
+                    title: "Quick Chat shortcut",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main thread.",
                     showsDivider: false)
+                {
+                    KeyboardShortcuts.Recorder(for: .toggleQuickChat)
+                }
+                .disabled(!self.state.quickChatEnabled)
             }
 
             SettingsCardGroup("Capabilities") {
@@ -100,10 +133,63 @@ struct GeneralSettings: View {
                     binding: self.$cameraEnabled)
 
                 SettingsCardToggleRow(
+                    title: "Allow Computer Control",
+                    subtitle: """
+                    Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can \
+                    move the pointer, click, and type without per-action confirmation. High risk.
+                    """,
+                    binding: self.$computerControlEnabled)
+
+                SettingsCardRow(
+                    title: "Computer Control access",
+                    subtitle: .verbatim(self.computerControlPermissions.diagnostic.detailText))
+                {
+                    Label {
+                        Text(verbatim: self.computerControlPermissions.diagnostic.statusText)
+                    } icon: {
+                        Image(systemName: self.computerControlPermissionIcon)
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(self.computerControlPermissionColor)
+                }
+
+                SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
-                    subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-                    binding: self.$state.peekabooBridgeEnabled,
+                    subtitle: """
+                    Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. \
+                    Requires Computer Control; otherwise run Peekaboo's own Mac app.
+                    """,
+                    binding: self.peekabooBridgeBinding,
                     showsDivider: false)
+                    .disabled(!self.computerControlEnabled)
+            }
+
+            SettingsCardGroup("Browser") {
+                SettingsCardRow(
+                    title: "Browser login",
+                    subtitle: "Copy cookies from a Chrome-family profile into an isolated managed profile.",
+                    showsDivider: false)
+                {
+                    Button("Import…") {
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.state.connectionMode != .local)
+                }
             }
 
             SettingsCardGroup("Developer") {
@@ -132,26 +218,39 @@ struct GeneralSettings: View {
     }
 
     private var openClawStatusPanel: some View {
-        HStack(alignment: .center, spacing: 14) {
+        let presentation = GeneralStatusPresentation.resolve(
+            mode: self.state.connectionMode,
+            isPaused: self.state.isPaused,
+            controlState: ControlChannel.shared.state)
+
+        return HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(self.state.isPaused ? Color.orange.opacity(0.18) : Color.green.opacity(0.18))
-                Image(systemName: self.state.isPaused ? "pause.fill" : "checkmark")
+                    .fill(self.statusColor(presentation.tone).opacity(0.18))
+                Image(systemName: presentation.symbolName)
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(self.state.isPaused ? .orange : .green)
+                    .foregroundStyle(self.statusColor(presentation.tone))
             }
             .frame(width: 42, height: 42)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(self.state.isPaused ? "OpenClaw paused" : "OpenClaw active")
+                Text(verbatim: presentation.title)
                     .font(.headline)
-                Text(self.generalStatusSubtitle)
+                Text(verbatim: presentation.subtitle)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 20)
+
+            if presentation.showsConnectionAction {
+                Button("Open Connection Settings") {
+                    AppNavigationActions.openSettings(tab: .connection)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
 
             Toggle("OpenClaw active", isOn: self.activeBinding)
                 .labelsHidden()
@@ -166,17 +265,11 @@ struct GeneralSettings: View {
         }
     }
 
-    private var generalStatusSubtitle: String {
-        if self.state.isPaused {
-            return "Gateway work is paused; incoming messages will wait."
-        }
-        switch self.state.connectionMode {
-        case .local:
-            return "Processing messages through the local Gateway on this Mac."
-        case .remote:
-            return "Connected to a remote Gateway configuration."
-        case .unconfigured:
-            return "Ready to run after you choose a Gateway connection."
+    private func statusColor(_ tone: GatewayConnectionTone) -> Color {
+        switch tone {
+        case .healthy: .green
+        case .transient: .orange
+        case .attention: .red
         }
     }
 
@@ -188,6 +281,14 @@ struct GeneralSettings: View {
 
             self.connectionStatusPanel
             self.gatewayModeGroup
+
+            if self.state.connectionMode != .remote,
+               self.state.gatewayConfigConflict != nil
+            {
+                SettingsCardGroup("Remote Access") {
+                    GatewayConfigConflictRecoveryView(state: self.state)
+                }
+            }
 
             switch self.state.connectionMode {
             case .unconfigured:
@@ -206,15 +307,44 @@ struct GeneralSettings: View {
             set: { self.state.isPaused = !$0 })
     }
 
+    /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
+    /// so the row matches the host that actually runs instead of a standalone toggle.
+    private var peekabooBridgeBinding: Binding<Bool> {
+        Binding(
+            get: { self.computerControlEnabled && self.state.peekabooBridgeEnabled },
+            set: { self.state.peekabooBridgeEnabled = $0 })
+    }
+
     private func updateActiveWork(active: Bool) {
         guard !self.isPreview else { return }
         if active {
+            self.refreshComputerControlPermissions()
             self.refreshGatewayStatus()
             if self.page == .connection {
                 self.gatewayDiscovery.start()
             }
         } else {
             self.gatewayDiscovery.stop()
+        }
+    }
+
+    private func refreshComputerControlPermissions() {
+        guard self.page == .general, self.isActive, !self.isPreview else { return }
+        self.computerControlPermissions = .probe()
+    }
+
+    private var computerControlPermissionIcon: String {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: "checkmark.circle.fill"
+        case .missing: "exclamationmark.circle.fill"
+        case .accessibilityGrantMayBeStale: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var computerControlPermissionColor: Color {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: .green
+        case .missing, .accessibilityGrantMayBeStale: .orange
         }
     }
 
@@ -240,7 +370,9 @@ struct GeneralSettings: View {
 
             Spacer(minLength: 18)
 
-            if let ping = ControlChannel.shared.lastPingMs {
+            if ControlChannel.shared.state == .connected,
+               let ping = ControlChannel.shared.lastPingMs
+            {
                 Text("\(Int(ping)) ms")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8)
@@ -317,7 +449,9 @@ struct GeneralSettings: View {
             if self.state.connectionMode == .unconfigured {
                 SettingsCardRow(
                     title: "Setup needed",
-                    subtitle: "Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.",
+                    subtitle: """
+                    Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.
+                    """,
                     showsDivider: false)
                 {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -355,6 +489,7 @@ struct GeneralSettings: View {
                     self.remoteDirectRow
                 }
                 self.remoteTokenRow
+                GatewayConfigConflictRecoveryView(state: self.state)
             }
 
             SettingsCardGroup("Discovery & Status") {
@@ -403,7 +538,10 @@ struct GeneralSettings: View {
     }
 
     private var controlChannelRow: some View {
-        SettingsCardRow(title: "Control channel", subtitle: self.controlChannelSubtitle) {
+        SettingsCardRow(
+            title: "Control channel",
+            subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim))
+        {
             Text(self.controlStatusLine)
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
@@ -537,7 +675,7 @@ struct GeneralSettings: View {
             SettingsCardRow(
                 title: "Gateway token",
                 subtitle: "Used when the remote gateway requires token auth.",
-                showsDivider: false)
+                showsDivider: self.state.gatewayConfigConflict != nil)
             {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
@@ -572,12 +710,7 @@ struct GeneralSettings: View {
     }
 
     private var controlStatusLine: String {
-        switch ControlChannel.shared.state {
-        case .connected: "Connected"
-        case .connecting: "Connecting…"
-        case .disconnected: "Disconnected"
-        case let .degraded(msg): msg
-        }
+        GatewayConnectionPresentation(state: ControlChannel.shared.state).statusLine
     }
 
     @ViewBuilder
@@ -666,9 +799,7 @@ struct GeneralSettings: View {
 
     private func refreshGatewayStatus() {
         Task {
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
+            let status = await GatewayEnvironment.check()
             self.gatewayStatus = status
         }
     }
@@ -679,83 +810,6 @@ struct GeneralSettings: View {
         case .checking: .secondary
         case .missingNode, .missingGateway, .incompatible, .error: .orange
         }
-    }
-
-    private var healthCard: some View {
-        let snapshot = self.healthStore.snapshot
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(self.healthStore.state.tint)
-                    .frame(width: 10, height: 10)
-                Text(self.healthStore.summaryLine)
-                    .font(.callout.weight(.semibold))
-            }
-
-            if let snap = snapshot {
-                let linkId = snap.channelOrder?.first(where: {
-                    if let summary = snap.channels[$0] { return summary.linked != nil }
-                    return false
-                }) ?? snap.channels.keys.first(where: {
-                    if let summary = snap.channels[$0] { return summary.linked != nil }
-                    return false
-                })
-                let linkLabel =
-                    linkId.flatMap { snap.channelLabels?[$0] } ??
-                    linkId?.capitalized ??
-                    "Link channel"
-                let linkAge = linkId.flatMap { snap.channels[$0]?.authAgeMs }
-                Text("\(linkLabel) auth age: \(healthAgeString(linkAge))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Session store: \(snap.sessions.path) (\(snap.sessions.count) entries)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let recent = snap.sessions.recent.first {
-                    let lastActivity = recent.updatedAt != nil
-                        ? relativeAge(from: Date(timeIntervalSince1970: (recent.updatedAt ?? 0) / 1000))
-                        : "unknown"
-                    Text("Last activity: \(recent.key) \(lastActivity)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("Last check: \(relativeAge(from: self.healthStore.lastSuccess))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let error = self.healthStore.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Text("Health check pending…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 12) {
-                Button {
-                    Task { await self.healthStore.refresh(onDemand: true) }
-                } label: {
-                    if self.healthStore.isRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Run Health Check", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(self.healthStore.isRefreshing)
-
-                Divider().frame(height: 18)
-
-                Button {
-                    self.revealLogs()
-                } label: {
-                    Label("Reveal Logs", systemImage: "doc.text.magnifyingglass")
-                }
-            }
-        }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(10)
     }
 }
 
@@ -834,14 +888,9 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
     }
-}
-
-private func healthAgeString(_ ms: Double?) -> String {
-    guard let ms else { return "unknown" }
-    return msToAge(ms)
 }
 
 #if DEBUG

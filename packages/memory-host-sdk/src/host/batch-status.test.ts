@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
+  throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
 } from "./batch-status.js";
 
@@ -31,6 +32,21 @@ describe("batch-status helpers", () => {
         readError: async () => "bad input",
       }),
     ).rejects.toThrow("voyage batch b2 failed: bad input");
+  });
+
+  it("reads a completed error file before requiring successful output", async () => {
+    await expect(
+      throwIfBatchCompletionError({
+        provider: "openai",
+        status: {
+          id: "b3",
+          status: "completed",
+          output_file_id: null,
+          error_file_id: "err-file",
+        },
+        readError: async () => "all requests failed",
+      }),
+    ).rejects.toThrow("openai batch b3 completed: all requests failed");
   });
 
   it("returns completed result directly without waiting", async () => {

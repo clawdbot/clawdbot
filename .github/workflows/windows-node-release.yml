@@ -8,9 +8,12 @@ on:
         required: true
         type: string
       windows_node_tag:
-        description: openclaw-windows-node release tag to promote, or latest
+        description: Exact openclaw-windows-node release tag to promote, for example v0.6.3
         required: true
-        default: latest
+        type: string
+      expected_installer_digests:
+        description: Compact JSON map of installer asset names to pinned source sha256 digests
+        required: true
         type: string
 
 permissions:
@@ -31,52 +34,138 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
             throw "Invalid OpenClaw release tag: $env:RELEASE_TAG"
           }
-          if ($env:WINDOWS_NODE_TAG -ne "latest" -and $env:WINDOWS_NODE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$') {
-            throw "Invalid openclaw-windows-node release tag: $env:WINDOWS_NODE_TAG"
+          $stableRelease = -not (
+            $env:RELEASE_TAG.Contains("-alpha.") -or
+            $env:RELEASE_TAG.Contains("-beta.")
+          )
+          if ($env:WINDOWS_NODE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$') {
+            throw "windows_node_tag must be an explicit openclaw-windows-node release tag, not latest: $env:WINDOWS_NODE_TAG"
           }
-          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY | Out-Null
+
+          try {
+            $expectedDigests = $env:EXPECTED_INSTALLER_DIGESTS | ConvertFrom-Json -AsHashtable
+          } catch {
+            throw "expected_installer_digests must be a JSON object: $_"
+          }
+          # Add future signed installer names, such as MSIX x64/ARM64, here.
+          $requiredInstallerNames = @(
+            "OpenClawCompanion-Setup-x64.exe",
+            "OpenClawCompanion-Setup-arm64.exe"
+          )
+          $allowedTargetCompanionAssetNames = @(
+            $requiredInstallerNames
+            "OpenClawCompanion-SHA256SUMS.txt"
+          )
+          if ($expectedDigests.Count -ne $requiredInstallerNames.Count) {
+            throw "expected_installer_digests must contain exactly the current installer asset contract."
+          }
+          foreach ($name in $requiredInstallerNames) {
+            $digest = [string]$expectedDigests[$name]
+            if ($digest -notmatch '^sha256:[A-Fa-f0-9]{64}$') {
+              throw "expected_installer_digests is missing a valid pinned digest for $name."
+            }
+          }
+
+          $targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets,url | ConvertFrom-Json
+          if ($targetRelease.tagName -ne $env:RELEASE_TAG) {
+            throw "OpenClaw release tag mismatch: expected $env:RELEASE_TAG, got $($targetRelease.tagName)"
+          }
+          $unexpectedTargetCompanionAssets = @(
+            $targetRelease.assets |
+              Where-Object {
+                $_.name.StartsWith("OpenClawCompanion-") -and
+                $_.name -notin $allowedTargetCompanionAssetNames
+              } |
+              ForEach-Object name |
+              Sort-Object
+          )
+          if ($unexpectedTargetCompanionAssets.Count -ne 0) {
+            throw "Target OpenClaw release contains unexpected OpenClawCompanion assets before upload: $($unexpectedTargetCompanionAssets -join ', ')"
+          }
+
+          $sourceRelease = gh release view $env:WINDOWS_NODE_TAG --repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,assets,url | ConvertFrom-Json
+          if ($sourceRelease.tagName -ne $env:WINDOWS_NODE_TAG) {
+            throw "Windows source release tag mismatch: expected $env:WINDOWS_NODE_TAG, got $($sourceRelease.tagName)"
+          }
+          if ($sourceRelease.isDraft) {
+            throw "Windows source release must be published: $($sourceRelease.url)"
+          }
+          if ($stableRelease -and $sourceRelease.isPrerelease) {
+            throw "Stable OpenClaw releases require a non-prerelease Windows source release: $($sourceRelease.url)"
+          }
+          foreach ($name in $requiredInstallerNames) {
+            $sourceAssets = @($sourceRelease.assets | Where-Object name -eq $name)
+            if ($sourceAssets.Count -ne 1) {
+              throw "Windows source release must contain exactly one required asset $name; found $($sourceAssets.Count)."
+            }
+            if ([string]$sourceAssets[0].digest -ne [string]$expectedDigests[$name]) {
+              throw "Windows source release asset digest does not match the pinned digest: $name"
+            }
+          }
 
       - name: Download Windows Hub release installers
         shell: pwsh
         env:
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+          EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $tagArgs = @()
-          if ($env:WINDOWS_NODE_TAG -ne "latest") {
-            $tagArgs += $env:WINDOWS_NODE_TAG
-          }
-          gh release download @tagArgs `
-            --repo openclaw/openclaw-windows-node `
-            --pattern "OpenClawCompanion-Setup-*.exe" `
-            --dir dist
-
-          $expected = @(
-            "dist/OpenClawCompanion-Setup-x64.exe",
-            "dist/OpenClawCompanion-Setup-arm64.exe"
+          # Add future signed installer patterns, such as MSIX x64/ARM64, here.
+          # Every matched installer is signature-checked, checksummed, and promoted.
+          $installerPatterns = @(
+            "OpenClawCompanion-Setup-x64.exe",
+            "OpenClawCompanion-Setup-arm64.exe"
           )
-          foreach ($file in $expected) {
-            if (-not (Test-Path -LiteralPath $file)) {
-              throw "Missing expected Windows installer: $file"
+          $downloadArgs = @(
+            $env:WINDOWS_NODE_TAG,
+            "--repo", "openclaw/openclaw-windows-node",
+            "--dir", "dist"
+          )
+          foreach ($pattern in $installerPatterns) {
+            $downloadArgs += @("--pattern", $pattern)
+          }
+          gh release download @downloadArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download Windows release assets from $env:WINDOWS_NODE_TAG."
+          }
+
+          foreach ($pattern in $installerPatterns) {
+            $patternMatches = @(Get-ChildItem -LiteralPath dist -File | Where-Object Name -Like $pattern)
+            if ($patternMatches.Count -ne 1) {
+              throw "Expected exactly one Windows installer matching '$pattern', found $($patternMatches.Count)."
+            }
+          }
+
+          $expectedDigests = $env:EXPECTED_INSTALLER_DIGESTS | ConvertFrom-Json -AsHashtable
+          foreach ($file in Get-ChildItem -LiteralPath dist -File) {
+            $expectedHash = ([string]$expectedDigests[$file.Name]) -replace '^sha256:', ''
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+            if ($actualHash -ne $expectedHash) {
+              throw "Downloaded Windows source asset does not match pinned digest: $($file.Name)"
             }
           }
 
       - name: Verify Authenticode signatures
         shell: pwsh
         run: |
-          Get-ChildItem -LiteralPath dist -Filter "OpenClawCompanion-Setup-*.exe" | ForEach-Object {
+          $expectedSignerSubject = "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US"
+          Get-ChildItem -LiteralPath dist -File | ForEach-Object {
             $signature = Get-AuthenticodeSignature -LiteralPath $_.FullName
             if ($signature.Status -ne "Valid") {
               throw "$($_.Name) Authenticode signature was $($signature.Status)."
             }
             if (-not $signature.SignerCertificate) {
               throw "$($_.Name) has no signer certificate."
+            }
+            if ($signature.SignerCertificate.Subject -ne $expectedSignerSubject) {
+              throw "$($_.Name) has unexpected signer subject $($signature.SignerCertificate.Subject)."
             }
             [pscustomobject]@{
               File = $_.Name
@@ -88,7 +177,7 @@ jobs:
       - name: Write SHA-256 manifest
         shell: pwsh
         run: |
-          Get-ChildItem -LiteralPath dist -Filter "OpenClawCompanion-Setup-*.exe" |
+          Get-ChildItem -LiteralPath dist -File |
             Sort-Object Name |
             ForEach-Object {
               $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName
@@ -101,12 +190,81 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload $env:RELEASE_TAG `
-            dist/OpenClawCompanion-Setup-x64.exe `
-            dist/OpenClawCompanion-Setup-arm64.exe `
-            dist/OpenClawCompanion-SHA256SUMS.txt `
-            --repo $env:GITHUB_REPOSITORY `
-            --clobber
+          $releaseAssets = @(Get-ChildItem -LiteralPath dist -File | Sort-Object Name | ForEach-Object FullName)
+          gh release upload $env:RELEASE_TAG @releaseAssets --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload Windows release assets to $env:RELEASE_TAG."
+          }
+
+      - name: Verify promoted release asset contract
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path verified | Out-Null
+          $expectedAssets = @(Get-ChildItem -LiteralPath dist -File | Sort-Object Name)
+          $expectedCompanionAssetNames = @($expectedAssets | ForEach-Object Name | Sort-Object)
+          $targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+          $actualCompanionAssetNames = @(
+            $targetRelease.assets |
+              Where-Object { $_.name.StartsWith("OpenClawCompanion-") } |
+              ForEach-Object name |
+              Sort-Object
+          )
+          $assetContractDiff = @(
+            Compare-Object `
+              -ReferenceObject $expectedCompanionAssetNames `
+              -DifferenceObject $actualCompanionAssetNames
+          )
+          if (
+            $actualCompanionAssetNames.Count -ne $expectedCompanionAssetNames.Count -or
+            $assetContractDiff.Count -ne 0
+          ) {
+            throw "Promoted OpenClawCompanion asset names do not exactly match the current contract."
+          }
+
+          foreach ($asset in $expectedAssets) {
+            gh release download $env:RELEASE_TAG `
+              --repo $env:GITHUB_REPOSITORY `
+              --pattern $asset.Name `
+              --dir verified
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to download promoted Windows release asset $($asset.Name)."
+            }
+          }
+
+          $manifestPath = "verified/OpenClawCompanion-SHA256SUMS.txt"
+          $manifestEntries = @(Get-Content -LiteralPath $manifestPath | ForEach-Object {
+            if ($_ -notmatch '^([A-Fa-f0-9]{64})  ([^\\/]+)$') {
+              throw "Invalid Windows SHA-256 manifest entry: $_"
+            }
+            [PSCustomObject]@{
+              Hash = $Matches[1]
+              Name = $Matches[2]
+            }
+          })
+          $expectedInstallerNames = @(
+            $expectedAssets |
+              Where-Object Name -ne "OpenClawCompanion-SHA256SUMS.txt" |
+              ForEach-Object Name
+          )
+          $manifestInstallerNames = @($manifestEntries | ForEach-Object Name | Sort-Object)
+          $contractDiff = @(
+            Compare-Object `
+              -ReferenceObject $expectedInstallerNames `
+              -DifferenceObject $manifestInstallerNames
+          )
+          if ($contractDiff.Count -ne 0) {
+            throw "Promoted Windows SHA-256 manifest does not match the installer asset contract."
+          }
+
+          foreach ($entry in $manifestEntries) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "verified/$($entry.Name)").Hash
+            if ($hash -ne $entry.Hash) {
+              throw "Promoted Windows release asset checksum mismatch: $($entry.Name)"
+            }
+          }
 
       - name: Summary
         shell: pwsh
@@ -119,8 +277,9 @@ jobs:
 
           OpenClaw release: $env:RELEASE_TAG
           Source release: openclaw/openclaw-windows-node@$env:WINDOWS_NODE_TAG
-
-          - https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/OpenClawCompanion-Setup-x64.exe
-          - https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/OpenClawCompanion-Setup-arm64.exe
-          - https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/OpenClawCompanion-SHA256SUMS.txt
           "@ >> $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem -LiteralPath dist -File |
+            Sort-Object Name |
+            ForEach-Object {
+              "- https://github.com/openclaw/openclaw/releases/download/$env:RELEASE_TAG/$($_.Name)"
+            } >> $env:GITHUB_STEP_SUMMARY

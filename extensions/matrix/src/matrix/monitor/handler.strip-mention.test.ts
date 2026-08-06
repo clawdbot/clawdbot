@@ -40,6 +40,15 @@ describe("stripMatrixMentionPrefix", () => {
     expect(result).toBe("/model");
   });
 
+  it("strips bracketed @display name syntax", () => {
+    const result = stripMatrixMentionPrefix({
+      text: "@[OpenClaw Bot] /model",
+      displayName: "OpenClaw Bot",
+      mentionRegexes: [],
+    });
+    expect(result).toBe("/model");
+  });
+
   it("returns original text when text is empty", () => {
     const result = stripMatrixMentionPrefix({
       text: "",

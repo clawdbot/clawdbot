@@ -23,7 +23,8 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
-import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prepare-routing.js";
+import type { SlackEventScope } from "../event-scope.js";
+import { resolveSlackRoutingContext } from "./prepare-routing.js";
 
 function buildCtx(overrides?: {
   replyToMode?: "all" | "first" | "off" | "batched";
@@ -40,13 +41,14 @@ function buildCtx(overrides?: {
     teamId: "T1",
     threadInheritParent: false,
     threadHistoryScope: "thread",
-  } satisfies SlackRoutingContextDeps;
+  } satisfies Parameters<typeof resolveSlackRoutingContext>[0]["ctx"];
 }
 
 function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): ResolvedSlackAccount {
   return {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",
@@ -64,6 +66,16 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
     ts: "1770408518.451689",
     ...overrides,
   } as SlackMessageEvent;
+}
+
+function buildEventScope(teamId: string): SlackEventScope {
+  return {
+    apiAppId: "A1",
+    enterpriseId: "E1",
+    isEnterpriseInstall: true,
+    teamId,
+    client: {} as SlackEventScope["client"],
+  };
 }
 
 function firstBindingRouteRequest() {
@@ -140,6 +152,7 @@ describe("thread-level session keys", () => {
         accountId: "default",
         sessionKey: "agent:main:slack:channel:c123",
         mainSessionKey: "agent:main:main",
+        dmScope: "main",
         lastRoutePolicy: "session",
         matchedBy: "default",
       },
@@ -349,11 +362,99 @@ describe("thread-level session keys", () => {
 
     expect(routing.sessionKey).toBe("agent:main:slack:channel:c123");
     expect(routing.threadContext.messageThreadId).toBeUndefined();
+    expect(routing.threadContext.replyToId).toBeUndefined();
   });
 
-  it("does not seed top-level group DM mentions into thread sessions", () => {
+  it.each(
+    (["off", "first", "all", "batched"] as const).flatMap((replyToMode) =>
+      [false, true].map((mentioned) => ({ replyToMode, mentioned })),
+    ),
+  )(
+    "keeps $replyToMode MPIM roots flat and routes $mentioned mention follow-ups by thread",
+    ({ replyToMode, mentioned }) => {
+      const ctx = buildCtx({ replyToMode });
+      const account = buildAccount(replyToMode);
+      const rootTs = "1777244692.409919";
+      const root = resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: buildChannelMessage({
+          channel: "G123",
+          channel_type: "mpim",
+          text: mentioned ? "<@B1> send a subagent" : "send a subagent",
+          ts: rootTs,
+        }),
+        isDirectMessage: false,
+        isGroupDm: true,
+        isRoom: false,
+        isRoomish: true,
+        seedTopLevelRoomThread: mentioned,
+      });
+      const followUp = resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: buildChannelMessage({
+          channel: "G123",
+          channel_type: "mpim",
+          text: "what did you find?",
+          ts: "1777244714.000100",
+          thread_ts: rootTs,
+          parent_user_id: "U1",
+        }),
+        isDirectMessage: false,
+        isGroupDm: true,
+        isRoom: false,
+        isRoomish: true,
+      });
+
+      expect(root.sessionKey).toBe("agent:main:slack:group:g123");
+      expect(root.historyKey).toBe("G123");
+      expect(root.threadContext.replyToId).toBeUndefined();
+      expect(root.threadContext.messageThreadId).toBe(replyToMode === "all" ? rootTs : undefined);
+      expect(followUp.sessionKey).toBe(`agent:main:slack:group:g123:thread:${rootTs}`);
+      expect(followUp.historyKey).toBe(followUp.sessionKey);
+      expect(followUp.threadContext.replyToId).toBe(rootTs);
+      expect(followUp.threadContext.messageThreadId).toBe(rootTs);
+      expect(followUp.sessionKey).not.toContain("1777244714.000100");
+    },
+  );
+
+  it("keeps configured MPIM bindings flat when Slack starts a reply thread", () => {
     const ctx = buildCtx({ replyToMode: "all" });
     const account = buildAccount("all");
+    const targetSessionKey = "agent:codex:acp:binding:slack:default:g123";
+    resolveConfiguredBindingRouteMock.mockImplementation(({ route, conversation }) => ({
+      bindingResolution: {
+        conversation,
+        record: {
+          bindingId: "config:acp:slack:default:g123",
+          targetSessionKey,
+          targetKind: "session",
+          conversation: {
+            channel: "slack",
+            accountId: "default",
+            conversationId: "g123",
+          },
+          status: "active",
+          boundAt: 0,
+          metadata: {
+            source: "config",
+            mode: "persistent",
+            agentId: "codex",
+          },
+        },
+      },
+      boundSessionKey: targetSessionKey,
+      boundAgentId: "codex",
+      route: {
+        ...route,
+        agentId: "codex",
+        sessionKey: targetSessionKey,
+        mainSessionKey: "agent:codex:main",
+        matchedBy: "binding.channel",
+        lastRoutePolicy: "session",
+      },
+    }));
 
     const routing = resolveSlackRoutingContext({
       ctx,
@@ -361,17 +462,18 @@ describe("thread-level session keys", () => {
       message: buildChannelMessage({
         channel: "G123",
         channel_type: "mpim",
-        text: "<@B1> send a subagent",
-        ts: "1777244692.409919",
+        text: "what did you find?",
+        ts: "1777244714.000100",
+        thread_ts: "1777244692.409919",
+        parent_user_id: "U1",
       }),
       isDirectMessage: false,
       isGroupDm: true,
       isRoom: false,
       isRoomish: true,
-      seedTopLevelRoomThread: true,
     });
 
-    expect(routing.sessionKey).toBe("agent:main:slack:group:g123");
+    expect(routing.sessionKey).toBe(targetSessionKey);
     expect(routing.sessionKey).not.toContain(":thread:");
   });
 
@@ -530,6 +632,38 @@ describe("thread-level session keys", () => {
     expect(second.sessionKey).toBe("agent:main:slack:direct:u3");
     expect(first.threadContext.messageThreadId).toBe("1770408530.000000");
     expect(second.threadContext.messageThreadId).toBe("1770408531.000000");
+  });
+
+  it("partitions enterprise dmScope=main sessions by account and workspace", () => {
+    const ctx = buildCtx({ replyToMode: "all", dmScope: "main" });
+    const account = buildAccount("all");
+    const routeForTeam = (teamId: string) =>
+      resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: {
+          channel: "D456",
+          channel_type: "im",
+          user: "U3",
+          text: "dm message",
+          ts: "1770408530.000000",
+        } as SlackMessageEvent,
+        isDirectMessage: true,
+        isGroupDm: false,
+        isRoom: false,
+        isRoomish: false,
+        eventScope: buildEventScope(teamId),
+      });
+
+    const first = routeForTeam("T111");
+    const second = routeForTeam("T222");
+
+    expect(first.sessionKey).toBe("agent:main:main:account:default:team:t111");
+    expect(first.route.mainSessionKey).toBe(first.sessionKey);
+    expect(second.sessionKey).toBe("agent:main:main:account:default:team:t222");
+    expect(second.route.mainSessionKey).toBe(second.sessionKey);
+    expect(first.sessionKey).not.toBe(second.sessionKey);
+    expect(resolveConfiguredBindingRouteMock).not.toHaveBeenCalled();
   });
 
   it("routes DM thread replies to the main DM session, not a thread-scoped session", () => {

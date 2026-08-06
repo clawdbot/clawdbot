@@ -26,6 +26,7 @@ describe("pnpm-audit-prod", () => {
     expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
       "--min-severity requires a value",
     );
+    expect(() => parseArgs(["--min-severity", "-h"])).toThrow("--min-severity requires a value");
     expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
   });
 
@@ -247,6 +248,26 @@ snapshots:
     expect(text.length).toBeLessThan(4200);
   });
 
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      responseBody: `abc\u{1f600}tail`,
+      expectedText: "abc\n[truncated]",
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      responseBody: `ab\u{1f600}tail`,
+      expectedText: `ab\u{1f600}\n[truncated]`,
+    },
+  ])(
+    "keeps bulk advisory error truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedText }) => {
+      const response = new Response(responseBody, { status: 500 });
+
+      await expect(readBoundedBulkAdvisoryErrorText(response, 4)).resolves.toBe(expectedText);
+    },
+  );
+
   it("aborts stalled bulk advisory requests", async () => {
     let signal: AbortSignal | undefined;
     const request = fetchBulkAdvisories({
@@ -273,6 +294,72 @@ snapshots:
     expect(signal?.aborted).toBe(true);
   });
 
+  it("clamps oversized bulk advisory request timers before scheduling", async () => {
+    let signal: AbortSignal | undefined;
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      fetchImpl: (async (_url, init) => {
+        signal = init?.signal ?? undefined;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+
+    await expect(request).resolves.toEqual({});
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("cancels stalled successful bulk advisory response bodies on request timeout", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      fetchImpl: async () => new Response(body, { status: 200 }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+    expect(cancelled).toBe(true);
+  });
+
+  it("cancels stalled failed bulk advisory response bodies on request timeout", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull() {
+        return new Promise(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      fetchImpl: async () => new Response(body, { status: 500, statusText: "Internal Error" }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+    expect(cancelled).toBe(true);
+  });
+
   it("bounds successful bulk advisory response bodies", async () => {
     let cancelled = false;
     const body = new ReadableStream({
@@ -294,6 +381,33 @@ snapshots:
     });
 
     await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+    expect(cancelled).toBe(true);
+  });
+
+  it("streams non-decimal bulk advisory content-length values through the body cap", async () => {
+    let readStarted = false;
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull(controller) {
+        readStarted = true;
+        controller.enqueue(new TextEncoder().encode("12345"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      responseBodyMaxBytes: 4,
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-length": "5junk" },
+        }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+    expect(readStarted).toBe(true);
     expect(cancelled).toBe(true);
   });
 

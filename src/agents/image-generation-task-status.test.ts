@@ -6,15 +6,10 @@ import {
   buildImageGenerationTaskStatusText,
   findActiveImageGenerationTaskForSession,
   findDuplicateGuardImageGenerationTaskForSession,
-  getImageGenerationTaskProviderId,
-  isActiveImageGenerationTask,
   IMAGE_GENERATION_TASK_KIND,
 } from "./image-generation-task-status.js";
-import {
-  findRecentStartedMediaGenerationTaskForSession,
-  recordRecentMediaGenerationTaskStartForSession,
-  resetRecentMediaGenerationDuplicateGuardsForTests,
-} from "./media-generation-task-status-shared.js";
+import { recordRecentMediaGenerationTaskStartForSession } from "./media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -33,7 +28,7 @@ vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 function expectActiveImageGenerationTask(
   task: ReturnType<typeof findActiveImageGenerationTaskForSession>,
 ): NonNullable<ReturnType<typeof findActiveImageGenerationTaskForSession>> {
-  // Narrows optional lookups in tests that need provider/status helper calls.
+  // Narrows optional lookups in tests that need status helper calls.
   if (task == null) {
     throw new Error("Expected active image generation task");
   }
@@ -50,41 +45,6 @@ describe("image generation task status", () => {
     );
     taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
     resetRecentMediaGenerationDuplicateGuardsForTests();
-  });
-
-  it("recognizes active session-backed image generation tasks", () => {
-    expect(
-      isActiveImageGenerationTask({
-        taskId: "task-1",
-        runtime: "cli",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
-        task: "make watercolor robot",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      }),
-    ).toBe(true);
-    expect(
-      isActiveImageGenerationTask({
-        taskId: "task-2",
-        runtime: "cron",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main",
-        ownerKey: "agent:main",
-        scopeKind: "session",
-        task: "make watercolor robot",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-        createdAt: Date.now(),
-      }),
-    ).toBe(false);
   });
 
   it("prefers a running task over queued session siblings", () => {
@@ -124,7 +84,6 @@ describe("image generation task status", () => {
 
     expect(task?.taskId).toBe("task-running");
     const activeTask = expectActiveImageGenerationTask(task);
-    expect(getImageGenerationTaskProviderId(activeTask)).toBe("openai");
     expect(buildImageGenerationTaskStatusText(activeTask, { duplicateGuard: true })).toContain(
       "Do not call image_generate again for this request.",
     );
@@ -417,19 +376,20 @@ describe("image generation task status", () => {
     });
 
     expect(
-      findRecentStartedMediaGenerationTaskForSession({
-        sessionKey: "agent:main",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourcePrefix: "image_generate",
-        taskLabel: "stale prompt",
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "stale prompt",
         requestKey: "image-request:stale",
-        maxAgeMs: 10 * 60_000,
-        nowMs: now,
       }),
     ).toBeUndefined();
+    expect(
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "fresh prompt",
+        requestKey: "image-request:fresh",
+      })?.taskId,
+    ).toBe("task-fresh");
   });
 
-  it("does not keep stale recent starts forever for non-finite maxAgeMs", () => {
+  it("expires recent image starts after the canonical 120-second guard window", () => {
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({
       sessionKey: "agent:main",
@@ -441,18 +401,13 @@ describe("image generation task status", () => {
       requestKey: "image-request:stale",
       providerId: "xai",
       progressSummary: "Generating stale image",
-      nowMs: now - 1,
+      nowMs: now - 2 * 60_000 - 1,
     });
 
     expect(
-      findRecentStartedMediaGenerationTaskForSession({
-        sessionKey: "agent:main",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourcePrefix: "image_generate",
-        taskLabel: "stale prompt",
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "stale prompt",
         requestKey: "image-request:stale",
-        maxAgeMs: Number.POSITIVE_INFINITY,
-        nowMs: now,
       }),
     ).toBeUndefined();
   });

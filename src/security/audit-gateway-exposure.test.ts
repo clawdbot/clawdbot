@@ -33,39 +33,21 @@ function requireFinding(
   if (!finding) {
     throw new Error(`Expected ${checkId} finding for ${label}`);
   }
-  expect(finding.checkId, label).toBe(checkId);
   return finding;
 }
 
 describe("security audit gateway exposure findings", () => {
+  it("warns when the MCP Apps bridge is enabled", () => {
+    const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
+    expect(collectGatewayConfigFindings(cfg, cfg, {})).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "mcp.apps.enabled", severity: "warn" }),
+      ]),
+    );
+  });
+
   it("warns on insecure or dangerous flags", () => {
     const cases = [
-      {
-        name: "control UI allows insecure auth",
-        cfg: {
-          gateway: {
-            controlUi: { allowInsecureAuth: true },
-          },
-        } satisfies OpenClawConfig,
-        expectedFinding: {
-          checkId: "gateway.control_ui.insecure_auth",
-          severity: "warn",
-        },
-        expectedDangerousDetails: ["gateway.controlUi.allowInsecureAuth=true"],
-      },
-      {
-        name: "control UI device auth is disabled",
-        cfg: {
-          gateway: {
-            controlUi: { dangerouslyDisableDeviceAuth: true },
-          },
-        } satisfies OpenClawConfig,
-        expectedFinding: {
-          checkId: "gateway.control_ui.device_auth_disabled",
-          severity: "critical",
-        },
-        expectedDangerousDetails: ["gateway.controlUi.dangerouslyDisableDeviceAuth=true"],
-      },
       {
         name: "generic insecure debug flags",
         cfg: {
@@ -91,14 +73,6 @@ describe("security audit gateway exposure findings", () => {
 
     for (const testCase of cases) {
       const findings = collectGatewayConfigFindings(testCase.cfg, testCase.cfg, {});
-      if ("expectedFinding" in testCase) {
-        const exposureFinding = requireFinding(
-          findings,
-          testCase.expectedFinding.checkId,
-          testCase.name,
-        );
-        expect(exposureFinding.severity, testCase.name).toBe(testCase.expectedFinding.severity);
-      }
       const dangerousFindings = requireDangerousFlagsFindings(findings, testCase.name);
       expect(dangerousFindings.every((finding) => finding.severity === "warn")).toBe(true);
       for (const snippet of testCase.expectedDangerousDetails) {
@@ -447,6 +421,44 @@ describe("security audit gateway exposure findings", () => {
         expectedCheckId: "gateway.trusted_proxy_allow_loopback",
         expectedSeverity: "warn",
       },
+      {
+        name: "browser device auto-approval enabled",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+                deviceAutoApprove: { enabled: true },
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_device_auto_approve",
+        expectedSeverity: "warn",
+      },
+      {
+        name: "browser device auto-approval grants admin",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+                deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_device_auto_approve_admin",
+        expectedSeverity: "critical",
+      },
     ];
 
     for (const testCase of cases) {
@@ -461,5 +473,59 @@ describe("security audit gateway exposure findings", () => {
         expect(checkIds).not.toContain("gateway.auth_no_rate_limit");
       }
     }
+  });
+
+  it("explains the trusted-proxy admin auto-approval impact and alternatives", () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowUsers: ["nick@example.com"],
+            deviceAutoApprove: { enabled: true, scopes: [" operator.admin "] },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      requireFinding(
+        collectGatewayConfigFindings(cfg, cfg, {}),
+        "gateway.trusted_proxy_device_auto_approve_admin",
+        "trusted-proxy admin device auto-approval",
+      ),
+    ).toEqual({
+      checkId: "gateway.trusted_proxy_device_auto_approve_admin",
+      severity: "critical",
+      title: "Trusted-proxy device auto-approval allows full admin",
+      detail:
+        "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+      remediation:
+        "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+    });
+  });
+
+  it("does not report dormant trusted-proxy admin auto-approval config", () => {
+    const cfg = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "test",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      collectGatewayConfigFindings(cfg, cfg, {}).some(
+        (finding) => finding.checkId === "gateway.trusted_proxy_device_auto_approve_admin",
+      ),
+    ).toBe(false);
   });
 });

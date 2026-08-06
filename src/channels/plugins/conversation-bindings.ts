@@ -3,30 +3,8 @@
  *
  * Starts plugin binding managers and updates per-session binding idle/max-age limits.
  */
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelPlugin } from "./registry.js";
 import type { ChannelId } from "./types.public.js";
-
-/**
- * Starts the optional per-channel conversation binding manager.
- *
- * Channels without binding state return `null` so callers can install
- * lifecycle hooks without special-casing plugins that do not support them.
- */
-export async function createChannelConversationBindingManager(params: {
-  channelId: ChannelId;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): Promise<{ stop: () => void | Promise<void> } | null> {
-  const createManager = getChannelPlugin(params.channelId)?.conversationBindings?.createManager;
-  if (!createManager) {
-    return null;
-  }
-  return await createManager({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-}
 
 /**
  * Updates the idle timeout for bindings that match a session key.

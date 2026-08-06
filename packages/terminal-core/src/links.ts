@@ -5,6 +5,8 @@ function resolveDocsRoot(): string {
   return "https://docs.openclaw.ai";
 }
 
+const ABSOLUTE_HTTP_URL_RE = /^https?:\/\//i;
+
 export function formatDocsLink(
   path: string | undefined | null,
   label?: string,
@@ -17,7 +19,7 @@ export function formatDocsLink(
   // here unguarded. The typed contract says docsPath is required, but a
   // handful of channel plugins and catalog rows leave it unset at runtime.
   const url = trimmed
-    ? trimmed.startsWith("http")
+    ? ABSOLUTE_HTTP_URL_RE.test(trimmed)
       ? trimmed
       : `${docsRoot}${trimmed.startsWith("/") ? trimmed : `/${trimmed}`}`
     : docsRoot;

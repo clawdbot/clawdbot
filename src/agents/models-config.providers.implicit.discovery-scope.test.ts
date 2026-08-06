@@ -2,15 +2,19 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
+  prepareProviderStaticCatalog: vi.fn(),
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderCatalog: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
 }));
+const BUNDLED_PLUGINS_DIR = fileURLToPath(new URL("../../extensions/", import.meta.url));
 
 vi.mock("../plugins/provider-discovery.js", () => ({
   resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
@@ -29,9 +33,13 @@ vi.mock("../plugins/provider-discovery.js", () => ({
     provider: ProviderPlugin;
     result?: { provider?: unknown; providers?: Record<string, unknown> } | null;
   }) => result?.providers ?? (result?.provider ? { [provider.id]: result.provider } : {}),
+  prepareProviderStaticCatalog: mocks.prepareProviderStaticCatalog,
 }));
 
-import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import {
+  prepareImplicitProviderStaticCatalog,
+  resolveImplicitProviders,
+} from "./models-config.providers.implicit.js";
 
 function metadataOwners(
   overrides: Partial<PluginMetadataSnapshotOwnerMaps>,
@@ -128,6 +136,32 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         },
       },
     });
+    mocks.prepareProviderStaticCatalog.mockResolvedValue({
+      providers: [],
+      entries: [],
+    });
+  });
+
+  it("loads configured provider entrypoints but runs static hooks only for unresolved refs", async () => {
+    const openai = createStaticOnlyProvider("openai");
+    const anthropic = createStaticOnlyProvider("anthropic");
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([openai, anthropic]);
+    mocks.prepareProviderStaticCatalog.mockResolvedValue({
+      providers: [anthropic],
+      entries: [],
+    });
+
+    const prepared = await prepareImplicitProviderStaticCatalog({
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      providerDiscoveryProviderIds: ["openai", "anthropic"],
+      staticCatalogProviderIds: ["anthropic"],
+    });
+
+    expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
+      providers: [anthropic],
+    });
+    expect(prepared.providers).toEqual([openai, anthropic]);
   });
 
   it("passes startup provider scopes as plugin owner filters", async () => {
@@ -174,6 +208,19 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
   });
 
+  it("does not fall through to live catalogs when entries-only providers lack static rows", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryEntriesOnly: true,
+    });
+
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+  });
+
   it("uses static provider catalogs for entries-only startup discovery", async () => {
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
       createProviderWithStaticCatalog("codex"),
@@ -189,6 +236,99 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
     expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+  });
+
+  it("reuses prepared static results while preserving the requesting provider scope", async () => {
+    const openai = { ...createStaticOnlyProvider("openai"), pluginId: "openai" };
+    const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      pluginMetadataSnapshot: {
+        index: { plugins: [] } as never,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: metadataOwners({
+          providers: new Map([
+            ["openai", ["openai"]],
+            ["anthropic", ["anthropic"]],
+          ]),
+        }),
+      },
+      preparedStaticProviderCatalog: {
+        providers: [openai, anthropic],
+        entries: [
+          {
+            provider: openai,
+            result: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  api: "openai-responses",
+                  models: [],
+                },
+              },
+            },
+          },
+          {
+            provider: anthropic,
+            result: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      providerDiscoveryEntriesOnly: true,
+      providerDiscoveryProviderIds: ["openai"],
+    });
+
+    expect(Object.keys(providers ?? {})).toEqual(["openai"]);
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+  });
+
+  it("runs a prepared provider's static hook when its result was not prepared", async () => {
+    const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
+    mocks.runProviderStaticCatalog.mockResolvedValueOnce({
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [],
+        },
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      pluginMetadataSnapshot: {
+        index: { plugins: [] } as never,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        owners: metadataOwners({
+          providers: new Map([["anthropic", ["anthropic"]]]),
+        }),
+      },
+      preparedStaticProviderCatalog: {
+        providers: [anthropic],
+        entries: [],
+      },
+      providerDiscoveryEntriesOnly: true,
+      providerDiscoveryProviderIds: ["anthropic"],
+    });
+
+    expect(Object.keys(providers ?? {})).toEqual(["anthropic"]);
+    expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider: anthropic });
   });
 
   it("uses static-only provider catalogs for scoped startup discovery", async () => {
@@ -225,17 +365,26 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
     });
 
-    const providers = await resolveImplicitProviders({
-      agentDir: "/tmp/openclaw-agent",
-      config: {},
-      env: {
-        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-        GOOGLE_CLOUD_PROJECT: "vertex-project",
-        GOOGLE_CLOUD_LOCATION: "global",
-      } as NodeJS.ProcessEnv,
-      explicitProviders: {},
-      providerDiscoveryEntriesOnly: true,
-    });
+    const providers = await withEnvAsync(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+      async () =>
+        await resolveImplicitProviders({
+          agentDir: "/tmp/openclaw-agent",
+          config: {},
+          env: {
+            OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_PLUGINS_DIR,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_PROJECT: "vertex-project",
+            GOOGLE_CLOUD_LOCATION: "global",
+          } as NodeJS.ProcessEnv,
+          explicitProviders: {},
+          providerDiscoveryEntriesOnly: true,
+        }),
+    );
 
     expect(providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
   });

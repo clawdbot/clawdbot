@@ -4,6 +4,7 @@ import { createDiscordActionGate } from "../accounts.js";
 import { readStringParam, type OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
@@ -58,15 +59,7 @@ const presenceActions = new Set(["setPresence"]);
 export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
-  options?: {
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-      workspaceDir?: string;
-    };
-    mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  },
+  options?: DiscordMessagingActionOptions,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");

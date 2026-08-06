@@ -1,0 +1,11 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"im.messageReaction.create","data":{"payload":{"emoji_type":"Typing"},"result":{"reaction_id":"reaction-1"},"target":"om-inbound"}}
+{"seq":3,"at":0,"dir":"in","kind":"final","data":{"text":"All checks passed."}}
+{"seq":4,"at":0,"dir":"out","kind":"POST /auth/v3/tenant_access_token/internal","data":{"result":{"code":0}}}
+{"seq":5,"at":0,"dir":"out","kind":"POST /cardkit/v1/cards","data":{"payload":{"card":{"body":{"elements":[{"content":"","element_id":"content","tag":"markdown"},{"tag":"hr"},{"content":"<font color='grey'>Agent: agent</font>","element_id":"note","tag":"markdown"}]},"config":{"streaming_config":{"print_frequency_ms":{"default":50},"print_step":{"default":1}},"streaming_mode":true,"summary":{"content":"[Generating...]"}},"header":{"template":"blue","title":{"content":"agent","tag":"plain_text"}},"schema":"2.0"},"type":"card_json"},"result":{"card_id":"card-1","code":0}}}
+{"seq":6,"at":0,"dir":"out","kind":"im.message.reply","data":{"payload":{"content":{"data":{"card_id":"card-1"},"type":"card"},"msg_type":"interactive"},"result":{"message_id":"om-1"},"target":"om-inbound"}}
+{"seq":7,"at":0,"dir":"out","kind":"PUT /cardkit/v1/cards/card-1/elements/content/content","data":{"payload":{"content":"All checks passed.","sequence":2,"uuid":"s_card-1_2"},"result":{"code":0}}}
+{"seq":8,"at":0,"dir":"in","kind":"idle"}
+{"seq":9,"at":0,"dir":"out","kind":"PUT /cardkit/v1/cards/card-1/elements/note/content","data":{"payload":{"content":"<font color='grey'>Agent: agent</font>","sequence":3,"uuid":"n_card-1_3"},"result":{"code":0}}}
+{"seq":10,"at":0,"dir":"out","kind":"PATCH /cardkit/v1/cards/card-1/settings","data":{"payload":{"sequence":4,"settings":{"config":{"streaming_mode":false,"summary":{"content":"All checks passed."}}},"uuid":"c_card-1_4"},"result":{"code":0}}}
+{"seq":11,"at":0,"dir":"out","kind":"im.messageReaction.delete","data":{"payload":{"reaction_id":"reaction-1"},"result":{"code":0},"target":"om-inbound"}}

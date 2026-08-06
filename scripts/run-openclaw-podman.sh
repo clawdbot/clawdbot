@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/host-timeout.sh
+source "$SCRIPT_DIR/lib/host-timeout.sh"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
 
 resolve_user_home() {
@@ -37,15 +40,7 @@ fail() {
 }
 
 run_podman_detached() {
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-      timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"
-    else
-      timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"
-    fi
-    return
-  fi
-  podman run "$@"
+  openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"
 }
 
 validate_single_line_value() {

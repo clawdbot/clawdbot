@@ -1,14 +1,22 @@
 // Voice Call helper module supports config behavior.
+import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
+import {
+  canonicalizeMainSessionAlias,
+  type SessionScope,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
+import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
-import { deepMergeDefined } from "./deep-merge.js";
+import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -60,6 +68,8 @@ const TwilioConfigSchema = z
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
     authToken: SecretInputSchema.optional(),
+    /** Twilio processing Region (for example, ie1) */
+    region: z.enum(TWILIO_REGIONS).optional(),
   })
   .strict();
 
@@ -91,7 +101,7 @@ const VoiceCallNumberRouteConfigSchema = z
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
-export type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
+type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
@@ -193,7 +203,6 @@ const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
 const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
-export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
 
 const OutboundConfigSchema = z
   .object({
@@ -256,10 +265,6 @@ const VoiceCallRealtimeFastContextConfigSchema = z
     sources: ["memory", "sessions"],
     fallbackToConsult: false,
   });
-export type VoiceCallRealtimeFastContextConfig = z.infer<
-  typeof VoiceCallRealtimeFastContextConfigSchema
->;
-
 const VoiceCallRealtimeAgentContextConfigSchema = z
   .object({
     /** Inject a compact agent persona/context capsule into realtime voice instructions. */
@@ -281,11 +286,8 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     includeWorkspaceFiles: true,
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
-export type VoiceCallRealtimeAgentContextConfig = z.infer<
-  typeof VoiceCallRealtimeAgentContextConfigSchema
->;
 
-export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
   "minimal",
   "low",
@@ -294,10 +296,8 @@ export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "xhigh",
   "adaptive",
   "max",
+  "ultra",
 ]);
-export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
-  typeof VoiceCallRealtimeConsultThinkingLevelSchema
->;
 
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
@@ -361,7 +361,7 @@ export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSche
 
 const VoiceCallStreamingConfigSchema = z
   .object({
-    /** Enable real-time audio streaming (requires WebSocket support) */
+    /** Enable Twilio Media Streams for real-time transcription. */
     enabled: z.boolean().default(false),
     /** Provider id from registered realtime transcription providers. */
     provider: z.string().min(1).optional(),
@@ -483,7 +483,7 @@ export const VoiceCallConfigSchema = z
     /** Skip webhook signature verification (development only, NOT for production) */
     skipSignatureVerification: z.boolean().default(false),
 
-    /** TTS override (deep-merges with core messages.tts) */
+    /** TTS override (deep-merges with core tts) */
     tts: TtsConfigSchema,
 
     /** Store path for call logs */
@@ -504,7 +504,7 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-export type VoiceCallEffectiveConfigResult = {
+type VoiceCallEffectiveConfigResult = {
   config: VoiceCallConfig;
   numberRouteKey?: string;
 };
@@ -515,7 +515,7 @@ type DeepPartial<T> = T extends SecretInput
     : T extends object
       ? { [K in keyof T]?: DeepPartial<T[K]> }
       : T;
-export type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
+type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
 
 // -----------------------------------------------------------------------------
@@ -528,20 +528,8 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
-function normalizeWebhookLikePath(pathname: string): string {
-  const trimmed = pathname.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (prefixed === "/") {
-    return prefixed;
-  }
-  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-}
-
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
-  const normalized = normalizeWebhookLikePath(servePath);
+  const normalized = normalizeWebhookPath(servePath);
   if (normalized.endsWith("/webhook")) {
     return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
   }
@@ -559,14 +547,14 @@ function normalizeVoiceCallTtsConfig(
     return undefined;
   }
 
-  return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
+  return TtsConfigSchema.parse(mergeDeep(defaults ?? {}, overrides ?? {}));
 }
 
 function normalizePhoneRouteKey(phone: string | undefined): string {
   return phone?.replace(/\D/g, "") ?? "";
 }
 
-export function resolveVoiceCallNumberRouteKey(
+function resolveVoiceCallNumberRouteKey(
   config: Pick<VoiceCallConfig, "numbers">,
   phone: string | undefined,
 ): string | undefined {
@@ -585,6 +573,22 @@ export function resolveVoiceCallNumberRouteKey(
   return Object.keys(routes).find(
     (routeKey) => normalizePhoneRouteKey(routeKey) === normalizedPhone,
   );
+}
+
+/** Resolve inbound-only number routing from a persisted call record. */
+export function resolveVoiceCallNumberRouteKeyForCall(call: {
+  direction?: "inbound" | "outbound";
+  to?: string;
+  metadata?: { numberRouteKey?: unknown };
+}): string | undefined {
+  if (call.direction !== "inbound") {
+    return undefined;
+  }
+  const storedRouteKey = call.metadata?.numberRouteKey;
+  if (typeof storedRouteKey === "string") {
+    return storedRouteKey;
+  }
+  return call.to;
 }
 
 export function resolveVoiceCallEffectiveConfig(
@@ -713,21 +717,73 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
   };
 }
 
+export type VoiceCallCoreSessionConfig = { mainKey?: string; scope?: SessionScope };
+
 export function resolveVoiceCallSessionKey(params: {
-  config: Pick<VoiceCallConfig, "sessionScope">;
+  config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
   callId: string;
   phone?: string;
   explicitSessionKey?: string;
+  coreSession?: VoiceCallCoreSessionConfig;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
   if (explicit) {
-    return explicit;
+    return resolveVoiceCallAgentSessionKey({
+      config: params.config,
+      sessionKey: explicit,
+      coreSession: params.coreSession,
+    });
   }
+  // Startup migration promotes unambiguous shipped `voice:*` rows;
+  // generate only canonical keys here so new history never needs repair.
+  const prefix = `agent:${normalizeAgentId(params.config.agentId)}:voice`;
   if (params.config.sessionScope === "per-call") {
-    return `voice:call:${params.callId}`;
+    return `${prefix}:call:${params.callId}`.toLowerCase();
   }
   const normalizedPhone = params.phone?.replace(/\D/g, "");
-  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+  return (
+    normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`
+  ).toLowerCase();
+}
+
+/** Resolve persisted or integration-provided keys into the configured agent namespace. */
+function resolveVoiceCallAgentSessionKey(params: {
+  config: Pick<VoiceCallConfig, "agentId">;
+  sessionKey: string;
+  coreSession?: VoiceCallCoreSessionConfig;
+}): string {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    throw new Error("Voice Call session key cannot be empty");
+  }
+  const lower = sessionKey.toLowerCase();
+  const agentId = normalizeAgentId(params.config.agentId);
+  if (lower === "global" || lower === "unknown") {
+    return lower;
+  }
+  const parsedInput = parseAgentSessionKey(sessionKey);
+  let normalizedScopedKey: string;
+  if (
+    parsedInput &&
+    normalizeAgentId(parsedInput.agentId) === parsedInput.agentId &&
+    parsedInput.agentId === agentId
+  ) {
+    normalizedScopedKey = `agent:${parsedInput.agentId}:${parsedInput.rest}`;
+  } else {
+    // Voice Call's configured agent owns both the store and runtime. Foreign or
+    // malformed agent-shaped input is an opaque integration key, not a route.
+    const wrappedInput = parseAgentSessionKey(`agent:${agentId}:${sessionKey}`);
+    if (!wrappedInput) {
+      throw new Error("Voice Call session key could not be normalized");
+    }
+    normalizedScopedKey = `agent:${agentId}:${wrappedInput.rest}`;
+  }
+  const canonicalMain = canonicalizeMainSessionAlias({
+    cfg: { session: params.coreSession },
+    agentId,
+    sessionKey: normalizedScopedKey,
+  });
+  return canonicalMain === normalizedScopedKey ? normalizedScopedKey : canonicalMain;
 }
 
 /**
@@ -740,24 +796,32 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   // Telnyx
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
-    resolved.telnyx.apiKey = resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
-    resolved.telnyx.connectionId = resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
-    resolved.telnyx.publicKey = resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+    resolved.telnyx.apiKey =
+      resolved.telnyx.apiKey ?? resolveSpeechProviderApiKey(process.env.TELNYX_API_KEY);
+    resolved.telnyx.connectionId =
+      resolved.telnyx.connectionId ?? resolveSpeechProviderApiKey(process.env.TELNYX_CONNECTION_ID);
+    resolved.telnyx.publicKey =
+      resolved.telnyx.publicKey ?? resolveSpeechProviderApiKey(process.env.TELNYX_PUBLIC_KEY);
   }
 
   // Twilio
   if (resolved.provider === "twilio") {
-    resolved.fromNumber = resolved.fromNumber ?? process.env.TWILIO_FROM_NUMBER;
+    resolved.fromNumber =
+      resolved.fromNumber ?? resolveSpeechProviderApiKey(process.env.TWILIO_FROM_NUMBER);
     resolved.twilio = resolved.twilio ?? {};
-    resolved.twilio.accountSid = resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
-    resolved.twilio.authToken = resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+    resolved.twilio.accountSid =
+      resolved.twilio.accountSid ?? resolveSpeechProviderApiKey(process.env.TWILIO_ACCOUNT_SID);
+    resolved.twilio.authToken =
+      resolved.twilio.authToken ?? resolveSpeechProviderApiKey(process.env.TWILIO_AUTH_TOKEN);
   }
 
   // Plivo
   if (resolved.provider === "plivo") {
     resolved.plivo = resolved.plivo ?? {};
-    resolved.plivo.authId = resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
-    resolved.plivo.authToken = resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
+    resolved.plivo.authId =
+      resolved.plivo.authId ?? resolveSpeechProviderApiKey(process.env.PLIVO_AUTH_ID);
+    resolved.plivo.authToken =
+      resolved.plivo.authToken ?? resolveSpeechProviderApiKey(process.env.PLIVO_AUTH_TOKEN);
   }
 
   // Tunnel Config
@@ -767,8 +831,10 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   };
   resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
     resolved.tunnel.allowNgrokFreeTierLoopbackBypass ?? false;
-  resolved.tunnel.ngrokAuthToken = resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
-  resolved.tunnel.ngrokDomain = resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+  resolved.tunnel.ngrokAuthToken =
+    resolved.tunnel.ngrokAuthToken ?? resolveSpeechProviderApiKey(process.env.NGROK_AUTHTOKEN);
+  resolved.tunnel.ngrokDomain =
+    resolved.tunnel.ngrokDomain ?? resolveSpeechProviderApiKey(process.env.NGROK_DOMAIN);
 
   // Webhook Security Config
   resolved.webhookSecurity = resolved.webhookSecurity ?? {
@@ -865,14 +931,21 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
+  if (config.streaming.enabled && config.provider && config.provider !== "twilio") {
+    errors.push(
+      'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
+    );
+  }
+
   if (
     config.realtime.enabled &&
     config.provider &&
     config.provider !== "twilio" &&
-    config.provider !== "telnyx"
+    config.provider !== "telnyx" &&
+    config.provider !== "mock"
   ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
     );
   }
 

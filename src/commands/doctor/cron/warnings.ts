@@ -1,19 +1,23 @@
 // Doctor cron warnings for model overrides and stale WhatsApp crontab health scripts.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
+import { normalizeChatChannelId } from "../../../channels/ids.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { shortenHomePath } from "../../../utils.js";
+import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
+import type { CronJob } from "../../../cron/types.js";
+import { runExec } from "../../../process/exec.js";
 
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
-const execFileAsync = promisify(execFile);
 const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
   /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
 const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
+const CRON_DELIVERY_TARGET_ADVISORY_EXAMPLE_LIMIT = 3;
+const CRONTAB_READ_TIMEOUT_MS = 5_000;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -49,16 +53,10 @@ function normalizeModelMismatchKey(value: unknown): string | undefined {
   return normalizeModelRef(value) ?? normalizeOptionalString(value)?.toLowerCase();
 }
 
-function getRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function formatProviderCounts(counts: Map<string, number>): string {
+function formatSortedCounts(counts: Map<string, number>): string {
   return [...counts.entries()]
     .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([provider, count]) => `${provider}=${count}`)
+    .map(([label, count]) => `${label}=${count}`)
     .join(", ");
 }
 
@@ -66,7 +64,6 @@ function formatProviderCounts(counts: Map<string, number>): string {
 export function noteCronModelOverrides(params: {
   cfg: OpenClawConfig;
   jobs: Array<Record<string, unknown>>;
-  storePath: string;
 }) {
   const defaultModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
   const defaultKey = normalizeModelMismatchKey(defaultModel);
@@ -76,7 +73,10 @@ export function noteCronModelOverrides(params: {
   let mismatchCount = 0;
 
   for (const rawJob of params.jobs) {
-    const payload = getRecord(rawJob.payload);
+    if (rawJob.enabled === false) {
+      continue;
+    }
+    const payload = isRecord(rawJob.payload) ? rawJob.payload : undefined;
     const kind = normalizeOptionalString(payload?.kind)?.toLowerCase();
     if (kind && kind !== "agentturn") {
       continue;
@@ -104,9 +104,9 @@ export function noteCronModelOverrides(params: {
   }
 
   const lines = [
-    `Cron model overrides detected at ${shortenHomePath(params.storePath)}.`,
+    "Automation model overrides detected.",
     `- ${pluralize(overrideCount, "job")} set \`payload.model\` and will not inherit \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
-    `- Provider namespaces: ${formatProviderCounts(providerCounts)}`,
+    `- Provider namespaces: ${formatSortedCounts(providerCounts)}`,
   ];
   if (mismatchCount > 0) {
     lines.push(
@@ -115,16 +115,130 @@ export function noteCronModelOverrides(params: {
     lines.push(`- Examples: ${mismatchExamples.join(", ")}`);
   }
   lines.push(
-    `Review with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
+    `Review with ${formatCliCommand("openclaw automations list")} and ${formatCliCommand("openclaw automations show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
   );
 
   note(lines.join("\n"), "Cron");
 }
 
+/** Canonicalizes a channel id/alias for comparison, falling back to lowercase for external plugin ids. */
+function canonicalChannelKey(value: string): string {
+  return normalizeChatChannelId(value) ?? value.trim().toLowerCase();
+}
+
+/** Concrete announce target a cron job pins ahead of run time, paired with its source job. */
+type ConcreteCronDeliveryTarget = { channel: string; job: Record<string, unknown> };
+
+/** Collects the concrete announce channels cron jobs pin, skipping pseudo/relative targets. */
+function listConcreteCronDeliveryTargets(
+  jobs: Array<Record<string, unknown>>,
+): ConcreteCronDeliveryTarget[] {
+  const targets: ConcreteCronDeliveryTarget[] = [];
+  for (const job of jobs) {
+    // Disabled jobs have no next scheduled run, so their delivery target cannot fail yet.
+    if (job.enabled === false) {
+      continue;
+    }
+    // Only an explicit delivery object pins a concrete channel; without one the plan resolves
+    // to the pseudo "last" route decided at run time, which doctor cannot validate ahead of time.
+    if (!isRecord(job.delivery)) {
+      continue;
+    }
+    const plan = resolveCronDeliveryPlan(job as unknown as CronJob);
+    // Skip webhook/none (no chat channel) and announce-to-`last` (resolved from runtime state).
+    if (plan.mode !== "announce" || !plan.channel || plan.channel === "last") {
+      continue;
+    }
+    targets.push({ channel: plan.channel, job });
+  }
+  return targets;
+}
+
+/**
+ * Builds an advisory when persisted cron jobs announce to a concrete channel whose plugin
+ * is not active in the current config, so their next scheduled run will fail-closed on
+ * delivery. Pseudo/relative targets (announce-to-`last`, webhook, `none`) are skipped because
+ * they resolve at run time. Observer-only: it never repairs jobs or writes config. The channel
+ * list is resolved lazily so doctor skips the read-only channel snapshot when no job can drift.
+ * Returns `null` when no job pins a concrete target or every concrete target is active.
+ */
+function collectCronDeliveryTargetAdvisory(params: {
+  jobs: Array<Record<string, unknown>>;
+  resolveAvailableChannelIds: () => Iterable<string>;
+}): string | null {
+  const concreteTargets = listConcreteCronDeliveryTargets(params.jobs);
+  if (concreteTargets.length === 0) {
+    return null;
+  }
+
+  const availableKeys = new Set<string>();
+  for (const id of params.resolveAvailableChannelIds()) {
+    const normalized = normalizeOptionalString(id);
+    if (normalized) {
+      availableKeys.add(canonicalChannelKey(normalized));
+    }
+  }
+
+  const channelCounts = new Map<string, number>();
+  const examples: string[] = [];
+  let unavailableCount = 0;
+
+  for (const { channel, job } of concreteTargets) {
+    if (availableKeys.has(canonicalChannelKey(channel))) {
+      continue;
+    }
+    unavailableCount += 1;
+    channelCounts.set(channel, (channelCounts.get(channel) ?? 0) + 1);
+    if (examples.length < CRON_DELIVERY_TARGET_ADVISORY_EXAMPLE_LIMIT) {
+      const id = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
+      const name = normalizeOptionalString(job.name);
+      examples.push(`${id ?? name ?? "<unnamed>"} -> ${channel}`);
+    }
+  }
+
+  if (unavailableCount === 0) {
+    return null;
+  }
+
+  return [
+    "Automation delivery targets unavailable channels.",
+    `- ${pluralize(unavailableCount, "job")} ${unavailableCount === 1 ? "announces" : "announce"} to a channel whose plugin is not active; the next scheduled run will fail to deliver`,
+    `- Channels: ${formatSortedCounts(channelCounts)}`,
+    `- Examples: ${examples.join(", ")}`,
+    `Reactivate the channel plugin or update the job's \`delivery.channel\` after reviewing with ${formatCliCommand("openclaw automations list")} and ${formatCliCommand("openclaw automations show <job-id>")}.`,
+  ].join("\n");
+}
+
+/** Emit a note when cron jobs announce to a concrete channel whose plugin is not active. */
+export function noteCronDeliveryTargetAdvisory(params: {
+  cfg: OpenClawConfig;
+  jobs: Array<Record<string, unknown>>;
+}): void {
+  let advisory: string | null;
+  try {
+    advisory = collectCronDeliveryTargetAdvisory({
+      jobs: params.jobs,
+      // Mirror the doctor channel lookup: setup-fallback materializes configured channels even
+      // when no gateway is running, so configured targets are not mistaken for unavailable ones.
+      resolveAvailableChannelIds: () =>
+        listReadOnlyChannelPluginsForConfig(params.cfg, {
+          includePersistedAuthState: false,
+          includeSetupFallbackPlugins: true,
+        }).map((plugin) => plugin.id),
+    });
+  } catch {
+    // Channel resolution is best-effort; never let an advisory break the doctor cron flow.
+    return;
+  }
+  if (advisory) {
+    note(advisory, "Cron");
+  }
+}
+
 async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
-  const result = await execFileAsync("crontab", ["-l"], {
-    encoding: "utf8",
-    windowsHide: true,
+  const result = await runExec("crontab", ["-l"], {
+    logOutput: false,
+    timeoutMs: CRONTAB_READ_TIMEOUT_MS,
   });
   return {
     stdout: result.stdout,

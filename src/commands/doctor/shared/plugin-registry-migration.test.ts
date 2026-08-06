@@ -14,13 +14,7 @@ import {
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-import {
-  DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
-  FORCE_PLUGIN_REGISTRY_MIGRATION_ENV,
-  migratePluginRegistryForInstall,
-  preflightPluginRegistryInstallMigration,
-} from "./plugin-registry-migration.js";
-
+import { migratePluginRegistryForInstall } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -260,6 +254,35 @@ describe("plugin registry install migration", () => {
     expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
   });
 
+  it("keeps bundled migration contracts discoverable after install", async () => {
+    const stateDir = makeTempDir();
+    const migrationDir = path.join(stateDir, "plugins", "migrate-demo");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
+    fs.mkdirSync(migrationDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
+
+    const result = await migratePluginRegistryForInstall({
+      stateDir,
+      candidates: [
+        createCandidate(migrationDir, "migrate-demo", "bundled", {
+          manifest: {
+            providers: [],
+            contracts: { migrationProviders: ["demo"] },
+          },
+        }),
+        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
+      ],
+      readConfig: async () => ({}),
+      env: hermeticEnv(),
+    });
+
+    const current = requireMigratedIndex(result);
+    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual(["migrate-demo"]);
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["migrate-demo"]);
+  });
+
   it("keeps legacy OpenAI Codex plugin references doctor-only", async () => {
     const stateDir = makeTempDir();
     const openaiDir = path.join(stateDir, "plugins", "openai");
@@ -467,39 +490,5 @@ describe("plugin registry install migration", () => {
       installPath: pluginDir,
     });
     expect(persisted?.plugins).toEqual([]);
-  });
-
-  it("marks force migration env as deprecated break-glass", () => {
-    const result = preflightPluginRegistryInstallMigration({
-      stateDir: makeTempDir(),
-      env: hermeticEnv({
-        [FORCE_PLUGIN_REGISTRY_MIGRATION_ENV]: "1",
-      }),
-    });
-    expectRecordFields(requireRecord(result, "preflight result"), {
-      action: "migrate",
-      force: true,
-    });
-    expect(result.deprecationWarnings).toStrictEqual([
-      `${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated and will be removed after the plugin registry migration rollout; use doctor registry repair once available.`,
-    ]);
-  });
-
-  it("treats falsey env flag strings as unset", async () => {
-    const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
-
-    const result = preflightPluginRegistryInstallMigration({
-      stateDir,
-      env: hermeticEnv({
-        [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "0",
-        [FORCE_PLUGIN_REGISTRY_MIGRATION_ENV]: "false",
-      }),
-    });
-    expectRecordFields(requireRecord(result, "preflight result"), {
-      action: "skip-existing",
-      force: false,
-      deprecationWarnings: [],
-    });
   });
 });

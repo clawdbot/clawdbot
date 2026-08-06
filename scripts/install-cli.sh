@@ -29,6 +29,18 @@ ensure_home_env() {
 
 ensure_home_env
 
+# Track temp paths so fail/exit paths do not leak mktemp dirs/files.
+# Register paths in the caller: command substitutions run in a subshell, so
+# array mutations inside a helper would not reach this shell.
+TMPFILES=()
+cleanup_tmpfiles() {
+  local f
+  for f in "${TMPFILES[@]:-}"; do
+    rm -rf "$f" 2>/dev/null || true
+  done
+}
+trap cleanup_tmpfiles EXIT
+
 resolve_openclaw_effective_home() {
   local openclaw_home="${OPENCLAW_HOME:-}"
   if [[ -z "$openclaw_home" ]]; then
@@ -52,12 +64,18 @@ resolve_openclaw_effective_home() {
 OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
-NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
+REQUIRED_COMPATIBLE_VERSION=""
+DEFAULT_NODE_VERSION="24.15.0"
+ARMV7_DEFAULT_NODE_VERSION="22.22.3"
+NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_VERSION="22.19.0"
+MIN_NODE_22_VERSION="22.22.3"
+MIN_NODE_24_VERSION="24.15.0"
+MIN_NODE_25_VERSION="25.9.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+"
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -78,7 +96,8 @@ Usage: install-cli.sh [options]
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
-  --node-version <ver>                Node version (default: 22.22.0)
+  --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
+  --node-version <ver>                Node version (default: 24.15.0; 22.22.3 on Linux ARMv7)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -120,7 +139,11 @@ download_file() {
     detect_downloader
   fi
   if [[ "$DOWNLOADER" == "curl" ]]; then
-    curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused -o "$output" "$url"
+    # Bound post-connect stalls without imposing a total download duration.
+    curl -fsSL --proto '=https' --tlsv1.2 \
+      --speed-limit 1 --speed-time 30 \
+      --retry 3 --retry-delay 1 --retry-connrefused \
+      -o "$output" "$url"
     return
   fi
   wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
@@ -268,6 +291,13 @@ parse_args() {
         OPENCLAW_VERSION="$2"
         shift 2
         ;;
+      --compatible-with)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
+        REQUIRED_COMPATIBLE_VERSION="$2"
+        shift 2
+        ;;
       --node-version)
         if [[ $# -lt 2 || "${2:-}" == --* ]]; then
           fail "Missing value for $1"
@@ -340,9 +370,21 @@ arch_detect() {
   arch="$(uname -m)"
   case "$arch" in
     arm64|aarch64) echo "arm64" ;;
+    armv7|armv7l) echo "armv7l" ;;
     x86_64|amd64) echo "x64" ;;
     *) fail "Unsupported architecture: $arch" ;;
   esac
+}
+
+select_node_version_for_platform() {
+  local os="$1"
+  local arch="$2"
+  if [[ "$NODE_VERSION_REQUESTED" == "0" && "$os" == "linux" && "$arch" == "armv7l" ]]; then
+    NODE_VERSION="$ARMV7_DEFAULT_NODE_VERSION"
+  fi
+  if [[ "$os" == "linux" && "$arch" == "armv7l" && "${NODE_VERSION%%.*}" != "22" ]]; then
+    fail "Linux ARMv7 requires Node 22.22.3+ because official Node 24+ binaries are unavailable; use --node-version 22.22.3."
+  fi
 }
 
 node_dir() {
@@ -414,6 +456,7 @@ link_node_runtime_paths() {
 }
 
 linked_node_is_usable() {
+  local candidate_bin
   local current_version
   local required_version
 
@@ -423,11 +466,56 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
+  if ! node_version_is_supported "$current_version"; then
+    return 1
+  fi
   if ! semver_at_least "$current_version" "$required_version"; then
     return 1
   fi
+  candidate_bin="$(node_dir)/bin"
+  if ! PATH="${candidate_bin}:${PATH}" "$(npm_bin)" --version >/dev/null 2>&1; then
+    return 1
+  fi
 
-  "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1
+  "$(node_bin)" -e '
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(":memory:");
+    try {
+      const value = db.prepare("SELECT sqlite_version() AS version").get()?.version;
+      const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null;
+      const major = Number(match?.[1]);
+      const minor = Number(match?.[2]);
+      const patch = Number(match?.[3]);
+      const safe =
+        major > 3 ||
+        (major === 3 &&
+          (minor > 51 ||
+            (minor === 51 && patch >= 3) ||
+            (minor === 50 && patch >= 7) ||
+            (minor === 44 && patch >= 6)));
+      if (!safe) process.exitCode = 1;
+    } finally {
+      db.close();
+    }
+  ' >/dev/null 2>&1
+}
+
+linked_node_sqlite_version() {
+  if [[ ! -x "$(node_bin)" ]]; then
+    printf 'unavailable\n'
+    return
+  fi
+  local version
+  version="$("$(node_bin)" -e '
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(":memory:");
+    try {
+      process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? "unknown"));
+    } finally {
+      db.close();
+    }
+  ' 2>/dev/null || true)"
+  printf '%s\n' "${version:-unavailable}"
 }
 
 semver_at_least() {
@@ -460,12 +548,40 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
+node_version_is_supported() {
+  local version="${1#v}"
+  local major minor patch
+
+  IFS=. read -r major minor patch <<<"$version"
+  minor="${minor:-0}"
+  patch="${patch:-0}"
+  for part in "$major" "$minor" "$patch"; do
+    if [[ ! "$part" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+  done
+
+  if ((major == 22)); then
+    semver_at_least "$version" "$MIN_NODE_22_VERSION"
+    return
+  fi
+  if ((major == 24)); then
+    semver_at_least "$version" "$MIN_NODE_24_VERSION"
+    return
+  fi
+  if ((major == 25)); then
+    semver_at_least "$version" "$MIN_NODE_25_VERSION"
+    return
+  fi
+  ((major > 25))
+}
+
 required_node_version() {
-  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
+  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && node_version_is_supported "$NODE_VERSION"; then
     printf '%s\n' "$NODE_VERSION"
     return
   fi
-  printf '%s\n' "$MIN_NODE_VERSION"
+  printf '%s\n' "$MIN_NODE_22_VERSION"
 }
 
 try_link_usable_node_runtime_from_path() {
@@ -495,6 +611,7 @@ try_link_usable_node_runtime_from_path() {
 install_alpine_node() {
   local installed_version
   local required_version
+  local sqlite_version
 
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"method\":\"apk\"}"
   if try_link_usable_node_runtime_from_path; then
@@ -521,7 +638,8 @@ install_alpine_node() {
   if ! linked_node_is_usable; then
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    fail "Alpine Node package must provide Node >= ${required_version} with node:sqlite; found ${installed_version}."
+    sqlite_version="$(linked_node_sqlite_version)"
+    fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
   fi
 
   installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
@@ -580,6 +698,15 @@ EOF
 }
 
 run_pnpm() {
+  if [[ ${#PNPM_CMD[@]} -eq 2 && "${PNPM_CMD[1]}" == "pnpm" ]] && [[ "${1:-}" == "-C" && -n "${2:-}" ]]; then
+    local repo_dir="$2"
+    shift 2
+    if ! (cd "$repo_dir" && "${PNPM_CMD[@]}" --version >/dev/null 2>&1); then
+      ensure_pnpm
+    fi
+    (cd "$repo_dir" && "${PNPM_CMD[@]}" "$@")
+    return
+  fi
   if ! pnpm_cmd_is_ready; then
     ensure_pnpm
   fi
@@ -605,6 +732,122 @@ is_openclaw_source_package_install_spec() {
   [[ "$normalized_value" =~ ^git://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
   [[ "$normalized_value" =~ ^git@github\.com:openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
   return 1
+}
+
+openclaw_version_is_compatible_with() {
+  local candidate="$1"
+  local config_writer="$2"
+
+  "$(node_bin)" - "$candidate" "$config_writer" <<'NODE'
+const candidateRaw = process.argv[2];
+const writerRaw = process.argv[3];
+
+function parse(raw) {
+  let value = String(raw ?? "").trim();
+  const legacyBeta = /^([vV]?\d+\.\d+\.\d+)\.beta(?:\.([0-9A-Za-z.-]+))?$/.exec(value);
+  if (legacyBeta) {
+    value = `${legacyBeta[1]}-beta${legacyBeta[2] ? `.${legacyBeta[2]}` : ""}`;
+  }
+  const match = /^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/.exec(value);
+  if (!match) return null;
+  const parseIdentifiers = (rawIdentifiers) => {
+    if (!rawIdentifiers) return [];
+    const identifiers = rawIdentifiers.split(".");
+    if (identifiers.some((identifier) => identifier.length === 0)) return null;
+    return identifiers.map((identifier) => {
+      if (!/^\d+$/.test(identifier)) return identifier;
+      if (identifier.length > 1 && identifier.startsWith("0")) return null;
+      return Number(identifier);
+    });
+  };
+  const prerelease = parseIdentifiers(match[4]);
+  const build = parseIdentifiers(match[5]);
+  if (!prerelease || !build || prerelease.includes(null) || build.includes(null)) return null;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease,
+    build,
+  };
+}
+
+function compareIdentifiers(left, right) {
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    if (a === b) continue;
+    if (typeof a === "number" && typeof b === "number") return a < b ? -1 : 1;
+    if (typeof a === "number") return -1;
+    if (typeof b === "number") return 1;
+    return a < b ? -1 : 1;
+  }
+  return 0;
+}
+
+function isCorrection(version) {
+  return version.prerelease.length === 1 && typeof version.prerelease[0] === "number";
+}
+
+function comparable(version) {
+  if (!isCorrection(version)) return version;
+  return { ...version, prerelease: [], build: [version.prerelease[0]] };
+}
+
+function compare(leftRaw, rightRaw) {
+  const left = comparable(leftRaw);
+  const right = comparable(rightRaw);
+  for (let index = 0; index < left.core.length; index += 1) {
+    if (left.core[index] !== right.core[index]) {
+      return left.core[index] < right.core[index] ? -1 : 1;
+    }
+  }
+  if (left.prerelease.length === 0 && right.prerelease.length > 0) return 1;
+  if (right.prerelease.length === 0 && left.prerelease.length > 0) return -1;
+  const prereleaseOrder = compareIdentifiers(left.prerelease, right.prerelease);
+  return prereleaseOrder === 0 ? compareIdentifiers(left.build, right.build) : prereleaseOrder;
+}
+
+const candidate = parse(candidateRaw);
+const writer = parse(writerRaw);
+if (!candidate || !writer) process.exit(2);
+const sameCore = candidate.core.every((part, index) => part === writer.core[index]);
+if (sameCore && (writer.prerelease.length === 0 || isCorrection(writer))) process.exit(0);
+process.exit(compare(candidate, writer) < 0 ? 1 : 0);
+NODE
+}
+
+require_openclaw_version_compatible() {
+  local candidate="$1"
+  local config_writer="${REQUIRED_COMPATIBLE_VERSION:-}"
+  if [[ -z "$config_writer" ]]; then
+    return 0
+  fi
+
+  if openclaw_version_is_compatible_with "$candidate" "$config_writer"; then
+    return 0
+  fi
+  local status="$?"
+  if [[ "$status" -eq 2 ]]; then
+    fail "Cannot compare resolved OpenClaw version '${candidate}' with config writer '${config_writer}'."
+  fi
+  fail "OpenClaw ${candidate} is older than config writer ${config_writer}. Choose a newer CLI channel or retry after the channel is updated."
+}
+
+resolve_npm_openclaw_version() {
+  local requested="$1"
+  "$(npm_bin)" view "openclaw@${requested}" version 2>/dev/null | awk 'NF { value = $0 } END { print value }'
+}
+
+resolve_git_checkout_openclaw_version() {
+  local repo_dir="$1"
+  "$(node_bin)" -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const value = JSON.parse(fs.readFileSync(path.join(process.argv[1], "package.json"), "utf8")).version;
+    if (typeof value !== "string" || value.trim() === "") process.exit(1);
+    process.stdout.write(value.trim());
+  ' "$repo_dir"
 }
 
 resolve_git_openclaw_ref() {
@@ -739,6 +982,10 @@ activate_repo_pnpm_version() {
   if [[ -n "$corepack_cmd" ]]; then
     log "Activating repo pnpm ${version}"
     "$corepack_cmd" prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
+    if [[ "$(cd "$repo_dir" && "$corepack_cmd" pnpm --version 2>/dev/null || true)" == "$version" ]]; then
+      set_pnpm_cmd "$corepack_cmd" pnpm
+      return 0
+    fi
     detect_pnpm_cmd || true
   fi
 }
@@ -756,6 +1003,10 @@ install_node() {
 
   os="$(os_detect)"
   arch="$(arch_detect)"
+  select_node_version_for_platform "$os" "$arch"
+  if ! node_version_is_supported "$NODE_VERSION"; then
+    fail "Node ${NODE_VERSION} is unsupported; use ${SUPPORTED_NODE_VERSION_LABEL}."
+  fi
   dir="$(node_dir)"
 
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
@@ -773,6 +1024,7 @@ install_node() {
 
   mkdir -p "${PREFIX}/tools"
   tmp="$(mktemp -d)"
+  TMPFILES+=("$tmp")
   base_url="https://nodejs.org/dist/v${NODE_VERSION}"
   tarball="node-v${NODE_VERSION}-${os}-${arch}.tar.gz"
   url="${base_url}/${tarball}"
@@ -802,9 +1054,11 @@ install_node() {
   if ! linked_node_is_usable; then
     local installed_version
     local required_version
+    local sqlite_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
+    sqlite_version="$(linked_node_sqlite_version)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.15.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }
@@ -973,6 +1227,14 @@ install_openclaw() {
     --no-audit
     "$freshness_flag"
   )
+  local resolved_requested="$requested"
+  if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
+    resolved_requested="$(resolve_npm_openclaw_version "$requested")"
+    if [[ -z "$resolved_requested" ]]; then
+      fail "Could not resolve OpenClaw ${requested} before compatibility checking."
+    fi
+    require_openclaw_version_compatible "$resolved_requested"
+  fi
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"version\":\"${requested}\"}"
   log "Installing OpenClaw (${requested})..."
   if [[ "$SET_NPM_PREFIX" -eq 1 ]]; then
@@ -980,14 +1242,22 @@ install_openclaw() {
   fi
 
   if [[ "${requested}" == "latest" ]]; then
-    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"; then
       log "npm install openclaw@latest failed; retrying openclaw@next"
       emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
+      resolved_requested="next"
+      if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
+        resolved_requested="$(resolve_npm_openclaw_version next)"
+        if [[ -z "$resolved_requested" ]]; then
+          fail "Could not resolve OpenClaw next before compatibility checking."
+        fi
+        require_openclaw_version_compatible "$resolved_requested"
+      fi
+      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"
       requested="next"
     fi
   else
-    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
+    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${resolved_requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"
@@ -1009,6 +1279,7 @@ ensure_pnpm_git_prepare_allowlist() {
 
   if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
     tmp="$(mktemp)"
+    TMPFILES+=("$tmp")
     if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
       awk -v dep="$dep" '
         BEGIN { inserted = 0 }
@@ -1056,6 +1327,11 @@ install_openclaw_from_git() {
   ensure_pnpm
   ensure_pnpm_binary_for_scripts
 
+  if [[ -d "$repo_dir/.git" ]] &&
+    ! git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+    fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
+  fi
+
   if [[ -d "$repo_dir/.git" ]]; then
     :
   elif [[ -d "$repo_dir" ]]; then
@@ -1075,6 +1351,15 @@ install_openclaw_from_git() {
     checkout_git_openclaw_ref "$repo_dir" "$git_ref"
   else
     log "Repo is dirty; skipping git checkout/update"
+  fi
+
+  if [[ -n "${REQUIRED_COMPATIBLE_VERSION:-}" ]]; then
+    local resolved_version
+    resolved_version="$(resolve_git_checkout_openclaw_version "$repo_dir" 2>/dev/null || true)"
+    if [[ -z "$resolved_version" ]]; then
+      fail "Could not resolve the Git checkout version before compatibility checking."
+    fi
+    require_openclaw_version_compatible "$resolved_version"
   fi
 
   cleanup_legacy_submodules "$repo_dir"
@@ -1153,12 +1438,8 @@ refresh_gateway_service_if_loaded() {
     return 0
   fi
 
-  if ! "$claw" gateway restart >/dev/null 2>&1; then
-    emit_json '{"event":"step","name":"gateway-service","status":"warn","reason":"restart-failed"}'
-    log "Warning: gateway service restart failed; continuing."
-    return 0
-  fi
-
+  # `gateway install --force` activates the replacement service. A second
+  # restart can kill startup migrations and strand their lock until expiry.
   "$claw" gateway status --probe --json >/dev/null 2>&1 || true
   emit_json '{"event":"step","name":"gateway-service","status":"ok"}'
 }
@@ -1170,8 +1451,7 @@ main() {
     RUN_ONBOARD=0
   fi
 
-  cleanup_legacy_submodules
-
+  select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 

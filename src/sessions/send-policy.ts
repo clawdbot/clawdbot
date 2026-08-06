@@ -6,6 +6,11 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
+import {
+  hasAmbiguousCanonicalSessionPeerShape,
+  parseCanonicalSessionPeerShape,
+} from "./session-chat-type-shared.js";
 import { deriveSessionChatType } from "./session-chat-type.js";
 
 /** Session send-policy decision after config and per-session overrides are evaluated. */
@@ -32,9 +37,12 @@ function stripAgentSessionKeyPrefix(key?: string): string | undefined {
   if (!key) {
     return undefined;
   }
-  const parts = key.split(":").filter(Boolean);
+  const parts = key.split(":");
   // Canonical agent session keys: agent:<agentId>:<sessionKey...>
-  if (parts.length >= 3 && parts[0] === "agent") {
+  if (parts[0] === "agent") {
+    if (parts.length < 3 || !parts[1] || !parts[2]) {
+      return undefined;
+    }
     return parts.slice(2).join(":");
   }
   return key;
@@ -45,33 +53,24 @@ function deriveChannelFromKey(key?: string) {
   if (!normalizedKey) {
     return undefined;
   }
-  const parts = normalizedKey.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    return normalizeMatchValue(parts[0]);
-  }
-  return undefined;
+  return normalizeMatchValue(parseCanonicalSessionPeerShape(normalizedKey)?.channel);
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
-  if (!normalizedKey) {
+  if (!normalizedKey || normalizedKey.startsWith("agent:")) {
     return undefined;
-  }
-  const tokens = new Set(normalizedKey.split(":").filter(Boolean));
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
   }
   const derived = deriveSessionChatType(normalizedKey);
   if (derived !== "unknown") {
     return derived;
   }
   return undefined;
+}
+
+function hasAmbiguousPeerShape(key?: string): boolean {
+  const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
+  return normalizedKey ? hasAmbiguousCanonicalSessionPeerShape(normalizedKey) : false;
 }
 
 /** Resolves whether a session send is allowed by entry override and config rules. */
@@ -91,6 +90,11 @@ export function resolveSendPolicy(params: {
   if (!policy) {
     return "allow";
   }
+  // The legacy key grammar cannot distinguish a peer-kind-shaped account id
+  // from a channel peer. Never let that ambiguity satisfy an allow policy.
+  if (hasAmbiguousPeerShape(params.sessionKey)) {
+    return "deny";
+  }
 
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
@@ -101,8 +105,7 @@ export function resolveSendPolicy(params: {
   const getChannel = () => {
     channel ??=
       normalizeMatchValue(params.channel) ??
-      normalizeMatchValue(params.entry?.channel) ??
-      normalizeMatchValue(params.entry?.lastChannel) ??
+      normalizeMatchValue(sessionDeliveryChannel(params.entry)) ??
       deriveChannelFromKey(params.sessionKey);
     return channel;
   };

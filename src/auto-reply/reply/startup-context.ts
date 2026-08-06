@@ -1,7 +1,9 @@
 // Loads startup context snippets injected into the first reply turn.
 import fs from "node:fs";
 import path from "node:path";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
@@ -33,34 +35,26 @@ export function shouldApplyStartupContext(params: {
 
 function resolveStartupContextLimits(cfg?: OpenClawConfig) {
   const startupContext = cfg?.agents?.defaults?.startupContext;
-  const clampInt = (value: number | undefined, fallback: number, min: number, max: number) => {
-    const numeric = Number.isFinite(value) ? Math.trunc(value as number) : fallback;
-    return Math.min(max, Math.max(min, numeric));
-  };
   return {
-    dailyMemoryDays: clampInt(
+    dailyMemoryDays: resolveIntegerOption(
       startupContext?.dailyMemoryDays,
       STARTUP_MEMORY_DAILY_DAYS,
-      1,
-      STARTUP_MEMORY_DAILY_DAYS_CAP,
+      { min: 1, max: STARTUP_MEMORY_DAILY_DAYS_CAP },
     ),
-    maxFileBytes: clampInt(
+    maxFileBytes: resolveIntegerOption(
       startupContext?.maxFileBytes,
       STARTUP_MEMORY_FILE_MAX_BYTES,
-      1,
-      STARTUP_MEMORY_FILE_MAX_BYTES_CAP,
+      { min: 1, max: STARTUP_MEMORY_FILE_MAX_BYTES_CAP },
     ),
-    maxFileChars: clampInt(
+    maxFileChars: resolveIntegerOption(
       startupContext?.maxFileChars,
       STARTUP_MEMORY_FILE_MAX_CHARS,
-      1,
-      STARTUP_MEMORY_FILE_MAX_CHARS_CAP,
+      { min: 1, max: STARTUP_MEMORY_FILE_MAX_CHARS_CAP },
     ),
-    maxTotalChars: clampInt(
+    maxTotalChars: resolveIntegerOption(
       startupContext?.maxTotalChars,
       STARTUP_MEMORY_TOTAL_MAX_CHARS,
-      1,
-      STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP,
+      { min: 1, max: STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP },
     ),
   };
 }
@@ -101,7 +95,7 @@ function trimStartupMemoryContent(content: string, maxChars: number): string {
   if (trimmed.length <= maxChars) {
     return trimmed;
   }
-  return `${trimmed.slice(0, maxChars)}\n...[truncated]...`;
+  return `${truncateUtf16Safe(trimmed, maxChars)}\n...[truncated]...`;
 }
 
 function escapeQuotedStartupMemory(content: string): string {

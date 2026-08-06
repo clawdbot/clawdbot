@@ -39,7 +39,7 @@ type BundledPluginPathPair = {
 };
 
 /** Metadata collected from a bundled plugin package and manifest. */
-export type BundledPluginMetadata = {
+type BundledPluginMetadata = {
   dirName: string;
   idHint: string;
   source: BundledPluginPathPair;
@@ -69,13 +69,6 @@ function resolveBundledPluginMetadataScanDir(
     packageRoot,
     runningFromBuiltArtifact: RUNNING_FROM_BUILT_ARTIFACT,
   });
-}
-
-function resolveBundledPluginLookupParams(params: { rootDir: string; scanDir?: string }): {
-  rootDir: string;
-  scanDir?: string;
-} {
-  return params.scanDir ? params : { rootDir: params.rootDir };
 }
 
 function collectBundledPluginMetadata(
@@ -206,29 +199,6 @@ export function findBundledPluginMetadataById(
   return listBundledPluginMetadata(params).find((entry) => entry.manifest.id === pluginId);
 }
 
-/** Resolves the source directory for a bundled plugin in the current workspace. */
-export function resolveBundledPluginWorkspaceSourcePath(params: {
-  rootDir: string;
-  scanDir?: string;
-  pluginId: string;
-}): string | null {
-  const metadata = findBundledPluginMetadataById(params.pluginId, {
-    ...resolveBundledPluginLookupParams({
-      rootDir: params.rootDir,
-      scanDir: params.scanDir,
-    }),
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  });
-  if (!metadata) {
-    return null;
-  }
-  if (params.scanDir) {
-    return path.resolve(params.scanDir, metadata.dirName);
-  }
-  return path.resolve(params.rootDir, "extensions", metadata.dirName);
-}
-
 function listBundledPluginEntryBaseDirs(params: {
   rootDir: string;
   pluginDirName?: string;
@@ -349,47 +319,4 @@ function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string):
     return null;
   }
   return candidate;
-}
-
-/** Resolves the repo entry path for a bundled plugin, preferring source unless requested. */
-export function resolveBundledPluginRepoEntryPath(params: {
-  rootDir: string;
-  pluginId: string;
-  preferBuilt?: boolean;
-  scanDir?: string;
-}): string | null {
-  const metadata = findBundledPluginMetadataById(params.pluginId, {
-    ...resolveBundledPluginLookupParams({
-      rootDir: params.rootDir,
-      scanDir: params.scanDir,
-    }),
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  });
-  if (!metadata) {
-    return null;
-  }
-
-  const entryOrder = params.preferBuilt
-    ? [metadata.source.built, metadata.source.source]
-    : [metadata.source.source, metadata.source.built];
-  const baseDirs = listBundledPluginEntryBaseDirs({
-    rootDir: params.rootDir,
-    pluginDirName: metadata.dirName,
-    ...(params.scanDir ? { scanDir: params.scanDir } : {}),
-  });
-
-  for (const baseDir of baseDirs) {
-    for (const entryPath of entryOrder) {
-      const candidate = resolveBundledPluginEntryCandidate(baseDir, entryPath);
-      if (!candidate) {
-        continue;
-      }
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
 }

@@ -2,7 +2,7 @@
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 /** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
-export type TaskRegistryProcessState = {
+type TaskRegistryProcessState = {
   tasks: Map<string, TaskRecord>;
   taskDeliveryStates: Map<string, TaskDeliveryState>;
   taskIdsByRunId: Map<string, Set<string>>;
@@ -10,6 +10,8 @@ export type TaskRegistryProcessState = {
   taskIdsByParentFlowId: Map<string, Set<string>>;
   taskIdsByRelatedSessionKey: Map<string, Set<string>>;
   tasksWithPendingDelivery: Set<string>;
+  // Listener ownership must survive module reloads alongside the task indexes it updates.
+  listenerStop?: (() => void) | null;
 };
 
 const TASK_REGISTRY_PROCESS_STATE_KEY = Symbol.for("openclaw.taskRegistry.state");

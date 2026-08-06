@@ -31,7 +31,7 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker commitments safety smoke failed"
-  cat "$RUN_LOG"
+  docker_e2e_print_log "$RUN_LOG"
   exit "$status"
 fi
 

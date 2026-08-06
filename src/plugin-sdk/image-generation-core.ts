@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // Shared image-generation implementation helpers for bundled and third-party plugins.
 
 export type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -39,14 +40,9 @@ export const OPENAI_DEFAULT_IMAGE_MODEL = "gpt-image-2";
 type ImageGenerationCoreAuthRuntimeModule =
   typeof import("./image-generation-core.auth.runtime.js");
 
-let imageGenerationCoreAuthRuntimePromise:
-  | Promise<ImageGenerationCoreAuthRuntimeModule>
-  | undefined;
-
-async function loadImageGenerationCoreAuthRuntime(): Promise<ImageGenerationCoreAuthRuntimeModule> {
-  imageGenerationCoreAuthRuntimePromise ??= import("./image-generation-core.auth.runtime.js");
-  return imageGenerationCoreAuthRuntimePromise;
-}
+const loadImageGenerationCoreAuthRuntime = createLazyRuntimeModule(
+  () => import("./image-generation-core.auth.runtime.js"),
+);
 
 /** Resolve image-generation provider API keys through the lazy auth runtime helper. */
 export async function resolveApiKeyForProvider(

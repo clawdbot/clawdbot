@@ -16,6 +16,7 @@ enum SignificantLocationMonitor {
         guard locationMode == .always else { return }
         let status = locationService.authorizationStatus()
         guard status == .authorizedAlways else { return }
+        locationService.setBackgroundLocationUpdatesEnabled(true)
         locationService.startMonitoringSignificantLocationChanges { location in
             struct Payload: Codable {
                 var lat: Double

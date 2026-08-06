@@ -111,6 +111,29 @@ export type DiffArtifactContext = {
   agentAccountId?: string;
 };
 
+export type DiffViewerArtifactMetadata = {
+  version: 1;
+  kind: "viewer";
+  encoding: "gzip";
+  tokenHash: string;
+  title: string;
+  inputKind: DiffInput["kind"];
+  fileCount: number;
+  decodedBytes: number;
+  context?: DiffArtifactContext;
+};
+
+export type DiffRenderedFileArtifactMetadata = {
+  version: 1;
+  kind: "rendered_file";
+  format: DiffOutputFormat;
+  context?: DiffArtifactContext;
+};
+
+export type DiffArtifactBlobMetadata =
+  | DiffViewerArtifactMetadata
+  | DiffRenderedFileArtifactMetadata;
+
 export type DiffArtifactMeta = {
   id: string;
   token: string;
@@ -120,10 +143,7 @@ export type DiffArtifactMeta = {
   inputKind: DiffInput["kind"];
   fileCount: number;
   viewerPath: string;
-  htmlPath: string;
   context?: DiffArtifactContext;
-  filePath?: string;
-  imagePath?: string;
 };
 
 export const DIFF_ARTIFACT_ID_PATTERN = /^[0-9a-f]{20}$/;

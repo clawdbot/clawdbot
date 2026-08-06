@@ -1,9 +1,9 @@
 // Provider contract suites provide shared assertions for provider plugin behavior.
 import { expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import type { WebFetchProviderPlugin } from "../provider-web-fetch-contract.js";
 import type { WebSearchProviderPlugin } from "../provider-web-search-contract.js";
-import type { OpenClawConfig } from "../testing.js";
 
 type Lazy<T> = T | (() => T);
 

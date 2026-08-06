@@ -17,14 +17,6 @@ import {
   type DiscordComponentControlHandlers,
 } from "./agent-components.wildcard-controls.js";
 
-export { resolveDiscordComponentOriginatingTo } from "./agent-components.dispatch.js";
-export {
-  AgentComponentButton,
-  AgentSelectMenu,
-  createAgentComponentButton,
-  createAgentSelectMenu,
-} from "./agent-components.system-controls.js";
-
 type ComponentFactory = (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
 
 function bindDiscordComponentControl<T extends BaseMessageInteractiveComponent>(
@@ -33,22 +25,22 @@ function bindDiscordComponentControl<T extends BaseMessageInteractiveComponent>(
   return (ctx: AgentComponentContext): T => createControl(ctx, discordComponentControlHandlers);
 }
 
-export const createDiscordComponentButton = bindDiscordComponentControl(
+const createDiscordComponentButton = bindDiscordComponentControl(
   createDiscordComponentButtonControl,
 );
-export const createDiscordComponentStringSelect = bindDiscordComponentControl(
+const createDiscordComponentStringSelect = bindDiscordComponentControl(
   createDiscordComponentStringSelectControl,
 );
-export const createDiscordComponentUserSelect = bindDiscordComponentControl(
+const createDiscordComponentUserSelect = bindDiscordComponentControl(
   createDiscordComponentUserSelectControl,
 );
-export const createDiscordComponentRoleSelect = bindDiscordComponentControl(
+const createDiscordComponentRoleSelect = bindDiscordComponentControl(
   createDiscordComponentRoleSelectControl,
 );
-export const createDiscordComponentMentionableSelect = bindDiscordComponentControl(
+const createDiscordComponentMentionableSelect = bindDiscordComponentControl(
   createDiscordComponentMentionableSelectControl,
 );
-export const createDiscordComponentChannelSelect = bindDiscordComponentControl(
+const createDiscordComponentChannelSelect = bindDiscordComponentControl(
   createDiscordComponentChannelSelectControl,
 );
 

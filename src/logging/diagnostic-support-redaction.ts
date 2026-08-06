@@ -2,6 +2,8 @@
 import path from "node:path";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { redactSensitiveText } from "./redact.js";
@@ -17,10 +19,12 @@ const PRIVATE_MAP_SUPPORT_FIELD_RE = /^(?:accounts|chats|conversations|messages|
 const CONFIG_PRIVATE_FIELD_RE =
   /(?:allow[-_]?from|allow[-_]?to|deny[-_]?from|deny[-_]?to|blocked[-_]?from|blocked[-_]?users|owner[-_]?id|sender[-_]?id|recipient[-_]?id)/iu;
 const SENSITIVE_COMMAND_ARG_RE =
-  /^--(?:api[-_]?key|hook[-_]?token|password|password-file|passwd|secret|token)(?:=.*)?$/iu;
+  /^--(?:aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey|api[-_]?key|hook[-_]?token|password|password-file|passwd|secret|token)(?:=.*)?$/iu;
 const BASIC_AUTH_RE = /\bBasic\s+[A-Za-z0-9+/]+={0,2}/giu;
 const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
+const AWS_SECRET_ACCESS_KEY_RE =
+  /(?<![A-Za-z0-9/+=_,-])(?<!;base64,[A-Za-z0-9+/=]*)(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=_,-])/gu;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
 const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
@@ -301,7 +305,8 @@ function redactCommonCredentialTextForSupport(value: string): string {
     .replace(BASIC_AUTH_RE, "Basic <redacted>")
     .replace(COOKIE_HEADER_RE, "$1: <redacted>")
     .replace(AWS_ACCESS_KEY_ID_RE, "<redacted-aws-key>")
-    .replace(JWT_RE, "<redacted-jwt>");
+    .replace(JWT_RE, "<redacted-jwt>")
+    .replace(AWS_SECRET_ACCESS_KEY_RE, "<redacted-aws-secret-key>");
 }
 
 function redactUrlSecretsForSupport(value: string): string {
@@ -343,7 +348,7 @@ export function redactSupportString(
   if (pathRedacted.length <= maxLength) {
     return pathRedacted;
   }
-  return `${pathRedacted.slice(0, maxLength)}${truncationSuffix}`;
+  return `${truncateUtf16Safe(pathRedacted, maxLength)}${truncationSuffix}`;
 }
 
 function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionContext): unknown[] {
@@ -429,6 +434,9 @@ export function sanitizeSupportConfigValue(
     return isPrivateConfigField(key) ? "<redacted>" : value;
   }
   if (typeof value === "string") {
+    if (value === REDACTED_SENTINEL) {
+      return "<redacted>";
+    }
     return isPrivateConfigField(key) ? "<redacted>" : redactSupportString(value, redaction);
   }
   if (depth >= MAX_SUPPORT_SNAPSHOT_DEPTH) {

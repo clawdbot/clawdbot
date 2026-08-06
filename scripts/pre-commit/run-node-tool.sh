@@ -11,8 +11,20 @@ fi
 tool="$1"
 shift
 
+local_tool="$ROOT_DIR/node_modules/.bin/$tool"
+if [[ -x "$local_tool" ]]; then
+  exec "$local_tool" "$@"
+fi
+
 if [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
-  exec pnpm exec "$tool" "$@"
+  if [[ ! -e "$ROOT_DIR/node_modules" ]]; then
+    echo "Missing repo dependencies: cannot run $tool without node_modules." >&2
+    echo "Run pnpm install in a normal checkout, or bypass the hook only after separate formatting proof." >&2
+    exit 1
+  fi
+
+  echo "Missing local tool: $local_tool" >&2
+  exit 1
 fi
 
 if { [[ -f "$ROOT_DIR/bun.lockb" ]] || [[ -f "$ROOT_DIR/bun.lock" ]]; } && command -v bun >/dev/null 2>&1; then

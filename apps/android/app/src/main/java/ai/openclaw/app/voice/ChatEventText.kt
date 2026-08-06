@@ -13,7 +13,7 @@ internal object ChatEventText {
   fun assistantTextFromMessage(messageEl: JsonElement?): String? {
     val message = messageEl.asObjectOrNull() ?: return null
     val role = message["role"].asStringOrNull()
-    if (role != null && role != "assistant") return null
+    if (role != "assistant") return null
     return textFromContent(message["content"])
   }
 

@@ -1,6 +1,6 @@
 // Covers direct-message policy audit findings for channels.
 import { describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 

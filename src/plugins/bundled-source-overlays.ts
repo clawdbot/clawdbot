@@ -11,7 +11,7 @@ function decodeMountInfoPath(value: string): string {
 }
 
 /** Parses Linux mountinfo content into absolute mount points. */
-export function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
+function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
   const mountPoints = new Set<string>();
   for (const line of mountInfo.split(/\r?\n/u)) {
     const trimmed = line.trim();

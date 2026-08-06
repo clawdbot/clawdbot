@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnPnpmRunner } from "../pnpm-runner.mjs";
 import {
+  createVitestProcessCompletion,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mjs";
@@ -17,36 +18,37 @@ const repoRoot = path.resolve(scriptDir, "../..");
 export async function runVitestBatch(params) {
   return await new Promise((resolve, reject) => {
     let forwardedSignal;
+    const detached = shouldUseDetachedVitestProcessGroup();
     const child = spawnPnpmRunner({
       cwd: repoRoot,
-      detached: shouldUseDetachedVitestProcessGroup(),
+      detached,
       env: params.env,
       pnpmArgs: buildVitestBatchPnpmArgs(params),
       stdio: "inherit",
     });
     const teardownChildCleanup = installVitestProcessGroupCleanup({
       child,
+      forceSignal: "SIGKILL",
+      forceSignalDelayMs: 100,
       onSignal(signal) {
-        forwardedSignal = signal;
+        forwardedSignal ??= signal;
       },
     });
+    const completion = createVitestProcessCompletion({ child, detached }).finally(
+      teardownChildCleanup,
+    );
 
-    child.on("error", (error) => {
-      teardownChildCleanup();
-      reject(error);
-    });
-    child.on("exit", (code, signal) => {
-      teardownChildCleanup();
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
+    completion.then(({ code, signal }) => {
       if (forwardedSignal) {
         process.kill(process.pid, forwardedSignal);
         return;
       }
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
       resolve(code ?? 1);
-    });
+    }, reject);
   });
 }
 

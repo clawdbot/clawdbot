@@ -18,6 +18,7 @@ export const browserCoreExamples = [
   "openclaw browser snapshot --format aria --limit 200",
   "openclaw browser snapshot --efficient",
   "openclaw browser snapshot --labels",
+  'openclaw browser extract "What is the main conclusion?"',
 ];
 
 /** Browser CLI examples for interaction/action commands. */
@@ -37,6 +38,10 @@ export const browserActionExamples = [
   "openclaw browser dialog --accept",
   'openclaw browser wait --text "Done"',
   "openclaw browser evaluate --fn '(el) => el.textContent' --ref 7",
+  "openclaw browser evaluate --fn 'const title = document.title; return title;'",
   "openclaw browser console --level error",
   "openclaw browser pdf",
+  "openclaw browser batch --actions-file plan.json",
+  'openclaw browser batch --actions \'[{"kind":"wait","timeMs":500},{"kind":"click","ref":"12"},{"kind":"type","ref":"23","text":"hello"}]\'',
+  "openclaw browser batch --actions-file plan.json --continue",
 ];

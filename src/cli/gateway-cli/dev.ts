@@ -3,10 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, replaceConfigFile } from "../../config/config.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
@@ -29,14 +31,7 @@ async function loadDevTemplate(name: string, fallback: string): Promise<string> 
         }
         throw error;
       }
-      if (!raw.startsWith("---")) {
-        return raw;
-      }
-      const endIndex = raw.indexOf("\n---", 3);
-      if (endIndex === -1) {
-        return raw;
-      }
-      return raw.slice(endIndex + "\n---".length).replace(/^\s+/, "");
+      return extractFrontmatterBlock(raw)?.body.replace(/^\s+/, "") ?? raw;
     }
   } catch {
     return fallback;
@@ -71,7 +66,7 @@ async function ensureDevWorkspace(dir: string) {
   const resolvedDir = resolveUserPath(dir);
   await fs.promises.mkdir(resolvedDir, { recursive: true });
 
-  const [agents, soul, tools, identity, user] = await Promise.all([
+  const [agents, soul, identity, user] = await Promise.all([
     loadDevTemplate(
       "AGENTS.dev.md",
       `# AGENTS.md - OpenClaw Dev Workspace\n\nDefault dev workspace for openclaw gateway --dev.\n`,
@@ -79,10 +74,6 @@ async function ensureDevWorkspace(dir: string) {
     loadDevTemplate(
       "SOUL.dev.md",
       `# SOUL.md - Dev Persona\n\nProtocol droid for debugging and operations.\n`,
-    ),
-    loadDevTemplate(
-      "TOOLS.dev.md",
-      `# TOOLS.md - User Tool Notes (editable)\n\nAdd your local tool notes here.\n`,
     ),
     loadDevTemplate(
       "IDENTITY.dev.md",
@@ -96,7 +87,6 @@ async function ensureDevWorkspace(dir: string) {
 
   await writeFileIfMissing(path.join(resolvedDir, "AGENTS.md"), agents);
   await writeFileIfMissing(path.join(resolvedDir, "SOUL.md"), soul);
-  await writeFileIfMissing(path.join(resolvedDir, "TOOLS.md"), tools);
   await writeFileIfMissing(path.join(resolvedDir, "IDENTITY.md"), identity);
   await writeFileIfMissing(path.join(resolvedDir, "USER.md"), user);
 }
@@ -125,9 +115,8 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
           workspace,
           skipBootstrap: true,
         },
-        list: [
-          {
-            id: "dev",
+        entries: {
+          dev: {
             default: true,
             workspace,
             identity: {
@@ -136,10 +125,13 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
               emoji: DEV_IDENTITY_EMOJI,
             },
           },
-        ],
+        },
       },
     },
     afterWrite: { mode: "auto" },
+    // An absent config resolves to the implicit legacy agent before this full
+    // replacement. Declare only that synthetic deletion; authored rosters stay protected.
+    writeOptions: { allowedAgentRosterRemovals: [LEGACY_IMPLICIT_AGENT_ID] },
   });
   await ensureDevWorkspace(workspace);
   defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);

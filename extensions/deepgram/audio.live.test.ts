@@ -1,15 +1,12 @@
 // Deepgram tests cover audio plugin behavior.
-import {
-  runRealtimeSttLiveTest,
-  synthesizeElevenLabsLiveSpeech,
-} from "openclaw/plugin-sdk/provider-test-contracts";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { spawnSync } from "node:child_process";
+import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { transcribeDeepgramAudio } from "./audio.js";
 import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY ?? "";
-const ELEVENLABS_KEY = process.env.ELEVENLABS_API_KEY ?? "";
 const DEEPGRAM_MODEL = process.env.DEEPGRAM_MODEL?.trim() || "nova-3";
 const DEEPGRAM_BASE_URL = process.env.DEEPGRAM_BASE_URL?.trim();
 const SAMPLE_URL =
@@ -34,6 +31,34 @@ async function fetchSampleBuffer(url: string, timeoutMs: number): Promise<Buffer
   }
 }
 
+function convertWavToMulaw8k(wav: Buffer): Buffer {
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      "pipe:0",
+      "-f",
+      "mulaw",
+      "-ar",
+      "8000",
+      "-ac",
+      "1",
+      "pipe:1",
+    ],
+    { input: wav, maxBuffer: 16 * 1024 * 1024 },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`ffmpeg failed: ${result.stderr.toString("utf8").trim()}`);
+  }
+  return result.stdout;
+}
+
 describeLive("deepgram live", () => {
   it("transcribes sample audio", async () => {
     const buffer = await fetchSampleBuffer(SAMPLE_URL, 15000);
@@ -50,17 +75,8 @@ describeLive("deepgram live", () => {
   }, 30000);
 
   it("streams realtime STT through the registered transcription provider", async () => {
-    if (!ELEVENLABS_KEY) {
-      throw new Error("ELEVENLABS_API_KEY required to synthesize live realtime STT input");
-    }
     const provider = buildDeepgramRealtimeTranscriptionProvider();
-    const phrase = "Testing OpenClaw Deepgram realtime transcription integration OK.";
-    const speech = await synthesizeElevenLabsLiveSpeech({
-      text: phrase,
-      apiKey: ELEVENLABS_KEY,
-      outputFormat: "ulaw_8000",
-      timeoutMs: 30_000,
-    });
+    const speech = convertWavToMulaw8k(await fetchSampleBuffer(SAMPLE_URL, 15_000));
     expect(speech.byteLength).toBeGreaterThan(0);
 
     await runRealtimeSttLiveTest({
@@ -71,6 +87,7 @@ describeLive("deepgram live", () => {
         endpointingMs: 500,
       },
       audio: Buffer.concat([Buffer.alloc(4000, 0xff), speech, Buffer.alloc(8000, 0xff)]),
+      expectedNormalizedText: "lifemovesprettyfast",
     });
   }, 90_000);
 });

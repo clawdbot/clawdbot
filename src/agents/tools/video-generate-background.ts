@@ -3,8 +3,6 @@
  *
  * Specializes the shared media background runner with video status text and completion metadata.
  */
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   createMediaGenerationTaskLifecycle,
@@ -27,35 +25,13 @@ export const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
 });
 
 /** Creates a queued video-generation background task run. */
-export const createVideoGenerationTaskRun = (
-  ...params: Parameters<typeof videoGenerationTaskLifecycle.createTaskRun>
-) => videoGenerationTaskLifecycle.createTaskRun(...params);
+export const createVideoGenerationTaskRun = videoGenerationTaskLifecycle.createTaskRun;
 
 /** Records progress for an active video-generation task. */
-export const recordVideoGenerationTaskProgress = (
-  ...params: Parameters<typeof videoGenerationTaskLifecycle.recordTaskProgress>
-) => videoGenerationTaskLifecycle.recordTaskProgress(...params);
+export const recordVideoGenerationTaskProgress = videoGenerationTaskLifecycle.recordTaskProgress;
 
 /** Marks a video-generation task complete and stores generated attachment metadata. */
-export const completeVideoGenerationTaskRun = (
-  ...params: Parameters<typeof videoGenerationTaskLifecycle.completeTaskRun>
-) => videoGenerationTaskLifecycle.completeTaskRun(...params);
+export const completeVideoGenerationTaskRun = videoGenerationTaskLifecycle.completeTaskRun;
 
 /** Marks a video-generation task failed and emits task status updates. */
-export const failVideoGenerationTaskRun = (
-  ...params: Parameters<typeof videoGenerationTaskLifecycle.failTaskRun>
-) => videoGenerationTaskLifecycle.failTaskRun(...params);
-
-/** Wakes the waiting session turn with final video-generation output. */
-export async function wakeVideoGenerationTaskCompletion(params: {
-  config?: OpenClawConfig;
-  handle: VideoGenerationTaskHandle | null;
-  status: "ok" | "error";
-  statusLabel: string;
-  result: string;
-  attachments?: AgentGeneratedAttachment[];
-  mediaUrls?: string[];
-  statsLine?: string;
-}) {
-  return await videoGenerationTaskLifecycle.wakeTaskCompletion(params);
-}
+export const failVideoGenerationTaskRun = videoGenerationTaskLifecycle.failTaskRun;

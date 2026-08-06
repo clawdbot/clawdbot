@@ -6,15 +6,21 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActiveChannelPluginRuntimeShape,
+  ActivePluginChannelRegistry,
   ActivePluginChannelRegistration,
 } from "../../plugins/channel-registry-state.types.js";
-import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
+import {
+  getActivePluginChannelRegistrySnapshotFromState,
+  type ActivePluginChannelRegistrySnapshot,
+} from "../../plugins/runtime-channel-state.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
 /**
  * Loaded channel plugin shape after id/meta normalization.
  */
-export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
+type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   id: string;
   meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
@@ -22,15 +28,18 @@ export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
 /**
  * Loaded channel registry entry with a normalized plugin payload.
  */
-export type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
+type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: LoadedChannelPlugin;
 };
 
 type ChannelPluginView = {
+  snapshot: ActivePluginChannelRegistrySnapshot;
   sorted: LoadedChannelPlugin[];
   byId: Map<string, LoadedChannelPlugin>;
   entriesById: Map<string, LoadedChannelPluginEntry>;
 };
+
+let cachedChannelPluginView: ChannelPluginView | undefined;
 
 function coerceLoadedChannelPlugin(
   plugin: ActiveChannelPluginRuntimeShape | null | undefined,
@@ -47,36 +56,36 @@ function coerceLoadedChannelPlugin(
   return plugin as LoadedChannelPlugin;
 }
 
-function dedupeChannels(channels: LoadedChannelPlugin[]): LoadedChannelPlugin[] {
+function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelPluginView {
+  const snapshot = getActivePluginChannelRegistrySnapshotFromState();
+  const currentRegistry = registry === undefined || registry === snapshot.registry;
+  if (currentRegistry && cachedChannelPluginView?.snapshot === snapshot) {
+    return cachedChannelPluginView;
+  }
+  const selectedRegistry = registry ?? snapshot.registry;
+
   const seen = new Set<string>();
-  const resolved: LoadedChannelPlugin[] = [];
-  for (const plugin of channels) {
-    const id = normalizeOptionalString(plugin.id) ?? "";
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    resolved.push(plugin);
-  }
-  return resolved;
-}
-
-function resolveChannelPlugins(): ChannelPluginView {
-  const registry = getActivePluginChannelRegistryFromState();
-
-  const channelPlugins: LoadedChannelPlugin[] = [];
-  const pluginEntries: LoadedChannelPluginEntry[] = [];
-  if (registry && Array.isArray(registry.channels)) {
-    for (const entry of registry.channels) {
+  const byId = new Map<string, LoadedChannelPlugin>();
+  const entriesById = new Map<string, LoadedChannelPluginEntry>();
+  if (selectedRegistry && Array.isArray(selectedRegistry.channels)) {
+    for (const entry of selectedRegistry.channels) {
       const plugin = coerceLoadedChannelPlugin(entry?.plugin);
-      if (plugin) {
-        channelPlugins.push(plugin);
-        pluginEntries.push({ ...entry, plugin });
+      if (!plugin) {
+        continue;
       }
+      const id = normalizeOptionalString(plugin.id) ?? "";
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      // Channel registration is first-wins. Keep its implementation and
+      // provenance together so a colliding plugin cannot borrow its authority.
+      seen.add(id);
+      byId.set(plugin.id, plugin);
+      entriesById.set(plugin.id, { ...entry, plugin });
     }
   }
 
-  const sorted = dedupeChannels(channelPlugins).toSorted((a, b) => {
+  const sorted = [...byId.values()].toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id);
     // Explicit plugin order wins; known built-ins keep their product order;
@@ -88,22 +97,18 @@ function resolveChannelPlugins(): ChannelPluginView {
     }
     return a.id.localeCompare(b.id);
   });
-  const byId = new Map<string, LoadedChannelPlugin>();
-  const entriesById = new Map<string, LoadedChannelPluginEntry>();
-  const unsortedEntriesById = new Map(pluginEntries.map((entry) => [entry.plugin.id, entry]));
-  for (const plugin of sorted) {
-    byId.set(plugin.id, plugin);
-    const entry = unsortedEntriesById.get(plugin.id);
-    if (entry) {
-      entriesById.set(plugin.id, entry);
-    }
-  }
 
-  return {
+  const view = {
+    snapshot: currentRegistry ? snapshot : { registry: selectedRegistry, version: 0 },
     sorted,
     byId,
     entriesById,
   };
+  if (currentRegistry) {
+    // Runtime snapshots invalidate the single process-root registry view.
+    cachedChannelPluginView = view;
+  }
+  return view;
 }
 
 /**
@@ -111,6 +116,13 @@ function resolveChannelPlugins(): ChannelPluginView {
  */
 export function listLoadedChannelPlugins(): LoadedChannelPlugin[] {
   return resolveChannelPlugins().sorted.slice();
+}
+
+/** Lists one exact registry without substituting a pinned or active registry. */
+export function listLoadedChannelPluginsForRegistry(
+  registry: ActivePluginChannelRegistry,
+): ChannelPlugin[] {
+  return resolveChannelPlugins(registry).sorted.slice() as ChannelPlugin[];
 }
 
 /**
@@ -122,6 +134,11 @@ export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | un
     return undefined;
   }
   return resolveChannelPlugins().byId.get(resolvedId);
+}
+
+/** Returns one loaded channel plugin without triggering bundled discovery. */
+export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
+  return getLoadedChannelPluginById(id) as ChannelPlugin | undefined;
 }
 
 /**

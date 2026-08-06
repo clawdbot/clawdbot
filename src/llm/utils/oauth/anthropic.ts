@@ -6,7 +6,13 @@
  */
 
 import type { Server } from "node:http";
+import { toErrorObject } from "../../../infra/errors.js";
+import { readResponseWithLimit } from "../../../infra/http-body.js";
 import {
+  generateOAuthState,
+  generatePKCE,
+  oauthErrorHtml,
+  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
@@ -16,8 +22,6 @@ import {
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
 } from "./abort.js";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
-import { generateOAuthState, generatePKCE } from "./pkce.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
@@ -27,7 +31,6 @@ import type {
 
 type CallbackServerInfo = {
   server: Server;
-  redirectUri: string;
   cancelWait: () => void;
   waitForCode: () => Promise<{ code: string; state: string } | null>;
 };
@@ -39,16 +42,29 @@ type NodeApis = {
 let nodeApis: NodeApis | null = null;
 let nodeApisPromise: Promise<NodeApis> | null = null;
 
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
+const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const CALLBACK_HOST = process.env.OPENCLAW_OAUTH_CALLBACK_HOST || "127.0.0.1";
+const DEFAULT_CALLBACK_HOST = "127.0.0.1";
+const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
+
+function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
+  const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
+  if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
+    throw new Error("Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1");
+  }
+  return host;
+}
+
 const SCOPES =
   "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+
+/** Max response body bytes for Anthropic OAuth token endpoint (16 MiB). */
+const OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 async function getNodeApis(): Promise<NodeApis> {
   if (nodeApis) {
     return nodeApis;
@@ -196,14 +212,15 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
       }
     });
 
+    const callbackHost = resolveCallbackHost();
+
     server.on("error", (err) => {
       reject(err);
     });
 
-    server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
+    server.listen(CALLBACK_PORT, callbackHost, () => {
       resolve({
         server,
-        redirectUri: REDIRECT_URI,
         cancelWait: () => {
           settleWait?.(null);
         },
@@ -230,7 +247,10 @@ async function postJson(
     signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
   });
 
-  const responseBody = await response.text();
+  const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size }) => new Error(`Anthropic OAuth response too large: ${size} bytes`),
+  });
+  const responseBody = new TextDecoder().decode(buffer);
 
   if (!response.ok) {
     throw new Error(
@@ -281,7 +301,7 @@ async function exchangeAuthorizationCode(
 /**
  * Login with Anthropic OAuth (authorization code + PKCE)
  */
-export async function loginAnthropic(options: {
+async function loginAnthropic(options: {
   onAuth: (info: { url: string; instructions?: string }) => void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
@@ -295,7 +315,6 @@ export async function loginAnthropic(options: {
 
   let code: string | undefined;
   let state: string | undefined;
-  let redirectUriForExchange = REDIRECT_URI;
 
   try {
     throwIfOAuthLoginAborted(options.signal);
@@ -344,7 +363,6 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = REDIRECT_URI;
       } else if (manualInput) {
         const parsed = parseOAuthAuthorizationInput(manualInput);
         if (parsed.state && parsed.state !== expectedState) {
@@ -357,7 +375,7 @@ export async function loginAnthropic(options: {
       if (!code) {
         await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
         if (manualError) {
-          throw toLintErrorObject(manualError, "Non-Error thrown");
+          throw toErrorObject(manualError, "Non-Error thrown");
         }
         if (manualInput) {
           const parsed = parseOAuthAuthorizationInput(manualInput);
@@ -377,7 +395,6 @@ export async function loginAnthropic(options: {
       if (result?.code) {
         code = result.code;
         state = result.state;
-        redirectUriForExchange = REDIRECT_URI;
       }
     }
 
@@ -407,7 +424,7 @@ export async function loginAnthropic(options: {
     }
 
     options.onProgress?.("Exchanging authorization code for tokens...");
-    return exchangeAuthorizationCode(code, state, verifier, redirectUriForExchange, options.signal);
+    return exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI, options.signal);
   } finally {
     server.server.close();
   }
@@ -416,7 +433,7 @@ export async function loginAnthropic(options: {
 /**
  * Refresh Anthropic OAuth token
  */
-export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
+async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
   let responseBody: string;
   try {
     responseBody = await postJson(TOKEN_URL, {
@@ -460,17 +477,3 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
     return credentials.access;
   },
 };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

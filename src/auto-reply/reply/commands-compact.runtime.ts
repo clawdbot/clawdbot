@@ -2,7 +2,7 @@
 export {
   abortEmbeddedAgentRun,
   compactEmbeddedAgentSession,
-  isEmbeddedAgentRunActive,
+  isEmbeddedAgentRunAbortableForCompaction,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent.js";
 export {

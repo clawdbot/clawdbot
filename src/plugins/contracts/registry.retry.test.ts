@@ -42,21 +42,19 @@ afterEach(() => {
 });
 
 describe("plugin contract registry scoped retries", () => {
-  it("retries provider loads after a transient plugin-scoped runtime error", async () => {
+  it("retries when a manifest-declared provider has no runtime entry", async () => {
     const loadBundledCapabilityRuntimeRegistry = vi
       .fn()
       .mockReturnValueOnce(
         createMockRuntimeRegistry({
           plugin: {
             id: "arcee",
-            status: "error",
-            error: "transient arcee load failure",
-            providerIds: [],
+            status: "loaded",
+            providerIds: ["arcee"],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
             migrationProviderIds: [],
           },
-          diagnostics: [{ pluginId: "arcee", message: "transient arcee load failure" }],
         }),
       )
       .mockReturnValueOnce(
@@ -165,44 +163,6 @@ describe("plugin contract registry scoped retries", () => {
       ),
     ).toEqual(["searxng"]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
-  });
-
-  it("reuses the single registered provider contract for paired manifest alias ids", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi.fn().mockReturnValue(
-      createMockRuntimeRegistry({
-        plugin: {
-          id: "byteplus",
-          status: "loaded",
-          providerIds: ["byteplus"],
-          webFetchProviderIds: [],
-          webSearchProviderIds: [],
-          migrationProviderIds: [],
-        },
-        providers: [
-          {
-            pluginId: "byteplus",
-            provider: {
-              id: "byteplus",
-              label: "BytePlus",
-              docsPath: "/providers/byteplus",
-              auth: [],
-            } as ProviderPlugin,
-          },
-        ],
-      }),
-    );
-
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
-    vi.doMock("../provider-contract-public-artifacts.js", () => ({
-      resolveBundledExplicitProviderContractsFromPublicArtifacts: () => null,
-    }));
-
-    const { requireProviderContractProvider } = await import("./registry.js");
-
-    expect(requireProviderContractProvider("byteplus-plan").id).toBe("byteplus");
-    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("uses provider public artifacts before falling back to the bundled runtime registry", async () => {

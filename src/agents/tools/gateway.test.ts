@@ -1,16 +1,36 @@
-// Gateway call helper tests pin URL override, token, and RPC scope behavior for
-// agent tools that route through the local gateway client.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CallGatewayScopedOptions } from "../../gateway/call.js";
+import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { callGatewayTool, readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  callGatewayTool,
+  readGatewayCallOptions,
+  resolveGatewayOptions,
+  resolveMessageActionAgentRuntimeIdentityToken,
+} from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   configState: {
     value: {} as Record<string, unknown>,
   },
+  deviceIdentity: {
+    deviceId: "agent-tool-device",
+    publicKeyPem: "public-key",
+    privateKeyPem: "private-key",
+  },
+  persistedDeviceIdentity: undefined as
+    | {
+        deviceId: string;
+        publicKeyPem: string;
+        privateKeyPem: string;
+      }
+    | null
+    | undefined,
+  deviceIdentityError: undefined as Error | undefined,
 }));
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => mocks.configState.value,
@@ -19,26 +39,42 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => mocks.callGateway(...args),
 }));
+vi.mock("../../infra/device-identity.js", () => ({
+  loadDeviceIdentityIfPresent: () =>
+    mocks.persistedDeviceIdentity === undefined
+      ? mocks.deviceIdentity
+      : mocks.persistedDeviceIdentity,
+  loadOrCreateDeviceIdentity: () => {
+    if (mocks.deviceIdentityError) {
+      throw mocks.deviceIdentityError;
+    }
+    return mocks.deviceIdentity;
+  },
+}));
 
-function capturedGatewayCall(): CallGatewayScopedOptions {
+function capturedGatewayCall(): CallGatewayOptions {
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   const call = mocks.callGateway.mock.calls[0];
   if (!call) {
     throw new Error("expected callGateway to be called");
   }
-  return call[0] as CallGatewayScopedOptions;
+  return call[0] as CallGatewayOptions;
 }
 
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
+    gatewayUrl: process.env.OPENCLAW_GATEWAY_URL,
   };
 
   beforeEach(() => {
     mocks.callGateway.mockClear();
+    mocks.deviceIdentityError = undefined;
+    mocks.persistedDeviceIdentity = undefined;
     mocks.configState.value = {};
     setActivePluginRegistry(createEmptyPluginRegistry());
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
   afterAll(() => {
@@ -47,11 +83,17 @@ describe("gateway tool defaults", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = envSnapshot.openclaw;
     }
+    if (envSnapshot.gatewayUrl === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_URL;
+    } else {
+      process.env.OPENCLAW_GATEWAY_URL = envSnapshot.gatewayUrl;
+    }
   });
 
   it("leaves url undefined so callGateway can use config", () => {
     const opts = resolveGatewayOptions();
     expect(opts.url).toBeUndefined();
+    expect(opts.target).toBe("local");
   });
 
   it("accepts allowlisted gatewayUrl overrides (SSRF hardening)", async () => {
@@ -221,9 +263,12 @@ describe("gateway tool defaults", () => {
     );
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
-      [{ method?: string; scopes?: string[] }]
-    >;
+    const [callParams] = expectDefined(
+      (
+        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
+      )[0],
+      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
+    );
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual(["operator.approvals"]);
   });
@@ -242,15 +287,19 @@ describe("gateway tool defaults", () => {
     );
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
-      [{ method?: string; scopes?: string[] }]
-    >;
+    const [callParams] = expectDefined(
+      (
+        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
+      )[0],
+      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
+    );
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual([
       "operator.admin",
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -279,6 +328,235 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.request");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it.each([
+    {
+      name: "approved flag",
+      params: { approved: true, runId: "approval-inline" },
+    },
+    {
+      name: "allow-once decision",
+      params: { approvalDecision: "allow-once", runId: "approval-async" },
+    },
+    {
+      name: "allow-always decision",
+      params: { approvalDecision: "allow-always", runId: "approval-always" },
+    },
+  ])("binds persisted device identity to node system.run with $name", async ({ params }) => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      { nodeId: "node-1", command: "system.run", params, idempotencyKey: "invoke-1" },
+      { scopes: ["operator.write", "operator.approvals"] },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+  });
+
+  it.each([
+    {
+      name: "unapproved system.run",
+      command: "system.run",
+      params: { approved: false },
+    },
+    {
+      name: "system.run.prepare",
+      command: "system.run.prepare",
+      params: { approved: true, approvalDecision: "allow-once" },
+    },
+    {
+      name: "unrelated node command",
+      command: "system.info",
+      params: { approved: true, approvalDecision: "allow-always" },
+    },
+  ])("keeps ordinary node.invoke device-less for $name", async ({ command, params }) => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command,
+        params,
+        idempotencyKey: "invoke-1",
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call).not.toHaveProperty("deviceIdentity");
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+  });
+
+  it("fails approved node system.run closed without a persisted identity", async () => {
+    mocks.persistedDeviceIdentity = null;
+
+    await expect(
+      callGatewayTool(
+        "node.invoke",
+        {},
+        {
+          nodeId: "node-1",
+          command: "system.run",
+          params: { approved: true, runId: "approval-id" },
+          idempotencyKey: "invoke-1",
+        },
+        { scopes: ["operator.write", "operator.approvals"] },
+      ),
+    ).rejects.toThrow("approved node gateway calls require a stable device identity");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("uses existing local identity without creating new authority", async () => {
+    mocks.deviceIdentityError = new Error("must not create identity during replay");
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.run",
+        params: { approved: true, runId: "approval-id" },
+        idempotencyKey: "invoke-1",
+      },
+      { scopes: ["operator.write", "operator.approvals"] },
+    );
+
+    expect(capturedGatewayCall().deviceIdentity).toEqual(mocks.deviceIdentity);
+    const turnCapability = "unused";
+    await withGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey: "agent:ops:telegram:group:room-1" },
+      async () => {
+        expect(
+          await resolveMessageActionAgentRuntimeIdentityToken({
+            opts: {},
+            target: "remote",
+            turnCapability,
+            runId: "run-1",
+            sessionId: "session-1",
+          }),
+        ).toBeUndefined();
+        expect(
+          await resolveMessageActionAgentRuntimeIdentityToken({
+            opts: { gatewayToken: "explicit" },
+            target: "local",
+            turnCapability,
+            runId: "run-1",
+            sessionId: "session-1",
+          }),
+        ).toBeUndefined();
+      },
+    );
+  });
+
+  it("explains stale gateway cron connection metadata rejections", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error(
+        "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+      ),
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow(
+      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("explains fail-closed stale gateway cron identity rejections", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error(
+        "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+      ),
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow(
+      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("does not rewrite stale gateway validation errors for unscoped cron calls", async () => {
+    const originalError = new Error(
+      "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+    );
+    mocks.callGateway.mockRejectedValueOnce(originalError);
+
+    await expect(callGatewayTool("cron.remove", {}, { id: "job-1" })).rejects.toBe(originalError);
+  });
+
+  it("fails contextual cron calls closed for gatewayUrl overrides", async () => {
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool(
+            "cron.remove",
+            { gatewayUrl: "ws://127.0.0.1:18789" },
+            { id: "job-1" },
+          );
+        },
+      ),
+    ).rejects.toThrow("agent gateway calls require the trusted local gateway context");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("fails contextual cron calls closed for explicit gateway tokens", async () => {
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", { gatewayToken: "token" }, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow("agent gateway calls require the trusted local gateway context");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("fails contextual cron calls closed for configured remote gateways", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow("agent gateway calls require the trusted local gateway context");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("marks local approval wait calls as approval runtime calls", async () => {
@@ -290,6 +568,232 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.waitDecision");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("marks local plugin approval wait calls with runtime and device identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("plugin.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("plugin.approval.waitDecision");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("attaches trusted turn-source metadata to node invokes", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:telegram:direct:alice",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: 42,
+      },
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "file.fetch",
+            params: { path: "/tmp/a" },
+            idempotencyKey: "invoke-1",
+            turnSourceChannel: "attacker-channel",
+            turnSourceTo: "attacker-target",
+            turnSourceAccountId: "attacker-account",
+            turnSourceThreadId: "attacker-thread",
+          },
+        );
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.params).toEqual({
+      nodeId: "node-1",
+      command: "file.fetch",
+      params: { path: "/tmp/a" },
+      idempotencyKey: "invoke-1",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "chat:123",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: 42,
+    });
+    await expect(
+      verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken ?? ""),
+    ).resolves.toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+    });
+  });
+
+  it("retries node invokes without optional identity against an older gateway", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(
+        new Error(
+          "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+        ),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+      },
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "device.info",
+            idempotencyKey: "invoke-legacy",
+          },
+        );
+      },
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway.mock.calls[0]?.[0]).toHaveProperty(
+      "agentRuntimeIdentityToken",
+      expect.any(String),
+    );
+    expect(mocks.callGateway.mock.calls[1]?.[0].agentRuntimeIdentityToken).toBeUndefined();
+    expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual({
+      nodeId: "node-1",
+      command: "device.info",
+      idempotencyKey: "invoke-legacy",
+    });
+  });
+
+  it("strips turn-source fields for gateways with the preceding node schema", async () => {
+    const schemaError = Object.assign(
+      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { nodeCommandDispatched: false },
+      },
+    );
+    mocks.callGateway.mockRejectedValueOnce(schemaError).mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+      },
+      async () => {
+        await callGatewayTool(
+          "node.invoke",
+          {},
+          {
+            nodeId: "node-1",
+            command: "device.info",
+            idempotencyKey: "invoke-preceding-schema",
+          },
+        );
+      },
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual({
+      nodeId: "node-1",
+      command: "device.info",
+      idempotencyKey: "invoke-preceding-schema",
+    });
+    expect(mocks.callGateway.mock.calls[1]?.[0]).toHaveProperty(
+      "agentRuntimeIdentityToken",
+      expect.any(String),
+    );
+  });
+
+  it("does not retry a dispatched node invoke whose error resembles schema rejection", async () => {
+    const dispatchedError = Object.assign(
+      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { nodeCommandDispatched: true },
+      },
+    );
+    mocks.callGateway.mockRejectedValueOnce(dispatchedError);
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        },
+        async () =>
+          await callGatewayTool(
+            "node.invoke",
+            {},
+            {
+              nodeId: "node-1",
+              command: "device.info",
+              idempotencyKey: "invoke-dispatched",
+            },
+          ),
+      ),
+    ).rejects.toBe(dispatchedError);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a node invoke schema rejection without pre-dispatch provenance", async () => {
+    const ambiguousError = Object.assign(
+      new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      },
+    );
+    mocks.callGateway.mockRejectedValueOnce(ambiguousError);
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat:123",
+        },
+        async () =>
+          await callGatewayTool(
+            "node.invoke",
+            {},
+            {
+              nodeId: "node-1",
+              command: "device.info",
+              idempotencyKey: "invoke-ambiguous",
+            },
+          ),
+      ),
+    ).rejects.toBe(ambiguousError);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks local plugin approval request calls with runtime and device identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "plugin:approval-id" });
+
+    await callGatewayTool("plugin.approval.request", {}, { title: "approve", description: "test" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("plugin.approval.request");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });
 
   it("marks local approval resolve calls as approval runtime calls", async () => {
@@ -305,6 +809,152 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("exec.approval.resolve");
     expect(call.scopes).toEqual(["operator.approvals"]);
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("does not attach agent provenance to ordinary contextual approval resolutions", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      async () => {
+        await callGatewayTool(
+          "exec.approval.resolve",
+          {},
+          { id: "approval-id", decision: "allow-once" },
+        );
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call).not.toHaveProperty("agentRuntimeIdentityToken");
+  });
+
+  it("attaches trusted agent identity to local auto-review resolution calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      async () => {
+        await callGatewayTool(
+          "exec.approval.resolve",
+          {},
+          { id: "approval-id", decision: "allow-once" },
+          { requireAgentRuntimeIdentity: true },
+        );
+      },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("fails required agent identity resolution calls closed outside agent context", async () => {
+    await expect(
+      callGatewayTool(
+        "exec.approval.resolve",
+        {},
+        { id: "approval-id", decision: "allow-once" },
+        { requireAgentRuntimeIdentity: true },
+      ),
+    ).rejects.toThrow("trusted agent runtime identity required for this gateway call");
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not require device identity for local approval runtime calls", async () => {
+    mocks.deviceIdentityError = new Error("state directory read-only");
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+    expect(call).not.toHaveProperty("deviceIdentity");
+  });
+
+  it("does not send the local approval runtime token to configured remote gateways", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.url).toBeUndefined();
+    expect(call.token).toBeUndefined();
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("keeps the local approval runtime token for remote mode without a remote URL", async () => {
+    mocks.configState.value = {
+      gateway: {
+        mode: "remote",
+      },
+    };
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
+  it("does not send the local approval runtime token to env-selected gateways", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway.example";
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.url).toBeUndefined();
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("does not send the local approval runtime token to loopback env-selected gateways", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.url).toBeUndefined();
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("does not send the local approval runtime token to loopback env-selected gateway paths", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789/ws";
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.url).toBeUndefined();
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
+  });
+
+  it("fails env-selected approval calls when requester device identity is unavailable", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    mocks.deviceIdentityError = new Error("state directory read-only");
+
+    await expect(
+      callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" }),
+    ).rejects.toThrow("remote approval gateway calls require a stable device identity");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("does not send the local approval runtime token to gatewayUrl overrides", async () => {

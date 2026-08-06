@@ -5,12 +5,13 @@ import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import { getTelegramRuntime } from "./runtime.js";
+import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const LEGACY_STORE_VERSION = 1;
 export const TELEGRAM_BOT_INFO_CACHE_NAMESPACE = "telegram.bot-info-cache";
 export const TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES = 128;
-export const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type TelegramBotInfoCacheState = {
   tokenFingerprint: string;
@@ -18,7 +19,7 @@ type TelegramBotInfoCacheState = {
   botInfo: TelegramBotInfo;
 };
 
-export type CachedTelegramBotInfo = {
+type CachedTelegramBotInfo = {
   botInfo: TelegramBotInfo;
   fetchedAt: string;
 };
@@ -28,16 +29,6 @@ type TelegramBotInfoCacheStore = {
   lookup(key: string): Promise<TelegramBotInfoCacheState | undefined>;
   delete(key: string): Promise<boolean>;
 };
-
-let botInfoCacheStoreForTest: TelegramBotInfoCacheStore | undefined;
-
-function normalizeAccountId(accountId?: string) {
-  const trimmed = accountId?.trim();
-  if (!trimmed) {
-    return "default";
-  }
-  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
-}
 
 function fingerprintFromToken(botToken?: string): string | null {
   const trimmed = botToken?.trim();
@@ -52,18 +43,19 @@ export function resolveTelegramBotInfoCachePath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "telegram", `bot-info-${normalizeAccountId(accountId)}.json`);
+  return path.join(
+    stateDir,
+    "telegram",
+    `bot-info-${normalizeTelegramStateAccountId(accountId)}.json`,
+  );
 }
 
 function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
-  return (
-    botInfoCacheStoreForTest ??
-    getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
-      namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
-      maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
-      defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
-    })
-  );
+  return getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
+    namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
+    maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
+    defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
+  });
 }
 
 function parseCachedTelegramBotInfo(value: unknown) {
@@ -110,7 +102,7 @@ export async function readCachedTelegramBotInfo(params: {
     return null;
   }
   const parsed = parseCachedTelegramBotInfo(
-    await openBotInfoCacheStore().lookup(normalizeAccountId(params.accountId)),
+    await openBotInfoCacheStore().lookup(normalizeTelegramStateAccountId(params.accountId)),
   );
   if (!parsed || parsed.tokenFingerprint !== tokenFingerprint) {
     return null;
@@ -136,7 +128,7 @@ export async function writeCachedTelegramBotInfo(params: {
   if (!botInfo) {
     return;
   }
-  await openBotInfoCacheStore().register(normalizeAccountId(params.accountId), {
+  await openBotInfoCacheStore().register(normalizeTelegramStateAccountId(params.accountId), {
     tokenFingerprint,
     fetchedAt: new Date().toISOString(),
     botInfo,
@@ -144,13 +136,7 @@ export async function writeCachedTelegramBotInfo(params: {
 }
 
 export async function deleteCachedTelegramBotInfo(params: { accountId?: string }): Promise<void> {
-  await openBotInfoCacheStore().delete(normalizeAccountId(params.accountId));
-}
-
-export function setTelegramBotInfoCacheStoreForTest(
-  store: TelegramBotInfoCacheStore | undefined,
-): void {
-  botInfoCacheStoreForTest = store;
+  await openBotInfoCacheStore().delete(normalizeTelegramStateAccountId(params.accountId));
 }
 
 export async function listTelegramLegacyBotInfoCacheEntries(params: {
@@ -162,5 +148,5 @@ export async function listTelegramLegacyBotInfoCacheEntries(params: {
   if (!parsed) {
     return [];
   }
-  return [{ key: normalizeAccountId(params.accountId), value: parsed }];
+  return [{ key: normalizeTelegramStateAccountId(params.accountId), value: parsed }];
 }

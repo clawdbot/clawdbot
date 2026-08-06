@@ -44,6 +44,18 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
     }
   });
 
+  it("rejects out-of-range gateway port env values", () => {
+    const root = makeTempRoot();
+    try {
+      const result = runFixture(root, "config-reload", [], { PORT: "65536" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("invalid PORT: 65536");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("writes strict positive browser CDP ports into generated config", () => {
     const root = makeTempRoot();
     try {
@@ -52,6 +64,11 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
       expect(result.status).toBe(0);
       const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
       expect(config.gateway.port).toBe(19000);
+      expect(config.browser.noSandbox).toBe(true);
+      expect(config.browser.extraArgs).toEqual([
+        "--remote-debugging-address=127.0.0.1",
+        "about:blank",
+      ]);
       expect(config.browser.profiles["docker-cdp"].cdpUrl).toBe("http://127.0.0.1:19223");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -65,6 +82,18 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("invalid CDP_PORT: 19222http");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects out-of-range browser CDP port env values", () => {
+    const root = makeTempRoot();
+    try {
+      const result = runFixture(root, "browser-cdp", [], { CDP_PORT: "65536" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("invalid CDP_PORT: 65536");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -98,6 +127,27 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
           (entry: { path: string }) => entry.path === "models.providers.openai.timeoutSeconds",
         )?.value,
       ).toBe(300);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes OpenAI web-search minimal config for the package scenario", () => {
+    const root = makeTempRoot();
+    try {
+      const result = runFixture(root, "openai-web-search-minimal-config");
+
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+      expect(config.agents.defaults.model.primary).toBe("openai/gpt-5");
+      expect(config.models.providers.openai).toMatchObject({
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        request: { allowPrivateNetwork: true },
+      });
+      expect(config.tools.web.search).toEqual({ enabled: true, maxResults: 3 });
+      expect(config.plugins.entries.openai).toEqual({ enabled: true });
+      expect(config.gateway.auth).toEqual({ mode: "token", token: "test-token" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

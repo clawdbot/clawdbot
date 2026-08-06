@@ -2,7 +2,7 @@
 // Summarizes Docker E2E timing artifacts.
 // Accepts scheduler summary.json or lane-timings.json so agents can see the
 // slowest lanes and phase critical path before deciding what to rerun.
-import fs from "node:fs";
+import { readDockerE2eJsonArtifact } from "./lib/docker-e2e-json-artifacts.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 function usage() {
@@ -12,7 +12,7 @@ function usage() {
 function parseArgs(argv) {
   const options = { file: "", help: false, limit: 12 };
   const readLimit = (raw) => {
-    if (!raw || raw.startsWith("--")) {
+    if (!raw || raw.startsWith("-")) {
       throw new Error("--limit requires a value");
     }
     return parsePositiveInt(raw, "--limit");
@@ -25,6 +25,8 @@ function parseArgs(argv) {
       options.limit = readLimit(argv[(index += 1)]);
     } else if (arg?.startsWith("--limit=")) {
       options.limit = readLimit(arg.slice("--limit=".length));
+    } else if (arg?.startsWith("-")) {
+      throw new Error(`unknown argument: ${arg}\n${usage()}`);
     } else if (!options.file) {
       options.file = arg;
     } else {
@@ -41,7 +43,7 @@ function parseArgs(argv) {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  return readDockerE2eJsonArtifact(file);
 }
 
 function seconds(value) {

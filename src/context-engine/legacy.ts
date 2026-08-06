@@ -1,15 +1,7 @@
 // Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
-import type { AgentMessage } from "../agents/runtime/index.js";
-import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
-import type {
-  ContextEngine,
-  ContextEngineInfo,
-  AssembleResult,
-  CompactResult,
-  ContextEngineRuntimeContext,
-  IngestResult,
-} from "./types.js";
+import { CONTEXT_ENGINE_HOST_PARAMS } from "./registry.js";
+import type { AssembleResult, ContextEngine, ContextEngineInfo } from "./types.js";
 
 /**
  * LegacyContextEngine wraps the existing compaction behavior behind the
@@ -24,27 +16,15 @@ export class LegacyContextEngine implements ContextEngine {
     id: "legacy",
     name: "Legacy Context Engine",
     version: "1.0.0",
+    acceptedHostParams: [...CONTEXT_ENGINE_HOST_PARAMS],
   };
 
-  async ingest(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    message: AgentMessage;
-    isHeartbeat?: boolean;
-  }): Promise<IngestResult> {
+  async ingest(_params: Parameters<ContextEngine["ingest"]>[0]) {
     // No-op: SessionManager handles message persistence in the legacy flow
     return { ingested: false };
   }
 
-  async assemble(params: {
-    sessionId: string;
-    sessionKey?: string;
-    messages: AgentMessage[];
-    tokenBudget?: number;
-    availableTools?: Set<string>;
-    citationsMode?: MemoryCitationsMode;
-    model?: string;
-  }): Promise<AssembleResult> {
+  async assemble(params: Parameters<ContextEngine["assemble"]>[0]): Promise<AssembleResult> {
     // Pass-through: the existing sanitize -> validate -> limit -> repair pipeline
     // in attempt.ts handles context assembly for the legacy engine.
     // We just return the messages as-is with a rough token estimate.
@@ -54,32 +34,12 @@ export class LegacyContextEngine implements ContextEngine {
     };
   }
 
-  async afterTurn(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
-    messages: AgentMessage[];
-    prePromptMessageCount: number;
-    autoCompactionSummary?: string;
-    isHeartbeat?: boolean;
-    tokenBudget?: number;
-    runtimeContext?: ContextEngineRuntimeContext;
-  }): Promise<void> {
+  async afterTurn(_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]): Promise<void> {
     // No-op: legacy flow persists context directly in SessionManager.
   }
 
-  async compact(params: {
-    sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
-    tokenBudget?: number;
-    force?: boolean;
-    currentTokenCount?: number;
-    compactionTarget?: "budget" | "threshold";
-    customInstructions?: string;
-    runtimeContext?: ContextEngineRuntimeContext;
-  }): Promise<CompactResult> {
-    return await delegateCompactionToRuntime(params);
+  compact(params: Parameters<ContextEngine["compact"]>[0]) {
+    return delegateCompactionToRuntime(params);
   }
 
   async dispose(): Promise<void> {

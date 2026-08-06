@@ -1,25 +1,6 @@
 // Slack tests cover stream mode plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  applyAppendOnlyStreamUpdate,
-  buildStatusFinalPreviewText,
-  resolveSlackStreamingConfig,
-  resolveSlackStreamMode,
-} from "./stream-mode.js";
-
-describe("resolveSlackStreamMode", () => {
-  it("defaults to replace", () => {
-    expect(resolveSlackStreamMode(undefined)).toBe("replace");
-    expect(resolveSlackStreamMode("")).toBe("replace");
-    expect(resolveSlackStreamMode("unknown")).toBe("replace");
-  });
-
-  it("accepts valid modes", () => {
-    expect(resolveSlackStreamMode("replace")).toBe("replace");
-    expect(resolveSlackStreamMode("status_final")).toBe("status_final");
-    expect(resolveSlackStreamMode("append")).toBe("append");
-  });
-});
+import { applyAppendOnlyStreamUpdate, resolveSlackStreamingConfig } from "./stream-mode.js";
 
 describe("resolveSlackStreamingConfig", () => {
   it("defaults to partial mode with native streaming enabled", () => {
@@ -117,13 +98,5 @@ describe("applyAppendOnlyStreamUpdate", () => {
       source: "next chunk",
       changed: true,
     });
-  });
-});
-
-describe("buildStatusFinalPreviewText", () => {
-  it("cycles status dots", () => {
-    expect(buildStatusFinalPreviewText(1)).toBe("Status: thinking..");
-    expect(buildStatusFinalPreviewText(2)).toBe("Status: thinking...");
-    expect(buildStatusFinalPreviewText(3)).toBe("Status: thinking.");
   });
 });

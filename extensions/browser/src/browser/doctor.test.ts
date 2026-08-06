@@ -155,4 +155,91 @@ describe("buildBrowserDoctorReport", () => {
     expect(headlessCheck?.status).toBe("pass");
     expect(report.checks.find((check) => check.id === "display")).toBeUndefined();
   });
+
+  it("reports cached software graphics facts without failing doctor", () => {
+    const report = buildBrowserDoctorReport({
+      status: {
+        enabled: true,
+        profile: "openclaw",
+        driver: "openclaw",
+        transport: "cdp",
+        running: true,
+        cdpReady: true,
+        cdpHttp: true,
+        pid: 4321,
+        cdpPort: 18800,
+        cdpUrl: "http://127.0.0.1:18800",
+        chosenBrowser: "chromium",
+        detectedBrowser: "chromium",
+        detectedExecutablePath: "/usr/bin/chromium",
+        detectError: null,
+        userDataDir: "/tmp/openclaw",
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        executablePath: null,
+        attachOnly: false,
+        graphics: {
+          status: "available",
+          observedAt: 123,
+          acceleration: "software",
+          renderer: "ANGLE (Google, SwiftShader Device)",
+          vendor: "Google Inc.",
+          version: "OpenGL ES 3.0",
+          backend: "(gl=angle,angle=swiftshader)",
+          devices: [],
+          featureStatus: { webgl: "enabled_readback" },
+          disabledFeatures: [],
+          driverBugWorkarounds: [],
+          videoDecoding: [],
+          videoEncoding: [],
+        },
+      },
+    });
+
+    expect(report.ok).toBe(true);
+    const graphicsCheck = report.checks.find((check) => check.id === "graphics");
+    expect(graphicsCheck?.status).toBe("info");
+    expect(graphicsCheck?.summary).toContain("software");
+    expect(graphicsCheck?.summary).toContain("SwiftShader");
+  });
+
+  it("warns when a running managed browser cannot provide graphics facts", () => {
+    const report = buildBrowserDoctorReport({
+      status: {
+        enabled: true,
+        profile: "openclaw",
+        driver: "openclaw",
+        transport: "cdp",
+        running: true,
+        cdpReady: true,
+        cdpHttp: true,
+        pid: 4321,
+        cdpPort: 18800,
+        cdpUrl: "http://127.0.0.1:18800",
+        chosenBrowser: "chromium",
+        detectedBrowser: "chromium",
+        detectedExecutablePath: "/usr/bin/chromium",
+        detectError: null,
+        userDataDir: "/tmp/openclaw",
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        executablePath: null,
+        attachOnly: false,
+        graphics: {
+          status: "unavailable",
+          observedAt: 123,
+          reason: "SystemInfo domain unavailable",
+        },
+      },
+    });
+
+    expect(report.ok).toBe(true);
+    const graphicsCheck = report.checks.find((check) => check.id === "graphics");
+    expect(graphicsCheck).toMatchObject({
+      status: "warn",
+      summary: "unavailable: SystemInfo domain unavailable",
+    });
+  });
 });

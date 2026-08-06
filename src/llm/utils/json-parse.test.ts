@@ -1,6 +1,6 @@
+import { parseJsonWithRepair, parseStreamingJson, repairJson } from "@openclaw/ai/internal/runtime";
 // JSON parse tests cover tolerant parsing of partial model JSON output.
 import { describe, expect, it } from "vitest";
-import { parseJsonWithRepair, parseStreamingJson, repairJson } from "./json-parse.js";
 
 describe("json-parse repairJson invalid \\u escapes", () => {
   it("repairs a \\u not followed by four hex digits so the result parses", () => {

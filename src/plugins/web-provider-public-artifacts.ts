@@ -1,6 +1,8 @@
 // Extracts web provider public artifacts from plugin entrypoints.
 import path from "node:path";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
+import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
@@ -10,6 +12,7 @@ import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.sh
 import {
   loadBundledWebFetchProviderEntriesFromDir,
   loadBundledWebSearchProviderEntriesFromDir,
+  resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
@@ -34,7 +37,7 @@ function filterAllowlistedBundledPluginIds(
 ) {
   // Deprecated shipped compat marker: old allowlist configs used this to keep
   // bundled web provider discovery available while plugin IDs were tightened.
-  if (config?.plugins?.bundledDiscovery === "compat") {
+  if (readBundledDiscoveryMode() === "compat") {
     return [...pluginIds];
   }
   const allow = config?.plugins?.allow;
@@ -101,6 +104,48 @@ function resolveBundledManifestRecordsByPluginId(params: {
       .filter((record) => record.origin === "bundled" && allowedPluginIds.has(record.id))
       .map((record) => [record.id, record] as const),
   );
+}
+
+function resolveBundledRuntimeCandidatePluginIds(params: {
+  contract: "webFetchProviders";
+  configKey: "webFetch";
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds: readonly string[];
+}): string[] | null {
+  const resolvedConfig = resolveBundledWebFetchResolutionConfig(params).config;
+  const candidates = resolveManifestDeclaredWebProviderCandidates({
+    contract: params.contract,
+    configKey: params.configKey,
+    config: resolvedConfig,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+  });
+  const pluginIds = filterAllowlistedBundledPluginIds(resolvedConfig, candidates.pluginIds ?? []);
+  const recordsByPluginId = new Map(
+    (candidates.manifestRecords ?? [])
+      .filter((record) => pluginIds.includes(record.id))
+      .map((record) => [record.id, record] as const),
+  );
+  if (pluginIds.some((pluginId) => recordsByPluginId.get(pluginId)?.origin !== "bundled")) {
+    return null;
+  }
+  const enabledPluginIds = new Set(
+    resolveEnabledBundledManifestContractPlugins({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      onlyPluginIds: pluginIds,
+      contract: params.contract,
+      compatMode: {
+        enablement: "always",
+        vitest: params.config !== undefined,
+      },
+    }).map((plugin) => plugin.id),
+  );
+  return pluginIds.filter((pluginId) => enabledPluginIds.has(pluginId));
 }
 
 export function resolveBundledWebSearchProvidersFromPublicArtifacts(
@@ -191,4 +236,28 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
     providers.push(...loadedProviders);
   }
   return providers;
+}
+
+export function resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts(
+  params: BundledWebProviderPublicArtifactParams & {
+    onlyPluginIds: readonly string[];
+  },
+): PluginWebFetchProviderEntry[] | null {
+  const pluginIds = resolveBundledRuntimeCandidatePluginIds({
+    contract: "webFetchProviders",
+    configKey: "webFetch",
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+  });
+  if (!pluginIds) {
+    return null;
+  }
+  if (pluginIds.length === 0) {
+    return [];
+  }
+  return resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts({
+    onlyPluginIds: pluginIds,
+  });
 }

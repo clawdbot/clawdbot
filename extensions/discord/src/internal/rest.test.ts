@@ -1,7 +1,7 @@
 // Discord tests cover rest plugin behavior.
 import { createServer, type Server } from "node:http";
+import { gzipSync } from "node:zlib";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
 import { DiscordError, RateLimitError, RequestClient } from "./rest.js";
@@ -692,6 +692,135 @@ describe("RequestClient", () => {
     expect(metrics.invalidRequestCountByStatus).toEqual({ 403: 1 });
   });
 
+  it("bounds oversized REST response bodies instead of buffering them unbounded", async () => {
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    let cancelCount = 0;
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pullCount += 1;
+              // Flood far past the cap so an unbounded reader would OOM.
+              controller.enqueue(encoder.encode("x".repeat(4 * 1024 * 1024)));
+            },
+            cancel() {
+              cancelCount += 1;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      /Discord REST response body exceeds 8388608 bytes/,
+    );
+    // The reader was cancelled at the cap rather than draining the whole flood:
+    // only a handful of 4 MiB chunks are pulled before the cap is hit.
+    expect(cancelCount).toBe(1);
+    expect(pullCount).toBeLessThanOrEqual(4);
+  });
+
+  it("aborts stalled REST response bodies after the idle timeout", async () => {
+    const encoder = new TextEncoder();
+    let cancelReason: unknown;
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              // Emit a partial chunk, then stall forever so the idle timeout
+              // (request timeout) must fire and cancel the stream.
+              controller.enqueue(encoder.encode("partial payload"));
+            },
+            cancel(reason) {
+              cancelReason = reason;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      queueRequests: false,
+      timeout: 50,
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      "Discord REST response stalled: no data received for 50ms",
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect((cancelReason as Error).message).toBe(
+      "Discord REST response stalled: no data received for 50ms",
+    );
+  });
+
+  it("still parses normal-sized REST response payloads under the cap", async () => {
+    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "channel", name: "general" }));
+    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
+
+    await expect(client.get("/channels/c1")).resolves.toEqual({ id: "channel", name: "general" });
+  });
+
+  it("parses raw gzip-compressed JSON response bodies", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify([{ id: "m1", content: "hello" }])));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).resolves.toEqual([
+      { id: "m1", content: "hello" },
+    ]);
+  });
+
+  it("bounds gzip-compressed REST response bodies after decompression", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) })));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      /Discord REST response body exceeds 8388608 bytes/,
+    );
+  });
+
+  it("does not double-decompress responses fetch has already decoded", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(JSON.stringify({ id: "m1", content: "hello" }), {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages/m1")).resolves.toEqual({
+      id: "m1",
+      content: "hello",
+    });
+  });
+
   it("serializes message multipart uploads with payload_json", () => {
     const headers = new Headers();
     const body = serializeRequestBody(
@@ -715,19 +844,12 @@ describe("RequestClient", () => {
     expect(form.get("files[0]")).toBeInstanceOf(Blob);
   });
 
-  it("dispatches multipart uploads with a multipart/form-data content type", async () => {
+  it("passes multipart uploads to fetch as FormData", async () => {
+    const arrayBufferSpy = vi.spyOn(Blob.prototype, "arrayBuffer");
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toBeInstanceOf(Headers);
-      expect((init!.headers as Headers).get("Content-Type")).toMatch(
-        /^multipart\/form-data; boundary=/,
-      );
-      expect(init?.body).not.toBeInstanceOf(FormData);
-      const request = new Request("https://discord.test/upload", {
-        method: "POST",
-        headers: init?.headers,
-        body: init?.body,
-      });
-      expect(request.headers.get("Content-Type")).toMatch(/^multipart\/form-data; boundary=/);
+      expect((init!.headers as Headers).get("Content-Type")).toBeNull();
+      expect(init?.body).toBeInstanceOf(FormData);
       return new Response(JSON.stringify({ id: "msg" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -735,16 +857,21 @@ describe("RequestClient", () => {
     });
     const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
 
-    await expect(
-      client.post("/channels/c1/messages", {
-        body: {
-          content: "file",
-          files: [{ name: "a.txt", data: new Uint8Array([1]), contentType: "text/plain" }],
-        },
-      }),
-    ).resolves.toEqual({ id: "msg" });
+    try {
+      await expect(
+        client.post("/channels/c1/messages", {
+          body: {
+            content: "file",
+            files: [{ name: "a.txt", data: new Uint8Array([1]), contentType: "text/plain" }],
+          },
+        }),
+      ).resolves.toEqual({ id: "msg" });
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(arrayBufferSpy).not.toHaveBeenCalled();
+    } finally {
+      arrayBufferSpy.mockRestore();
+    }
   });
 
   it("dispatches multipart uploads through undici fetch with a multipart/form-data content type", async () => {
@@ -767,7 +894,6 @@ describe("RequestClient", () => {
       const client = new RequestClient("test-token", {
         baseUrl: `http://127.0.0.1:${address.port}`,
         apiVersion: 10,
-        fetch: undiciFetch as unknown as typeof fetch,
         queueRequests: false,
       });
 

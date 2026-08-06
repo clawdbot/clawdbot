@@ -8,6 +8,7 @@ const runConfigUnsetMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
+const runGatewayHealthJsonRouteMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksListJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -31,6 +32,10 @@ vi.mock("../../commands/models/list.status-command.js", () => ({
 
 vi.mock("../daemon-cli/status.js", () => ({
   runDaemonStatus: runDaemonStatusMock,
+}));
+
+vi.mock("../gateway-cli/health-route.js", () => ({
+  runGatewayHealthJsonRoute: runGatewayHealthJsonRouteMock,
 }));
 
 vi.mock("../../commands/status-json.js", () => ({
@@ -164,32 +169,72 @@ describe("program routes", () => {
     );
   });
 
-  it("routes plugins list JSON without importing the full plugins CLI", async () => {
-    const route = expectRoute(["plugins", "list"]);
-    expect(route.loadPlugins).toBeUndefined();
-    expect(route.canRun?.(["node", "openclaw", "plugins", "list"])).toBe(false);
+  it.each([
+    { label: "default", flags: [], options: { json: false, enabled: false, verbose: false } },
+    {
+      label: "enabled",
+      flags: ["--enabled"],
+      options: { json: false, enabled: true, verbose: false },
+    },
+    {
+      label: "verbose",
+      flags: ["--verbose"],
+      options: { json: false, enabled: false, verbose: true },
+    },
+    {
+      label: "JSON",
+      flags: ["--json", "--enabled", "--verbose"],
+      options: { json: true, enabled: true, verbose: true },
+    },
+  ])(
+    "routes plugins list $label without importing the full plugins CLI",
+    async ({ flags, options }) => {
+      const route = expectRoute(["plugins", "list"]);
+      expect(route.loadPlugins).toBeUndefined();
+      expect(route.canRun?.(["node", "openclaw", "plugins", "list", ...flags])).toBe(true);
 
-    await expect(
-      route.run(["node", "openclaw", "plugins", "list", "--json", "--enabled", "--verbose"]),
-    ).resolves.toBe(true);
+      await expect(route.run(["node", "openclaw", "plugins", "list", ...flags])).resolves.toBe(
+        true,
+      );
 
-    expect(runPluginsListCommandMock).toHaveBeenCalledWith(
-      { json: true, enabled: true, verbose: true },
-      defaultRuntime,
-    );
-    expect(pluginsCliLoadedMock).not.toHaveBeenCalled();
-  });
+      expect(runPluginsListCommandMock).toHaveBeenCalledWith(options, defaultRuntime);
+      expect(pluginsCliLoadedMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("returns false for plugins list JSON route with unsupported arguments", async () => {
-    await expectRunFalse(
-      ["plugins", "list"],
-      ["node", "openclaw", "plugins", "list", "--json", "--wat"],
-    );
+  it("returns false for plugins list route with unsupported arguments", async () => {
+    await expectRunFalse(["plugins", "list"], ["node", "openclaw", "plugins", "list", "--wat"]);
   });
 
   it("matches gateway status route without plugin preload", () => {
     const route = expectRoute(["gateway", "status"]);
     expect(route.loadPlugins).toBeUndefined();
+  });
+
+  it("routes machine-readable gateway health without plugin preload", async () => {
+    const route = expectRoute(["gateway", "health"]);
+    expect(route.loadPlugins).toBeUndefined();
+    await expect(
+      route.run(["node", "openclaw", "gateway", "health", "--json", "--timeout", "5000"]),
+    ).resolves.toBe(true);
+    expect(runGatewayHealthJsonRouteMock).toHaveBeenCalledWith(
+      {
+        rpc: {
+          url: undefined,
+          token: undefined,
+          password: undefined,
+          timeout: "5000",
+          expectFinal: false,
+          json: true,
+        },
+        localPortOverride: undefined,
+      },
+      defaultRuntime,
+    );
+  });
+
+  it("falls back for text gateway health output", async () => {
+    await expectRunFalse(["gateway", "health"], ["node", "openclaw", "gateway", "health"]);
   });
 
   it("returns false for gateway status route when option values are missing", async () => {
@@ -283,6 +328,22 @@ describe("program routes", () => {
   it("returns false when status timeout flag value is missing", async () => {
     await expectRunFalse(["status"], ["node", "openclaw", "status", "--timeout"]);
   });
+
+  it.each([
+    { path: ["health"], argv: ["node", "openclaw", "health", "--wat"] },
+    { path: ["status"], argv: ["node", "openclaw", "status", "--wat"] },
+    { path: ["sessions"], argv: ["node", "openclaw", "sessions", "--wat"] },
+    {
+      path: ["agents", "list"],
+      argv: ["node", "openclaw", "agents", "list", "--wat"],
+    },
+    { path: ["agents"], argv: ["node", "openclaw", "agents", "--wat"] },
+  ])(
+    "returns false instead of handling unknown routed option for $path",
+    async ({ path, argv }) => {
+      await expectRunFalse(path, argv);
+    },
+  );
 
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
@@ -520,6 +581,24 @@ describe("program routes", () => {
       { json: true, runtime: "cron", status: undefined },
       defaultRuntime,
     );
+
+    await expect(
+      listRoute.run([
+        "node",
+        "openclaw",
+        "tasks",
+        "list",
+        "--json",
+        "--runtime",
+        "   ",
+        "--status",
+        "\t",
+      ]),
+    ).resolves.toBe(true);
+    expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
+      { json: true, runtime: "   ", status: "\t" },
+      defaultRuntime,
+    );
   });
 
   it("routes parent task filter values that command-path discovery sees as positionals", async () => {
@@ -582,6 +661,24 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksAuditJsonCommandMock).toHaveBeenCalledWith(
       { json: true, severity: "error", code: "stale_running", limit: 5 },
+      defaultRuntime,
+    );
+
+    await expect(
+      route.run([
+        "node",
+        "openclaw",
+        "tasks",
+        "audit",
+        "--json",
+        "--severity",
+        "  ",
+        "--code",
+        "\t",
+      ]),
+    ).resolves.toBe(true);
+    expect(tasksAuditJsonCommandMock).toHaveBeenLastCalledWith(
+      { json: true, severity: "  ", code: "\t", limit: undefined },
       defaultRuntime,
     );
   });

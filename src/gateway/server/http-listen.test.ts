@@ -82,6 +82,26 @@ describe("listenGatewayHttpServer", () => {
     expect(fake.closeCalls).toBe(20);
   });
 
+  it("fails immediately when EADDRINUSE retries are disabled", async () => {
+    sleepMock.mockClear();
+    const fake = createFakeHttpServer([
+      { kind: "error", code: "EADDRINUSE" },
+      { kind: "listening" },
+    ]);
+
+    await expect(
+      listenGatewayHttpServer({
+        httpServer: fake as unknown as HttpServer,
+        bindHost: "127.0.0.1",
+        port: 18789,
+        retryEaddrinuse: false,
+      }),
+    ).rejects.toBeInstanceOf(GatewayLockError);
+
+    expect(fake.closeCalls).toBe(0);
+    expect(sleepMock).not.toHaveBeenCalled();
+  });
+
   it("wraps non-EADDRINUSE errors as GatewayLockError", async () => {
     sleepMock.mockClear();
     const fake = createFakeHttpServer([{ kind: "error", code: "EACCES" }]);

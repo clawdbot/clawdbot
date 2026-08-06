@@ -8,13 +8,13 @@ import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-req
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { parseStrictFiniteNumber } from "../../../infra/parse-finite-number.js";
+import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
 import { streamSimple } from "../../stream.js";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
   resolveAnthropicEphemeralCacheControl,
 } from "./anthropic-cache-control-payload.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
-import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -130,34 +130,6 @@ function resolveOpenRouterResponseCacheHeaders(
   return headers;
 }
 
-function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkLevel): void {
-  if (!payload || typeof payload !== "object") {
-    return;
-  }
-
-  const payloadObj = payload as Record<string, unknown>;
-  delete payloadObj.reasoning_effort;
-  if (!thinkingLevel || thinkingLevel === "off") {
-    return;
-  }
-
-  const existingReasoning = payloadObj.reasoning;
-  if (
-    existingReasoning &&
-    typeof existingReasoning === "object" &&
-    !Array.isArray(existingReasoning)
-  ) {
-    const reasoningObj = existingReasoning as Record<string, unknown>;
-    if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-      reasoningObj.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
-    }
-  } else if (!existingReasoning) {
-    payloadObj.reasoning = {
-      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
-    };
-  }
-}
-
 /** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenRouterSystemCacheWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -246,7 +218,7 @@ export function createOpenRouterWrapper(
         headers,
       },
       (payload) => {
-        normalizeProxyReasoningPayload(payload, thinkingLevel);
+        normalizeOpenAICompatibleReasoningPayload(payload, thinkingLevel);
       },
     );
   };
@@ -285,7 +257,7 @@ export function createKilocodeWrapper(
         headers,
       },
       (payload) => {
-        normalizeProxyReasoningPayload(payload, thinkingLevel);
+        normalizeOpenAICompatibleReasoningPayload(payload, thinkingLevel);
       },
     );
   };

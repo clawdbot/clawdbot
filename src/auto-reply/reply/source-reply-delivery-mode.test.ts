@@ -414,6 +414,28 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     );
   });
 
+  it.each([
+    [automaticGroupReplyConfig, "automatic"],
+    [globalToolOnlyReplyConfig, "message_tool_only"],
+  ] as const)(
+    "keeps room-event effective delivery tool-only while session-stable mode follows config",
+    (cfg, expectedStableMode) => {
+      expectPolicyFields(
+        resolveSourceReplyVisibilityPolicy({
+          cfg,
+          ctx: { ChatType: "group", InboundEventKind: "room_event" },
+          sendPolicy: "allow",
+        }),
+        {
+          sourceReplyDeliveryMode: "message_tool_only",
+          sessionStableSourceReplyDeliveryMode: expectedStableMode,
+          suppressAutomaticSourceDelivery: true,
+          suppressDelivery: true,
+        },
+      );
+    },
+  );
+
   it("suppresses automatic source delivery for opted-in message-tool group turns without suppressing typing", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
@@ -446,12 +468,13 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     ] as const) {
       expectPolicyFields(
         resolveSourceReplyVisibilityPolicy({
-          cfg: emptyConfig,
+          cfg: globalToolOnlyReplyConfig,
           ctx,
           sendPolicy: "allow",
         }),
         {
           sourceReplyDeliveryMode: "automatic",
+          sessionStableSourceReplyDeliveryMode: "automatic",
           suppressAutomaticSourceDelivery: false,
           suppressDelivery: false,
           suppressHookReplyLifecycle: false,
@@ -470,6 +493,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       }),
       {
         sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "automatic",
         suppressAutomaticSourceDelivery: false,
         suppressDelivery: false,
         suppressHookReplyLifecycle: false,
@@ -488,6 +512,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       }),
       {
         sourceReplyDeliveryMode: "message_tool_only",
+        sessionStableSourceReplyDeliveryMode: "message_tool_only",
         suppressAutomaticSourceDelivery: true,
         suppressDelivery: true,
         suppressHookReplyLifecycle: false,

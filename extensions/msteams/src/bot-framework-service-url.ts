@@ -1,9 +1,7 @@
 // Msteams plugin module implements bot framework service url behavior.
 import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   normalizeHostnameSuffixAllowlist,
-  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
 
 const DEFAULT_BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = [
@@ -18,19 +16,9 @@ const DEFAULT_BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = [
   "botframework.azure.cn",
 ] as const;
 
-export const BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = normalizeHostnameSuffixAllowlist(
+const BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = normalizeHostnameSuffixAllowlist(
   DEFAULT_BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST,
 );
-
-const serviceUrlSsrfPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist(
-  BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST,
-);
-
-if (!serviceUrlSsrfPolicy) {
-  throw new Error("Microsoft Teams Bot Framework serviceUrl allowlist is empty");
-}
-
-export const BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY: SsrFPolicy = serviceUrlSsrfPolicy;
 
 export function describeBotFrameworkServiceUrlHost(serviceUrl: string): string {
   try {

@@ -5,15 +5,15 @@ import {
   readConfiguredProviderCatalogEntries,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
 import { createDeepInfraAnthropicCacheWrapper } from "./cache-wrapper.js";
+import { buildDeepInfraEmbeddingAdapter } from "./embedding-adapter.js";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
 import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildDeepInfraMemoryEmbeddingAdapter } from "./memory-embedding-adapter.js";
 import { applyDeepInfraConfig } from "./onboard.js";
 import { buildDeepInfraApiKeyCatalog, buildStaticDeepInfraProvider } from "./provider-catalog.js";
 import {
@@ -104,7 +104,7 @@ export default defineSingleProviderPluginEntry({
     normalizeConfig: ({ providerConfig }) => providerConfig,
     normalizeTransport: ({ api, baseUrl }) =>
       baseUrl === "https://api.deepinfra.com/v1/openai" ? { api, baseUrl } : undefined,
-    ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+    ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     wrapStreamFn: (ctx) => {
       const thinkingLevel = isProxyReasoningUnsupported(ctx.modelId)
         ? undefined
@@ -140,9 +140,7 @@ export default defineSingleProviderPluginEntry({
         sttModels: catalog.stt,
       }),
     );
-    api.registerMemoryEmbeddingProvider(
-      buildDeepInfraMemoryEmbeddingAdapter({ embedModels: catalog.embed }),
-    );
+    api.registerEmbeddingProvider(buildDeepInfraEmbeddingAdapter({ embedModels: catalog.embed }));
     api.registerSpeechProvider(buildDeepInfraSpeechProvider({ ttsModels: catalog.tts }));
     api.registerVideoGenerationProvider(
       buildDeepInfraVideoGenerationProvider({ videoGenModels: catalog.videoGen }),

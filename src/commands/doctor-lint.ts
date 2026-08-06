@@ -1,30 +1,32 @@
 /** CLI entrypoint for non-mutating doctor lint health checks. */
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
-import {
-  configValidationIssuesToHealthFindings,
-  registerCoreHealthChecks,
-} from "../flows/doctor-core-checks.js";
+import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
+import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import {
   exitCodeFromFindings,
   runDoctorLintChecks,
   type DoctorLintRunOptions,
 } from "../flows/doctor-lint-flow.js";
+import { listExtensionHealthChecksForDoctor } from "../flows/health-check-registry.js";
 import {
   healthFindingMeetsSeverity,
   parseHealthFindingSeverity,
+  type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-export interface DoctorLintCliOptions {
+interface DoctorLintCliOptions {
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
   readonly allowExec?: boolean;
+  readonly deep?: boolean;
+  readonly includeAllChecks?: boolean;
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -44,10 +46,8 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
-  registerCoreHealthChecks();
-
   const sevMin =
-    opts.severityMin === undefined ? "info" : parseHealthFindingSeverity(opts.severityMin);
+    opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
@@ -72,17 +72,23 @@ export async function runDoctorLintCli(
     return exitCodeFromFindings(findings, sevMin);
   }
 
+  const defaultAgentId = tryResolveDefaultAgentId(snapshot.config);
   const ctx: HealthCheckContext = {
     mode: "lint",
     runtime,
     cfg: snapshot.config,
-    cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
+    cwd: defaultAgentId ? resolveAgentWorkspaceDir(snapshot.config, defaultAgentId) : process.cwd(),
     allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
+  const coreChecks = await resolveDoctorContributionHealthChecks();
+  const extensionChecks = listExtensionHealthChecksForDoctor(coreChecks);
+  const coreCtx = { ...ctx, deep: opts.deep === true };
 
   const runOpts: DoctorLintRunOptions = {
+    checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
+    includeAllChecks: opts.includeAllChecks === true,
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
@@ -116,6 +122,18 @@ export async function runDoctorLintCli(
   }
 
   return exitCodeFromFindings(result.findings, sevMin);
+}
+
+function withCoreLintContext(
+  check: HealthCheck,
+  ctx: HealthCheckContext & { readonly deep?: boolean },
+): HealthCheck {
+  return {
+    ...check,
+    detect(_ctx, scope) {
+      return check.detect(ctx, scope);
+    },
+  };
 }
 
 function writeJsonResult(result: {

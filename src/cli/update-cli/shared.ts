@@ -35,6 +35,7 @@ export type UpdateCommandOptions = {
   tag?: string;
   timeout?: string;
   yes?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateStatusOptions = {
@@ -48,6 +49,7 @@ export type UpdateFinalizeOptions = {
   timeout?: string;
   yes?: boolean;
   restart?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateWizardOptions = {
@@ -73,6 +75,9 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
 }
 
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+// Keep the full commit graph for dev ref switching while deferring historical blobs.
+// A shallow clone would make older or non-default dev targets unreachable.
+const GIT_CLONE_BLOB_FILTER = "--filter=blob:none";
 const MAX_LOG_CHARS = 8000;
 
 export const DEFAULT_PACKAGE_NAME = "openclaw";
@@ -98,6 +103,7 @@ export { readPackageName, readPackageVersion };
 export async function resolveTargetVersion(
   tag: string,
   timeoutMs?: number,
+  options: { spec?: string; command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<string | null> {
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return null;
@@ -106,7 +112,14 @@ export async function resolveTargetVersion(
   if (direct) {
     return direct;
   }
-  const res = await fetchNpmTagVersion({ tag, timeoutMs });
+  const res = await fetchNpmTagVersion({
+    tag,
+    timeoutMs,
+    spec: options.spec,
+    command: options.command,
+    cwd: options.cwd,
+    env: options.env,
+  });
   return res.version ?? null;
 }
 
@@ -163,12 +176,15 @@ export function resolveNodeRunner(): string {
 
 /** Locate the installed OpenClaw package root that should receive update operations. */
 export async function resolveUpdateRoot(): Promise<string> {
+  // Preserve the lexical package path from the invoking shim. pnpm 11 package
+  // modules realpath into a shared store, which is not the install owner.
+  const invocationRoot = process.argv[1]
+    ? await resolveOpenClawPackageRoot({ cwd: path.dirname(path.resolve(process.argv[1])) })
+    : null;
   return (
-    (await resolveOpenClawPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })) ?? process.cwd()
+    invocationRoot ??
+    (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, cwd: process.cwd() })) ??
+    process.cwd()
   );
 }
 
@@ -206,6 +222,9 @@ export async function runUpdateStep(params: {
     durationMs,
     exitCode: res.code,
     stderrTail,
+    signal: res.signal,
+    killed: res.killed,
+    termination: res.termination,
   });
 
   return {
@@ -216,6 +235,9 @@ export async function runUpdateStep(params: {
     exitCode: res.code,
     stdoutTail: trimLogTail(res.stdout, MAX_LOG_CHARS),
     stderrTail,
+    signal: res.signal,
+    killed: res.killed,
+    termination: res.termination,
   };
 }
 
@@ -232,7 +254,7 @@ export async function ensureGitCheckout(params: {
     await fs.mkdir(path.dirname(params.dir), { recursive: true });
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -249,7 +271,7 @@ export async function ensureGitCheckout(params: {
 
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
       cwd: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,

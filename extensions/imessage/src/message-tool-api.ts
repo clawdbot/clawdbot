@@ -4,9 +4,13 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { Type } from "typebox";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
-import { getCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+} from "./private-api-status.js";
 import { inferIMessageTargetChatType } from "./targets.js";
 
 const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
@@ -21,6 +25,8 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
   "removeParticipant",
   "leaveGroup",
   "sendAttachment",
+  "poll",
+  "poll-vote",
 ]);
 
 function isGroupTarget(raw?: string | null): boolean {
@@ -62,6 +68,31 @@ export function describeIMessageMessageTool({
     if (action === "unsend" && privateApiStatus?.selectors?.retractMessagePart !== true) {
       continue;
     }
+    // Keep first-dispatch discovery optimistic while the status cache is empty;
+    // handleAction probes lazily and enforces the exact selector before sending.
+    if (
+      action === "poll" &&
+      privateApiStatus?.selectors &&
+      !privateApiStatus.selectors.pollPayloadMessage
+    ) {
+      continue;
+    }
+    if (
+      action === "poll-vote" &&
+      privateApiStatus?.selectors &&
+      !privateApiStatus.selectors.pollVoteMessage
+    ) {
+      continue;
+    }
+    // The injected helper can outlive the selected imsg binary. Require both
+    // the native initializer and a binary new enough to advertise poll.vote.
+    if (
+      action === "poll-vote" &&
+      privateApiStatus &&
+      !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")
+    ) {
+      continue;
+    }
     actions.add(action);
   }
   if (!isGroupTarget(currentChannelId)) {
@@ -74,5 +105,20 @@ export function describeIMessageMessageTool({
   if (actions.delete("sendAttachment")) {
     actions.add("upload-file");
   }
-  return { actions: Array.from(actions) };
+  return {
+    actions: Array.from(actions),
+    ...(actions.has("poll-vote")
+      ? {
+          schema: {
+            properties: {
+              pollOptionText: Type.Optional(
+                Type.String({ description: "Exact iMessage poll option text." }),
+              ),
+            },
+            actions: ["poll-vote" as const],
+            visibility: "all-configured" as const,
+          },
+        }
+      : {}),
+  };
 }

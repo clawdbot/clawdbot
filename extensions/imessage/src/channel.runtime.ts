@@ -1,5 +1,8 @@
 // Imessage plugin module implements channel behavior.
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createAccountStatusSink,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { resolveIMessageDuplicateSourceOwner, type ResolvedIMessageAccount } from "./accounts.js";
 import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "./channel-api.js";
 import type { ChannelPlugin } from "./channel-api.js";
@@ -16,11 +19,15 @@ export async function sendIMessageOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaAccess?: Parameters<IMessageSendFn>[2]["mediaAccess"];
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: Parameters<IMessageSendFn>[2]["mediaReadFile"];
   audioAsVoice?: boolean;
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
+  conversationReadOrigin?: "delegated" | "direct-operator";
+  onDeliveryResult?: NonNullable<Parameters<IMessageSendFn>[2]["onDeliveryResult"]>;
 }) {
   const send =
     resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
@@ -33,15 +40,25 @@ export async function sendIMessageOutbound(params: {
       cfg.channels?.imessage?.mediaMaxMb,
     accountId: params.accountId,
   });
-  return await send(params.to, params.text, {
+  const result = await send(params.to, params.text, {
     config: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+    ...(params.mediaAccess ? { mediaAccess: params.mediaAccess } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
+    ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
     replyToId: params.replyToId ?? undefined,
+    conversationReadOrigin: params.conversationReadOrigin,
+    ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
   });
+  const meta = {
+    ...(result as typeof result & { meta?: Record<string, unknown> }).meta,
+    ...(result.guid ? { imessageMessageGuid: result.guid } : {}),
+    ...(result.sentText ? { imessageVisibleText: result.sentText } : {}),
+  };
+  return Object.keys(meta).length > 0 ? { ...result, meta } : result;
 }
 
 export async function notifyIMessageApproval(params: {
@@ -59,6 +76,7 @@ export async function probeIMessageAccount(params?: {
   return await probeIMessage(params?.timeoutMs, {
     cliPath: params?.cliPath,
     dbPath: params?.dbPath,
+    forceRefresh: true,
   });
 }
 
@@ -80,7 +98,8 @@ export async function startIMessageGatewayAccount(
     // openclaw/openclaw#65141: this account shares a local Messages source with
     // an already-owning account, so spawning a second `imsg rpc` would deliver
     // every inbound twice. Keep the account enabled for outbound sends, status,
-    // and capability surfaces; just park the watcher slot until shutdown.
+    // and capability surfaces; just park the watcher slot until shutdown. Lifecycle stays silent:
+    // ready would lie about admission and stopped would invite restart; parked semantics are deferred.
     ctx.log?.info?.(
       `[${account.accountId}] skipping watcher: duplicate iMessage source; using account "${ownerAccountId}"`,
     );
@@ -92,6 +111,11 @@ export async function startIMessageGatewayAccount(
     });
     return;
   }
+  const statusSink = createAccountStatusSink({
+    accountId: account.accountId,
+    setStatus: ctx.setStatus,
+  });
+  statusSink({ lifecycle: "starting" });
   ctx.log?.info?.(
     `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
   );
@@ -101,6 +125,7 @@ export async function startIMessageGatewayAccount(
     runtime: ctx.runtime,
     abortSignal: ctx.abortSignal,
     channelRuntime: ctx.channelRuntime,
+    statusSink,
   });
 }
 

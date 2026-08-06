@@ -1,13 +1,43 @@
 // Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { testing as cliBackendsTesting } from "./cli-backends.js";
-import { createModelPickerVisibleProviderPredicate } from "./model-picker-visibility.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import {
+  createModelPickerVisibleProviderPredicate,
+  isRetiredModelPickerProvider,
+} from "./model-runtime-aliases.js";
 import {
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
-  resolveCliRuntimeExecutionProvider,
+  resolveCliRuntimeExecutionProvider as resolveCliRuntimeExecutionProviderBase,
 } from "./model-runtime-aliases.js";
+
+const anthropicAuthAliasMetadata = {
+  plugins: [
+    {
+      id: "anthropic",
+      origin: "bundled",
+      providerAuthChoices: [
+        {
+          provider: "anthropic",
+          method: "cli",
+          choiceId: "anthropic-cli",
+          deprecatedChoiceIds: ["claude-cli"],
+          choiceLabel: "Anthropic Claude CLI",
+        },
+      ],
+    },
+  ],
+} as never;
+
+function resolveCliRuntimeExecutionProvider(
+  params: Omit<Parameters<typeof resolveCliRuntimeExecutionProviderBase>[0], "metadataSnapshot">,
+) {
+  return resolveCliRuntimeExecutionProviderBase({
+    ...params,
+    metadataSnapshot: anthropicAuthAliasMetadata,
+  });
+}
 
 function createAnthropicAuthConfig(params: {
   order?: string[];
@@ -34,6 +64,7 @@ function createAnthropicAuthConfig(params: {
 describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
       resolvePluginSetupRegistry: () => ({
         providers: [],
         cliBackends: [],
@@ -100,6 +131,17 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
+  it("uses prepared Anthropic auth choice aliases without metadata discovery", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        authProfileId: "anthropic:claude-cli",
+        cfg: createAnthropicAuthConfig({ order: ["anthropic:api"] }),
+        provider: "anthropic",
+        modelId: "opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
   it("does not override an explicit OpenClaw model-runtime policy with CLI auth", () => {
     // Runtime policy is more explicit than profile order, so CLI auth cannot
     // force a model onto the CLI harness when config says OpenClaw.
@@ -127,6 +169,26 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         }),
         provider: "",
         modelId: "opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
+  it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.example/v1",
+                agentRuntime: { id: "claude-cli" },
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "",
+        modelId: "anthropic/opus-4.7",
       }),
     ).toBe("claude-cli");
   });
@@ -168,6 +230,20 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     expect(isVisibleProvider("claude-cli")).toBe(false);
     expect(isCliRuntimeProvider("acme-cli")).toBe(false);
     expect(isVisibleProvider("acme-cli")).toBe(true);
+  });
+
+  it("recognizes retired picker providers without loading CLI backend metadata", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => {
+        throw new Error("retired provider checks should not load setup metadata");
+      },
+      resolveRuntimeCliBackends: () => {
+        throw new Error("retired provider checks should not load runtime metadata");
+      },
+    });
+
+    expect(isRetiredModelPickerProvider("CODEX-CLI")).toBe(true);
+    expect(isRetiredModelPickerProvider("anthropic")).toBe(false);
   });
 });
 
@@ -215,15 +291,7 @@ describe("areRuntimeModelRefsEquivalent", () => {
 
     expect(
       areRuntimeModelRefsEquivalent("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", {
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       }),
     ).toBe(true);
   });

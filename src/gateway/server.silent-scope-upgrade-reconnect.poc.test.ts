@@ -271,6 +271,44 @@ describe("gateway silent scope-upgrade reconnect", () => {
     }
   });
 
+  test("keeps direct-local CLI shared-token calls off stale paired CLI baseline", async () => {
+    const started = await startServerWithClient("secret");
+    const identity = await approveReadScopedDevice({
+      clientId: GATEWAY_CLIENT_NAMES.CLI,
+      clientMode: GATEWAY_CLIENT_MODES.CLI,
+    });
+
+    try {
+      const health = await callGateway({
+        url: `ws://127.0.0.1:${started.port}`,
+        token: "secret",
+        method: "health",
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        timeoutMs: 2_000,
+      });
+      expect(health.ok).toBe(true);
+
+      const admin = await callGateway({
+        url: `ws://127.0.0.1:${started.port}`,
+        token: "secret",
+        method: "set-heartbeats",
+        params: { enabled: false },
+        scopes: ["operator.admin"],
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        timeoutMs: 2_000,
+      });
+      expect(admin.ok).toBe(true);
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending).toHaveLength(0);
+      await expectReadScopedPairing(identity.deviceId);
+    } finally {
+      await closeStartedGateway(started);
+    }
+  });
+
   test("keeps local native approval clients off stale paired gateway-client baseline", async () => {
     const started = await startServerWithClient("secret");
     const identity = await approveReadScopedDevice({

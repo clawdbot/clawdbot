@@ -7,12 +7,13 @@ vi.mock("../command-explainer/extract.js", () => {
 });
 
 describe("command-analysis lazy command explainer", () => {
-  it("does not load tree-sitter parser dependencies for policy summaries", async () => {
+  it("does not load tree-sitter parser dependencies for node argv summaries", async () => {
     const { resolveCommandAnalysisSummaryForDisplay } = await import("./explain.js");
 
-    const summary = resolveCommandAnalysisSummaryForDisplay({
-      host: "gateway",
-      commandText: "python3 -c 'print(1)'",
+    const summary = await resolveCommandAnalysisSummaryForDisplay({
+      host: "node",
+      commandText: "python3 script.py",
+      commandArgv: ["python3", "-c", "print(1)"],
     });
 
     if (!summary) {

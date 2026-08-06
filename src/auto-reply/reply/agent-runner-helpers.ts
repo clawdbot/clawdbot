@@ -4,7 +4,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { loadSessionStore } from "../../config/sessions.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -29,8 +29,11 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
     return undefined;
   }
   try {
-    const store = loadSessionStore(params.storePath, { clone: false });
-    const entry = store[params.sessionKey];
+    const entry = loadSessionEntryReadOnly({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      clone: false,
+    });
     return typeof entry?.verboseLevel === "string"
       ? normalizeVerboseLevel(entry.verboseLevel)
       : undefined;

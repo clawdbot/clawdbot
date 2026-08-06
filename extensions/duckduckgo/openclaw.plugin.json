@@ -1,5 +1,6 @@
 {
   "id": "duckduckgo",
+  "icon": "https://cdn.simpleicons.org/duckduckgo",
   "activation": {
     "onStartup": false
   },

@@ -9,9 +9,10 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
-import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
+import { handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
+import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 interface LineBotOptions {
   channelAccessToken: string;
@@ -20,12 +21,16 @@ interface LineBotOptions {
   runtime?: RuntimeEnv;
   config?: OpenClawConfig;
   mediaMaxMb?: number;
-  onMessage?: (ctx: LineInboundContext) => Promise<void>;
+  onMessage?: (
+    ctx: LineInboundContext,
+    control: { turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle },
+  ) => Promise<void>;
 }
 
 interface LineBot {
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   account: ResolvedLineAccount;
+  stop: () => Promise<void>;
 }
 
 export function createLineBot(opts: LineBotOptions): LineBot {
@@ -44,28 +49,29 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     (async () => {
       logVerbose("line: no message handler configured");
     });
-  const replayCache = createLineWebhookReplayCache();
   const groupHistories = new Map<string, HistoryEntry[]>();
-
-  const handleWebhook = async (body: webhook.CallbackRequest): Promise<void> => {
-    if (!body.events || body.events.length === 0) {
-      return;
-    }
-
-    await handleLineWebhookEvents(body.events, {
-      cfg,
-      account,
-      runtime,
-      mediaMaxBytes,
-      processMessage,
-      replayCache,
-      groupHistories,
-      historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-    });
-  };
+  const spool = createLineWebhookSpool({
+    accountId: account.accountId,
+    runtime,
+    deliver: async (event, _destination, control) =>
+      await handleLineWebhookEvents([event], {
+        cfg,
+        account,
+        runtime,
+        mediaMaxBytes,
+        processMessage,
+        ...(control.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
+          : {}),
+        groupHistories,
+        historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+      }),
+  });
+  spool.start();
 
   return {
-    handleWebhook,
+    handleWebhook: spool.accept,
     account,
+    stop: spool.stop,
   };
 }

@@ -153,7 +153,7 @@ async function confirmRecreate(): Promise<boolean> {
     initialValue: false,
   });
 
-  return result !== false && result !== Symbol.for("clack:cancel");
+  return result === true;
 }
 
 async function removeContainers(

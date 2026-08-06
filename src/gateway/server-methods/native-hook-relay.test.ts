@@ -1,6 +1,8 @@
 /**
  * Tests for relaying native hook events through gateway request handlers.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing, registerNativeHookRelay } from "../../agents/harness/native-hook-relay.js";
 import { nativeHookRelayHandlers } from "./native-hook-relay.js";
@@ -78,7 +80,10 @@ describe("native hook relay gateway method", () => {
 
 async function invokeNativeHook(params: Record<string, unknown>) {
   const respond = viRespond();
-  await nativeHookRelayHandlers["nativeHook.invoke"]({
+  await expectDefined(
+    nativeHookRelayHandlers["nativeHook.invoke"],
+    'nativeHookRelayHandlers["nativeHook.invoke"] test invariant',
+  )({
     req: { type: "req", id: "1", method: "nativeHook.invoke" },
     params,
     client: null,

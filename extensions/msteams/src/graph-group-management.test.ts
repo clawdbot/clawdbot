@@ -10,9 +10,8 @@ import {
 const mockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
-  postGraphJson: vi.fn(),
+  mutateGraphJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
-  patchGraphJson: vi.fn(),
   findPreferredDmByUserId: vi.fn(),
 }));
 
@@ -22,9 +21,8 @@ vi.mock("./graph.js", async (importOriginal) => {
     ...actual,
     resolveGraphToken: mockState.resolveGraphToken,
     fetchGraphJson: mockState.fetchGraphJson,
-    postGraphJson: mockState.postGraphJson,
+    mutateGraphJson: mockState.mutateGraphJson,
     deleteGraphRequest: mockState.deleteGraphRequest,
-    patchGraphJson: mockState.patchGraphJson,
   };
 });
 
@@ -39,7 +37,7 @@ const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
 
 function postGraphBodyAt(index: number): Record<string, unknown> {
-  const call = mockState.postGraphJson.mock.calls[index];
+  const call = mockState.mutateGraphJson.mock.calls[index];
   if (!call) {
     throw new Error(`expected Graph post call ${index}`);
   }
@@ -56,8 +54,8 @@ describe("addParticipantMSTeams", () => {
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
   });
 
-  it("adds member to a chat with default role", async () => {
-    mockState.postGraphJson.mockResolvedValue({});
+  it("maps the default chat member role to Graph owner", async () => {
+    mockState.mutateGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
       cfg: {} as OpenClawConfig,
@@ -66,19 +64,20 @@ describe("addParticipantMSTeams", () => {
     });
 
     expect(result).toEqual({ added: { userId: "user-aad-id-1", chatId: CHAT_ID } });
-    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
+      method: "POST",
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: ["owner"],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-1')",
       },
     });
   });
 
   it("adds member to a chat with owner role", async () => {
-    mockState.postGraphJson.mockResolvedValue({});
+    mockState.mutateGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
       cfg: {} as OpenClawConfig,
@@ -88,9 +87,10 @@ describe("addParticipantMSTeams", () => {
     });
 
     expect(result).toEqual({ added: { userId: "user-aad-id-2", chatId: CHAT_ID } });
-    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
+      method: "POST",
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
         roles: ["owner"],
@@ -100,7 +100,7 @@ describe("addParticipantMSTeams", () => {
   });
 
   it("normalizes role casing and whitespace", async () => {
-    mockState.postGraphJson.mockResolvedValue({});
+    mockState.mutateGraphJson.mockResolvedValue({});
 
     await addParticipantMSTeams({
       cfg: {} as OpenClawConfig,
@@ -109,9 +109,10 @@ describe("addParticipantMSTeams", () => {
       role: " OWNER ",
     });
 
-    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
+      method: "POST",
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
         roles: ["owner"],
@@ -130,11 +131,11 @@ describe("addParticipantMSTeams", () => {
       }),
     ).rejects.toThrow('role must be "member" or "owner"');
 
-    expect(mockState.postGraphJson).not.toHaveBeenCalled();
+    expect(mockState.mutateGraphJson).not.toHaveBeenCalled();
   });
 
   it("constructs correct user@odata.bind URL", async () => {
-    mockState.postGraphJson.mockResolvedValue({});
+    mockState.mutateGraphJson.mockResolvedValue({});
 
     await addParticipantMSTeams({
       cfg: {} as OpenClawConfig,
@@ -149,7 +150,7 @@ describe("addParticipantMSTeams", () => {
   });
 
   it("escapes user ids before building the OData bind URL", async () => {
-    mockState.postGraphJson.mockResolvedValue({});
+    mockState.mutateGraphJson.mockResolvedValue({});
 
     await addParticipantMSTeams({
       cfg: {} as OpenClawConfig,
@@ -163,8 +164,8 @@ describe("addParticipantMSTeams", () => {
     );
   });
 
-  it("adds member to a channel", async () => {
-    mockState.postGraphJson.mockResolvedValue({});
+  it("maps the default channel member role to an empty Graph role list", async () => {
+    mockState.mutateGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
       cfg: {} as OpenClawConfig,
@@ -173,13 +174,36 @@ describe("addParticipantMSTeams", () => {
     });
 
     expect(result).toEqual({ added: { userId: "user-aad-id-3", chatId: CHANNEL_TO } });
-    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/members",
+      method: "POST",
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: [],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-3')",
+      },
+    });
+  });
+
+  it("preserves the owner role for a channel", async () => {
+    mockState.mutateGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      userId: "user-aad-id-4",
+      role: "owner",
+    });
+
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: "/teams/team-id-1/channels/channel-id-1/members",
+      method: "POST",
+      body: {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        roles: ["owner"],
+        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-4')",
       },
     });
   });
@@ -298,7 +322,7 @@ describe("renameGroupMSTeams", () => {
   });
 
   it("renames a chat with topic", async () => {
-    mockState.patchGraphJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     const result = await renameGroupMSTeams({
       cfg: {} as OpenClawConfig,
@@ -307,15 +331,16 @@ describe("renameGroupMSTeams", () => {
     });
 
     expect(result).toEqual({ renamed: { chatId: CHAT_ID, newName: "New Chat Name" } });
-    expect(mockState.patchGraphJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}`,
+      method: "PATCH",
       body: { topic: "New Chat Name" },
     });
   });
 
   it("renames a channel with displayName", async () => {
-    mockState.patchGraphJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     const result = await renameGroupMSTeams({
       cfg: {} as OpenClawConfig,
@@ -324,9 +349,10 @@ describe("renameGroupMSTeams", () => {
     });
 
     expect(result).toEqual({ renamed: { chatId: CHANNEL_TO, newName: "New Channel Name" } });
-    expect(mockState.patchGraphJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1",
+      method: "PATCH",
       body: { displayName: "New Channel Name" },
     });
   });

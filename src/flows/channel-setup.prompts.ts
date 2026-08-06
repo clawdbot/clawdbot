@@ -3,11 +3,11 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type {
   ChannelSetupDmPolicy,
   ChannelSetupWizardAdapter,
-} from "../commands/channel-setup/types.js";
+} from "../channels/plugins/setup-wizard-types.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import type { DmPolicy } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

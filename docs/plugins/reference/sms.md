@@ -12,11 +12,11 @@ Twilio SMS channel plugin for OpenClaw text messages.
 ## Distribution
 
 - Package: `@openclaw/sms`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/sms`
 
 ## Surface
 
-channels: sms
+channels: `sms`
 
 ## Related docs
 

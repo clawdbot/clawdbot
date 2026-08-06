@@ -13,8 +13,10 @@ import type {
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isUnresolvedSecretInputError } from "../../../config/types.secrets.js";
 
 type ChannelDoctorEntry = {
+  id: string;
   doctor: ChannelDoctorAdapter;
 };
 
@@ -227,7 +229,7 @@ function listChannelDoctorEntries(
     if (!doctor) {
       continue;
     }
-    entries.push({ doctor });
+    entries.push({ id, doctor });
   }
   return entries;
 }
@@ -337,11 +339,12 @@ export function collectChannelDoctorCompatibilityMutations(
 /** Collect stale channel config cleanup mutations from configured channel doctor adapters. */
 export async function collectChannelDoctorStaleConfigMutations(
   cfg: OpenClawConfig,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: { env?: NodeJS.ProcessEnv; channelIds?: readonly string[] } = {},
 ): Promise<ChannelDoctorConfigMutation[]> {
   const mutations: ChannelDoctorConfigMutation[] = [];
   let nextCfg = cfg;
-  for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(cfg), {
+  const channelIds = options.channelIds ?? collectConfiguredChannelIds(cfg);
+  for (const entry of listChannelDoctorEntries(channelIds, {
     cfg,
     env: options.env,
   })) {
@@ -366,7 +369,18 @@ export async function collectChannelDoctorPreviewWarnings(params: {
     cfg: params.cfg,
     env: params.env,
   })) {
-    const lines = await entry.doctor.collectPreviewWarnings?.(params);
+    let lines: string[] | undefined;
+    try {
+      lines = await entry.doctor.collectPreviewWarnings?.(params);
+    } catch (error) {
+      if (!isUnresolvedSecretInputError(error)) {
+        throw error;
+      }
+      warnings.push(
+        `- channels.${entry.id}: configured SecretRef at ${error.path} is unavailable in doctor preview; skipping secret-backed channel preview checks.`,
+      );
+      continue;
+    }
     if (lines?.length) {
       warnings.push(...lines);
     }

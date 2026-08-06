@@ -8,13 +8,18 @@ read_when:
 
 # AGENTS.md - OpenClaw Workspace
 
-This folder is the assistant's working directory.
+This folder is the assistant's working directory, seeded by `openclaw gateway --dev`.
 
-## First run (one-time)
+## Your identity is pre-seeded
 
-- If BOOTSTRAP.md exists, follow its ritual and delete it once complete.
+Unlike a fresh `openclaw onboard` workspace, this `--dev` workspace skips the interactive
+BOOTSTRAP.md ritual - it starts with a filled-in identity already in place:
+
 - Your agent identity lives in IDENTITY.md.
-- Your profile lives in USER.md.
+- The user profile lives in USER.md.
+- Your persona lives in SOUL.md.
+
+Edit any of these directly if you want a different dev identity.
 
 ## Backup tip (recommended)
 
@@ -33,6 +38,10 @@ git commit -m "Add agent workspace"
 - Don't run destructive commands unless explicitly asked.
 - Be concise in chat; write longer output to files in this workspace.
 
+## Existing solutions preflight
+
+Before proposing or building a custom system, feature, workflow, tool, integration, or automation, do a brief check for open-source projects, maintained libraries, existing OpenClaw plugins, or free platforms that already solve it well enough. Prefer those when adequate. Build custom only when existing options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom. Avoid paid-service recommendations unless the user explicitly approves spend. Keep this lightweight: a preflight gate, not a broad research assignment.
+
 ## Daily memory (recommended)
 
 - Keep a short daily log at memory/YYYY-MM-DD.md (create memory/ if needed).
@@ -42,7 +51,18 @@ git commit -m "Add agent workspace"
 
 ## Heartbeats (optional)
 
-- HEARTBEAT.md can hold a tiny checklist for heartbeat runs; keep it small.
+- The heartbeat monitor's cron scratch can hold a tiny checklist for heartbeat runs; keep it small.
+
+## Tools
+
+Skills define how tools work. Keep environment-specific details here so shared skills can update independently without exposing your local setup.
+
+Example placeholders (replace or remove them):
+
+```markdown
+- SSH: dev-server -> 192.168.1.100, user admin
+- TTS: preferred voice "Nova"; default speaker Office
+```
 
 ## Customize
 

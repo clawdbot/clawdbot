@@ -6,10 +6,7 @@ read_when:
 title: "Northflank"
 ---
 
-# Northflank
-
-Deploy OpenClaw on Northflank with a one-click template and access it through the web Control UI.
-This is the easiest "no terminal on the server" path: Northflank runs the Gateway for you.
+Deploy OpenClaw on Northflank with a one-click template and access it through the web Control UI. This is the easiest "no terminal on the server" path: Northflank runs the gateway for you.
 
 ## How to get started
 
@@ -25,20 +22,18 @@ This is the easiest "no terminal on the server" path: Northflank runs the Gatewa
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
-- Persistent storage via Northflank Volume (`/data`) so `openclaw.json`,
-  per-agent `auth-profiles.json`, channel/provider state, sessions, and
-  workspace survive redeploys
+- Persistent storage via a Northflank Volume (`/data`) so `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions, and workspace survive redeploys
 
 ## Connect a channel
 
-Use the Control UI at `/openclaw` or run `openclaw onboard` via SSH for channel setup instructions:
+Use the Control UI at `/openclaw`, or run `openclaw onboard` via SSH for channel setup instructions:
 
-- [Telegram](/channels/telegram) (fastest — just a bot token)
+- [Telegram](/channels/telegram) (fastest, just a bot token)
 - [Discord](/channels/discord)
 - [All channels](/channels)
 
 ## Next steps
 
 - Set up messaging channels: [Channels](/channels)
-- Configure the Gateway: [Gateway configuration](/gateway/configuration)
+- Configure the gateway: [Gateway configuration](/gateway/configuration)
 - Keep OpenClaw up to date: [Updating](/install/updating)

@@ -6,19 +6,11 @@ import {
   isWhatsAppGroupJid as isWhatsAppGroupJidImpl,
   normalizeWhatsAppTarget as normalizeWhatsAppTargetImpl,
 } from "./src/normalize-target.js";
-export {
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-} from "./src/directory-config.js";
 import { resolveWhatsAppRuntimeGroupPolicy as resolveWhatsAppRuntimeGroupPolicyImpl } from "./src/runtime-group-policy.js";
 import {
   canonicalizeLegacySessionKey as canonicalizeLegacySessionKeyImpl,
   isLegacyGroupSessionKey as isLegacyGroupSessionKeyImpl,
 } from "./src/session-contract.js";
-export {
-  collectUnsupportedSecretRefConfigCandidates,
-  unsupportedSecretRefSurfacePatterns,
-} from "./src/security-contract.js";
 
 export const canonicalizeLegacySessionKey = canonicalizeLegacySessionKeyImpl;
 export const isLegacyGroupSessionKey = isLegacyGroupSessionKeyImpl;

@@ -7,6 +7,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
+const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+
+function isSessionHistoryPrelude(message: AgentMessage | undefined): boolean {
+  return Boolean(
+    message &&
+    (message as AgentMessage & { [SESSION_HISTORY_PRELUDE]?: true })[SESSION_HISTORY_PRELUDE],
+  );
+}
 
 function stripThreadSuffix(value: string): string {
   const match = value.match(THREAD_SUFFIX_REGEX);
@@ -14,8 +22,12 @@ function stripThreadSuffix(value: string): string {
 }
 
 /**
- * Limits conversation history to the last N user turns (and their associated
+ * Limits conversation history to recent user turns (and their associated
  * assistant responses). This reduces token usage for long-running DM sessions.
+ *
+ * Leading non-conversation messages (e.g. compactionSummary, branchSummary)
+ * placed at index 0 by buildSessionContext are always preserved, since they
+ * carry summarized pre-compaction context that history limiting must not drop.
  */
 export function limitHistoryTurns(
   messages: AgentMessage[],
@@ -25,14 +37,51 @@ export function limitHistoryTurns(
     return messages;
   }
 
-  let userCount = 0;
-  let lastUserIndex = messages.length;
+  // Preserve leading non-conversation messages (compactionSummary, branchSummary, etc.)
+  // that buildSessionContext places at index 0 to carry pre-compaction context.
+  let conversationStart = 0;
+  while (conversationStart < messages.length) {
+    if (isSessionHistoryPrelude(messages[conversationStart])) {
+      conversationStart++;
+      continue;
+    }
+    const role = messages.at(conversationStart)?.role;
+    if (role === "user" || role === "assistant") {
+      break;
+    }
+    conversationStart++;
+  }
 
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
+  const tail = messages.slice(conversationStart);
+  if (tail.length === 0) {
+    return messages;
+  }
+
+  let userCount = 0;
+  for (const message of tail) {
+    if (message.role === "user") {
       userCount++;
-      if (userCount > limit) {
-        return messages.slice(lastUserIndex);
+    }
+  }
+
+  // Allow a 50% cushion, then evict a full batch so the prompt-cache prefix stays
+  // stable between cuts; up to 1.5x turns trades strictness for amortized cache reuse.
+  const targetUserTurns = Math.floor(limit);
+  const maxUserTurns = Math.ceil(targetUserTurns * 1.5);
+  if (userCount <= maxUserTurns) {
+    return messages;
+  }
+  const evictionBatchSize = maxUserTurns - targetUserTurns + 1;
+  const userTurnsToKeep = targetUserTurns + ((userCount - targetUserTurns) % evictionBatchSize);
+
+  userCount = 0;
+  let lastUserIndex = tail.length;
+
+  for (const [i, message] of Array.from(tail.entries()).toReversed()) {
+    if (message.role === "user") {
+      userCount++;
+      if (userCount > userTurnsToKeep) {
+        return [...messages.slice(0, conversationStart), ...tail.slice(lastUserIndex)];
       }
       lastUserIndex = i;
     }

@@ -7,7 +7,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
 let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
-let toModelRow: typeof import("./models/list.registry.js").toModelRow;
+let toModelRow: typeof import("./models/list.model-row.js").toModelRow;
 
 const getRuntimeConfig = vi.fn();
 const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
@@ -21,20 +21,21 @@ const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
 const hasSyntheticLocalProviderAuthConfig = vi.fn().mockReturnValue(false);
-const loadModelCatalog = vi.fn(async () => []);
-const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
+const loadModelCatalog = vi.fn<(_params?: unknown) => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
-const loadStaticManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
-const loadSupplementalManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(
-  () => [],
-);
-const loadProviderIndexCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
-const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
   vi.fn(({ context }) => {
+    if (context?.provider === "anthropic" && context?.modelId === "claude-sonnet-5") {
+      return {
+        ...context.model,
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+      };
+    }
     if (
       context?.provider === "anthropic" &&
       context?.modelId === "claude-sonnet-4-5" &&
@@ -53,54 +54,13 @@ const modelRegistryState = {
   getAvailableError: undefined as unknown,
   findError: undefined as unknown,
 };
-let previousExitCode: typeof process.exitCode;
 
-vi.mock("./models/load-config.js", () => ({
-  loadModelsConfigWithSource: vi.fn(async () => {
-    const resolvedConfig = getRuntimeConfig();
-    const sourceConfig = await loadSourceConfigSnapshotForTest(resolvedConfig);
-    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
-    return {
-      sourceConfig,
-      resolvedConfig,
-      diagnostics: [],
-    };
-  }),
-}));
+function createMockModelRegistry() {
+  return new (class {
+    fork() {
+      return createMockModelRegistry();
+    }
 
-vi.mock("../agents/auth-profiles/profile-list.js", () => ({
-  listProfilesForProvider,
-}));
-
-vi.mock("../agents/auth-profiles/store.js", () => ({
-  loadAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
-}));
-
-vi.mock("../agents/model-auth.js", () => ({
-  hasUsableCustomProviderApiKey,
-  hasSyntheticLocalProviderAuthConfig,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-}));
-
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog,
-}));
-
-vi.mock("../agents/embedded-agent-runner/model.js", () => ({
-  resolveModelWithRegistry: ({
-    provider,
-    modelId,
-    modelRegistry,
-  }: {
-    provider: string;
-    modelId: string;
-    modelRegistry: { find: (provider: string, id: string) => unknown };
-  }) => modelRegistry.find(provider, modelId),
-}));
-
-vi.mock("../agents/agent-model-discovery.js", () => {
-  class MockModelRegistry {
     find(provider: string, id: string) {
       if (modelRegistryState.findError !== undefined) {
         throw toLintErrorObject(modelRegistryState.findError, "Non-Error thrown");
@@ -125,50 +85,124 @@ vi.mock("../agents/agent-model-discovery.js", () => {
       return modelRegistryState.available;
     }
 
+    getProviderMetadataOwners() {
+      return undefined;
+    }
+
     hasConfiguredAuth(model: { provider: string; id: string }) {
       return modelRegistryState.available.some(
         (available) => available.provider === model.provider && available.id === model.id,
       );
     }
-  }
+  })();
+}
 
-  return {
-    discoverAuthStorage: () => ({}) as unknown,
-    discoverModels: () => new MockModelRegistry() as unknown,
-  };
-});
+let previousExitCode: typeof process.exitCode;
+let previousOpenAiApiKey: string | undefined;
 
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+vi.mock("./models/load-config.js", () => ({
+  loadModelsConfigWithSource: vi.fn(async () => {
+    const resolvedConfig = getRuntimeConfig();
+    const sourceConfig = await loadSourceConfigSnapshotForTest(resolvedConfig);
+    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+    return {
+      sourceConfig,
+      resolvedConfig,
+      diagnostics: [],
+    };
+  }),
+}));
+
+vi.mock("../agents/auth-profiles/profile-list.js", () => ({
+  listProfilesForProvider,
+}));
+
+vi.mock("../agents/auth-profiles/store.js", () => ({
+  ensureAuthProfileStore,
+  getRuntimeAuthProfileStoreSnapshot: vi.fn(() => undefined),
+  loadAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
+  updateAuthProfileStoreWithLock: vi.fn(async () => ensureAuthProfileStore()),
+}));
+
+vi.mock("../agents/model-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/model-auth.js")>();
   return {
     ...actual,
-    normalizeProviderResolvedModelWithPlugin,
+    hasUsableCustomProviderApiKey,
+    hasSyntheticLocalProviderAuthConfig,
+    resolveAwsSdkEnvVarName,
+    resolveEnvApiKey,
   };
 });
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalog,
+  loadPreparedModelCatalogOwnerSnapshot: async (params: { agentDir?: string; config?: object }) => {
+    const entries = await loadModelCatalog(params);
+    return {
+      agentDir: params.agentDir ?? "/tmp/openclaw-agent",
+      config: params.config ?? {},
+      metadataSnapshot: { manifestRegistry: { plugins: [] } },
+      modelCatalog: { entries, routeVariants: entries, staticEntries: entries },
+    };
+  },
+  loadPreparedModelCatalogSnapshot: async (...args: Parameters<typeof loadModelCatalog>) => {
+    const entries = await loadModelCatalog(...args);
+    return { entries, routeVariants: entries };
+  },
+}));
+
+vi.mock("./models/list.scoped-catalog.js", () => ({
+  // The scoped-catalog owner covers live discovery; this command fixture supplies
+  // deterministic rows without materializing provider runtime in the shared E2E worker.
+  loadScopedListModelCatalogSnapshot: async () => {
+    const entries = await loadModelCatalog();
+    return { entries, routeVariants: entries, staticEntries: [] };
+  },
+}));
+
+vi.mock("../agents/prepared-model-registry.js", () => ({
+  loadPreparedAgentModelRegistry: async (config: object, options?: { agentDir?: string }) => ({
+    agentDir: options?.agentDir ?? "/tmp/openclaw-agent",
+    config,
+    registry: createMockModelRegistry(),
+  }),
+}));
+
+vi.mock("../agents/embedded-agent-runner/model.js", () => ({
+  resolveModelWithRegistry: ({
+    provider,
+    modelId,
+    modelRegistry,
+  }: {
+    provider: string;
+    modelId: string;
+    modelRegistry: { find: (provider: string, id: string) => unknown };
+  }) => modelRegistry.find(provider, modelId),
+}));
+
+vi.mock("../agents/agent-model-discovery.js", () => ({
+  discoverAuthStorage: () => ({ getAll: () => ({}) }),
+  discoverModels: () => createMockModelRegistry(),
+  normalizeDiscoveredAgentModel: (model: unknown) => model,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  applyProviderNativeStreamingUsageCompatWithPlugin: vi.fn(() => undefined),
+  buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
+  normalizeProviderConfigWithPlugin: vi.fn(() => undefined),
+  normalizeProviderResolvedModelWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin: vi.fn(() => undefined),
+  resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: vi.fn(() => false),
+}));
 
 vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
-vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models/list.provider-catalog.js")>();
-  return {
-    ...actual,
-    hasProviderStaticCatalogForFilter,
-    loadProviderCatalogModelsForList,
-  };
-});
-
-vi.mock("./models/list.manifest-catalog.js", () => ({
-  loadStaticManifestCatalogRowsForList,
-  loadSupplementalManifestCatalogRowsForList,
-}));
-
-vi.mock("./models/list.provider-index-catalog.js", () => ({
-  loadProviderIndexCatalogRowsForList,
-}));
-
-vi.mock("../agents/model-suppression.js", () => ({
+vi.mock("../agents/model-suppression.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-suppression.js")>()),
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
 }));
@@ -232,6 +266,8 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
+  previousOpenAiApiKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
   modelRegistryState.models = [];
   modelRegistryState.available = [];
   modelRegistryState.getAllError = undefined;
@@ -240,18 +276,8 @@ beforeEach(() => {
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
-  loadModelCatalog.mockClear();
+  loadModelCatalog.mockReset();
   loadModelCatalog.mockResolvedValue([]);
-  loadProviderCatalogModelsForList.mockReset();
-  loadProviderCatalogModelsForList.mockResolvedValue([]);
-  loadStaticManifestCatalogRowsForList.mockReset();
-  loadStaticManifestCatalogRowsForList.mockReturnValue([]);
-  loadSupplementalManifestCatalogRowsForList.mockReset();
-  loadSupplementalManifestCatalogRowsForList.mockReturnValue([]);
-  loadProviderIndexCatalogRowsForList.mockReset();
-  loadProviderIndexCatalogRowsForList.mockReturnValue([]);
-  hasProviderStaticCatalogForFilter.mockReset();
-  hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   shouldSuppressBuiltInModel.mockReset();
   shouldSuppressBuiltInModel.mockReturnValue(false);
   normalizeProviderResolvedModelWithPlugin.mockClear();
@@ -265,6 +291,11 @@ beforeEach(() => {
 
 afterEach(() => {
   process.exitCode = previousExitCode;
+  if (previousOpenAiApiKey === undefined) {
+    delete process.env.OPENAI_API_KEY;
+  } else {
+    process.env.OPENAI_API_KEY = previousOpenAiApiKey;
+  }
 });
 
 describe("models list/status", () => {
@@ -365,14 +396,17 @@ describe("models list/status", () => {
 
   async function expectZaiProviderFilter(provider: string) {
     setDefaultZaiRegistry();
-    loadProviderIndexCatalogRowsForList.mockReturnValueOnce([ZAI_MODEL]);
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, provider, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(payload.count).toBe(1);
-    expect(payload.models[0]?.key).toBe("zai/glm-4.7");
+    expect(payload.count).toBe(payload.models.length);
+    expect(payload.models.length).toBeGreaterThan(0);
+    expect(payload.models.map((model: { key: string }) => model.key)).toContain("zai/glm-4.7");
+    expect(payload.models.every((model: { key: string }) => model.key.startsWith("zai/"))).toBe(
+      true,
+    );
   }
 
   function setDefaultZaiRegistry(params: { available?: boolean } = {}) {
@@ -413,7 +447,9 @@ describe("models list/status", () => {
 
   beforeAll(async () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
-    ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
+    const registryModule = await import("./models/list.registry.js");
+    loadModelRegistry = registryModule.loadModelRegistry;
+    ({ toModelRow } = await import("./models/list.model-row.js"));
   });
 
   it("models list runs model discovery without auth.json sync", async () => {
@@ -494,6 +530,23 @@ describe("models list/status", () => {
     );
   });
 
+  it("models list renders a configured Sonnet 5 table row through provider normalization", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { model: "anthropic/claude-sonnet-5" } },
+    });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({}, runtime);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain("anthropic/claude-sonnet-5");
+    expect(output).toContain("text+image");
+    const normalizationContext =
+      normalizeProviderResolvedModelWithPlugin.mock.calls.at(-1)?.[0]?.context;
+    expect(normalizationContext?.model).not.toHaveProperty("cost");
+  });
+
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(
     "models list provider filter normalizes %s alias",
     async (provider) => {
@@ -508,7 +561,9 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models[0]?.available).toBe(false);
+    expect(
+      payload.models.find((model: { key?: string }) => model.key === "zai/glm-4.7")?.available,
+    ).toBe(false);
   });
 
   it("models list uses trusted workspace plugin auth evidence for configured rows", async () => {
@@ -549,7 +604,6 @@ describe("models list/status", () => {
       },
     });
     const runtime = makeRuntime();
-
     try {
       await withEnvAsync(
         {
@@ -570,10 +624,9 @@ describe("models list/status", () => {
     expect(model.available).toBe(true);
   });
 
-  it("models list all includes unauthenticated provider catalog rows", async () => {
+  it("models list all includes catalog rows with unknown auth availability", async () => {
     setDefaultZaiRegistry({ available: false });
-    hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
-    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    loadModelCatalog.mockResolvedValueOnce([{ ...MOONSHOT_MODEL, id: "kimi-k3", name: "Kimi K3" }]);
     const runtime = makeRuntime();
 
     await withEnvAsync(
@@ -582,12 +635,15 @@ describe("models list/status", () => {
     );
 
     const payload = parseJsonLog(runtime);
-    expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(payload.models).toHaveLength(1);
-    const model = payload.models[0];
-    expect(model.key).toBe("moonshot/kimi-k2.6");
-    expect(model.name).toBe("Kimi K2.6");
-    expect(model.available).toBe(false);
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(payload.models.length).toBeGreaterThan(0);
+    const model = payload.models.find(
+      (candidate: { key: string }) => candidate.key === "moonshot/kimi-k3",
+    );
+    expect(model).toBeDefined();
+    expect(model.key).toBe("moonshot/kimi-k3");
+    expect(model.name).toBe("Kimi K3");
+    expect(model.available).toBeNull();
     expect(model.missing).toBe(false);
   });
 
@@ -602,18 +658,18 @@ describe("models list/status", () => {
     );
     expect(runtime.log).not.toHaveBeenCalled();
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
   it("models list all local skips unauthenticated provider catalog rows", async () => {
     setDefaultZaiRegistry({ available: false });
-    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    loadModelCatalog.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, local: true, json: true }, runtime);
 
-    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(parseJsonLog(runtime).models).toEqual([]);
   });
 
   it("models list default does not enumerate all registry models", async () => {
@@ -626,7 +682,9 @@ describe("models list/status", () => {
       code: "MODEL_AVAILABILITY_UNAVAILABLE",
     });
     const runtime = makeRuntime();
-    await modelsListCommand({ json: true }, runtime);
+    await withEnvAsync({ OPENAI_API_KEY: undefined }, () =>
+      modelsListCommand({ json: true }, runtime),
+    );
 
     expect(runtime.error).not.toHaveBeenCalled();
     const payload = parseJsonLog(runtime);
@@ -754,7 +812,7 @@ describe("models list/status", () => {
     expect(model.missing).toBe(false);
   });
 
-  it("toModelRow marks unavailable when cfg/authStore and availability are undefined", () => {
+  it("toModelRow keeps auth availability unknown when no evidence exists", () => {
     const row = toModelRow({
       model: makeGoogleAntigravityTemplate(
         "claude-opus-4-6-thinking",
@@ -763,10 +821,11 @@ describe("models list/status", () => {
       key: "google-antigravity/claude-opus-4-6-thinking",
       tags: [],
       availableKeys: undefined,
+      authAvailability: undefined,
     });
 
     expect(row.missing).toBe(false);
-    expect(row.available).toBe(false);
+    expect(row.available).toBeNull();
   });
 });
 

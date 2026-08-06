@@ -1,5 +1,4 @@
 /** Shared cases for filtering usage summaries by current model/provider. */
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,20 +8,11 @@ import {
   requireSessionStorePath,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
 const usageMocks = getProviderUsageMocks();
-
-async function readSessionStore(storePath: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(storePath, "utf-8");
-  return JSON.parse(raw) as Record<string, unknown>;
-}
-
-function pickFirstStoreEntry(store: Record<string, unknown>): unknown {
-  const entries = Object.values(store);
-  return entries[0];
-}
 
 function getReplyFromConfigNow(getReplyFromConfig: () => GetReplyFromConfig): GetReplyFromConfig {
   return getReplyFromConfig();
@@ -145,10 +135,8 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         );
         expect(replyText(r3)).toContain("Usage footer: tokens");
 
-        const finalStore = await readSessionStore(usageStorePath);
-        expect((pickFirstStoreEntry(finalStore) as { responseUsage?: string })?.responseUsage).toBe(
-          "tokens",
-        );
+        const finalEntries = listSessionEntries({ storePath: usageStorePath });
+        expect(finalEntries[0]?.entry.responseUsage).toBe("tokens");
         expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       });
     });

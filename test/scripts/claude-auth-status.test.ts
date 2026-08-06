@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createScriptTestHarness } from "./test-helpers.ts";
+import { createScriptTestHarness, writeNodeBackedJq } from "./test-helpers.ts";
 
 const SCRIPT = "scripts/claude-auth-status.sh";
 
@@ -16,6 +16,7 @@ describe("claude-auth-status.sh", () => {
     mkdirSync(bin, { recursive: true });
     const openclaw = path.join(bin, "openclaw");
     const futureMs = String(Date.now() + 2 * 60 * 60 * 1000);
+    writeNodeBackedJq(bin);
 
     writeFileSync(
       openclaw,

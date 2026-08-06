@@ -1,9 +1,19 @@
-// Tlon helper module supports utils behavior.
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import {
+  formatAgentEnvelope,
+  implicitMentionKindWhen,
+  resolveEnvelopeFormatOptions,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Tlon helper module supports utils behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeShip } from "../targets.js";
 
 export interface ParsedCite {
@@ -59,7 +69,9 @@ export function formatModelName(modelString?: string | null): string {
   if (!modelString) {
     return "AI";
   }
-  const modelName = modelString.includes("/") ? modelString.split("/")[1] : modelString;
+  const modelName = modelString.includes("/")
+    ? expectDefined(modelString.split("/").at(1), "provider/model second segment")
+    : modelString;
   const modelMappings: Record<string, string> = {
     "claude-opus-4-5": "Claude Opus 4.5",
     "claude-sonnet-4-5": "Claude Sonnet 4.5",
@@ -71,8 +83,9 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  if (modelMappings[modelName]) {
-    return modelMappings[modelName];
+  const mappedName = modelMappings[modelName];
+  if (mappedName !== undefined) {
+    return mappedName;
   }
   return modelName
     .replace(/-/g, " ")
@@ -173,15 +186,46 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
   });
 }
 
+export function resolveTlonGroupMentionDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  wasMentioned: boolean;
+  botParticipatedInThread: boolean;
+}) {
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "tlon",
+    accountId: params.accountId,
+  });
+  return resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        params.botParticipatedInThread,
+      ),
+    },
+    policy: {
+      isGroup: true,
+      requireMention: true,
+      implicitMentions,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
+  });
+}
+
 export function isGroupInviteAllowed(
   inviterShip: string,
   allowlist: string[] | undefined,
 ): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return false;
-  }
   const normalizedInviter = normalizeShip(inviterShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
+  return resolveAllowlistMatchByCandidates({
+    allowList: (allowlist ?? []).map((ship) => normalizeShip(ship)),
+    candidates: [{ value: normalizedInviter, source: "ship" }],
+  }).allowed;
 }
 
 export async function resolveAuthorizedMessageText(params: {
@@ -400,4 +444,27 @@ export function isSummarizationRequest(messageText: string): boolean {
     /tldr/i,
   ];
   return patterns.some((pattern) => pattern.test(messageText));
+}
+
+/**
+ * Formats channel history for a summarization request. Each entry is rendered
+ * through the shared inbound envelope so timestamps honor the configured user
+ * timezone instead of the host process zone (matches Mattermost/Feishu).
+ */
+export function formatSummarizationHistoryText(
+  history: ReadonlyArray<{ author: string; content: string; timestamp: number }>,
+  cfg?: OpenClawConfig,
+): string {
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  return history
+    .map((msg) =>
+      formatAgentEnvelope({
+        channel: "Tlon",
+        from: msg.author,
+        timestamp: msg.timestamp,
+        body: msg.content,
+        envelope: envelopeOptions,
+      }),
+    )
+    .join("\n");
 }

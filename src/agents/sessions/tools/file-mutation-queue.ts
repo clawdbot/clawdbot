@@ -5,8 +5,12 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 
-const fileMutationQueues = new Map<string, Promise<void>>();
+const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
+  Symbol.for("openclaw.fileMutationTails"),
+  "close-only",
+);
 
 function getMutationQueueKey(filePath: string): string {
   const resolvedPath = resolve(filePath);
@@ -22,23 +26,31 @@ function getMutationQueueKey(filePath: string): string {
  * Operations for different files still run in parallel.
  */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const key = getMutationQueueKey(filePath);
-  const currentQueue = fileMutationQueues.get(key) ?? Promise.resolve();
+  return await withFileMutationQueues([filePath], fn);
+}
 
-  let releaseNext!: () => void;
-  const nextQueue = new Promise<void>((resolveQueue) => {
-    releaseNext = resolveQueue;
-  });
-  const chainedQueue = currentQueue.then(() => nextQueue);
-  fileMutationQueues.set(key, chainedQueue);
-
-  await currentQueue;
-  try {
-    return await fn();
-  } finally {
-    releaseNext();
-    if (fileMutationQueues.get(key) === chainedQueue) {
-      fileMutationQueues.delete(key);
-    }
+export async function withFileMutationQueues<T>(
+  filePaths: readonly string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const keys = [...new Set(filePaths.map(getMutationQueueKey))].toSorted();
+  const current = Promise.all(
+    keys.map((key) => (fileMutationTails.get(key) ?? Promise.resolve()).catch(() => undefined)),
+  ).then(fn);
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  for (const key of keys) {
+    fileMutationTails.set(key, tail);
   }
+  const cleanup = () => {
+    for (const key of keys) {
+      if (fileMutationTails.get(key) === tail) {
+        fileMutationTails.delete(key);
+      }
+    }
+  };
+  tail.then(cleanup, cleanup);
+  return await current;
 }

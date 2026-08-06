@@ -1,14 +1,22 @@
 // Resolves and packages install sources for plugin installs.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  gt as gtSemver,
+  satisfies as satisfiesSemver,
+  validRange as validSemverRange,
+} from "semver";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
+import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 /** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
@@ -22,7 +30,7 @@ export type NpmSpecResolution = {
 };
 
 /** Flattened npm resolution fields stored on install results and diagnostics. */
-export type NpmResolutionFields = {
+type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
   resolvedSpec?: string;
@@ -55,13 +63,48 @@ export function createNpmMetadataEnv(
   return env;
 }
 
-function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
-  if (!value || typeof value !== "object") {
+function resolveNpmSpecVersionSelector(spec: string): string | undefined {
+  const separator = spec.lastIndexOf("@");
+  return separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
+}
+
+function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const entries = value.filter((entry) => isRecord(entry) && !Array.isArray(entry));
+  const selector = resolveNpmSpecVersionSelector(spec);
+  const range = selector ? validSemverRange(selector) : null;
+  if (range) {
+    // npm view output order tracks publication, not SemVer (a backport can be
+    // published after a higher release), so pick the max satisfying version.
+    let best: { entry: unknown; version: string } | undefined;
+    for (const entry of entries) {
+      const version = normalizeOptionalString(entry.version);
+      if (!version || !satisfiesSemver(version, range)) {
+        continue;
+      }
+      if (!best || gtSemver(version, best.version)) {
+        best = { entry, version };
+      }
+    }
+    // A recognized range with no satisfying entry must fail the metadata read
+    // rather than silently resolve outside the requested constraint.
+    return best?.entry;
+  }
+  return entries.at(-1);
+}
+
+function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
+  // npm output varies by version, selector, and field projection. npm orders
+  // view arrays ascending, so non-semver selectors intentionally use the last entry.
+  const entry = selectNpmViewMetadataEntry(value, spec);
+  if (!isRecord(entry) || Array.isArray(entry)) {
     return null;
   }
-  const rec = value as Record<string, unknown>;
-  const name = toOptionalString(rec.name);
-  const version = toOptionalString(rec.version);
+  const rec = entry;
+  const name = normalizeOptionalString(rec.name);
+  const version = normalizeOptionalString(rec.version);
   const resolvedSpec = name && version ? `${name}@${version}` : undefined;
   const dist =
     rec.dist && typeof rec.dist === "object" ? (rec.dist as Record<string, unknown>) : {};
@@ -69,13 +112,16 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
     name,
     version,
     resolvedSpec,
-    integrity: toOptionalString(rec["dist.integrity"]) ?? toOptionalString(dist.integrity),
-    shasum: toOptionalString(rec["dist.shasum"]) ?? toOptionalString(dist.shasum),
+    integrity:
+      normalizeOptionalString(rec["dist.integrity"]) ?? normalizeOptionalString(dist.integrity),
+    shasum: normalizeOptionalString(rec["dist.shasum"]) ?? normalizeOptionalString(dist.shasum),
     ...(isRecord(rec.openclaw) ? { packageOpenClaw: rec.openclaw } : {}),
   };
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
+type NpmMetadataFailureCategory = "metadata-env";
+
 export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
   | {
       ok: true;
@@ -84,6 +130,7 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
   | {
       ok: false;
       error: string;
+      category?: NpmMetadataFailureCategory;
     }
 > {
   const res = await runCommandWithTimeout(
@@ -111,18 +158,29 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    return { ok: false, error: `npm view failed: ${raw}` };
+    return { ok: false, error: `npm view failed: ${raw}`, category: "metadata-env" };
   }
 
   try {
     const parsed = JSON.parse(res.stdout.trim()) as unknown;
-    const metadata = normalizeNpmViewMetadata(parsed);
+    const metadata = normalizeNpmViewMetadata(parsed, params.spec);
     if (!metadata?.name || !metadata.version) {
-      return { ok: false, error: "npm view produced incomplete package metadata" };
+      const missingFields = [!metadata?.name ? "name" : null, !metadata?.version ? "version" : null]
+        .filter((field): field is string => field !== null)
+        .join(", ");
+      return {
+        ok: false,
+        error: `npm view produced incomplete package metadata (missing: ${missingFields})`,
+        category: "metadata-env",
+      };
     }
     return { ok: true, metadata };
   } catch (err) {
-    return { ok: false, error: `npm view produced invalid JSON: ${String(err)}` };
+    return {
+      ok: false,
+      error: `npm view produced invalid JSON: ${String(err)}`,
+      category: "metadata-env",
+    };
   }
 }
 
@@ -136,8 +194,10 @@ export type NpmIntegrityDrift = {
 export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
+  options?: { rootDir?: string },
 ): Promise<T> {
-  return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
+  const rootDir = options?.rootDir ?? resolvePreferredOpenClawTmpDir();
+  return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
 }
 
 /** Resolves and validates a user-supplied archive path before extraction. */
@@ -163,18 +223,6 @@ export async function resolveArchiveSourcePath(archivePath: string): Promise<
   return { ok: true, path: resolved };
 }
 
-function toOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseResolvedSpecFromId(id: string): string | undefined {
   const at = id.lastIndexOf("@");
   if (at <= 0 || at >= id.length - 1) {
@@ -195,21 +243,21 @@ function normalizeNpmPackEntry(
     return null;
   }
   const rec = entry as Record<string, unknown>;
-  const name = toOptionalString(rec.name);
-  const version = toOptionalString(rec.version);
-  const id = toOptionalString(rec.id);
+  const name = normalizeOptionalString(rec.name);
+  const version = normalizeOptionalString(rec.version);
+  const id = normalizeOptionalString(rec.id);
   const resolvedSpec =
     (name && version ? `${name}@${version}` : undefined) ??
     (id ? parseResolvedSpecFromId(id) : undefined);
 
   return {
-    filename: toOptionalString(rec.filename),
+    filename: normalizeOptionalString(rec.filename),
     metadata: {
       name,
       version,
       resolvedSpec,
-      integrity: toOptionalString(rec.integrity),
-      shasum: toOptionalString(rec.shasum),
+      integrity: normalizeOptionalString(rec.integrity),
+      shasum: normalizeOptionalString(rec.shasum),
     },
   };
 }
@@ -236,7 +284,7 @@ function parseNpmPackJsonOutput(
       continue;
     }
 
-    const entries = Array.isArray(parsed) ? parsed : [parsed];
+    const entries = resolveNpmJsonEntries(parsed);
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const normalized = normalizeNpmPackEntry(entries[i]);

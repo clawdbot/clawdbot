@@ -7,8 +7,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveOAuthRefreshLockPath } from "./paths.js";
+
+const lockBasenamePattern = /^lock-[0-9a-f]{32}$/;
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -26,7 +28,7 @@ describe("resolveOAuthRefreshLockPath", () => {
 
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-lock-path-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   });
 
   afterEach(async () => {
@@ -41,8 +43,8 @@ describe("resolveOAuthRefreshLockPath", () => {
 
     expect(path.dirname(dotSegmentPath)).toBe(refreshLockDir);
     expect(path.dirname(currentDirPath)).toBe(refreshLockDir);
-    expect(path.basename(dotSegmentPath)).toMatch(/^sha256-[0-9a-f]{64}$/);
-    expect(path.basename(currentDirPath)).toMatch(/^sha256-[0-9a-f]{64}$/);
+    expect(path.basename(dotSegmentPath)).toMatch(lockBasenamePattern);
+    expect(path.basename(currentDirPath)).toMatch(lockBasenamePattern);
     expect(path.basename(dotSegmentPath)).not.toBe(path.basename(currentDirPath));
   });
 
@@ -66,10 +68,12 @@ describe("resolveOAuthRefreshLockPath", () => {
 
   it("is immune to simple concat collisions at the provider/profile boundary", () => {
     // With a plain `${provider}:${profileId}` hash input, the pair
-    // ("a", "b:c") would collide with ("a:b", "c"). The NUL separator
-    // in the hash input rules that out.
+    // ("a", "b:c") would collide with ("a:b", "c"). Tuple encoding rules that out.
     expect(resolveOAuthRefreshLockPath("a", "b:c")).not.toBe(
       resolveOAuthRefreshLockPath("a:b", "c"),
+    );
+    expect(resolveOAuthRefreshLockPath("a", "\x00b")).not.toBe(
+      resolveOAuthRefreshLockPath("a\x00", "b"),
     );
   });
 
@@ -77,7 +81,7 @@ describe("resolveOAuthRefreshLockPath", () => {
     const longProfileId = `openai:${"x".repeat(512)}`;
     const basename = path.basename(resolveOAuthRefreshLockPath("openai", longProfileId));
 
-    expect(basename).toMatch(/^sha256-[0-9a-f]{64}$/);
+    expect(basename).toMatch(lockBasenamePattern);
     expect(Buffer.byteLength(basename, "utf8")).toBeLessThan(255);
   });
 
@@ -99,7 +103,7 @@ describe("resolveOAuthRefreshLockPath", () => {
 
     const resolved = resolveOAuthRefreshLockPath("openai", "openai:default");
     expect(path.dirname(resolved)).toBe(locksDir);
-    expect(path.basename(resolved)).toMatch(/^sha256-[0-9a-f]{64}$/);
+    expect(path.basename(resolved)).toMatch(lockBasenamePattern);
     // Function itself must not create the directory (path resolver only).
     await expectPathMissing(locksDir);
   });
@@ -118,7 +122,7 @@ describe("resolveOAuthRefreshLockPath", () => {
     ] as const;
     for (const [provider, id] of hazards) {
       const basename = path.basename(resolveOAuthRefreshLockPath(provider, id));
-      expect(basename).toMatch(/^sha256-[0-9a-f]{64}$/);
+      expect(basename).toMatch(lockBasenamePattern);
       expect(basename).not.toContain("/");
       expect(basename).not.toContain("\\");
       expect(basename).not.toContain("..");
@@ -134,7 +138,7 @@ describe("resolveOAuthRefreshLockPath fuzz", () => {
 
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-lock-path-fuzz-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   });
 
   afterEach(async () => {
@@ -176,15 +180,15 @@ describe("resolveOAuthRefreshLockPath fuzz", () => {
     return chars.join("");
   }
 
-  it("always produces a basename that matches sha256-<hex64> regardless of input", () => {
+  it("always produces a bounded hex basename regardless of input", () => {
     const rng = makeSeededRandom(0x2026_0417);
     for (let i = 0; i < 500; i += 1) {
       const provider = randomProfileId(rng, 64) || "openai";
       const id = randomProfileId(rng, 4096);
       const basename = path.basename(resolveOAuthRefreshLockPath(provider, id));
-      expect(basename).toMatch(/^sha256-[0-9a-f]{64}$/);
+      expect(basename).toMatch(lockBasenamePattern);
       expect(Buffer.byteLength(basename, "utf8")).toBeLessThan(255);
-      // sha256-<64 hex> = 71 chars, no path hazards. Explicit substring
+      // lock-<32 hex> = 37 chars, no path hazards. Explicit substring
       // checks (no control-char regex) to keep lint happy.
       expect(basename).not.toContain("\\");
       expect(basename).not.toContain("/");

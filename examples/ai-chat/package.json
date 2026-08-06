@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/example-ai-chat",
+  "version": "0.0.0-private",
+  "private": true,
+  "description": "Minimal external-consumer example for @openclaw/ai",
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@openclaw/ai": "workspace:*"
+  }
+}

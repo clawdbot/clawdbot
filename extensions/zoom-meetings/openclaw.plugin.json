@@ -1,0 +1,111 @@
+{
+  "id": "zoom-meetings",
+  "name": "Zoom meetings",
+  "description": "Join Zoom meetings as a Chrome browser guest.",
+  "icon": "https://cdn.simpleicons.org/zoom",
+  "enabledByDefault": true,
+  "commandAliases": [{ "name": "zoommeetings" }],
+  "activation": {
+    "onStartup": true,
+    "onCommands": ["zoommeetings"],
+    "onCapabilities": ["tool"]
+  },
+  "contracts": {
+    "tools": ["zoom_meetings"],
+    "transcriptSourceProviders": ["zoom"]
+  },
+  "uiHints": {
+    "defaultMode": {
+      "label": "Default Mode",
+      "help": "Agent consults OpenClaw, bidi uses direct realtime voice, and transcribe observes only."
+    },
+    "chrome.browserProfile": { "label": "Chrome Profile", "advanced": true },
+    "chrome.guestName": { "label": "Guest Name" },
+    "chrome.waitForInCallMs": { "label": "Wait For In-Call (ms)", "advanced": true },
+    "chrome.audioInputCommand": { "label": "Audio Input Command", "advanced": true },
+    "chrome.audioOutputCommand": { "label": "Audio Output Command", "advanced": true },
+    "chromeNode.node": {
+      "label": "Chrome Node",
+      "help": "Node id/name/IP that owns Chrome, BlackHole, and SoX.",
+      "advanced": true
+    },
+    "realtime.transcriptionProvider": { "label": "Realtime Transcription Provider" },
+    "realtime.voiceProvider": { "label": "Bidi Voice Provider" },
+    "realtime.model": { "label": "Bidi Realtime Model", "advanced": true },
+    "realtime.instructions": { "label": "Realtime Instructions", "advanced": true },
+    "realtime.introMessage": { "label": "Realtime Intro Message" },
+    "realtime.agentId": { "label": "Realtime Consult Agent", "advanced": true },
+    "realtime.toolPolicy": { "label": "Realtime Tool Policy", "advanced": true }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "defaultMode": {
+        "type": "string",
+        "enum": ["agent", "bidi", "transcribe"],
+        "default": "agent"
+      },
+      "chrome": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "audioBackend": {
+            "type": "string",
+            "enum": ["blackhole-2ch"],
+            "default": "blackhole-2ch"
+          },
+          "audioFormat": {
+            "type": "string",
+            "enum": ["pcm16-24khz", "g711-ulaw-8khz"],
+            "default": "pcm16-24khz"
+          },
+          "audioBufferBytes": { "type": "number", "minimum": 17 },
+          "launch": { "type": "boolean" },
+          "browserProfile": { "type": "string" },
+          "guestName": { "type": "string" },
+          "reuseExistingTab": { "type": "boolean" },
+          "autoJoin": { "type": "boolean" },
+          "joinTimeoutMs": { "type": "number", "minimum": 1 },
+          "waitForInCallMs": { "type": "number", "minimum": 1 },
+          "audioInputCommand": { "type": "array", "items": { "type": "string" } },
+          "audioOutputCommand": { "type": "array", "items": { "type": "string" } },
+          "bargeInInputCommand": { "type": "array", "items": { "type": "string" } },
+          "bargeInRmsThreshold": { "type": "number", "exclusiveMinimum": 0 },
+          "bargeInPeakThreshold": { "type": "number", "exclusiveMinimum": 0 },
+          "bargeInCooldownMs": { "type": "number", "minimum": 1 }
+        }
+      },
+      "chromeNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "node": { "type": "string" }
+        }
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "strategy": { "type": "string", "enum": ["agent", "bidi"] },
+          "provider": { "type": "string" },
+          "transcriptionProvider": { "type": "string" },
+          "voiceProvider": { "type": "string" },
+          "model": { "type": "string" },
+          "instructions": { "type": "string" },
+          "introMessage": { "type": "string" },
+          "agentId": { "type": "string" },
+          "toolPolicy": {
+            "type": "string",
+            "enum": ["safe-read-only", "owner", "none"]
+          },
+          "providers": {
+            "type": "object",
+            "additionalProperties": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}

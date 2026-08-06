@@ -44,6 +44,7 @@ type DiagnosticsTimelineEvent = {
   provider?: string;
   operation?: string;
   ok?: boolean;
+  status?: number;
   command?: string;
   exitCode?: number | null;
   signal?: string | null;
@@ -64,7 +65,7 @@ type DiagnosticsTimelineOptions = {
 };
 
 /** Active timeline span carried through async-local scope for nested diagnostics. */
-export type ActiveDiagnosticsTimelineSpan = {
+type ActiveDiagnosticsTimelineSpan = {
   name: string;
   phase?: string;
   spanId: string;
@@ -160,6 +161,7 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.operation ? { operation: event.operation } : {}),
     ...(typeof event.ok === "boolean" ? { ok: event.ok } : {}),
+    ...(typeof event.status === "number" ? { status: normalizeNumber(event.status) } : {}),
     ...(event.command ? { command: event.command } : {}),
     ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
     ...(event.signal !== undefined ? { signal: event.signal } : {}),
@@ -195,9 +197,44 @@ export function emitDiagnosticsTimelineEvent(
     if (!warnedAboutTimelineWrite) {
       warnedAboutTimelineWrite = true;
       // Diagnostics output is best-effort; one warning avoids recursive stderr spam.
-      process.stderr.write(`[diagnostics] failed to write timeline event: ${String(error)}\n`);
+      console.warn(`[diagnostics] failed to write timeline event: ${String(error)}`);
     }
   }
+}
+
+/** Replays a completed span after its activation config becomes available. */
+export function emitCompletedDiagnosticsTimelineSpan(
+  name: string,
+  durationMs: number,
+  options: DiagnosticsTimelineSpanOptions = {},
+): void {
+  if (!isDiagnosticsTimelineEnabled(options)) {
+    return;
+  }
+  const spanId = randomUUID();
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.start",
+      name,
+      phase: options.phase,
+      spanId,
+      parentSpanId: options.parentSpanId,
+      attributes: options.attributes,
+    },
+    options,
+  );
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.end",
+      name,
+      phase: options.phase,
+      spanId,
+      parentSpanId: options.parentSpanId,
+      durationMs,
+      attributes: options.attributes,
+    },
+    options,
+  );
 }
 
 /** Returns the currently active span so callers can preserve parentage across memoized work. */
@@ -329,9 +366,4 @@ export function measureDiagnosticsTimelineSpanSync<T>(
     emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
   }
-}
-
-/** Lets tests await any future asynchronous timeline cleanup without changing call sites. */
-export async function flushDiagnosticsTimelineForTest(): Promise<void> {
-  await Promise.resolve();
 }

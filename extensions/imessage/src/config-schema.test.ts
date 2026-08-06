@@ -24,6 +24,14 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts account allowlist policy inherited from the channel", () => {
+    const result = IMessageConfigSchema.safeParse({
+      allowFrom: ["alice"],
+      accounts: { work: { dmPolicy: "allowlist" } },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("defaults dm/group policy", () => {
     const res = IMessageConfigSchema.safeParse({});
 
@@ -72,6 +80,31 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts nested delivery streaming config", () => {
+    const res = IMessageConfigSchema.safeParse({
+      enabled: true,
+      streaming: {
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+          coalesce: { minChars: 200, idleMs: 50 },
+        },
+      },
+      accounts: {
+        personal: {
+          streaming: { chunkMode: "length", block: { enabled: false } },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.streaming?.chunkMode).toBe("newline");
+      expect(res.data.streaming?.block?.enabled).toBe(true);
+      expect(res.data.accounts?.personal?.streaming?.block?.enabled).toBe(false);
+    }
+  });
+
   it("accepts reaction notification mode overrides", () => {
     const res = IMessageConfigSchema.safeParse({
       reactionNotifications: "all",
@@ -83,6 +116,38 @@ describe("imessage config schema", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+
+  it("accepts send transport overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      sendTransport: "auto",
+      accounts: {
+        bridge: {
+          sendTransport: "bridge",
+        },
+        applescript: {
+          sendTransport: "applescript",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.sendTransport).toBe("auto");
+      expect(res.data.accounts?.bridge?.sendTransport).toBe("bridge");
+      expect(res.data.accounts?.applescript?.sendTransport).toBe("applescript");
+    }
+  });
+
+  it("rejects invalid send transport overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      sendTransport: "private-api",
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("sendTransport");
+    }
   });
 
   it("rejects invalid reaction notification modes", () => {

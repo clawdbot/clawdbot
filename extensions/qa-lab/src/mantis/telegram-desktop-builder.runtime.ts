@@ -8,6 +8,8 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
+import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -44,7 +46,7 @@ export type MantisTelegramDesktopBuilderOptions = {
 
 export type MantisTelegramDesktopHydrateMode = "prehydrated" | "source";
 
-export type MantisTelegramDesktopBuilderResult = {
+type MantisTelegramDesktopBuilderResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;
@@ -95,19 +97,6 @@ type MantisTelegramDesktopBuilderSummary = {
   timings: MantisPhaseTimings;
 };
 
-type MantisPhaseTiming = {
-  durationMs: number;
-  finishedAt: string;
-  name: string;
-  startedAt: string;
-  status: "accepted" | "fail" | "pass";
-};
-
-type MantisPhaseTimings = {
-  phases: MantisPhaseTiming[];
-  totalMs: number;
-};
-
 type TelegramDesktopRemoteMetadata = {
   gatewayAlive?: boolean;
   gatewayPid?: string;
@@ -138,16 +127,6 @@ const TELEGRAM_PROFILE_ARCHIVE_ENV_NAME_ENV =
   "OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_ARCHIVE_ENV";
 const TELEGRAM_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_DIR";
 
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
 function normalizeHydrateMode(
   value: string | undefined,
 ): MantisTelegramDesktopHydrateMode | undefined {
@@ -159,45 +138,6 @@ function normalizeHydrateMode(
     return normalized;
   }
   throw new Error(`Unsupported Mantis Telegram desktop hydrate mode: ${value}`);
-}
-
-function createPhaseTimer(startedAt: Date) {
-  const phases: MantisPhaseTiming[] = [];
-  const origin = startedAt.getTime();
-  function recordPhase(name: string, phaseStarted: Date, status: MantisPhaseTiming["status"]) {
-    const phaseFinished = new Date();
-    phases.push({
-      durationMs: phaseFinished.getTime() - phaseStarted.getTime(),
-      finishedAt: phaseFinished.toISOString(),
-      name,
-      startedAt: phaseStarted.toISOString(),
-      status,
-    });
-  }
-  async function timePhase<T>(name: string, run: () => Promise<T>): Promise<T> {
-    const phaseStarted = new Date();
-    try {
-      const result = await run();
-      recordPhase(name, phaseStarted, "pass");
-      return result;
-    } catch (error) {
-      recordPhase(name, phaseStarted, "fail");
-      throw error;
-    }
-  }
-  function snapshot(now = new Date()): MantisPhaseTimings {
-    return {
-      phases: [...phases],
-      totalMs: now.getTime() - origin,
-    };
-  }
-  function updatePhaseStatus(name: string, status: MantisPhaseTiming["status"]) {
-    const phase = phases.findLast((entry) => entry.name === name);
-    if (phase) {
-      phase.status = status;
-    }
-  }
-  return { recordPhase, snapshot, timePhase, updatePhaseStatus };
 }
 
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
@@ -374,7 +314,9 @@ if [ -n "\${OPENCLAW_LIVE_OPENAI_KEY:-}" ] && [ -z "\${OPENAI_API_KEY:-}" ]; the
 fi
 if ! command -v node >/dev/null 2>&1; then
   sudo apt-get update -y >"$out/node-apt.log" 2>&1
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >>"$out/node-apt.log" 2>&1
+  # Complete the setup download before execution; a timed-out stream may be partial.
+  curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x -o "$out/nodesource-setup.sh"
+  sudo -E bash "$out/nodesource-setup.sh" >>"$out/node-apt.log" 2>&1
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs >>"$out/node-apt.log" 2>&1
 fi
 if ! command -v scrot >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 || ! command -v xz >/dev/null 2>&1; then
@@ -389,7 +331,7 @@ telegram_root="$HOME/.local/share/openclaw-mantis/telegram-desktop-bin"
 telegram_bin="$telegram_root/Telegram/Telegram"
 if [ ! -x "$telegram_bin" ]; then
   mkdir -p "$telegram_root"
-  curl -fsSL https://telegram.org/dl/desktop/linux -o "$out/telegram-desktop.tar.xz"
+  curl -fsSL --connect-timeout 10 --max-time 600 --retry 2 --retry-delay 2 https://telegram.org/dl/desktop/linux -o "$out/telegram-desktop.tar.xz"
   tar -xJf "$out/telegram-desktop.tar.xz" -C "$telegram_root"
 fi
 if [ -z "$telegram_profile_dir" ] || [ "$telegram_profile_dir" = "\\$HOME/.local/share/TelegramDesktop" ]; then
@@ -457,7 +399,9 @@ qa_status=0
     fi
     driver_user_id="$(node --input-type=module >"$out/telegram-driver-getme.json" 2>"$out/telegram-driver-getme.err" <<'MANTIS_TELEGRAM_GETME'
 const token = process.env.OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN;
-const response = await fetch(\`https://api.telegram.org/bot\${token}/getMe\`);
+const response = await fetch(\`https://api.telegram.org/bot\${token}/getMe\`, {
+  signal: AbortSignal.timeout(15_000),
+});
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, id: body.result?.id, username: body.result?.username }));
 if (!body.ok || !body.result?.id) process.exit(1);
@@ -498,6 +442,7 @@ const response = await fetch(\`https://api.telegram.org/bot\${token}/sendMessage
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ chat_id: chatId, text, disable_notification: true }),
+  signal: AbortSignal.timeout(15_000),
 });
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, message_id: body.result?.message_id }));
@@ -890,3 +835,4 @@ export async function runMantisTelegramDesktopBuilder(
 function toErrorObject(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

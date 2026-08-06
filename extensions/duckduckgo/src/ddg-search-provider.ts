@@ -1,16 +1,10 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Duckduckgo provider module implements model/runtime integration.
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { createDuckDuckGoWebSearchProviderBase } from "./ddg-search-provider.shared.js";
 
-type DuckDuckGoClientModule = typeof import("./ddg-client.js");
-
-let duckDuckGoClientModulePromise: Promise<DuckDuckGoClientModule> | undefined;
-
-function loadDuckDuckGoClientModule(): Promise<DuckDuckGoClientModule> {
-  duckDuckGoClientModulePromise ??= import("./ddg-client.js");
-  return duckDuckGoClientModulePromise;
-}
+const loadDuckDuckGoClientModule = createLazyRuntimeModule(() => import("./ddg-client.js"));
 
 const DuckDuckGoSearchSchema = {
   type: "object",
@@ -41,7 +35,8 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using DuckDuckGo. Returns titles, URLs, and snippets with no API key required.",
       parameters: DuckDuckGoSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
         const { runDuckDuckGoSearch } = await loadDuckDuckGoClientModule();
         return await runDuckDuckGoSearch({
           config: ctx.config,
@@ -56,6 +51,7 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
             | "moderate"
             | "off"
             | undefined,
+          ...(context?.signal ? { signal: context.signal } : {}),
         });
       },
     }),

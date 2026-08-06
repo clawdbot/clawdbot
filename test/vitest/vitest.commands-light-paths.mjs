@@ -8,6 +8,10 @@ const commandsLightEntries = [
     source: "src/commands/dashboard.links.ts",
     test: "src/commands/dashboard.links.test.ts",
   },
+  {
+    source: "src/commands/dashboard.ts",
+    test: "src/commands/dashboard.test.ts",
+  },
   { test: "src/commands/daemon-install-helpers.test.ts" },
   { source: "src/commands/doctor-browser.ts", test: "src/commands/doctor-browser.test.ts" },
   {
@@ -98,10 +102,6 @@ export const commandsLightTestFiles = commandsLightEntries.map(({ test }) => tes
 
 export function isCommandsLightTarget(file) {
   return commandsLightIncludePatternByFile.has(normalizeRepoPath(file));
-}
-
-export function isCommandsLightTestFile(file) {
-  return commandsLightTestFiles.includes(normalizeRepoPath(file));
 }
 
 export function resolveCommandsLightIncludePattern(file) {

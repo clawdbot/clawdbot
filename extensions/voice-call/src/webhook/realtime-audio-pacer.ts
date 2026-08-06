@@ -1,18 +1,10 @@
-// Realtime telephony audio pacing and speech-start detection for mulaw streams.
+// Realtime telephony audio pacing for mulaw streams.
 
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
-const DEFAULT_SPEECH_RMS_THRESHOLD = 0.035;
-const DEFAULT_REQUIRED_LOUD_CHUNKS = 4;
-const DEFAULT_REQUIRED_QUIET_CHUNKS = 12;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
-const PCM16_MAX_AMPLITUDE = 32768;
-const MULAW_LINEAR_SAMPLES = new Int16Array(256);
-
-for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
-  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
-}
+const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 
 /** Queue item sent over the realtime provider media stream. */
 type RealtimeAudioQueueItem =
@@ -27,10 +19,10 @@ type RealtimeAudioQueueItem =
     };
 
 /** WebSocket send callback for realtime audio frames. */
-export type RealtimeAudioSend = (message: string) => boolean;
+type RealtimeAudioSend = (message: string) => boolean;
 
 /** Provider-specific serializer for media, clear, and mark frames. */
-export interface RealtimeAudioSerializer {
+interface RealtimeAudioSerializer {
   media(payloadBase64: string): string;
   clear(): string;
   mark(name: string): string;
@@ -39,6 +31,7 @@ export interface RealtimeAudioSerializer {
 /** Paces outgoing mulaw audio frames at telephony cadence. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
+  private queueHead = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
@@ -90,17 +83,22 @@ export class RealtimeAudioPacer {
     }
     const clearedAudioBytes = this.queuedAudioBytes;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
     this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
+  }
+
+  /** True while queued audio or a paced send timer can still reach the telephony stream. */
+  hasPendingAudio(): boolean {
+    return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
   }
 
   /** Stop sending and discard queued frames. */
   close(): void {
     this.closed = true;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
   }
 
@@ -126,13 +124,42 @@ export class RealtimeAudioPacer {
     this.params.onBackpressure?.();
   }
 
+  private get pendingQueueSize(): number {
+    return Math.max(0, this.queue.length - this.queueHead);
+  }
+
+  /** Take one queued item without shifting the remaining paced-audio backlog. */
+  private takeNextItem(): RealtimeAudioQueueItem | undefined {
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+      return undefined;
+    }
+    const item = this.queue[this.queueHead];
+    this.queueHead += 1;
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+    } else if (
+      this.queueHead > QUEUE_COMPACT_HEAD_THRESHOLD &&
+      this.queueHead * 2 > this.queue.length
+    ) {
+      this.queue.splice(0, this.queueHead);
+      this.queueHead = 0;
+    }
+    return item;
+  }
+
+  private resetQueue(): void {
+    this.queue.length = 0;
+    this.queueHead = 0;
+  }
+
   /** Send one queued item and schedule the next send based on audio duration. */
   private pump(): void {
     this.timer = null;
     if (this.closed) {
       return;
     }
-    const item = this.queue.shift();
+    const item = this.takeNextItem();
     if (!item) {
       return;
     }
@@ -148,75 +175,12 @@ export class RealtimeAudioPacer {
     }
 
     if (!sent) {
-      this.queue = [];
+      this.resetQueue();
       this.queuedAudioBytes = 0;
       return;
     }
-    if (this.queue.length > 0) {
+    if (this.pendingQueueSize > 0) {
       this.timer = setTimeout(() => this.pump(), delayMs);
     }
   }
-}
-
-/** Calculate normalized RMS from mulaw bytes. */
-export function calculateMulawRms(muLaw: Buffer): number {
-  if (muLaw.length === 0) {
-    return 0;
-  }
-  let sum = 0;
-  for (const sample of muLaw) {
-    const normalized = (MULAW_LINEAR_SAMPLES[sample] ?? 0) / PCM16_MAX_AMPLITUDE;
-    sum += normalized * normalized;
-  }
-  return Math.sqrt(sum / muLaw.length);
-}
-
-/** Detect likely speech start from consecutive loud mulaw chunks. */
-export class RealtimeMulawSpeechStartDetector {
-  private loudChunks = 0;
-  private quietChunks = DEFAULT_REQUIRED_QUIET_CHUNKS;
-  private speaking = false;
-
-  constructor(
-    private readonly params: {
-      requiredLoudChunks?: number;
-      requiredQuietChunks?: number;
-      rmsThreshold?: number;
-    } = {},
-  ) {}
-
-  /** Accept one mulaw chunk and return true only on transition into speaking. */
-  accept(muLaw: Buffer): boolean {
-    const rms = calculateMulawRms(muLaw);
-    const threshold = this.params.rmsThreshold ?? DEFAULT_SPEECH_RMS_THRESHOLD;
-    if (rms >= threshold) {
-      this.quietChunks = 0;
-      this.loudChunks += 1;
-      const requiredLoudChunks = this.params.requiredLoudChunks ?? DEFAULT_REQUIRED_LOUD_CHUNKS;
-      if (!this.speaking && this.loudChunks >= requiredLoudChunks) {
-        this.speaking = true;
-        return true;
-      }
-      return false;
-    }
-
-    this.loudChunks = 0;
-    this.quietChunks += 1;
-    const requiredQuietChunks = this.params.requiredQuietChunks ?? DEFAULT_REQUIRED_QUIET_CHUNKS;
-    if (this.quietChunks >= requiredQuietChunks) {
-      this.speaking = false;
-    }
-    return false;
-  }
-}
-
-/** Decode one G.711 mulaw byte to a linear PCM sample. */
-function decodeMulawSample(value: number): number {
-  const muLaw = ~value & 0xff;
-  const sign = muLaw & 0x80;
-  const exponent = (muLaw >> 4) & 0x07;
-  const mantissa = muLaw & 0x0f;
-  let sample = ((mantissa << 3) + 132) << exponent;
-  sample -= 132;
-  return sign ? -sample : sample;
 }

@@ -3,25 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
-import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
-
-function fileExists(pathValue: string): boolean {
-  try {
-    return !statRegularFileSync(pathValue).missing;
-  } catch {
-    return false;
-  }
-}
-
-function isLegacyWhatsAppAuthFile(name: string): boolean {
-  if (name === "creds.json" || name === "creds.json.bak") {
-    return true;
-  }
-  if (!name.endsWith(".json")) {
-    return false;
-  }
-  return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
-}
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
+import { isWhatsAppBaileysAuthFileName } from "./creds-files.js";
 
 export function detectWhatsAppLegacyStateMigrations(params: {
   oauthDir: string;
@@ -36,7 +19,7 @@ export function detectWhatsAppLegacyStateMigrations(params: {
   })();
 
   return entries.flatMap((entry) => {
-    if (!entry.isFile() || entry.name === "oauth.json" || !isLegacyWhatsAppAuthFile(entry.name)) {
+    if (!entry.isFile() || !isWhatsAppBaileysAuthFileName(entry.name)) {
       return [];
     }
     const sourcePath = path.join(params.oauthDir, entry.name);

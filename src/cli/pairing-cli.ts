@@ -9,15 +9,8 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
-import {
-  formatCommandOwnerFromChannelSender,
-  hasConfiguredCommandOwners,
-} from "../commands/doctor-command-owner.js";
-import {
-  getRuntimeConfig,
-  readConfigFileSnapshotForWrite,
-  replaceConfigFile,
-} from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { bootstrapCommandOwnerFromPairing } from "../pairing/command-owner.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
@@ -57,37 +50,10 @@ async function notifyApproved(channel: PairingChannel, id: string, accountId?: s
   await notifyPairingApproved({ channelId: channel, id, cfg, ...(accountId ? { accountId } : {}) });
 }
 
-async function maybeBootstrapCommandOwnerFromPairing(params: {
-  channel: PairingChannel;
-  id: string;
-}): Promise<{ ownerEntry: string | null; bootstrapped: boolean }> {
-  // First approved pairing can seed ownerAllowFrom so command access is not left open-ended.
-  const ownerEntry = formatCommandOwnerFromChannelSender(params);
-  if (!ownerEntry) {
-    return { ownerEntry: null, bootstrapped: false };
-  }
-
-  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
-  if (hasConfiguredCommandOwners(snapshot.sourceConfig)) {
-    return { ownerEntry, bootstrapped: false };
-  }
-
-  const nextConfig = structuredClone(snapshot.sourceConfig);
-  nextConfig.commands = {
-    ...nextConfig.commands,
-    ownerAllowFrom: [ownerEntry],
-  };
-  await replaceConfigFile({
-    nextConfig,
-    snapshot,
-    writeOptions,
-    afterWrite: { mode: "auto" },
-  });
-  return { ownerEntry, bootstrapped: true };
-}
-
 export function registerPairingCli(program: Command) {
   const channels = listPairingChannels();
+  // Avoid rendering a bare "()" enum when no channels are configured.
+  const channelHint = channels.length > 0 ? channels.join(", ") : "none configured";
   const pairing = program
     .command("pairing")
     .description("Secure DM pairing (approve inbound requests)")
@@ -100,18 +66,32 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("list")
     .description("List pending pairing requests")
-    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--channel <channel>", `Channel (${channelHint})`)
     .option("--account <accountId>", "Account id (for multi-account channels)")
-    .argument("[channel]", `Channel (${channels.join(", ")})`)
+    .argument("[channel]", `Channel (${channelHint})`)
     .option("--json", "Print JSON", false)
     .action(async (channelArg, opts) => {
       const channelRaw = opts.channel ?? channelArg ?? (channels.length === 1 ? channels[0] : "");
       if (!channelRaw) {
-        throw new Error(
-          `Channel required. Use --channel <channel> or pass it as the first argument (expected one of: ${channels.join(", ")})`,
-        );
+        if (channels.length === 0) {
+          // `pairing` is chat DM only; TUI/device approvals live under `openclaw devices`.
+          throw new Error(
+            `No chat DM pairing channels are configured. To approve a TUI or device request, ` +
+              `use ${formatCliCommand("openclaw devices approve")} instead.`,
+          );
+        }
+        throw new Error(`Channel required (expected one of: ${channelHint}).`);
       }
       const channel = parseChannel(channelRaw, channels);
+      if (opts.channel && channelArg) {
+        const positionalChannel = parseChannel(channelArg, channels);
+        if (channel !== positionalChannel) {
+          throw new Error(
+            `Conflicting pairing channels: "${channel}" and "${positionalChannel}". ` +
+              `Pass the channel either positionally or with --channel.`,
+          );
+        }
+      }
       const accountId = normalizeStringifiedOptionalString(opts.account) ?? "";
       const requests = accountId
         ? await listChannelPairingRequests(channel, process.env, accountId)
@@ -151,7 +131,7 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("approve")
     .description("Approve a pairing code and allow that sender")
-    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--channel <channel>", `Channel (${channelHint})`)
     .option("--account <accountId>", "Account id (for multi-account channels)")
     .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
@@ -201,11 +181,11 @@ export function registerPairingCli(program: Command) {
       defaultRuntime.log(
         `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
       );
-      const ownerBootstrap = await maybeBootstrapCommandOwnerFromPairing({
+      const ownerBootstrap = await bootstrapCommandOwnerFromPairing({
         channel,
         id: approved.id,
       });
-      if (ownerBootstrap.bootstrapped && ownerBootstrap.ownerEntry) {
+      if (ownerBootstrap.status === "configured" && ownerBootstrap.ownerEntry) {
         defaultRuntime.log(
           `${theme.success("Command owner configured")} ${theme.command(ownerBootstrap.ownerEntry)} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
         );

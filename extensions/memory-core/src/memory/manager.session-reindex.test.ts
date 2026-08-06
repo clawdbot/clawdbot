@@ -41,4 +41,17 @@ describe("memory manager session reindex gating", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps session syncing enabled for failed full-reindex retries without dirty files", () => {
+    expect(
+      shouldSyncSessionsForReindex({
+        hasSessionSource: true,
+        sessionsDirty: true,
+        sessionsFullRetryDirty: true,
+        dirtySessionFileCount: 0,
+        sync: { reason: "interval" },
+        needsFullReindex: false,
+      }),
+    ).toBe(true);
+  });
 });

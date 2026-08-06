@@ -8,9 +8,19 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyDurableFinalCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappOutbound } from "./outbound-adapter.js";
+
+const hoisted = vi.hoisted(() => ({
+  sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-live-1", toJid: "jid-live" })),
+  sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-live-1", toJid: "jid-live" })),
+}));
+
+vi.mock("./send.js", () => ({
+  sendMessageWhatsApp: hoisted.sendMessageWhatsApp,
+  sendPollWhatsApp: hoisted.sendPollWhatsApp,
+}));
 
 function createWhatsAppHarness(params: OutboundPayloadHarnessParams) {
   const sendWhatsApp = vi.fn();
@@ -32,6 +42,10 @@ function createWhatsAppHarness(params: OutboundPayloadHarnessParams) {
 }
 
 describe("WhatsApp outbound payload contract", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   installChannelOutboundPayloadContractSuite({
     channel: "whatsapp",
     chunking: { mode: "split", longTextLength: 5000, maxChunkLength: 4000 },
@@ -56,17 +70,21 @@ describe("WhatsApp outbound payload contract", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/voice.ogg",
-      mediaAccess: undefined,
-      mediaLocalRoots: undefined,
-      mediaReadFile: undefined,
-      accountId: undefined,
-      gifPlayback: undefined,
-      quotedMessageKey: undefined,
-    });
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "caption",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        mediaUrl: "/tmp/voice.ogg",
+        mediaAccess: undefined,
+        mediaLocalRoots: undefined,
+        mediaReadFile: undefined,
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {
@@ -96,7 +114,12 @@ describe("WhatsApp outbound payload contract", () => {
         replyToId: "msg-1",
         deps: { whatsapp: sendWhatsApp },
       });
-      expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
+      expect(sendWhatsApp).not.toHaveBeenCalledWith(
+        "5511999999999@c.us",
+        "reply",
+        expect.anything(),
+      );
+      expect(hoisted.sendMessageWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
         verbose: false,
         cfg: {},
         accountId: undefined,
@@ -160,20 +183,30 @@ describe("WhatsApp outbound payload contract", () => {
           } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
             deps: { whatsapp: typeof sendWhatsApp };
           });
-          expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
-            verbose: false,
-            cfg: {},
-            accountId: undefined,
-            gifPlayback: undefined,
-            quotedMessageKey: {
-              id: "msg-1",
-              remoteJid: "5511999999999@c.us",
-              fromMe: false,
-              participant: undefined,
-              messageText: undefined,
+          expect(sendWhatsApp).not.toHaveBeenCalledWith(
+            "5511999999999@c.us",
+            "reply",
+            expect.anything(),
+          );
+          expect(hoisted.sendMessageWhatsApp).toHaveBeenLastCalledWith(
+            "5511999999999@c.us",
+            "reply",
+            {
+              verbose: false,
+              cfg: {},
+              accountId: undefined,
+              gifPlayback: undefined,
+              quotedMessageKey: {
+                id: "msg-1",
+                remoteJid: "5511999999999@c.us",
+                fromMe: false,
+                participant: undefined,
+                messageText: undefined,
+              },
+              preserveLeadingWhitespace: true,
             },
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
+          );
+          expect(result?.receipt.platformMessageIds).toEqual(["wa-live-1"]);
         },
         messageSendingHooks: () => {
           expect(whatsappMessageAdapter.send.text).toBeTypeOf("function");

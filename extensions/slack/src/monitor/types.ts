@@ -2,13 +2,14 @@
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { SlackAppContext } from "../agent-context.js";
 import type { SlackMessageEvent } from "../types.js";
 
 export type MonitorSlackOpts = {
   botToken?: string;
   appToken?: string;
   accountId?: string;
-  mode?: "socket" | "http";
+  mode?: "socket" | "http" | "relay";
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
@@ -66,6 +67,14 @@ export type SlackAppHomeOpenedEvent = {
   user?: string;
   channel?: string;
   tab?: "home" | "messages";
+  context?: SlackAppContext;
+  event_ts?: string;
+};
+
+export type SlackAppContextChangedEvent = {
+  type: "app_context_changed";
+  user?: string;
+  context?: SlackAppContext;
   event_ts?: string;
 };
 

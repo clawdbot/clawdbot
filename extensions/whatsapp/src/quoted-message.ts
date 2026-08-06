@@ -1,5 +1,15 @@
 // Whatsapp plugin module implements quoted message behavior.
-import type { MiscMessageGenerationOptions } from "baileys";
+import {
+  isHostedLidUser,
+  isHostedPnUser,
+  isLidUser,
+  isPnUser,
+  type MiscMessageGenerationOptions,
+} from "baileys";
+import {
+  formatMediaPlaceholderText,
+  type MediaPlaceholderTextFact,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { jidToE164 } from "./text-runtime.js";
 
 // ── Inbound message metadata cache ──────────────────────────────────────
@@ -12,10 +22,22 @@ type QuotedMeta = {
   participant?: string;
   participantE164?: string;
   body?: string;
+  media?: MediaPlaceholderTextFact;
   fromMe?: boolean;
 };
 type CacheEntry = QuotedMeta & { ts: number };
 type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
+
+export type WhatsAppQuotedMessageKey = {
+  id: string;
+  remoteJid: string;
+  fromMe: boolean;
+  participant?: string;
+  /** Target JID against which quote lookup proved the cached conversation equivalent. */
+  lookupTargetJid?: string;
+  messageText?: string;
+  media?: MediaPlaceholderTextFact;
+};
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ENTRIES = 500;
@@ -61,6 +83,7 @@ export function lookupInboundMessageMeta(
     participant: entry.participant,
     participantE164: entry.participantE164,
     body: entry.body,
+    media: entry.media,
     fromMe: entry.fromMe,
   };
 }
@@ -125,6 +148,7 @@ export function lookupInboundMessageMetaForTarget(
       participant: exact.participant,
       participantE164: exact.participantE164,
       body: exact.body,
+      media: exact.media,
       fromMe: exact.fromMe,
     };
   }
@@ -145,6 +169,7 @@ export function lookupInboundMessageMetaForTarget(
       participant: entry.participant,
       participantE164: entry.participantE164,
       body: entry.body,
+      media: entry.media,
       fromMe: entry.fromMe,
     };
     if (!matchesQuotedConversationTarget(targetJid, candidate)) {
@@ -158,19 +183,66 @@ export function lookupInboundMessageMetaForTarget(
   return matched;
 }
 
+function resolveQuotedRemoteJid(params: {
+  destinationJid: string | undefined;
+  lookupTargetJid: string | undefined;
+  quotedRemoteJid: string;
+  requestedJid: string | undefined;
+}): string {
+  const destinationJid = params.destinationJid?.trim();
+  const requestedJid = params.requestedJid?.trim();
+  const lookupTargetJid = params.lookupTargetJid?.trim();
+  if (!destinationJid || !requestedJid) {
+    return params.quotedRemoteJid;
+  }
+
+  // Reconcile only a quote tied to this requested conversation. Other JIDs can
+  // intentionally represent status, group, or cross-conversation replies.
+  if (
+    params.quotedRemoteJid !== requestedJid &&
+    (!lookupTargetJid || lookupTargetJid !== requestedJid)
+  ) {
+    return params.quotedRemoteJid;
+  }
+
+  const destinationIsPn = isPnUser(destinationJid) || isHostedPnUser(destinationJid);
+  const destinationIsLid = isLidUser(destinationJid) || isHostedLidUser(destinationJid);
+  const quotedIsPn = isPnUser(params.quotedRemoteJid) || isHostedPnUser(params.quotedRemoteJid);
+  const quotedIsLid = isLidUser(params.quotedRemoteJid) || isHostedLidUser(params.quotedRemoteJid);
+  return (destinationIsPn && quotedIsLid) || (destinationIsLid && quotedIsPn)
+    ? destinationJid
+    : params.quotedRemoteJid;
+}
+
 export function buildQuotedMessageOptions(params: {
   messageId?: string | null;
   remoteJid?: string | null;
   fromMe?: boolean;
   participant?: string;
+  destinationJid?: string;
+  requestedJid?: string;
+  lookupTargetJid?: string;
   /** Original message text — shown in the quote preview bubble. */
   messageText?: string;
+  media?: MediaPlaceholderTextFact;
 }): MiscMessageGenerationOptions | undefined {
   const id = params.messageId?.trim();
-  const remoteJid = params.remoteJid?.trim();
-  if (!id || !remoteJid) {
+  const quotedRemoteJid = params.remoteJid?.trim();
+  if (!id || !quotedRemoteJid) {
     return undefined;
   }
+  const remoteJid = resolveQuotedRemoteJid({
+    destinationJid: params.destinationJid,
+    lookupTargetJid: params.lookupTargetJid,
+    quotedRemoteJid,
+    requestedJid: params.requestedJid,
+  });
+  const previewText = [
+    params.messageText,
+    formatMediaPlaceholderText(params.media ? [params.media] : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     quoted: {
       key: {
@@ -179,7 +251,7 @@ export function buildQuotedMessageOptions(params: {
         fromMe: params.fromMe ?? false,
         participant: params.participant,
       },
-      message: { conversation: params.messageText ?? "" },
+      message: { conversation: previewText },
     },
   } as MiscMessageGenerationOptions;
 }

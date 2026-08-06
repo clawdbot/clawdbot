@@ -1,4 +1,4 @@
-// Git utility tests cover plugin git source parsing, ref extraction, and path
+// Git utility tests cover plugin git source parsing, ref normalization, and path
 // traversal rejection before managed checkouts are created.
 import { describe, expect, it } from "vitest";
 import { parseGitUrl } from "./git.js";
@@ -9,34 +9,21 @@ describe("parseGitUrl", () => {
       type: "git",
       host: "github.com",
       path: "openclaw/example-plugin",
-      repo: "https://github.com/openclaw/example-plugin",
+    });
+    expect(parseGitUrl("git:https://example.com/@team/example-plugin")).toMatchObject({
+      host: "example.com",
+      path: "@team/example-plugin",
     });
   });
 
-  it("parses refs from hosted, scp-style, and generic shorthand sources", () => {
-    expect(parseGitUrl("git:https://github.com/openclaw/example-plugin.git@v1.2.3")).toMatchObject({
-      host: "github.com",
-      path: "openclaw/example-plugin",
-      repo: "https://github.com/openclaw/example-plugin.git",
-      ref: "v1.2.3",
-      pinned: true,
-    });
-    expect(parseGitUrl("git:git@github.com:openclaw/example-plugin.git@feature/foo")).toMatchObject(
-      {
-        host: "github.com",
-        path: "openclaw/example-plugin",
-        repo: "git@github.com:openclaw/example-plugin.git",
-        ref: "feature/foo",
-        pinned: true,
-      },
-    );
-    expect(parseGitUrl("git:example.com/openclaw/example-plugin@main")).toMatchObject({
-      host: "example.com",
-      path: "openclaw/example-plugin",
-      repo: "https://example.com/openclaw/example-plugin",
-      ref: "main",
-      pinned: true,
-    });
+  it.each([
+    ["git:https://github.com/openclaw/example-plugin.git@v1.2.3", "github.com"],
+    ["git:git@github.com:openclaw/example-plugin.git@feature/foo", "github.com"],
+    ["git:example.com/openclaw/example-plugin@main", "example.com"],
+    ["git:gitlab.com/openclaw/example-plugin@feature/foo", "gitlab.com"],
+    ["git:https://example.com/@team/example-plugin@main", "example.com", "@team/example-plugin"],
+  ])("ignores refs in the identity for %s", (source, host, path = "openclaw/example-plugin") => {
+    expect(parseGitUrl(source)).toMatchObject({ host, path });
   });
 
   it("rejects repository paths that could escape managed checkout roots", () => {
@@ -45,5 +32,8 @@ describe("parseGitUrl", () => {
     expect(parseGitUrl("git:https://example.com/openclaw/../outside")).toBeNull();
     expect(parseGitUrl("git:git@example.com:openclaw/../outside")).toBeNull();
     expect(parseGitUrl("git:example.com/openclaw/./outside")).toBeNull();
+    expect(parseGitUrl("git:https://github.com/openclaw/../outside@feature/foo")).toBeNull();
+    expect(parseGitUrl("git:https://github.com/openclaw/%2e%2e/outside")).toBeNull();
+    expect(parseGitUrl("git:https://github.com/openclaw/repo\\..\\outside")).toBeNull();
   });
 });

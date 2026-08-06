@@ -3,28 +3,18 @@
 // Inventories core plugin imports that cross into bundled extension files.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mjs";
 import {
-  collectTypeScriptInventory,
   createCachedAsync,
   diffInventoryEntries,
   formatGroupedInventoryHuman,
-  normalizeRepoPath,
   runBaselineInventoryCheck,
   resolveRepoSpecifier,
-  visitModuleSpecifiers,
 } from "./lib/guard-inventory-utils.mjs";
-import {
-  collectTypeScriptFilesFromRoots,
-  resolveSourceRoots,
-  runAsScript,
-  toLine,
-} from "./lib/ts-guard-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const scanRoots = resolveSourceRoots(repoRoot, ["src/plugins"]);
+const repoRoot = resolveRepoRoot(import.meta.url);
 const baselinePath = path.join(
   repoRoot,
   "test",
@@ -75,44 +65,18 @@ function classifyResolvedExtensionReason(kind, resolvedPath) {
   return `${verb} extension-owned file from src/plugins`;
 }
 
-function pushEntry(entries, entry) {
-  entries.push(entry);
-}
-
-function scanImportBoundaryViolations(sourceFile, filePath) {
-  const entries = [];
-  const relativeFile = normalizeRepoPath(repoRoot, filePath);
-
-  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
-    const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
-    if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-      return;
-    }
-    pushEntry(entries, {
-      file: relativeFile,
-      line: toLine(sourceFile, specifierNode),
-      kind,
-      specifier,
-      resolvedPath,
-      reason: classifyResolvedExtensionReason(kind, resolvedPath),
-    });
-  });
-  return entries;
-}
-
-function scanWebSearchRegistrySmells(sourceFile, filePath) {
-  const relativeFile = normalizeRepoPath(repoRoot, filePath);
+function scanWebSearchRegistrySmells(source, relativeFile) {
   if (relativeFile !== "src/plugins/web-search-providers.ts") {
     return [];
   }
 
   const entries = [];
-  const lines = sourceFile.text.split(/\r?\n/);
+  const lines = source.split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
     const lineNumber = index + 1;
 
     if (line.includes("web-search-plugin-factory.js")) {
-      pushEntry(entries, {
+      entries.push({
         file: relativeFile,
         line: lineNumber,
         kind: "registry-smell",
@@ -124,7 +88,7 @@ function scanWebSearchRegistrySmells(sourceFile, filePath) {
 
     const pluginMatch = line.match(/pluginId:\s*"([^"]+)"/);
     if (pluginMatch && bundledWebSearchPluginIds.has(pluginMatch[1])) {
-      pushEntry(entries, {
+      entries.push({
         file: relativeFile,
         line: lineNumber,
         kind: "registry-smell",
@@ -136,7 +100,7 @@ function scanWebSearchRegistrySmells(sourceFile, filePath) {
 
     const providerMatch = line.match(/id:\s*"(brave|firecrawl|gemini|grok|kimi|perplexity)"/);
     if (providerMatch && bundledWebSearchProviders.has(providerMatch[1])) {
-      pushEntry(entries, {
+      entries.push({
         file: relativeFile,
         line: lineNumber,
         kind: "registry-smell",
@@ -150,36 +114,36 @@ function scanWebSearchRegistrySmells(sourceFile, filePath) {
   return entries;
 }
 
-function shouldSkipFile(filePath) {
-  const relativeFile = normalizeRepoPath(repoRoot, filePath);
-  return (
-    relativeFile === "src/plugins/bundled-web-search-registry.ts" ||
-    relativeFile.startsWith("src/plugins/contracts/") ||
-    /^src\/plugins\/runtime\/runtime-[^/]+-contract\.[cm]?[jt]s$/u.test(relativeFile)
-  );
-}
-
-/**
- * Cached inventory of src/plugins imports that cross into bundled extensions.
- */
-export const collectPluginExtensionImportBoundaryInventory = createCachedAsync(async () => {
-  const files = (await collectTypeScriptFilesFromRoots(scanRoots))
-    .filter((filePath) => !shouldSkipFile(filePath))
-    .toSorted((left, right) =>
-      normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+const boundaryChecker = createExtensionImportBoundaryChecker({
+  roots: ["src/plugins"],
+  shouldSkipFile(relativeFile) {
+    return (
+      relativeFile === "src/plugins/bundled-web-search-registry.ts" ||
+      relativeFile.startsWith("src/plugins/contracts/") ||
+      /^src\/plugins\/runtime\/runtime-[^/]+-contract\.[cm]?[jt]s$/u.test(relativeFile)
     );
-  return await collectTypeScriptInventory({
-    ts,
-    files,
-    compareEntries,
-    collectEntries(sourceFile, filePath) {
-      return [
-        ...scanImportBoundaryViolations(sourceFile, filePath),
-        ...scanWebSearchRegistrySmells(sourceFile, filePath),
-      ];
-    },
-  });
+  },
+  collectEntries({ source, filePath, relativeFile, references }) {
+    return [
+      ...references.map(({ kind, line, specifier }) => {
+        const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+        return {
+          file: relativeFile,
+          line,
+          kind,
+          specifier,
+          resolvedPath,
+          reason: classifyResolvedExtensionReason(kind, resolvedPath),
+        };
+      }),
+      ...scanWebSearchRegistrySmells(source, relativeFile),
+    ];
+  },
+  compareEntries,
 });
+
+/** Cached inventory of src/plugins imports that cross into bundled extensions. */
+export const collectPluginExtensionImportBoundaryInventory = boundaryChecker.collectInventory;
 
 /**
  * Cached expected plugin-extension import inventory baseline.
@@ -212,7 +176,7 @@ function formatEntry(entry) {
 /**
  * Runs the plugin-extension import boundary baseline check.
  */
-export async function runPluginExtensionImportBoundaryCheck(argv, io) {
+async function runPluginExtensionImportBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
     argv: argv ?? process.argv.slice(2),
     io,

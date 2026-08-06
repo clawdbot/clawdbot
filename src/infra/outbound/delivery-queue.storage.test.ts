@@ -1,18 +1,31 @@
 // Verifies SQLite-backed outbound queue storage, metadata, failure updates,
 // recovery-state markers, and failed-entry moves.
+import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
   ackDelivery,
+  claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
+  enqueueDeliveryOnce,
   failDelivery,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
+  failPendingDelivery,
+  loadPendingDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
-} from "./delivery-queue.js";
+  reserveDeliveryAttempt,
+  type QueuedDelivery,
+} from "./delivery-queue-storage.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
@@ -24,17 +37,230 @@ describe("delivery-queue storage", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
     });
     const row = db
-      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
-      .get(id) as { status?: string } | undefined;
+      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+      .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
     return row?.status;
   }
 
+  async function enqueueSpoolDelivery(suffix: string) {
+    const artifact = path.join(
+      tmpDir(),
+      "delivery-queue-media",
+      `00000000-0000-4000-8000-00000000000${suffix}.ogg`,
+    );
+    await fs.mkdir(path.dirname(artifact), { recursive: true });
+    await fs.writeFile(artifact, "audio-bytes");
+    const id = await enqueueTextDelivery({
+      channel: "directchat",
+      to: "+1",
+      payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+    });
+    return { artifact, id };
+  }
+
   describe("enqueue + ack lifecycle", () => {
+    it("fences stale same-millisecond terminal mutations without releasing newer owner media", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-07-20T10:00:00.000Z"));
+        const stateDir = tmpDir();
+        const id = "cron-direct-delivery:v1:fenced-stale-terminal-media";
+        const artifact = path.join(
+          stateDir,
+          "delivery-queue-media",
+          "00000000-0000-4000-8000-000000000090.ogg",
+        );
+        await fs.mkdir(path.dirname(artifact), { recursive: true });
+        await fs.writeFile(artifact, "newer owner still needs these bytes");
+        await enqueueDeliveryOnce(
+          {
+            channel: "directchat",
+            to: "+1555",
+            payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+            completionRetention: {
+              idPrefix: "cron-direct-delivery:v1:",
+              maxAgeMs: 24 * 60 * 60_000,
+              maxEntries: 2_000,
+            },
+          },
+          id,
+          stateDir,
+        );
+        const unclaimedSnapshot = await loadPendingDelivery(id, stateDir);
+        if (!unclaimedSnapshot) {
+          throw new Error("test invariant: the unclaimed bounded row must be readable");
+        }
+        const firstAttemptId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+        if (!firstAttemptId) {
+          throw new Error("test invariant: first platform owner must claim the durable row");
+        }
+        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
+        // Admission snapshots taken before ownership must CAS the unclaimed
+        // state; a producer that claimed meanwhile retains its media and row.
+        await expect(
+          ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: null }),
+        ).rejects.toThrow(lostClaim);
+        await expect(moveToFailed(id, stateDir, null)).rejects.toThrow(lostClaim);
+        await expect(
+          failPendingDelivery(
+            {
+              id,
+              expectedStatus: "pending",
+              lastError: "stale preclaim admission",
+              entry: unclaimedSnapshot,
+            },
+            stateDir,
+          ),
+        ).resolves.toEqual({ status: "not_pending" });
+        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
+        await markDeliveryPlatformSendAttemptStarted(
+          id,
+          stateDir,
+          { replyToId: null },
+          firstAttemptId,
+        );
+        const sameStartedAt = Date.now();
+        const secondAttemptId = await claimDeliveryPlatformSendAttempt(
+          id,
+          stateDir,
+          sameStartedAt,
+          firstAttemptId,
+        );
+        if (!secondAttemptId) {
+          throw new Error("test invariant: reconciled replacement must claim the durable row");
+        }
+        await markDeliveryPlatformSendAttemptStarted(
+          id,
+          stateDir,
+          { replyToId: null },
+          secondAttemptId,
+        );
+
+        await expect(
+          ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: firstAttemptId }),
+        ).rejects.toThrow(lostClaim);
+        await expect(failDelivery(id, "stale failure", stateDir, firstAttemptId)).rejects.toThrow(
+          lostClaim,
+        );
+        await expect(
+          failDeliveryBeforePlatformSend(id, "stale pre-send", stateDir, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(
+          failDeliveryAfterPlatformSend(id, "stale post-send", stateDir, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(
+          markDeliveryPlatformOutcomeUnknown(id, stateDir, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(
+          markDeliveryPlatformSendDispatched(id, stateDir, { replyToId: null }, firstAttemptId),
+        ).rejects.toThrow(lostClaim);
+        await expect(moveToFailed(id, stateDir, firstAttemptId)).rejects.toThrow(lostClaim);
+        await expect(reserveDeliveryAttempt(id, 5, stateDir, firstAttemptId)).rejects.toThrow(
+          lostClaim,
+        );
+        expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
+        expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
+          recoveryState: "send_attempt_started",
+          platformSendAttemptId: secondAttemptId,
+          platformSendStartedAt: sameStartedAt,
+        });
+        expect(readStatus(id)).toBe("pending");
+
+        await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
+        expect(readStatus(id)).toBe("completed");
+        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("persists a producer-specific retry budget", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "retry-budget" }],
+        maxRetries: 45,
+      });
+
+      expect(readQueuedEntry(tmpDir(), id).maxRetries).toBe(45);
+    });
+
+    it("projects process-local hook metadata out before JSON custody", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        preparedBatch: {
+          schemaVersion: 1,
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              sourceIndex: 0,
+              status: "suppressed",
+              reason: "cancelled_by_message_sending_hook",
+              hookEffect: {
+                cancelReason: "owned elsewhere",
+                metadata: { nonJsonValue: 1n },
+              },
+            },
+          ],
+        },
+      });
+
+      expect(readQueuedEntry(tmpDir(), id).preparedBatch).toEqual({
+        schemaVersion: 1,
+        sourcePayloadCount: 1,
+        entries: [
+          {
+            sourceIndex: 0,
+            status: "suppressed",
+            reason: "cancelled_by_message_sending_hook",
+          },
+        ],
+      });
+    });
+
+    it("canonicalizes duplicate singular and plural media before recording fan-out", async () => {
+      const mediaUrl = "https://example.com/same.png";
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "caption", mediaUrl, mediaUrls: [mediaUrl] }],
+      });
+
+      const entry = readQueuedEntry(tmpDir(), id) as unknown as QueuedDelivery;
+      expect(acceptedPreparedOutboundEntries(entry.preparedBatch)[0]?.preparedMediaCount).toBe(1);
+    });
+
+    it("atomically reserves delivery attempts up to the producer budget", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "attempt-budget" }],
+        maxRetries: 2,
+      });
+
+      await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
+        status: "reserved",
+        attemptCount: 1,
+      });
+      await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
+        status: "reserved",
+        attemptCount: 2,
+      });
+      await expect(reserveDeliveryAttempt(id, 2, tmpDir())).resolves.toEqual({
+        status: "exhausted",
+        attemptCount: 2,
+      });
+      expect(readQueuedEntry(tmpDir(), id).attemptCount).toBe(2);
+    });
+
     it("creates and removes a queue entry", async () => {
       const id = await enqueueTextDelivery(
         {
           channel: "directchat",
           to: "+1555",
+          queuePolicy: "required",
+          requireUnknownSendReconciliation: true,
           payloads: [{ text: "hello" }],
           renderedBatchPlan: {
             payloadCount: 1,
@@ -50,10 +276,17 @@ describe("delivery-queue storage", () => {
           gifPlayback: true,
           silent: true,
           gatewayClientScopes: ["operator.write"],
+          preparedMessageId: "prepared-message-1",
           mirror: {
             sessionKey: "agent:main:main",
+            expectedSessionId: "session-main",
             text: "hello",
             mediaUrls: ["https://example.com/file.png"],
+            idempotencyKey: "channel-final:message-1",
+            deliveryMirror: {
+              kind: "channel-final",
+              sourceMessageId: "message-1",
+            },
           },
           session: {
             key: "agent:main:main",
@@ -68,6 +301,8 @@ describe("delivery-queue storage", () => {
       expect(entry.id).toBe(id);
       expect(entry.channel).toBe("directchat");
       expect(entry.to).toBe("+1555");
+      expect(entry.queuePolicy).toBe("required");
+      expect(entry.requireUnknownSendReconciliation).toBe(true);
       expect(entry.renderedBatchPlan).toEqual({
         payloadCount: 1,
         textCount: 1,
@@ -82,10 +317,17 @@ describe("delivery-queue storage", () => {
       expect(entry.gifPlayback).toBe(true);
       expect(entry.silent).toBe(true);
       expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
+      expect(entry.preparedMessageId).toBe("prepared-message-1");
       expect(entry.mirror).toEqual({
         sessionKey: "agent:main:main",
+        expectedSessionId: "session-main",
         text: "hello",
         mediaUrls: ["https://example.com/file.png"],
+        idempotencyKey: "channel-final:message-1",
+        deliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "message-1",
+        },
       });
       expect(entry.session).toEqual({
         key: "agent:main:main",
@@ -94,10 +336,83 @@ describe("delivery-queue storage", () => {
         requesterSenderId: "sender-1",
       });
       expect(entry.retryCount).toBe(0);
-      expect(entry.payloads).toEqual([{ text: "hello" }]);
+      expect(
+        acceptedPreparedOutboundEntries((entry as unknown as QueuedDelivery).preparedBatch).map(
+          (prepared) => prepared.payload,
+        ),
+      ).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir());
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    });
+
+    it("does not replace an existing stable queue intent", async () => {
+      const first = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "first" }],
+          deliveryCompletion: {
+            kind: "conversation",
+            agentId: "main",
+            operationId: "operation-stable",
+          },
+        },
+        "operation-stable",
+        tmpDir(),
+      );
+      const repeated = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "replacement" }],
+        },
+        "operation-stable",
+        tmpDir(),
+      );
+
+      expect(first).toEqual({ id: "operation-stable", created: true });
+      expect(repeated).toEqual({ id: "operation-stable", created: false });
+      expect(readQueuedEntry(tmpDir(), "operation-stable")).toMatchObject({
+        preparedBatch: {
+          entries: [expect.objectContaining({ payload: { text: "first" }, status: "accepted" })],
+        },
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-stable",
+        },
+      });
+    });
+
+    it("keeps permanent completion ownership after ack", async () => {
+      const id = "restart-sentinel-notice:agent:main:main:123";
+      await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "restart complete" }],
+          completionRetention: "permanent",
+        },
+        id,
+        tmpDir(),
+      );
+
+      await ackDelivery(id, tmpDir());
+      const repeated = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "must not replay" }],
+          completionRetention: "permanent",
+        },
+        id,
+        tmpDir(),
+      );
+
+      expect(repeated).toEqual({ id, created: false });
+      expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+      expect(readStatus(id)).toBe("completed");
     });
 
     it("ack is idempotent (no error on missing file)", async () => {
@@ -129,12 +444,15 @@ describe("delivery-queue storage", () => {
         tmpDir(),
       );
 
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
+        replyToId: "1782584644.377229",
+      });
 
       const entry = readQueuedEntry(tmpDir(), id);
       expect(typeof entry.platformSendStartedAt).toBe("number");
       expect((entry.platformSendStartedAt as number) > 0).toBe(true);
       expect(entry.recoveryState).toBe("send_attempt_started");
+      expect(entry.effectiveReplyToId).toBe("1782584644.377229");
       expect(entry.retryCount).toBe(0);
     });
 
@@ -158,6 +476,77 @@ describe("delivery-queue storage", () => {
       expect(entry.retryCount).toBe(0);
     });
 
+    it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+        const stateDir = tmpDir();
+        const id = "cron-direct-delivery:v1:unknown-owner-lease";
+        await enqueueDeliveryOnce(
+          {
+            channel: "forum",
+            to: "123",
+            payloads: [{ text: "test" }],
+            completionRetention: {
+              idPrefix: "cron-direct-delivery:v1:",
+              maxAgeMs: 24 * 60 * 60_000,
+              maxEntries: 2_000,
+            },
+            requiresProducerClaim: true,
+          },
+          id,
+          stateDir,
+        );
+        const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+        if (!claimId) {
+          throw new Error("test invariant: explicit producer must own the stable row");
+        }
+        await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
+        const started = readQueuedEntry(stateDir, id);
+        const originalExpiry = started.availableAt;
+        vi.setSystemTime(Date.now() + 1_000);
+
+        await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
+
+        expect(readQueuedEntry(stateDir, id)).toMatchObject({
+          recoveryState: "unknown_after_send",
+          platformSendAttemptId: claimId,
+          availableAt: originalExpiry,
+        });
+        await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
+          Date.now() + 30_000,
+        );
+        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 30_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("refreshes the attempt timestamp immediately before provider I/O", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir(),
+      );
+
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000);
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        vi.setSystemTime(9_000);
+        await markDeliveryPlatformSendDispatched(id, tmpDir());
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.platformSendStartedAt).toBe(9_000);
+      expect(entry.recoveryState).toBe("send_attempt_started");
+    });
+
     it("increments retryCount, records attempt time, and sets lastError", async () => {
       const id = await enqueueTextDelivery(
         {
@@ -175,6 +564,96 @@ describe("delivery-queue storage", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
+    });
+
+    it("keeps post-send failure evidence while recording the retry failure", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+      });
+
+      await failDeliveryAfterPlatformSend(id, "state update failed", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("state update failed");
+      expect(entry.recoveryState).toBe("unknown_after_send");
+      expect(typeof entry.platformSendStartedAt).toBe("number");
+    });
+
+    it("atomically records a pre-send failure without retaining send evidence", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+      });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+
+      await failDeliveryBeforePlatformSend(id, "connect refused", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("connect refused");
+      expect(entry.recoveryState).toBeUndefined();
+      expect(entry.platformSendStartedAt).toBeUndefined();
+    });
+  });
+
+  describe("failPendingDelivery", () => {
+    it("atomically writes the failed status and immutable reason into row and entry JSON", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "blocked" }],
+      });
+      const entry = await loadPendingDelivery(id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            expectedStatus: "pending",
+            lastError: "unsupported_enterprise_slack_delivery",
+            entry,
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "failed" });
+
+      expect(await loadPendingDelivery(id, tmpDir())).toBeNull();
+      expect(readStatus(id)).toBe("failed");
+      expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+    });
+
+    it("returns a typed no-op when a status race already moved the row", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        payloads: [{ text: "blocked" }],
+      });
+      const entry = await loadPendingDelivery(id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+      await moveToFailed(id, tmpDir());
+
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            expectedStatus: "pending",
+            lastError: "unsupported_enterprise_slack_delivery",
+            entry,
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "not_pending" });
+      expect(readQueuedEntry(tmpDir(), id).lastError).toBeUndefined();
     });
   });
 
@@ -209,6 +688,43 @@ describe("delivery-queue storage", () => {
       await ackDelivery(id, tmpDir());
 
       expect(readStatus(id)).toBe("failed");
+    });
+  });
+
+  describe("queue media custody", () => {
+    it("can retain artifacts while an active recovery attempt owns them", async () => {
+      const acked = await enqueueSpoolDelivery("0");
+
+      await ackDelivery(acked.id, tmpDir(), { retainSpoolArtifacts: true });
+
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      await expect(fs.stat(acked.artifact)).resolves.toBeDefined();
+    });
+
+    it("releases artifacts after every terminal queue transition", async () => {
+      const acked = await enqueueSpoolDelivery("1");
+      await ackDelivery(acked.id, tmpDir());
+      await expect(fs.stat(acked.artifact)).rejects.toThrow();
+
+      const moved = await enqueueSpoolDelivery("2");
+      await moveToFailed(moved.id, tmpDir());
+      await expect(fs.stat(moved.artifact)).rejects.toThrow();
+
+      const guarded = await enqueueSpoolDelivery("3");
+      const entry = await loadPendingDelivery(guarded.id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+      await failPendingDelivery(
+        {
+          id: guarded.id,
+          expectedStatus: "pending",
+          lastError: "terminal failure",
+          entry,
+        },
+        tmpDir(),
+      );
+      await expect(fs.stat(guarded.artifact)).rejects.toThrow();
     });
   });
 

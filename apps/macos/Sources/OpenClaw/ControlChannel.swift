@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
@@ -102,6 +103,11 @@ final class ControlChannel {
         didSet {
             CanvasManager.shared.refreshDebugStatus()
             guard oldValue != self.state else { return }
+            if self.state != .connected {
+                self.lastPingMs = nil
+                self.authSourceLabel = nil
+            }
+            NotificationCenter.default.post(name: .controlChannelStateDidChange, object: nil)
             switch self.state {
             case .connected:
                 self.logger.info("control channel state -> connected")
@@ -245,7 +251,8 @@ final class ControlChannel {
     func request(
         method: String,
         params: [String: AnyHashable]? = nil,
-        timeoutMs: Double? = nil) async throws -> Data
+        timeoutMs: Double? = nil,
+        retryTransportFailures: Bool = true) async throws -> Data
     {
         do {
             let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
@@ -254,7 +261,25 @@ final class ControlChannel {
             let data = try await GatewayConnection.shared.request(
                 method: method,
                 params: rawParams,
-                timeoutMs: timeoutMs)
+                timeoutMs: timeoutMs,
+                retryTransportFailures: retryTransportFailures)
+            self.setStateThrottled(.connected)
+            return data
+        } catch {
+            let message = self.friendlyGatewayMessage(error)
+            self.setStateThrottled(.degraded(message))
+            throw ControlChannelError.badResponse(message)
+        }
+    }
+
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        retryTransportFailures: Bool = true) async throws -> Data
+    {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                request,
+                retryTransportFailures: retryTransportFailures)
             self.setStateThrottled(.connected)
             return data
         } catch {
@@ -525,6 +550,6 @@ final class ControlChannel {
 }
 
 extension Notification.Name {
+    static let controlChannelStateDidChange = Notification.Name("openclaw.control-channel.state-did-change")
     static let controlHeartbeat = Notification.Name("openclaw.control.heartbeat")
-    static let controlAgentEvent = Notification.Name("openclaw.control.agent")
 }

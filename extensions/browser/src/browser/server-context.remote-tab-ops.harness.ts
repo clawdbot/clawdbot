@@ -5,9 +5,10 @@ import { vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { getOrCreateProfileRuntime } from "./server-context.lifecycle.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
-import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
+import type { BrowserServerState } from "./server-context.types.js";
 
 /** Original global fetch restored between remote-tab harness tests. */
 export const originalFetch = globalThis.fetch;
@@ -24,6 +25,8 @@ export function makeState(
       controlPort: 18791,
       cdpPortRangeStart: 18800,
       cdpPortRangeEnd: 18899,
+      extensionRelayDefaultPort: 18799,
+      extensionRelayPorts: {},
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "1.1.1.1" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",
@@ -70,15 +73,15 @@ function resolveProfileForTest(
   state: BrowserServerState,
   profileName: string,
 ): ResolvedBrowserProfile {
-  const rawProfile = state.resolved.profiles[profileName] ?? {};
+  const rawProfile = state.resolved.profiles[profileName];
   const cdpPort =
-    typeof rawProfile.cdpPort === "number"
+    typeof rawProfile?.cdpPort === "number"
       ? rawProfile.cdpPort
       : profileName === "remote"
         ? 9222
         : state.resolved.cdpPortRangeStart;
   const cdpUrl =
-    typeof rawProfile.cdpUrl === "string"
+    typeof rawProfile?.cdpUrl === "string"
       ? rawProfile.cdpUrl
       : `${state.resolved.cdpProtocol}://${state.resolved.cdpHost}:${cdpPort}`;
   const parsed = new URL(cdpUrl.replace(/^ws/i, "http"));
@@ -90,13 +93,13 @@ function resolveProfileForTest(
     cdpUrl,
     cdpHost,
     cdpIsLoopback,
-    color: rawProfile.color ?? state.resolved.color,
-    driver: rawProfile.driver === "existing-session" ? "existing-session" : "openclaw",
-    headless: rawProfile.headless ?? state.resolved.headless,
+    color: rawProfile?.color ?? state.resolved.color,
+    driver: rawProfile?.driver === "existing-session" ? "existing-session" : "openclaw",
+    headless: rawProfile?.headless ?? state.resolved.headless,
     headlessSource:
-      typeof rawProfile.headless === "boolean" ? "profile" : state.resolved.headlessSource,
-    attachOnly: rawProfile.attachOnly ?? state.resolved.attachOnly,
-    userDataDir: rawProfile.userDataDir,
+      typeof rawProfile?.headless === "boolean" ? "profile" : state.resolved.headlessSource,
+    attachOnly: rawProfile?.attachOnly ?? state.resolved.attachOnly,
+    userDataDir: rawProfile?.userDataDir,
   };
 }
 
@@ -105,22 +108,18 @@ export function createTestBrowserRouteContext(opts: { getState: () => BrowserSer
   const forProfile = (profileName?: string) => {
     const state = opts.getState();
     const profile = resolveProfileForTest(state, profileName ?? state.resolved.defaultProfile);
-    const getProfileState = (): ProfileRuntimeState => {
-      let profileState = state.profiles.get(profile.name);
-      if (!profileState) {
-        profileState = { profile, running: null, lastTargetId: null, reconcile: null };
-        state.profiles.set(profile.name, profileState);
-      }
-      return profileState;
-    };
+    let runtime = state.profiles.get(profile.name);
+    if (!runtime) {
+      runtime = getOrCreateProfileRuntime(state, profile);
+    }
     const tabOps = createProfileTabOps({
       profile,
       state: () => state,
-      getProfileState,
+      runtime,
     });
     const selectionOps = createProfileSelectionOps({
       profile,
-      getProfileState,
+      runtime,
       getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state.resolved.ssrfPolicy),
       ensureBrowserAvailable: async () => {},
       listTabs: tabOps.listTabs,
@@ -156,7 +155,7 @@ type JsonListEntry = {
   title: string;
   url: string;
   webSocketDebuggerUrl: string;
-  type: "page";
+  type: string;
 };
 
 /** Creates a /json/list fetch mock with static entries. */

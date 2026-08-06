@@ -64,6 +64,15 @@ func TestDocsI18nCommandWaitDelayUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestNormalizeThinkingDefaultsToXHighAndAcceptsMax(t *testing.T) {
+	if got := normalizeThinking(""); got != "xhigh" {
+		t.Fatalf("expected xhigh default, got %q", got)
+	}
+	if got := normalizeThinking("MAX"); got != "max" {
+		t.Fatalf("expected max normalization, got %q", got)
+	}
+}
+
 func TestIsRetryableTranslateErrorRejectsDeadlineExceeded(t *testing.T) {
 	t.Parallel()
 
@@ -147,12 +156,37 @@ func TestCodexTranslatorStripsInputWrapperEcho(t *testing.T) {
 	}
 }
 
+func TestCodexTranslatorUsesExactGlossaryMatchWithoutPrompt(t *testing.T) {
+	t.Parallel()
+
+	translator, err := NewCodexTranslator("en", "zh-CN", []GlossaryEntry{
+		{Source: "LINE", Target: "LINE"},
+	}, "low")
+	if err != nil {
+		t.Fatalf("NewCodexTranslator returned error: %v", err)
+	}
+	translator.runPrompt = func(context.Context, codexPromptRequest) (string, error) {
+		t.Fatal("exact glossary matches should not call Codex")
+		return "", nil
+	}
+
+	got, err := translator.TranslateRaw(context.Background(), " LINE ", "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != " LINE " {
+		t.Fatalf("unexpected translation %q", got)
+	}
+}
+
 func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 	prompt := buildCodexTranslationPrompt("System prompt.", "Hello\nworld")
 
 	for _, want := range []string{
 		"System prompt.",
 		"Return only the translated text",
+		"Do not wrap the response in an additional code fence",
+		"preserve every code fence already present in the input exactly",
 		"<openclaw_docs_i18n_input>",
 		"Hello\nworld",
 		"</openclaw_docs_i18n_input>",
@@ -160,6 +194,9 @@ func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "with no code fences") {
+		t.Fatalf("prompt must not instruct the translator to remove input fences:\n%s", prompt)
 	}
 }
 
@@ -243,6 +280,44 @@ printf 'translated from codex\n' > "$out"
 	}
 }
 
+func TestRunCodexExecPromptUsesOutputLastMessageAfterNonZeroExit(t *testing.T) {
+	dir := t.TempDir()
+	fakeCodex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(fakeCodex, []byte(`#!/bin/sh
+set -eu
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-last-message)
+      shift
+      out="$1"
+      ;;
+  esac
+  shift || true
+done
+cat >/dev/null
+printf 'translated despite nonzero\n' > "$out"
+echo "transient Codex shutdown failure" >&2
+exit 1
+`), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv(envDocsI18nCodexExecutable, fakeCodex)
+
+	got, err := runCodexExecPrompt(context.Background(), codexPromptRequest{
+		SystemPrompt: "Translate.",
+		Message:      "Hello",
+		Model:        "gpt-5.5",
+		Thinking:     "high",
+	})
+	if err != nil {
+		t.Fatalf("runCodexExecPrompt returned error: %v", err)
+	}
+	if got != "translated despite nonzero" {
+		t.Fatalf("unexpected output %q", got)
+	}
+}
+
 func TestRunCodexExecPromptDoesNotHangOnInheritedPipesAfterTimeout(t *testing.T) {
 	dir := t.TempDir()
 	fakeCodex := filepath.Join(dir, "codex")
@@ -275,7 +350,7 @@ sleep 10
 }
 
 func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
-	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 600)
+	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 1200) + " final api error 429"
 	preview := previewCommandOutput(input, "")
 	if strings.Contains(preview, "\n") {
 		t.Fatalf("expected flattened whitespace, got %q", preview)
@@ -283,7 +358,22 @@ func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
 	if !strings.HasPrefix(preview, "line one line two line three ") {
 		t.Fatalf("unexpected preview prefix: %q", preview)
 	}
-	if !strings.HasSuffix(preview, "...") {
-		t.Fatalf("expected truncation suffix, got %q", preview)
+	if !strings.Contains(preview, "... [truncated] ...") {
+		t.Fatalf("expected truncation marker, got %q", preview)
+	}
+	if !strings.HasSuffix(preview, "final api error 429") {
+		t.Fatalf("expected retained error tail, got %q", preview)
+	}
+}
+
+func TestPreviewCommandOutputRetainsStderrTail(t *testing.T) {
+	stdout := "startup banner " + strings.Repeat("x", 1200)
+	stderr := "provider api error 429"
+	preview := previewCommandOutput(stdout, stderr)
+	if !strings.HasPrefix(preview, "startup banner ") {
+		t.Fatalf("unexpected preview prefix: %q", preview)
+	}
+	if !strings.HasSuffix(preview, stderr) {
+		t.Fatalf("expected retained stderr tail, got %q", preview)
 	}
 }

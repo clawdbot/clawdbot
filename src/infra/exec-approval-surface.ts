@@ -133,3 +133,24 @@ export function describeNativeExecApprovalClientSetup(params: {
     }) ?? null
   );
 }
+
+/** Returns channel-specific setup guidance for native plugin approvals, when available. */
+export function describeNativePluginApprovalClientSetup(params: {
+  channel?: string | null;
+  channelLabel?: string | null;
+  accountId?: string | null;
+}): string | null {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
+    return null;
+  }
+  const channelLabel = normalizeOptionalString(params.channelLabel) ?? labelForChannel(channel);
+  const accountId = normalizeOptionalString(params.accountId);
+  return (
+    resolveChannelApprovalCapability(getChannelPlugin(channel))?.describePluginApprovalSetup?.({
+      channel,
+      channelLabel,
+      accountId,
+    }) ?? null
+  );
+}

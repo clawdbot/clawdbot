@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
 import {
-  buildTrustedSafeBinDirs,
   getTrustedSafeBinDirs,
   isTrustedSafeBinPath,
   listWritableExplicitTrustedSafeBinDirs,
@@ -29,9 +28,10 @@ describe("exec safe bin trust", () => {
   });
 
   it("builds trusted dirs from defaults and explicit extra dirs", () => {
-    const dirs = buildTrustedSafeBinDirs({
+    const dirs = getTrustedSafeBinDirs({
       baseDirs: ["/usr/bin"],
       extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
+      refresh: true,
     });
 
     expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
@@ -89,9 +89,10 @@ describe("exec safe bin trust", () => {
         return;
       }
 
-      const dirs = buildTrustedSafeBinDirs({
+      const dirs = getTrustedSafeBinDirs({
         baseDirs: [],
         extraDirs: [swapped],
+        refresh: true,
       });
 
       expect(
@@ -114,9 +115,10 @@ describe("exec safe bin trust", () => {
         return;
       }
 
-      const dirs = buildTrustedSafeBinDirs({
+      const dirs = getTrustedSafeBinDirs({
         baseDirs: [],
         extraDirs: [trustedDir],
+        refresh: true,
       });
 
       expect(

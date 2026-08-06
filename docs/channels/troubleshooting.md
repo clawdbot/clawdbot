@@ -29,8 +29,8 @@ Healthy baseline:
 
 ## After an update
 
-Use this when Telegram, iMessage, BlueBubbles-era configs, or another plugin
-channel disappears after updating.
+Use this when Telegram, iMessage, BlueBubbles-era configs, or another plugin channel disappears
+after updating.
 
 ```bash
 openclaw status --all
@@ -39,11 +39,10 @@ openclaw gateway restart
 openclaw status --all
 ```
 
-Look for `plugin load failed: dependency tree corrupted; run openclaw doctor
---fix` in `openclaw status --all`. That means the channel is configured, but
-the plugin setup/load path hit a corrupt dependency tree instead of registering
-the channel. `openclaw doctor --fix` removes stale plugin dependency staging
-directories and stale auth shadows, then `openclaw gateway restart` reloads the
+Look for `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` in `openclaw
+status --all`. That means the channel is configured, but plugin setup/load hit a corrupted
+dependency tree instead of registering the channel. `openclaw doctor --fix` clears stale
+plugin-runtime dependency symlinks and stale auth shadows, then `openclaw gateway restart` reloads
 clean state.
 
 ## WhatsApp
@@ -65,15 +64,15 @@ Full troubleshooting: [WhatsApp troubleshooting](/channels/whatsapp#troubleshoot
 
 ### Telegram failure signatures
 
-| Symptom                              | Fastest check                                    | Fix                                                                                                                        |
-| ------------------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `/start` but no usable reply flow    | `openclaw pairing list telegram`                 | Approve pairing or change DM policy.                                                                                       |
-| Bot online but group stays silent    | Verify mention requirement and bot privacy mode  | Disable privacy mode for group visibility or mention bot.                                                                  |
-| Send failures with network errors    | Inspect logs for Telegram API call failures      | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                                                                          |
-| Startup reports `getMe returned 401` | Check configured token source                    | Re-copy or regenerate the BotFather token and update `botToken`, `tokenFile`, or default-account `TELEGRAM_BOT_TOKEN`.     |
-| Polling stalls or reconnects slowly  | `openclaw logs --follow` for polling diagnostics | Upgrade; if restarts are false positives, tune `pollingStallThresholdMs`. Persistent stalls still point to proxy/DNS/IPv6. |
-| `setMyCommands` rejected at startup  | Inspect logs for `BOT_COMMANDS_TOO_MUCH`         | Reduce plugin/skill/custom Telegram commands or disable native menus.                                                      |
-| Upgraded and allowlist blocks you    | `openclaw security audit` and config allowlists  | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs.                                                |
+| Symptom                              | Fastest check                                    | Fix                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `/start` but no usable reply flow    | `openclaw pairing list telegram`                 | Approve pairing or change DM policy.                                                                                   |
+| Bot online but group stays silent    | Verify mention requirement and bot privacy mode  | Disable privacy mode for group visibility or mention bot.                                                              |
+| Send failures with network errors    | Inspect logs for Telegram API call failures      | Fix DNS/IPv6/proxy routing to `api.telegram.org`.                                                                      |
+| Startup reports `getMe returned 401` | Check configured token source                    | Re-copy or regenerate the BotFather token and update `botToken`, `tokenFile`, or default-account `TELEGRAM_BOT_TOKEN`. |
+| Polling stalls or reconnects slowly  | `openclaw logs --follow` for polling diagnostics | Upgrade; persistent stalls usually point to proxy/DNS/IPv6.                                                            |
+| `setMyCommands` rejected at startup  | Inspect logs for `BOT_COMMANDS_TOO_MUCH`         | Reduce plugin/skill/custom Telegram commands or disable native menus.                                                  |
+| Upgraded and allowlist blocks you    | `openclaw security audit` and config allowlists  | Run `openclaw doctor --fix` or replace `@username` with numeric sender IDs.                                            |
 
 Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshooting)
 
@@ -81,12 +80,15 @@ Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshoot
 
 ### Discord failure signatures
 
-| Symptom                                   | Fastest check                                                                                                                | Fix                                                                                                                                                                                                                                                                   |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bot online but no guild replies           | `openclaw channels status --probe`                                                                                           | Allow guild/channel and verify message content intent.                                                                                                                                                                                                                |
-| Group messages ignored                    | Check logs for mention gating drops                                                                                          | Mention bot or set guild/channel `requireMention: false`.                                                                                                                                                                                                             |
-| Typing/token usage but no Discord message | Check whether this is an ambient room event or an opted-in `message_tool` room where the model missed `message(action=send)` | Inspect the gateway verbose log for suppressed final payload metadata, verify `messages.groupChat.unmentionedInbound`, read [Ambient room events](/channels/ambient-room-events), or keep `messages.groupChat.visibleReplies: "automatic"` for normal group requests. |
-| DM replies missing                        | `openclaw pairing list discord`                                                                                              | Approve DM pairing or adjust DM policy.                                                                                                                                                                                                                               |
+| Symptom                                                      | Fastest check                                                                                                                | Fix                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bot online but no guild replies                              | `openclaw channels status --probe`                                                                                           | Allow guild/channel and verify message content intent.                                                                                                                                                                                                                |
+| Group messages ignored                                       | Check logs for mention gating drops                                                                                          | Mention bot or set guild/channel `requireMention: false`.                                                                                                                                                                                                             |
+| Typing/token usage but no Discord message                    | Check whether this is an ambient room event or an opted-in `message_tool` room where the model missed `message(action=send)` | Inspect the gateway verbose log for suppressed final payload metadata, verify `messages.groupChat.unmentionedInbound`, read [Ambient room events](/channels/ambient-room-events), or keep `messages.groupChat.visibleReplies: "automatic"` for normal group requests. |
+| DM replies missing                                           | `openclaw pairing list discord`                                                                                              | Approve DM pairing or adjust DM policy.                                                                                                                                                                                                                               |
+| Bot silent in channels that used to work                     | Check whether the guild entry gained a `channels` map                                                                        | A channel map is an allowlist: unlisted channels are denied. Add a `"*"` wildcard entry. See [Guild channel maps are allowlists](/channels/discord#guild-channel-maps-are-allowlists).                                                                                |
+| Agent cannot see room history or attachments from other bots | Check the room's `requireMention` and the account's `allowBots`                                                              | `requireMention: true` drops unmentioned messages before they become room events, so there is no backlog. Bot-authored messages and their attachments need `allowBots` (`"mentions"` is the safer setting). See [Ambient room events](/channels/ambient-room-events). |
+| Agent watches an ambient room but never posts                | Check the agent's tool profile for the `message` tool                                                                        | Room events require `message(action=send)`, which the `minimal` and `coding` profiles omit. Grant `tools.alsoAllow: ["message"]` for that agent.                                                                                                                      |
 
 Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshooting)
 
@@ -112,9 +114,7 @@ Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
 | Can send but no receive on macOS     | Check macOS privacy permissions for Messages automation | Re-grant TCC permissions and restart channel process.                 |
 | DM sender blocked                    | `openclaw pairing list imessage`                        | Approve pairing or update allowlist.                                  |
 
-Full troubleshooting:
-
-- [iMessage troubleshooting](/channels/imessage#troubleshooting)
+Full troubleshooting: [iMessage troubleshooting](/channels/imessage#troubleshooting)
 
 ## Signal
 
@@ -154,6 +154,16 @@ Full troubleshooting: [QQ Bot troubleshooting](/channels/qqbot#troubleshooting)
 | Cross-signing/bootstrap looks wrong | `openclaw matrix verify bootstrap`     | Repair secret storage, cross-signing, and backup state in one pass.       |
 
 Full setup and config: [Matrix](/channels/matrix)
+
+## Gateway up but channel never connects
+
+If the gateway process is healthy but a channel stays stopped after repeated
+unclean boots, the [crash-loop breaker](/gateway/restart-recovery#safety-valves-and-observability)
+may be suppressing channel auto-start. Use
+`openclaw gateway call channels.start --params '{"channel":"<id>"}'` to
+override immediately, or leave the healthy gateway running. After the full
+unclean-boot window drains, the same process rechecks the breaker and resumes
+deferred channel auto-start.
 
 ## Related
 

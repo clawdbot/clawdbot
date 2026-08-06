@@ -15,6 +15,7 @@ import {
   ackComponentInteraction,
   ensureAgentComponentInteractionAllowed,
   parseAgentComponentData,
+  replyUnavailableComponentInteraction,
   resolveAgentComponentRoute,
   resolveInteractionContextWithDmAuth,
   type AgentComponentContext,
@@ -39,14 +40,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   const parsed = parseAgentComponentData(params.data);
   if (!parsed) {
     logError(`${params.label}: failed to parse component data`);
-    try {
-      await params.interaction.reply({
-        content: params.invalidReply,
-        ephemeral: true,
-      });
-    } catch {
-      // Interaction may have expired
-    }
+    await replyUnavailableComponentInteraction(params.interaction, params.invalidReply);
     return;
   }
 
@@ -114,7 +108,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   });
 }
 
-export class AgentComponentButton extends Button {
+class AgentComponentButton extends Button {
   override label = AGENT_BUTTON_KEY;
   customId = `${AGENT_BUTTON_KEY}:seed=1`;
   override style = ButtonStyle.Primary;
@@ -142,7 +136,7 @@ export class AgentComponentButton extends Button {
   }
 }
 
-export class AgentSelectMenu extends StringSelectMenu {
+class AgentSelectMenu extends StringSelectMenu {
   customId = `${AGENT_SELECT_KEY}:seed=1`;
   options: APIStringSelectComponent["options"] = [];
   private ctx: AgentComponentContext;

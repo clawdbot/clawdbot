@@ -21,30 +21,59 @@ function normalizePosixAbsolutePath(value: string): string | undefined {
   if (WINDOWS_DRIVE_ROOT_RE.test(withoutTrailingSlash)) {
     return undefined;
   }
-  return withoutTrailingSlash;
+  return WINDOWS_DRIVE_ABS_RE.test(withoutTrailingSlash)
+    ? withoutTrailingSlash.toLowerCase()
+    : withoutTrailingSlash;
 }
 
 function splitPathSegments(value: string): string[] {
   return value.split("/").filter(Boolean);
 }
 
-function matchesRootPattern(params: { candidatePath: string; rootPattern: string }): boolean {
+export type InboundPathRootMatch = {
+  anchorRoot: string;
+  matchedRoot: string;
+};
+
+function joinAbsolutePathSegments(candidatePath: string, segments: readonly string[]): string {
+  const joined = segments.join("/");
+  if (!WINDOWS_DRIVE_ABS_RE.test(candidatePath)) {
+    return `/${joined}`;
+  }
+  return segments.length === 1 ? `${joined}/` : joined;
+}
+
+function resolveRootPatternMatch(params: {
+  candidatePath: string;
+  rootPattern: string;
+}): InboundPathRootMatch | undefined {
   const candidateSegments = splitPathSegments(params.candidatePath);
   const rootSegments = splitPathSegments(params.rootPattern);
   if (candidateSegments.length < rootSegments.length) {
-    return false;
+    return undefined;
   }
-  for (let idx = 0; idx < rootSegments.length; idx += 1) {
-    const expected = rootSegments[idx];
+  const resolvedSegments: string[] = [];
+  for (const [idx, expected] of rootSegments.entries()) {
     const actual = candidateSegments[idx];
+    if (!actual) {
+      return undefined;
+    }
     if (expected === WILDCARD_SEGMENT) {
+      resolvedSegments.push(actual);
       continue;
     }
     if (expected !== actual) {
-      return false;
+      return undefined;
     }
+    resolvedSegments.push(expected);
   }
-  return true;
+  const firstWildcardIndex = rootSegments.indexOf(WILDCARD_SEGMENT);
+  const anchorSegments =
+    firstWildcardIndex === -1 ? resolvedSegments : rootSegments.slice(0, firstWildcardIndex);
+  return {
+    anchorRoot: joinAbsolutePathSegments(params.candidatePath, anchorSegments),
+    matchedRoot: joinAbsolutePathSegments(params.candidatePath, resolvedSegments),
+  };
 }
 
 /** Validates an absolute inbound root pattern with whole-segment wildcards only. */
@@ -100,21 +129,36 @@ export function mergeInboundPathRoots(
   return merged;
 }
 
+/** Resolves the concrete lexical root matched by an inbound path pattern. */
+export function resolveInboundPathRoot(params: {
+  filePath: string;
+  roots: readonly string[];
+  fallbackRoots?: readonly string[];
+}): InboundPathRootMatch | undefined {
+  const candidatePath = normalizePosixAbsolutePath(params.filePath);
+  if (!candidatePath) {
+    return undefined;
+  }
+  const roots = normalizeInboundPathRoots(params.roots);
+  const effectiveRoots =
+    roots.length > 0 ? roots : normalizeInboundPathRoots(params.fallbackRoots ?? undefined);
+  if (effectiveRoots.length === 0) {
+    return undefined;
+  }
+  for (const rootPattern of effectiveRoots) {
+    const resolved = resolveRootPatternMatch({ candidatePath, rootPattern });
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
+}
+
 /** Checks whether a candidate inbound media path is covered by configured or fallback roots. */
 export function isInboundPathAllowed(params: {
   filePath: string;
   roots: readonly string[];
   fallbackRoots?: readonly string[];
 }): boolean {
-  const candidatePath = normalizePosixAbsolutePath(params.filePath);
-  if (!candidatePath) {
-    return false;
-  }
-  const roots = normalizeInboundPathRoots(params.roots);
-  const effectiveRoots =
-    roots.length > 0 ? roots : normalizeInboundPathRoots(params.fallbackRoots ?? undefined);
-  if (effectiveRoots.length === 0) {
-    return false;
-  }
-  return effectiveRoots.some((rootPattern) => matchesRootPattern({ candidatePath, rootPattern }));
+  return resolveInboundPathRoot(params) !== undefined;
 }

@@ -17,9 +17,7 @@ describe("memory embedding cache", () => {
     const db = new DatabaseSync(":memory:");
     ensureMemoryIndexSchema({
       db,
-      embeddingCacheTable: "embedding_cache",
       cacheEnabled: true,
-      ftsTable: "chunks_fts",
       ftsEnabled: false,
       ftsTokenizer: "unicode61",
     });
@@ -44,8 +42,13 @@ describe("memory embedding cache", () => {
       const cached = loadMemoryEmbeddingCache({
         db,
         enabled: true,
-        provider: { id: "openai", model: "text-embedding-3-small" },
-        providerKey: "provider-key",
+        providerIdentities: [
+          {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            providerKey: "provider-key",
+          },
+        ],
         hashes: ["a", "b", "a"],
       });
 
@@ -55,6 +58,48 @@ describe("memory embedding cache", () => {
           ["b", [0.3, 0.4]],
         ]),
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("loads provider-declared alias cache rows without accepting arbitrary identities", () => {
+    const db = createDb();
+    try {
+      upsertMemoryEmbeddingCache({
+        db,
+        enabled: true,
+        provider: { id: "local", model: "/cache/default.gguf" },
+        providerKey: "provider-key-alias",
+        entries: [{ hash: "alias", embedding: [0.1, 0.2] }],
+      });
+      upsertMemoryEmbeddingCache({
+        db,
+        enabled: true,
+        provider: { id: "local", model: "/other/default.gguf" },
+        providerKey: "provider-key-arbitrary",
+        entries: [{ hash: "arbitrary", embedding: [0.3, 0.4] }],
+      });
+
+      const cached = loadMemoryEmbeddingCache({
+        db,
+        enabled: true,
+        providerIdentities: [
+          {
+            provider: "local",
+            model: "hf:owner/default.gguf",
+            providerKey: "provider-key-current",
+          },
+          {
+            provider: "local",
+            model: "/cache/default.gguf",
+            providerKey: "provider-key-alias",
+          },
+        ],
+        hashes: ["alias", "arbitrary"],
+      });
+
+      expect(cached).toEqual(new Map([["alias", [0.1, 0.2]]]));
     } finally {
       db.close();
     }

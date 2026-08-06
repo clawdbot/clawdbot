@@ -1,10 +1,12 @@
 // Covers TUI launch argument and environment construction.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const detachMock = vi.hoisted(() => vi.fn());
+let pauseSpy: MockInstance;
+let resumeSpy: MockInstance;
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
@@ -42,8 +44,8 @@ describe("launchTuiCli", () => {
     process.execArgv.length = 0;
     spawnMock.mockReset();
     detachMock.mockReset();
-    vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
-    vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
+    pauseSpy = vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+    resumeSpy = vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
     vi.spyOn(process.stdin, "isPaused").mockReturnValue(false);
   });
 
@@ -133,6 +135,19 @@ describe("launchTuiCli", () => {
       "300000",
     ]);
     expect(options.stdio).toBe("inherit");
+  });
+
+  it("keeps parent stdin paused after the relaunched TUI exits", async () => {
+    const child = createChildProcess();
+    spawnMock.mockImplementation((_cmd: string, _args: string[], _opts: SpawnOptions) => {
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+
+    await launchTuiCli({ deliver: false });
+
+    expect(pauseSpy).toHaveBeenCalledOnce();
+    expect(resumeSpy).not.toHaveBeenCalled();
   });
 
   it("launches compiled CLI shapes without repeating the current command", async () => {

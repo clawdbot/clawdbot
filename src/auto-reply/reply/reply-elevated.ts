@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
+import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { MsgContext } from "../templating.js";
 import {
   type AllowFromFormatter,
@@ -94,7 +95,10 @@ function isApprovedElevatedSender(params: {
       tokens: senderIdTokens,
     });
   }
-  if (senderFrom) {
+  if (
+    senderFrom &&
+    shouldUseFromAsSenderFallback({ from: senderFrom, chatType: params.ctx.ChatType })
+  ) {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,
       values: [senderFrom, stripSenderPrefix(senderFrom)].filter((value): value is string =>
@@ -194,7 +198,7 @@ export function resolveElevatedPermissions(params: {
   if (!agentEnabled) {
     failures.push({
       gate: "enabled",
-      key: "agents.list[].tools.elevated.enabled",
+      key: "agents.entries.*.tools.elevated.enabled",
     });
   }
   if (!enabled) {
@@ -244,7 +248,7 @@ export function resolveElevatedPermissions(params: {
   if (!agentAllowed) {
     failures.push({
       gate: "allowFrom",
-      key: `agents.list[].tools.elevated.allowFrom.${params.provider}`,
+      key: `agents.entries.*.tools.elevated.allowFrom.${params.provider}`,
     });
   }
   return { enabled, allowed: globalAllowed && agentAllowed, failures };

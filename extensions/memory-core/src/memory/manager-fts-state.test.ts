@@ -11,17 +11,27 @@ describe("memory FTS state", () => {
     db = null;
   });
 
-  it("only removes rows for the active model when a provider is active", () => {
+  it("removes rows for all models when a provider is active", () => {
     db = new DatabaseSync(":memory:");
-    db.exec("CREATE TABLE chunks_fts (path TEXT, source TEXT, model TEXT)");
-    db.prepare("INSERT INTO chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
+    db.exec("CREATE TABLE memory_index_chunks_fts (path TEXT, source TEXT, model TEXT)");
+    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
       "memory/2026-01-12.md",
       "memory",
       "mock-embed",
     );
-    db.prepare("INSERT INTO chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
+    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
       "memory/2026-01-12.md",
       "memory",
+      "other-model",
+    );
+    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
+      "memory/2026-01-13.md",
+      "memory",
+      "other-model",
+    );
+    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
+      "memory/2026-01-12.md",
+      "sessions",
       "other-model",
     );
 
@@ -32,21 +42,28 @@ describe("memory FTS state", () => {
       currentModel: "mock-embed",
     });
 
-    const rows = db.prepare("SELECT model FROM chunks_fts ORDER BY model").all() as Array<{
+    const rows = db
+      .prepare("SELECT path, source, model FROM memory_index_chunks_fts ORDER BY path, source")
+      .all() as Array<{
+      path: string;
+      source: string;
       model: string;
     }>;
-    expect(rows).toEqual([{ model: "other-model" }]);
+    expect(rows).toEqual([
+      { path: "memory/2026-01-12.md", source: "sessions", model: "other-model" },
+      { path: "memory/2026-01-13.md", source: "memory", model: "other-model" },
+    ]);
   });
 
   it("removes all rows for the path in FTS-only mode", () => {
     db = new DatabaseSync(":memory:");
-    db.exec("CREATE TABLE chunks_fts (path TEXT, source TEXT, model TEXT)");
-    db.prepare("INSERT INTO chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
+    db.exec("CREATE TABLE memory_index_chunks_fts (path TEXT, source TEXT, model TEXT)");
+    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
       "memory/2026-01-12.md",
       "memory",
       "mock-embed",
     );
-    db.prepare("INSERT INTO chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
+    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
       "memory/2026-01-12.md",
       "memory",
       "fts-only",
@@ -58,7 +75,9 @@ describe("memory FTS state", () => {
       source: "memory",
     });
 
-    const count = db.prepare("SELECT COUNT(*) as c FROM chunks_fts").get() as { c: number };
+    const count = db.prepare("SELECT COUNT(*) as c FROM memory_index_chunks_fts").get() as {
+      c: number;
+    };
     expect(count.c).toBe(0);
   });
 });

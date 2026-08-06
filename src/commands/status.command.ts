@@ -9,6 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { withProgress } from "../cli/progress.js";
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -36,28 +37,8 @@ const statusCommandTextRuntimeLoader = createLazyImportLoader(
 );
 const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
-function loadStatusScanModule() {
-  return statusScanModuleLoader.load();
-}
-
-function loadStatusScanFastJsonModule() {
-  return statusScanFastJsonModuleLoader.load();
-}
-
-function loadStatusAllModule() {
-  return statusAllModuleLoader.load();
-}
-
-function loadStatusCommandTextRuntime() {
-  return statusCommandTextRuntimeLoader.load();
-}
-
-function loadStatusNodeModeModule() {
-  return statusNodeModeModuleLoader.load();
-}
-
 /** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
-export function resolvePairingRecoveryContext(params: {
+function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
   details?: unknown;
@@ -91,6 +72,31 @@ export function resolvePairingRecoveryContext(params: {
   };
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.statusCommandTestApi")] = {
+    resolvePairingRecoveryContext,
+  };
+}
+
+function normalizeStatusWrapperPath(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function resolveServiceWrapperContextHint(params: {
+  serviceWrapperPath?: string | null;
+  cliWrapperPath?: string | null;
+}): string | null {
+  const serviceWrapperPath = normalizeStatusWrapperPath(params.serviceWrapperPath);
+  if (!serviceWrapperPath) {
+    return null;
+  }
+  if (normalizeStatusWrapperPath(params.cliWrapperPath) === serviceWrapperPath) {
+    return null;
+  }
+  return `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`;
+}
+
 /** Runs `openclaw status`, including JSON/all routing and optional deep probes. */
 export async function statusCommand(
   opts: {
@@ -105,9 +111,9 @@ export async function statusCommand(
 ) {
   if (opts.all && !opts.json) {
     // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
-    await loadStatusAllModule().then(({ statusAllCommand }) =>
-      statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
-    );
+    await statusAllModuleLoader
+      .load()
+      .then(({ statusAllCommand }) => statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }));
     return;
   }
 
@@ -115,20 +121,25 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts,
       runtime,
-      includeSecurityAudit: opts.all === true,
-      includePluginCompatibility: true,
+      includeSecurityAudit: opts.all === true || opts.deep === true,
+      includePluginCompatibility: opts.all === true,
       suppressHealthErrors: true,
       scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
-        await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
-          scanStatusJsonFast(scanOpts, runtimeForScan),
-        ),
+        await statusScanFastJsonModuleLoader
+          .load()
+          .then(({ scanStatusJsonFast }) => scanStatusJsonFast(scanOpts, runtimeForScan)),
     });
     return;
   }
 
-  const scan = await loadStatusScanModule().then(({ scanStatus }) =>
-    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep }, runtime),
-  );
+  const scan = await statusScanModuleLoader
+    .load()
+    .then(({ scanStatus }) =>
+      scanStatus(
+        { json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep },
+        runtime,
+      ),
+    );
 
   const {
     cfg,
@@ -136,6 +147,7 @@ export async function statusCommand(
     tailscaleMode,
     tailscaleDns,
     tailscaleHttpsUrl,
+    advertisedControlUiLinks,
     update,
     gatewayConnection,
     remoteUrlMissing,
@@ -199,6 +211,11 @@ export async function statusCommand(
       ),
   });
 
+  // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
+  if (health && "error" in health) {
+    throw new Error(health.error);
+  }
+
   const rich = true;
   const {
     buildStatusUpdateSurface,
@@ -218,7 +235,7 @@ export async function statusCommand(
     resolveMemoryVectorState,
     shortenText,
     theme,
-  } = await loadStatusCommandTextRuntime();
+  } = await statusCommandTextRuntimeLoader.load();
   const muted = (value: string) => (rich ? theme.muted(value) : value);
   const ok = (value: string) => (rich ? theme.success(value) : value);
   const warn = (value: string) => (rich ? theme.warn(value) : value);
@@ -247,15 +264,24 @@ export async function statusCommand(
     for (const entry of secretDiagnostics) {
       runtime.log(`- ${entry}`);
     }
+    const wrapperContextHint = resolveServiceWrapperContextHint({
+      serviceWrapperPath: daemon.wrapperPath,
+      cliWrapperPath: process.env[OPENCLAW_WRAPPER_ENV_KEY],
+    });
+    if (wrapperContextHint) {
+      runtime.log(theme.warn(wrapperContextHint));
+    }
     runtime.log("");
   }
 
-  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
-    resolveNodeOnlyGatewayInfo({
-      daemon,
-      node: nodeDaemon,
-    }),
-  );
+  const nodeOnlyGateway = await statusNodeModeModuleLoader
+    .load()
+    .then(({ resolveNodeOnlyGatewayInfo }) =>
+      resolveNodeOnlyGatewayInfo({
+        daemon,
+        node: nodeDaemon,
+      }),
+    );
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
@@ -274,6 +300,7 @@ export async function statusCommand(
       tailscaleMode,
       tailscaleDns,
       tailscaleHttpsUrl,
+      ...(advertisedControlUiLinks ? { advertisedControlUiLinks } : {}),
       gatewayMode,
       remoteUrlMissing,
       gatewayConnection,

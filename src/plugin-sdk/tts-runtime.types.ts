@@ -1,6 +1,11 @@
 // TTS runtime types define plugin-facing text-to-speech synthesis hooks and results.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ResolvedTtsPersona, TtsAutoMode, TtsProvider } from "../config/types.tts.js";
+import type {
+  ResolvedTtsPersona,
+  TtsAutoMode,
+  TtsConfig,
+  TtsProvider,
+} from "../config/types.tts.js";
 import type {
   SpeechProviderConfig,
   SpeechVoiceOption,
@@ -93,6 +98,22 @@ export type TtsRequestParams = {
   agentId?: string;
   accountId?: string;
 };
+
+/** Inputs for surface-specific config merge and directive pre-resolution. */
+export type PrepareTtsRequestParams = {
+  cfg: OpenClawConfig;
+  override?: TtsConfig;
+  text: string;
+};
+
+/** Effective synthesis inputs returned before choosing file, stream, or telephony output. */
+export type PreparedTtsRequest = {
+  cfg: OpenClawConfig;
+  directives: TtsDirectiveParseResult;
+};
+
+/** Shared surface-specific TTS request preparation contract. */
+export type PrepareTtsRequest = (params: PrepareTtsRequestParams) => Promise<PreparedTtsRequest>;
 
 /** Telephony-specific synthesis request where output format is constrained by the caller. */
 export type TtsTelephonyRequestParams = {

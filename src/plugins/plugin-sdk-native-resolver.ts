@@ -3,6 +3,8 @@ import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   buildPluginLoaderAliasMap,
   listWorkspacePackageExportAliasEntries,
@@ -38,7 +40,7 @@ type NativeAliasEntry = {
 };
 
 /** Resolver install options for CJS `_resolveFilename` and modern ESM loader hooks. */
-export type InstallOpenClawPluginSdkNativeResolverOptions = {
+type InstallOpenClawPluginSdkNativeResolverOptions = {
   modulePath?: string;
   pluginModulePath?: string;
   allowedParentRoots?: readonly string[];
@@ -53,14 +55,39 @@ const nodeResolveFilenameProperty = "_resolveFilename" as const;
 const PLUGIN_SDK_PACKAGE_PREFIXES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const INTERNAL_CORE_PACKAGE_ALIASES = [
   {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
     subpaths: [
       ["", "index.ts"],
-      ["number-coercion", "number-coercion.ts"],
-      ["record-coerce", "record-coerce.ts"],
-      ["string-coerce", "string-coerce.ts"],
-      ["string-normalization", "string-normalization.ts"],
+      ["code-spans", "code-spans.ts"],
+      ["fences", "fences.ts"],
+      ["frontmatter", "frontmatter.ts"],
+      ["ir", "ir.ts"],
+      ["render", "render.ts"],
+      ["render-aware-chunking", "render-aware-chunking.ts"],
+      ["tables", "tables.ts"],
+      ["types", "types.ts"],
+    ],
+  },
+  {
+    // Mirrors packages/ai/package.json exports; dist file names do not follow
+    // the src layout (dist/diagnostics.mjs <- src/utils/diagnostics.ts), so the
+    // generic export-map derivation cannot be used here.
+    packageName: "@openclaw/ai",
+    packageDir: "ai",
+    subpaths: [
+      ["", "index.ts"],
+      ["providers", "providers.ts"],
+      ["transports", "transports.ts"],
+      ["diagnostics", path.join("utils", "diagnostics.ts")],
+      ["event-stream", path.join("utils", "event-stream.ts")],
+      ["types", "types.ts"],
+      ["validation", "validation.ts"],
+      ["internal/anthropic", path.join("internal", "anthropic.ts")],
+      ["internal/openai", path.join("internal", "openai.ts")],
+      ["internal/retry-after", path.join("internal", "retry-after.ts")],
+      ["internal/runtime", path.join("internal", "runtime.ts")],
+      ["internal/shared", path.join("internal", "shared.ts")],
     ],
   },
   {
@@ -77,7 +104,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["media-source-url", "media-source-url.ts"],
       ["mime", "mime.ts"],
       ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
-      ["read-response-with-limit", "read-response-with-limit.ts"],
     ],
   },
   {
@@ -93,18 +119,26 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
   },
 ] as const;
 const pluginSdkNativeAliases = new Map<string, NativeAliasEntry[]>();
+const pluginSdkNativeAliasesByMap = new WeakMap<
+  Record<string, string>,
+  Array<readonly [string, string]>
+>();
+const internalCorePackageHostRoots = new PluginLruCache<string>(128);
+const registeredInternalCorePackageHosts = new PluginLruCache<true>(128);
 let installed = false;
 let previousResolveFilename: ResolveFilename | undefined;
-let esmHooks: { deregister: () => void } | undefined;
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  internalCorePackageHostRoots.clear();
+  registeredInternalCorePackageHosts.clear();
+});
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
   return options.modulePath ?? fileURLToPath(options.moduleUrl ?? import.meta.url);
 }
 
 function isPluginSdkAliasSpecifier(specifier: string): boolean {
-  return PLUGIN_SDK_PACKAGE_PREFIXES.some(
-    (prefix) => specifier === prefix || specifier.startsWith(`${prefix}/`),
-  );
+  return PLUGIN_SDK_PACKAGE_PREFIXES.some((prefix) => specifier.startsWith(`${prefix}/`));
 }
 
 function isNativeLoadableSdkTarget(targetPath: string): boolean {
@@ -189,6 +223,19 @@ function resolveLoaderPackageRootFromModulePath(modulePath: string): string {
   return findNearestPackageRoot(modulePath);
 }
 
+function resolveInternalCorePackageHostRoot(modulePath: string): string {
+  const normalizedModulePath = path.resolve(modulePath);
+  const cached = internalCorePackageHostRoots.get(normalizedModulePath);
+  if (cached) {
+    return cached;
+  }
+  const packageRoot = normalizePathForBoundary(
+    resolveLoaderPackageRootFromModulePath(normalizedModulePath),
+  );
+  internalCorePackageHostRoots.set(normalizedModulePath, packageRoot);
+  return packageRoot;
+}
+
 function resolveAllowedParentRoot(modulePath: string): string {
   return findBundledPluginRoot(modulePath) ?? findNearestPackageRoot(modulePath);
 }
@@ -247,17 +294,20 @@ function listPluginSdkNativeAliases(
   options: InstallOpenClawPluginSdkNativeResolverOptions,
 ): Array<readonly [string, string]> {
   const modulePath = options.pluginModulePath ?? resolveLoaderModulePath(options);
-  return Object.entries(
-    buildPluginLoaderAliasMap(
-      modulePath,
-      options.argv1 ?? process.argv[1],
-      options.moduleUrl,
-      // Native require hooks must point at JavaScript artifacts, even when the
-      // plugin loader itself is configured to prefer source imports.
-      "dist",
-      options.devSourceRoot,
-    ),
-  )
+  const aliasMap = buildPluginLoaderAliasMap(
+    modulePath,
+    options.argv1 ?? process.argv[1],
+    options.moduleUrl,
+    // Native require hooks must point at JavaScript artifacts, even when the
+    // plugin loader itself is configured to prefer source imports.
+    "dist",
+    options.devSourceRoot,
+  );
+  const cached = pluginSdkNativeAliasesByMap.get(aliasMap);
+  if (cached) {
+    return cached;
+  }
+  const aliases = Object.entries(aliasMap)
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
     .filter(([, target]) => isNativeLoadableSdkTarget(target))
     .flatMap(([specifier, target]) => {
@@ -269,16 +319,18 @@ function listPluginSdkNativeAliases(
         [`${specifier}.js`, target],
       ] as Array<readonly [string, string]>;
     });
+  pluginSdkNativeAliasesByMap.set(aliasMap, aliases);
+  return aliases;
 }
 
 function listInternalCorePackageNativeAliases(
   options: InstallOpenClawPluginSdkNativeResolverOptions,
+  packageRoot = resolveInternalCorePackageHostRoot(resolveLoaderModulePath(options)),
 ): Array<{
   request: string;
   target: string;
   parentRoots: string[];
 }> {
-  const packageRoot = resolveLoaderPackageRootFromModulePath(resolveLoaderModulePath(options));
   const parentRoots = ["src", "scripts", "packages", "test"]
     .map((segment) => path.join(packageRoot, segment))
     .filter((candidate) => fs.existsSync(candidate))
@@ -294,15 +346,15 @@ function listInternalCorePackageNativeAliases(
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    {
-      packageName: "@openclaw/acp-core",
-      packageDir: "acp-core",
+    ...["normalization-core", "acp-core"].map((packageDir) => ({
+      packageName: `@openclaw/${packageDir}`,
+      packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({
         packageRoot,
-        packageName: "@openclaw/acp-core",
-        packageDir: "acp-core",
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
       }).map((entry) => [entry.subpath, entry.srcFile] as const),
-    },
+    })),
   ];
   for (const entry of internalCorePackageAliases) {
     for (const [subpath, srcFile] of entry.subpaths) {
@@ -328,7 +380,7 @@ function installResolver(): void {
     }
     return previousResolveFilename?.(request, parent, isMain, options) ?? request;
   }) satisfies ResolveFilename;
-  esmHooks = moduleWithResolver.registerHooks?.({
+  moduleWithResolver.registerHooks?.({
     resolve(specifier, context, nextResolve) {
       const aliasTarget = resolveAliasTargetForParentUrl(specifier, context.parentURL);
       if (aliasTarget) {
@@ -377,6 +429,19 @@ function clearNativeAliasesForParentRoots(parentRoots: readonly string[]): void 
   }
 }
 
+function registerInternalCorePackageNativeAliases(
+  options: InstallOpenClawPluginSdkNativeResolverOptions,
+): void {
+  const packageRoot = resolveInternalCorePackageHostRoot(resolveLoaderModulePath(options));
+  if (registeredInternalCorePackageHosts.get(packageRoot)) {
+    return;
+  }
+  for (const alias of listInternalCorePackageNativeAliases(options, packageRoot)) {
+    registerNativeAlias(alias);
+  }
+  registeredInternalCorePackageHosts.set(packageRoot, true);
+}
+
 export function installOpenClawPluginSdkNativeResolver(
   options: InstallOpenClawPluginSdkNativeResolverOptions = {},
 ): string[] {
@@ -385,9 +450,7 @@ export function installOpenClawPluginSdkNativeResolver(
   for (const [specifier, target] of listPluginSdkNativeAliases(options)) {
     registerNativeAlias({ request: specifier, target, parentRoots });
   }
-  for (const alias of listInternalCorePackageNativeAliases(options)) {
-    registerNativeAlias(alias);
-  }
+  registerInternalCorePackageNativeAliases(options);
   installResolver();
   return [...pluginSdkNativeAliases.keys()].toSorted();
 }
@@ -395,20 +458,7 @@ export function installOpenClawPluginSdkNativeResolver(
 export function installOpenClawInternalCorePackageNativeResolver(
   options: Pick<InstallOpenClawPluginSdkNativeResolverOptions, "moduleUrl"> = {},
 ): string[] {
-  for (const alias of listInternalCorePackageNativeAliases(options)) {
-    registerNativeAlias(alias);
-  }
+  registerInternalCorePackageNativeAliases(options);
   installResolver();
   return [...pluginSdkNativeAliases.keys()].toSorted();
-}
-
-export function resetOpenClawPluginSdkNativeResolverForTest(): void {
-  pluginSdkNativeAliases.clear();
-  esmHooks?.deregister();
-  esmHooks = undefined;
-  if (installed && previousResolveFilename) {
-    moduleWithResolver[nodeResolveFilenameProperty] = previousResolveFilename;
-  }
-  previousResolveFilename = undefined;
-  installed = false;
 }

@@ -8,13 +8,15 @@ import { cliBackendLog } from "../cli-runner/log.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
-  claudeCliSessionTranscriptPath,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
-  formatClaudeCliFallbackPrelude,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
 } from "./attempt-execution.helpers.js";
+import {
+  claudeCliSessionTranscriptPath,
+  formatClaudeCliFallbackPrelude,
+} from "./attempt-execution.helpers.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 describe("resolveFallbackRetryPrompt", () => {
@@ -166,7 +168,7 @@ describe("formatClaudeCliFallbackPrelude", () => {
           role: "assistant",
           content: [
             { type: "text", text: "Earlier assistant reply" },
-            { type: "tool_use", name: "Bash" },
+            { type: "toolcall", name: "Bash" },
           ],
         },
         {
@@ -198,6 +200,18 @@ describe("formatClaudeCliFallbackPrelude", () => {
     expect(out).toContain("Summary of earlier conversation (truncated):");
     expect(out.length).toBeLessThan(800);
     expect(out).toMatch(/…$/);
+  });
+
+  it.each([
+    ["a surrogate boundary", `${"x".repeat(21)}😀${"y".repeat(100)}`, "x".repeat(21)],
+    ["the ASCII budget", "x".repeat(100), "x".repeat(22)],
+  ])("preserves %s when truncating an oversized summary", (_label, summaryText, expected) => {
+    const out = formatClaudeCliFallbackPrelude(
+      { summaryText, recentTurns: [] },
+      { charBudget: 128 },
+    );
+
+    expect(out).toContain(`Summary of earlier conversation (truncated):\n${expected} …`);
   });
 
   it("drops oldest turns first when the budget cannot fit all of them", () => {
@@ -269,7 +283,10 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
           message: {
             role: "assistant",
             model: "claude-sonnet-4-6",
-            content: [{ type: "text", text: "prior answer about blue-green" }],
+            content: [
+              { type: "text", text: "prior answer about blue-green" },
+              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "pwd" } },
+            ],
           },
         },
       ];
@@ -285,6 +302,7 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
       expect(prelude).toContain("## Prior session context (from claude-cli)");
       expect(prelude).toContain("user: prior question about deploys");
       expect(prelude).toContain("assistant: prior answer about blue-green");
+      expect(prelude).toContain("(tool call: Bash)");
     } finally {
       await fs.rm(tmpHome, { recursive: true, force: true });
     }
@@ -1146,6 +1164,10 @@ describe("createAcpVisibleTextAccumulator", () => {
     });
 
     expect(acc.finalize()).toBe("NO_REPLY: explanation");
+    expect(acc.finalizeReplySnapshot()).toEqual({
+      disposition: "visible",
+      text: "NO_REPLY: explanation",
+    });
   });
 
   it("buffers chunked NO_REPLY prefixes before emitting visible text", () => {
@@ -1160,4 +1182,42 @@ describe("createAcpVisibleTextAccumulator", () => {
       delta: "Actual answer",
     });
   });
+
+  it.each([
+    {
+      name: "visible output",
+      chunks: ["Final answer"],
+      expected: { disposition: "visible", text: "Final answer" },
+    },
+    { name: "exact silence", chunks: ["NO_REPLY"], expected: { disposition: "silent" } },
+    { name: "clean empty output", chunks: [], expected: { disposition: "empty" } },
+    { name: "partial control prefix", chunks: ["NO_RE"], expected: { disposition: "empty" } },
+    {
+      name: "punctuation-wrapped silence",
+      chunks: ["NO_REPLY:"],
+      expected: { disposition: "silent" },
+    },
+    {
+      name: "ellipsis-wrapped silence",
+      chunks: ["NO_REPLY..."],
+      expected: { disposition: "silent" },
+    },
+    {
+      name: "chunked punctuation-wrapped silence",
+      chunks: ["NO_REPLY", ":"],
+      expected: { disposition: "silent" },
+    },
+    {
+      name: "glued visible continuation",
+      chunks: ["NO_REPLYVisible continuation"],
+      expected: { disposition: "visible", text: "Visible continuation" },
+    },
+  ])("classifies $name at ACP finalization", ({ chunks, expected }) => {
+    const acc = createAcpVisibleTextAccumulator();
+    for (const chunk of chunks) {
+      acc.consume(chunk);
+    }
+    expect(acc.finalizeReplySnapshot()).toEqual(expected);
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

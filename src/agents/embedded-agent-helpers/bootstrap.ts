@@ -1,12 +1,10 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
-import fs from "node:fs/promises";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
@@ -88,9 +86,11 @@ export function stripThoughtSignatures<T>(
   }) as T;
 }
 
-export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
-export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
-export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
+const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
+const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
+// USER.md stays directive-sized so profile guidance cannot crowd out project
+// rules or durable facts from the shared bootstrap budget.
+export const USER_BOOTSTRAP_MAX_CHARS = 4_000;
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 // Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
 // The marker and "\n" separators are already reserved before this split runs; these ratios
@@ -100,6 +100,7 @@ const BOOTSTRAP_HEAD_RATIO = 0.75;
 const BOOTSTRAP_TAIL_RATIO = 0.25;
 const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
 const AGENTS_BOOTSTRAP_FILENAME = "AGENTS.md";
+const USER_BOOTSTRAP_FILENAME = "USER.md";
 const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
@@ -144,18 +145,12 @@ export function resolveBootstrapTotalMaxChars(
   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
 }
 
-export function resolveBootstrapPromptTruncationWarningMode(
-  cfg?: OpenClawConfig,
-): "off" | "once" | "always" {
-  const raw = cfg?.agents?.defaults?.bootstrapPromptTruncationWarning;
-  if (raw === "off" || raw === "once" || raw === "always") {
-    return raw;
-  }
-  return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
-}
-
 function isAgentsBootstrapFile(fileName: string | undefined): boolean {
   return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
+}
+
+function isUserBootstrapFile(fileName: string | undefined): boolean {
+  return fileName?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase();
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
@@ -235,13 +230,13 @@ function trimAgentsBootstrapContent(content: string, maxChars: number): TrimBoot
   let digest = buildAgentsPolicyDigest(trimmed, digestBudget);
   const render = () =>
     [
-      trimmed.slice(0, headChars),
+      sliceUtf16Safe(trimmed, 0, headChars),
       `[...truncated, read ${AGENTS_BOOTSTRAP_FILENAME} for full content...]`,
       digest.text ? "[Policy digest from AGENTS.md]" : "",
       digest.text,
       digest.omittedLines > 0 ? `[...${digest.omittedLines} more policy lines omitted...]` : "",
       `…(truncated ${AGENTS_BOOTSTRAP_FILENAME}: kept ${headChars}+policy ${digest.text.length}+${tailChars} chars of ${trimmed.length})…`,
-      tailChars > 0 ? trimmed.slice(-tailChars) : "",
+      tailChars > 0 ? sliceUtf16Safe(trimmed, -tailChars) : "",
     ]
       .filter((part) => part.length > 0)
       .join("\n");
@@ -353,8 +348,8 @@ function trimBootstrapContent(
       marker = singleHeadMarker;
     }
   }
-  const head = trimmed.slice(0, headChars);
-  const tail = tailChars > 0 ? trimmed.slice(-tailChars) : "";
+  const head = sliceUtf16Safe(trimmed, 0, headChars);
+  const tail = tailChars > 0 ? sliceUtf16Safe(trimmed, -tailChars) : "";
 
   const contentWithMarker = renderTruncatedContent(head, marker, tail);
   const boundedContent =
@@ -381,33 +376,6 @@ function clampToBudget(content: string, budget: number): string {
   }
   const safe = budget - 1;
   return `${truncateUtf16Safe(content, safe)}…`;
-}
-
-export async function ensureSessionHeader(params: {
-  sessionFile: string;
-  sessionId: string;
-  cwd: string;
-}) {
-  const file = params.sessionFile;
-  try {
-    await fs.stat(file);
-    return;
-  } catch {
-    // create
-  }
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const sessionVersion = 2;
-  const entry = {
-    type: "session",
-    version: sessionVersion,
-    id: params.sessionId,
-    timestamp: new Date().toISOString(),
-    cwd: params.cwd,
-  };
-  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
 }
 
 export function buildBootstrapContextFiles(
@@ -451,7 +419,10 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
-    const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
+    const fileBudget = isUserBootstrapFile(file.name)
+      ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+      : maxChars;
+    const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
     const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {

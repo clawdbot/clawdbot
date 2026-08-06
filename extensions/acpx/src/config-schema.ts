@@ -42,6 +42,7 @@ export type AcpxPluginConfig = {
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
+  piSessionCatalog?: { enabled?: boolean };
   mcpServers?: Record<string, McpServerConfig>;
   agents?: Record<string, { command: string; args?: string[] }>;
 };
@@ -116,6 +117,11 @@ export const AcpxPluginConfigSchema = z.strictObject({
   queueOwnerTtlSeconds: z
     .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
     .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
+    .optional(),
+  piSessionCatalog: z
+    .strictObject({
+      enabled: z.boolean({ error: "piSessionCatalog.enabled must be a boolean" }).default(true),
+    })
     .optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   agents: z

@@ -1,10 +1,10 @@
 // Run Oxlint tests cover run oxlint script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mjs";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -22,8 +22,170 @@ import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createScriptTestHarness();
+const CONSTRAINED_HOST = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
+const ROOMY_HOST = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
+const RUN_OXLINT_SHARDS_URL = pathToFileURL(
+  join(process.cwd(), "scripts/run-oxlint-shards.mjs"),
+).href;
+type SignalScenario = "forward" | "group" | "ignore";
+
+async function captureFailedTrailer(
+  run: () => Promise<void> | void,
+): Promise<{ exitCode: number | undefined; lines: unknown[] }> {
+  const priorExitCode = process.exitCode;
+  const lines: unknown[] = [];
+  try {
+    process.exitCode = 0;
+    await runWithFailedTrailer("oxlint", run, (line: unknown) => lines.push(line));
+    return { exitCode: process.exitCode, lines };
+  } finally {
+    process.exitCode = priorExitCode;
+  }
+}
+
+function shouldSerializeShards(env: NodeJS.ProcessEnv, hostResources = CONSTRAINED_HOST): boolean {
+  return shouldRunOxlintShardsSerial({ env, platform: "linux", hostResources });
+}
+
+function resolveSplitCoreConcurrency(env: NodeJS.ProcessEnv, hostResources = ROOMY_HOST): number {
+  return resolveOxlintShardConcurrency({ env, platform: "linux", hostResources, splitCore: true });
+}
+
+function writeModule(target: string, lines: string[]): void {
+  writeFileSync(target, `${lines.join("\n")}\n`, "utf8");
+}
+
+function createSignalRunner(mode: SignalScenario, target: string): void {
+  if (mode === "group") {
+    const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+    writeModule(target, [
+      "import { spawn } from 'node:child_process';",
+      "import { writeFileSync } from 'node:fs';",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+      "writeFileSync(process.env.CHILD_PID_PATH, String(child.pid)); writeFileSync(process.env.READY_FILE, String(process.pid));",
+      "process.on('SIGTERM', () => process.exit(0));",
+      "setInterval(() => {}, 1000);",
+    ]);
+    return;
+  }
+
+  const markerEnv = mode === "forward" ? "SIGNALED_FILE" : "IGNORED_FILE";
+  writeModule(target, [
+    "import { writeFileSync } from 'node:fs';",
+    "process.on('SIGTERM', () => {",
+    `  writeFileSync(process.env.${markerEnv}, 'SIGTERM');`,
+    ...(mode === "forward" ? ["  process.exit(0);"] : []),
+    "});",
+    "writeFileSync(process.env.READY_FILE, String(process.pid));",
+    "setInterval(() => {}, 1000);",
+  ]);
+}
+
+function runParentTerminationScenario(mode: SignalScenario) {
+  const groupScenario = mode === "group";
+  const tempDir = createTempDir(
+    groupScenario ? "openclaw-oxlint-parent-group-" : "openclaw-oxlint-signal-",
+  );
+  const runner = join(tempDir, "signal-runner.mjs");
+  const harness = join(tempDir, "signal-harness.mjs");
+  const readyFile = join(tempDir, "ready");
+  const markerFile = groupScenario
+    ? undefined
+    : join(tempDir, mode === "forward" ? "signaled" : "ignored");
+  const childPidPath = groupScenario ? join(tempDir, "child.pid") : undefined;
+  createSignalRunner(mode, runner);
+
+  // Execute cancellation in a subprocess because runShard installs process-level signal handlers.
+  writeModule(harness, [
+    "import { existsSync, readFileSync } from 'node:fs';",
+    `import { runShard } from ${JSON.stringify(RUN_OXLINT_SHARDS_URL)};`,
+    "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)); const groupScenario = process.env.SCENARIO === 'group';",
+    "const waitFor = async (predicate) => { const attempts = groupScenario ? 500 : 100; const delay = groupScenario ? 5 : 10; for (let attempt = 0; attempt < attempts; attempt += 1) { if (predicate()) return true; await sleep(delay); } return false; };",
+    "const shardEnv = { ...process.env, OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: '0', OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: '0' };",
+    "if (process.env.SCENARIO === 'ignore') shardEnv.OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS = '250';",
+    "if (groupScenario) shardEnv.OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS = '25';",
+    "const promise = runShard({ env: shardEnv, extraArgs: [], runner: process.env.RUNNER_FILE, shard: { name: groupScenario ? 'signal-group-test' : 'signal-test', args: [] } });",
+    "const waitPath = groupScenario ? process.env.CHILD_PID_PATH : process.env.READY_FILE;",
+    "if (!(await waitFor(() => existsSync(waitPath)))) process.exit(2);",
+    "const childPid = groupScenario ? Number(readFileSync(process.env.CHILD_PID_PATH, 'utf8')) : 0;",
+    "process.kill(process.pid, 'SIGTERM'); const status = await promise;",
+    "if (process.env.MARKER_FILE && !existsSync(process.env.MARKER_FILE)) process.exit(3);",
+    "if (groupScenario && !(await waitFor(() => { try { process.kill(childPid, 0); return false; } catch { return true; } }))) { process.kill(childPid, 'SIGKILL'); process.exit(5); }",
+    "process.exit(status === 143 ? 0 : 4);",
+  ]);
+
+  const markerEnv = mode === "forward" ? "SIGNALED_FILE" : "IGNORED_FILE";
+  const scenarioEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CHILD_PID_PATH: childPidPath,
+    MARKER_FILE: markerFile,
+    READY_FILE: readyFile,
+    RUNNER_FILE: runner,
+    SCENARIO: mode,
+    ...(markerFile ? { [markerEnv]: markerFile } : {}),
+  };
+  return spawnSync(process.execPath, [harness], {
+    encoding: "utf8",
+    env: scenarioEnv,
+    timeout: 5_000,
+  });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolvePoll) => setTimeout(resolvePoll, 5));
+  }
+  throw new Error("condition was not met before timeout");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function oxlintShard(name: string, config: string, ...targets: string[]) {
+  return { name, args: ["--tsconfig", `config/tsconfig/oxlint.${config}.json`, ...targets] };
+}
 
 describe("run-oxlint", () => {
+  it("ends a failing run with a stable final status line", async () => {
+    const { lines } = await captureFailedTrailer(() => {
+      process.exitCode = 2;
+    });
+
+    expect(lines).toEqual(["[oxlint] FAILED (exit 2)"]);
+  });
+
+  it("converts a wrapper crash into a nonzero exit with the status line last", async () => {
+    // The original incident: a crashed wrapper printed only a stack trace, and
+    // truncated output read as success. The marker must be the final line.
+    const { exitCode, lines } = await captureFailedTrailer(() => {
+      throw new Error("artifact prep failed");
+    });
+
+    expect(exitCode).toBe(1);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBeInstanceOf(Error);
+    expect(lines[1]).toBe("[oxlint] FAILED (exit 1)");
+  });
+
+  it("stays silent on a clean run", async () => {
+    const { lines } = await captureFailedTrailer(async () => {});
+
+    expect(lines).toEqual([]);
+  });
+
   it("prepares extension package boundary artifacts for normal lint runs", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
@@ -44,7 +206,7 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
-    expect(packageJson.scripts.lint).toBe("node scripts/run-oxlint-shards.mjs");
+    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
     expect(packageJson.scripts["lint:core"]).toBe(
       "node scripts/run-oxlint-shards.mjs --only=core --split-core",
     );
@@ -53,6 +215,22 @@ describe("run-oxlint", () => {
     );
     expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mjs");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
+  });
+
+  it("prepares the worktree toolchain before the complete lint pre-step", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const lintRunner = readFileSync("scripts/run-lint.mjs", "utf8");
+
+    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
+    expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
+    expect(
+      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
+    ).toBeGreaterThan(lintRunner.indexOf("ensureRepoToolNodeModulesLink("));
+    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mjs")')).toBeGreaterThan(
+      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
+    );
   });
 
   it("holds one parent heavy-check lock for sharded lint runs", () => {
@@ -69,142 +247,72 @@ describe("run-oxlint", () => {
     expect(childSkipIndex).toBeGreaterThan(lockIndex);
   });
 
-  it("keeps a serial oxlint shard path available", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
-
-    expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
-    expect(shardedLintRunner).toContain('platform === "win32"');
-    expect(shardedLintRunner).toContain("runShardsSerial");
-  });
-
   it("serializes broad oxlint shards on constrained local hosts", () => {
-    expect(
-      shouldRunOxlintShardsSerial({
-        env: {},
-        platform: "linux",
-        hostResources: { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 },
-      }),
-    ).toBe(true);
+    expect(shouldSerializeShards({})).toBe(true);
   });
 
   it("serializes broad oxlint shards on constrained CI hosts", () => {
-    const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
+    expect(shouldSerializeShards({ CI: "true" })).toBe(true);
+    expect(shouldSerializeShards({ CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" })).toBe(
+      true,
+    );
+  });
 
+  it("keeps oxlint shards parallel on dedicated CI runner classes", () => {
+    // Blacksmith's 16 vCPU class carries 32GB; the local-Mac 48GB threshold
+    // must not force CI serial (measured: serial shards cost 89s vs ~47s).
     expect(
-      shouldRunOxlintShardsSerial({
-        env: { CI: "true" },
-        platform: "linux",
-        hostResources: constrainedHost,
-      }),
-    ).toBe(true);
+      shouldSerializeShards(
+        { CI: "true" },
+        { totalMemoryBytes: 32 * 1024 ** 3, logicalCpuCount: 16 },
+      ),
+    ).toBe(false);
     expect(
-      shouldRunOxlintShardsSerial({
-        env: { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
-        platform: "linux",
-        hostResources: constrainedHost,
-      }),
+      shouldSerializeShards(
+        { CI: "true" },
+        { totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 },
+      ),
     ).toBe(true);
   });
 
   it("keeps oxlint shards parallel for roomy CI and explicit full-speed runs", () => {
-    const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
-    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
-
-    expect(
-      shouldRunOxlintShardsSerial({
-        env: { CI: "true" },
-        platform: "linux",
-        hostResources: roomyHost,
-      }),
-    ).toBe(false);
-    expect(
-      shouldRunOxlintShardsSerial({
-        env: { OPENCLAW_LOCAL_CHECK_MODE: "full" },
-        platform: "linux",
-        hostResources: constrainedHost,
-      }),
-    ).toBe(false);
+    expect(shouldSerializeShards({ CI: "true" }, ROOMY_HOST)).toBe(false);
+    expect(shouldSerializeShards({ OPENCLAW_LOCAL_CHECK_MODE: "full" })).toBe(false);
   });
 
   it("honors explicit oxlint shard serial overrides", () => {
-    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
-
     expect(
-      shouldRunOxlintShardsSerial({
-        env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "1", CI: "true" },
-        platform: "linux",
-        hostResources: roomyHost,
-      }),
+      shouldSerializeShards({ OPENCLAW_OXLINT_SHARDS_SERIAL: "1", CI: "true" }, ROOMY_HOST),
     ).toBe(true);
-    expect(
-      shouldRunOxlintShardsSerial({
-        env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" },
-        platform: "linux",
-        hostResources: roomyHost,
-      }),
-    ).toBe(false);
+    expect(shouldSerializeShards({ OPENCLAW_OXLINT_SHARDS_SERIAL: "0" }, ROOMY_HOST)).toBe(false);
   });
 
   it("bounds split-core shard parallelism on roomy CI hosts", () => {
-    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
-
-    expect(
-      resolveOxlintShardConcurrency({
-        env: { CI: "true" },
-        platform: "linux",
-        hostResources: roomyHost,
-        splitCore: true,
-      }),
-    ).toBe(4);
+    expect(resolveSplitCoreConcurrency({ CI: "true" })).toBe(4);
   });
 
   it("keeps split-core shard runs serial on constrained hosts", () => {
-    const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
-
-    expect(
-      resolveOxlintShardConcurrency({
-        env: { CI: "true" },
-        platform: "linux",
-        hostResources: constrainedHost,
-        splitCore: true,
-      }),
-    ).toBe(1);
+    expect(resolveSplitCoreConcurrency({ CI: "true" }, CONSTRAINED_HOST)).toBe(1);
   });
 
   it("does not let local throttled mode serialize remote changed gates", () => {
-    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
-
     expect(
-      resolveOxlintShardConcurrency({
-        env: {
-          OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
-          OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-        },
-        platform: "linux",
-        hostResources: roomyHost,
-        splitCore: true,
+      resolveSplitCoreConcurrency({
+        OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
+        OPENCLAW_LOCAL_CHECK_MODE: "throttled",
       }),
     ).toBe(4);
   });
 
   it("honors explicit oxlint shard concurrency overrides", () => {
-    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
-
     expect(
-      resolveOxlintShardConcurrency({
-        env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2" },
-        platform: "linux",
-        hostResources: roomyHost,
-        splitCore: true,
-      }),
+      resolveSplitCoreConcurrency({ CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2" }),
     ).toBe(2);
 
     expect(() =>
-      resolveOxlintShardConcurrency({
-        env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2x" },
-        platform: "linux",
-        hostResources: roomyHost,
-        splitCore: true,
+      resolveSplitCoreConcurrency({
+        CI: "true",
+        OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2x",
       }),
     ).toThrow("OPENCLAW_OXLINT_SHARD_CONCURRENCY must be a positive integer; got: 2x");
   });
@@ -233,176 +341,97 @@ describe("run-oxlint", () => {
   });
 
   it("fails a stuck oxlint shard instead of waiting forever", async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-oxlint-shard-"));
+    const tempDir = createTempDir("openclaw-oxlint-shard-");
     const runner = join(tempDir, "hang-runner.mjs");
-    try {
-      writeFileSync(runner, "setInterval(() => {}, 1000);\n", "utf8");
+    writeFileSync(runner, "setInterval(() => {}, 1000);\n", "utf8");
 
-      const status = await runShard({
-        env: {
-          ...process.env,
-          OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
-          OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "25",
-          OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
-        },
-        extraArgs: [],
-        runner,
-        shard: { name: "timeout-test", args: [] },
-      });
+    const status = await runShard({
+      env: {
+        ...process.env,
+        OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
+        OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "25",
+        OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
+      },
+      extraArgs: [],
+      runner,
+      shard: { name: "timeout-test", args: [] },
+    });
 
-      expect(status).toBe(124);
-    } finally {
-      rmSync(tempDir, { force: true, recursive: true });
-    }
+    expect(status).toBe(124);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out shard process groups when the leader exits first",
+    async () => {
+      const tempDir = createTempDir("openclaw-oxlint-timeout-group-");
+      const runner = join(tempDir, "timeout-runner.mjs");
+      const childPidPath = join(tempDir, "child.pid");
+      let childPid = 0;
+      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+      try {
+        writeModule(runner, [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          "writeFileSync(process.env.CHILD_PID_PATH, String(child.pid));",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ]);
+
+        const command = runShard({
+          env: {
+            ...process.env,
+            CHILD_PID_PATH: childPidPath,
+            OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
+            OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
+            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
+          },
+          extraArgs: [],
+          runner,
+          shard: { name: "timeout-group-test", args: [] },
+        });
+
+        await waitFor(() => existsSync(childPidPath), 15_000);
+        childPid = Number(readFileSync(childPidPath, "utf8"));
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        await expect(command).resolves.toBe(124);
+        await waitFor(() => !isProcessAlive(childPid), 15_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "forwards parent termination to detached oxlint shard processes",
     () => {
-      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-oxlint-signal-"));
-      const runner = join(tempDir, "signal-runner.mjs");
-      const harness = join(tempDir, "signal-harness.mjs");
-      const readyFile = join(tempDir, "ready");
-      const signaledFile = join(tempDir, "signaled");
-      try {
-        writeFileSync(
-          runner,
-          [
-            "import { writeFileSync } from 'node:fs';",
-            "process.on('SIGTERM', () => {",
-            "  writeFileSync(process.env.SIGNALED_FILE, 'SIGTERM');",
-            "  process.exit(0);",
-            "});",
-            "writeFileSync(process.env.READY_FILE, String(process.pid));",
-            "setInterval(() => {}, 1000);",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
-        writeFileSync(
-          harness,
-          [
-            "import { existsSync } from 'node:fs';",
-            `import { runShard } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "scripts/run-oxlint-shards.mjs")).href)};`,
-            "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
-            "const promise = runShard({",
-            "  env: {",
-            "    ...process.env,",
-            "    OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: '0',",
-            "    OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: '0',",
-            "  },",
-            "  extraArgs: [],",
-            "  runner: process.env.RUNNER_FILE,",
-            "  shard: { name: 'signal-test', args: [] },",
-            "});",
-            "for (let attempt = 0; attempt < 100 && !existsSync(process.env.READY_FILE); attempt += 1) {",
-            "  await sleep(10);",
-            "}",
-            "if (!existsSync(process.env.READY_FILE)) {",
-            "  process.exit(2);",
-            "}",
-            "process.kill(process.pid, 'SIGTERM');",
-            "const status = await promise;",
-            "if (!existsSync(process.env.SIGNALED_FILE)) {",
-            "  process.exit(3);",
-            "}",
-            "process.exit(status === 143 ? 0 : 4);",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
+      const result = runParentTerminationScenario("forward");
 
-        const result = spawnSync(process.execPath, [harness], {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            READY_FILE: readyFile,
-            RUNNER_FILE: runner,
-            SIGNALED_FILE: signaledFile,
-          },
-          timeout: 5_000,
-        });
-
-        expect(result.status).toBe(0);
-        expect(result.signal).toBeNull();
-      } finally {
-        rmSync(tempDir, { force: true, recursive: true });
-      }
+      expect(result.status).toBe(0);
+      expect(result.signal).toBeNull();
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "force kills detached shard processes that ignore parent termination",
     () => {
-      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-oxlint-signal-"));
-      const runner = join(tempDir, "signal-runner.mjs");
-      const harness = join(tempDir, "signal-harness.mjs");
-      const readyFile = join(tempDir, "ready");
-      const ignoredFile = join(tempDir, "ignored");
-      try {
-        writeFileSync(
-          runner,
-          [
-            "import { writeFileSync } from 'node:fs';",
-            "process.on('SIGTERM', () => {",
-            "  writeFileSync(process.env.IGNORED_FILE, 'SIGTERM');",
-            "});",
-            "writeFileSync(process.env.READY_FILE, String(process.pid));",
-            "setInterval(() => {}, 1000);",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
-        writeFileSync(
-          harness,
-          [
-            "import { existsSync } from 'node:fs';",
-            `import { runShard } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "scripts/run-oxlint-shards.mjs")).href)};`,
-            "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
-            "const promise = runShard({",
-            "  env: {",
-            "    ...process.env,",
-            "    OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: '0',",
-            "    OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: '0',",
-            "    OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: '250',",
-            "  },",
-            "  extraArgs: [],",
-            "  runner: process.env.RUNNER_FILE,",
-            "  shard: { name: 'signal-test', args: [] },",
-            "});",
-            "for (let attempt = 0; attempt < 100 && !existsSync(process.env.READY_FILE); attempt += 1) {",
-            "  await sleep(10);",
-            "}",
-            "if (!existsSync(process.env.READY_FILE)) {",
-            "  process.exit(2);",
-            "}",
-            "process.kill(process.pid, 'SIGTERM');",
-            "const status = await promise;",
-            "if (!existsSync(process.env.IGNORED_FILE)) {",
-            "  process.exit(3);",
-            "}",
-            "process.exit(status === 143 ? 0 : 4);",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
+      const result = runParentTerminationScenario("ignore");
 
-        const result = spawnSync(process.execPath, [harness], {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            IGNORED_FILE: ignoredFile,
-            READY_FILE: readyFile,
-            RUNNER_FILE: runner,
-          },
-          timeout: 5_000,
-        });
+      expect(result.status).toBe(0);
+      expect(result.signal).toBeNull();
+    },
+  );
 
-        expect(result.status).toBe(0);
-        expect(result.signal).toBeNull();
-      } finally {
-        rmSync(tempDir, { force: true, recursive: true });
-      }
+  it.runIf(process.platform !== "win32")(
+    "kills parent-terminated shard process groups when the leader exits first",
+    () => {
+      const result = runParentTerminationScenario("group");
+
+      expect(result.status).toBe(0);
+      expect(result.signal).toBeNull();
     },
   );
 
@@ -425,35 +454,11 @@ describe("run-oxlint", () => {
     });
 
     expect(shards).toEqual([
-      {
-        name: "core",
-        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src", "ui", "packages"],
-      },
-      {
-        name: "extensions:root",
-        args: [
-          "--tsconfig",
-          "config/tsconfig/oxlint.extensions.json",
-          "extensions/root.live.test.ts",
-        ],
-      },
-      {
-        name: "extensions:01",
-        args: [
-          "--tsconfig",
-          "config/tsconfig/oxlint.extensions.json",
-          "extensions/alpha",
-          "extensions/beta",
-        ],
-      },
-      {
-        name: "extensions:02",
-        args: ["--tsconfig", "config/tsconfig/oxlint.extensions.json", "extensions/zeta"],
-      },
-      {
-        name: "scripts",
-        args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
-      },
+      oxlintShard("core", "core", "src", "ui", "packages"),
+      oxlintShard("extensions:root", "extensions", "extensions/root.live.test.ts"),
+      oxlintShard("extensions:01", "extensions", "extensions/alpha", "extensions/beta"),
+      oxlintShard("extensions:02", "extensions", "extensions/zeta"),
+      oxlintShard("scripts", "scripts", "scripts"),
     ]);
   });
 
@@ -475,22 +480,10 @@ describe("run-oxlint", () => {
     });
 
     expect(shards.slice(0, 4)).toEqual([
-      {
-        name: "core:src:alpha",
-        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/alpha"],
-      },
-      {
-        name: "core:src:root",
-        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/omega.ts", "src/zeta.ts"],
-      },
-      {
-        name: "core:ui",
-        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "ui"],
-      },
-      {
-        name: "core:packages",
-        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "packages"],
-      },
+      oxlintShard("core:src:alpha", "core", "src/alpha"),
+      oxlintShard("core:src:root", "core", "src/omega.ts", "src/zeta.ts"),
+      oxlintShard("core:ui", "core", "ui"),
+      oxlintShard("core:packages", "core", "packages"),
     ]);
   });
 
@@ -527,12 +520,7 @@ describe("run-oxlint", () => {
       },
     });
 
-    expect(shards).toEqual([
-      {
-        name: "extensions",
-        args: ["--tsconfig", "config/tsconfig/oxlint.extensions.json", "extensions"],
-      },
-    ]);
+    expect(shards).toEqual([oxlintShard("extensions", "extensions", "extensions")]);
   });
 
   it("rejects invalid Windows oxlint extension chunk size overrides", () => {

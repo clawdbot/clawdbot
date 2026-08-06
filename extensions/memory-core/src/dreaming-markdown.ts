@@ -11,6 +11,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
@@ -111,6 +112,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: params.phase,
+    outcome: "completed",
     ...(inlinePath ? { inlinePath } : {}),
     ...(reportPath ? { reportPath } : {}),
     lineCount: params.bodyLines.length,
@@ -130,19 +132,25 @@ export async function writeDeepDreamingReport(params: {
   timezone?: string;
   storage: MemoryDreamingStorageConfig;
 }): Promise<string | undefined> {
-  if (!shouldWriteSeparate(params.storage)) {
-    return undefined;
-  }
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
-  const reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
-  await fs.mkdir(path.dirname(reportPath), { recursive: true });
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+  const inlinePath = await updateDeepDreamsFile({
+    workspaceDir: params.workspaceDir,
+    bodyLines: params.bodyLines,
+  });
+  let reportPath: string | undefined;
+  if (shouldWriteSeparate(params.storage)) {
+    reportPath = resolveSeparateReportPath(params.workspaceDir, "deep", nowMs, params.timezone);
+    await fs.mkdir(path.dirname(reportPath), { recursive: true });
+    await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+  }
   await appendMemoryHostEvent(params.workspaceDir, {
     type: "memory.dream.completed",
     timestamp: resolveMemoryCoreTimestamp(nowMs),
     phase: "deep",
-    reportPath,
+    outcome: "completed",
+    inlinePath,
+    ...(reportPath ? { reportPath } : {}),
     lineCount: params.bodyLines.length,
     storageMode: params.storage.mode,
   });

@@ -2,19 +2,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  buildOutboundMediaLoadOptions,
   extensionForMime,
   maxBytesForKind,
   unlinkIfExists,
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import type { RequestClient } from "./internal/discord.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
+import type { DiscordReplyReference } from "./reply-reference.js";
+import type { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import { buildDiscordSendError, createDiscordClient, resolveChannelId } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -24,34 +25,49 @@ import {
   sendDiscordVoiceMessage,
 } from "./voice-message.js";
 
-type VoiceMessageOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  verbose?: boolean;
-  rest?: RequestClient;
-  replyTo?: string;
-  retry?: RetryConfig;
-  silent?: boolean;
-};
+type VoiceMessageOpts = Pick<
+  Parameters<typeof sendMessageDiscord>[2],
+  | "cfg"
+  | "token"
+  | "accountId"
+  | "verbose"
+  | "rest"
+  | "reply"
+  | "retry"
+  | "silent"
+  | "mediaAccess"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+>;
 
 function toDiscordSendResult(
   result: { id?: string | null; channel_id?: string | null },
   fallbackChannelId: string,
+  reply?: DiscordReplyReference,
 ): DiscordSendResult {
   return createDiscordSendResult({
     result,
     fallbackChannelId,
     kind: "voice",
+    reply,
   });
 }
 
 async function materializeVoiceMessageInput(
   mediaUrl: string,
+  opts: VoiceMessageOpts,
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
   // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
   // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
-  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  const media = await loadWebMediaRaw(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: maxBytesForKind("audio"),
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+    }),
+  );
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
@@ -60,7 +76,10 @@ async function materializeVoiceMessageInput(
     prefix: "voice-src-",
   });
   const filePath = await workspace.write(`input${ext}`, media.buffer);
-  return { filePath, cleanup: async () => await workspace.cleanup() };
+  return {
+    filePath,
+    cleanup: () => workspace.cleanup().then(() => undefined),
+  };
 }
 
 /**
@@ -79,7 +98,7 @@ export async function sendVoiceMessageDiscord(
   opts: VoiceMessageOpts,
 ): Promise<DiscordSendResult> {
   const { filePath: localInputPath, cleanup: cleanupLocalInput } =
-    await materializeVoiceMessageInput(audioPath);
+    await materializeVoiceMessageInput(audioPath, opts);
   let oggPath: string | null = null;
   let oggCleanup = false;
   let token: string | undefined;
@@ -110,7 +129,7 @@ export async function sendVoiceMessageDiscord(
       channelId,
       audioBuffer,
       metadata,
-      opts.replyTo,
+      opts.reply?.messageId,
       request,
       opts.silent,
       token,
@@ -122,7 +141,7 @@ export async function sendVoiceMessageDiscord(
       direction: "outbound",
     });
 
-    return toDiscordSendResult(result, channelId);
+    return toDiscordSendResult(result, channelId, opts.reply);
   } catch (err) {
     if (channelId && rest && token) {
       throw await buildDiscordSendError(err, {

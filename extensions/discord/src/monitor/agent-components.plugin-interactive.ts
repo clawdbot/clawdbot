@@ -1,5 +1,6 @@
 // Discord plugin module implements agent components.plugin interactive behavior.
 import { ChannelType } from "discord-api-types/v10";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   dispatchDiscordPluginInteractiveHandler,
@@ -15,12 +16,9 @@ import {
   type DiscordChannelContext,
 } from "./agent-components-helpers.js";
 
-let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
-
-async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("./agent-components.runtime.js");
-  return await conversationRuntimePromise;
-}
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("./agent-components.runtime.js"),
+);
 
 export async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
@@ -68,10 +66,11 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     },
     reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;
-      await params.interaction.reply({
-        content: text,
-        ephemeral,
-      });
+      const payload = { content: text, ephemeral };
+      // Deferred component replies edit the public source; follow-ups preserve reply visibility.
+      await (acknowledged
+        ? params.interaction.followUp(payload)
+        : params.interaction.reply(payload));
     },
     followUp: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;

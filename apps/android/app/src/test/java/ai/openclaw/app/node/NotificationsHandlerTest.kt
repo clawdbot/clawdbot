@@ -266,6 +266,18 @@ class NotificationsHandlerTest {
   }
 
   @Test
+  fun sanitizeNotificationTextPreservesUtf16BoundariesAtLimit() {
+    val splitPairPrefix = "a".repeat(511)
+    assertEquals(splitPairPrefix, sanitizeNotificationText("$splitPairPrefix🚀 trailing text"))
+
+    val completePairPrefix = "a".repeat(510)
+    assertEquals(
+      "$completePairPrefix🚀",
+      sanitizeNotificationText("$completePairPrefix🚀 trailing text"),
+    )
+  }
+
+  @Test
   fun notificationsActionClearablePolicy_onlyRequiresClearableForDismiss() {
     assertTrue(actionRequiresClearableNotification(NotificationActionKind.Dismiss))
     assertFalse(actionRequiresClearableNotification(NotificationActionKind.Open))

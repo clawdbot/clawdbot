@@ -1,7 +1,9 @@
 // Qqbot tests cover response timeout plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_RESPONSE_TIMEOUT_MS, resolveResponseTimeoutMs } from "./response-timeout.js";
+import { resolveResponseTimeoutMs } from "./response-timeout.js";
+
+const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
 
 describe("resolveResponseTimeoutMs", () => {
   it("falls back to the historical 5-minute floor when no timeouts configured", () => {

@@ -1,2 +1,7 @@
 // Slack plugin module implements send behavior.
-export { sendMessageSlack, type SlackSendIdentity } from "../send.js";
+export {
+  sendMessageSlack,
+  setSlackDefaultSendIdentity,
+  type SlackSendIdentity,
+  type SlackSendResult,
+} from "../send.js";

@@ -7,9 +7,7 @@ import {
 
 export type SendDiscordTarget = DiscordTarget;
 
-type SendDiscordTargetParseOptions = DiscordTargetParseOptions;
-
 export const parseDiscordSendTarget = (
   raw: string,
-  options: SendDiscordTargetParseOptions = {},
+  options: DiscordTargetParseOptions = {},
 ): SendDiscordTarget | undefined => parseDiscordTarget(raw, options);

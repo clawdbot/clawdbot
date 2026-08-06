@@ -1,6 +1,6 @@
 // Qqbot tests cover message queue plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createMessageQueue, mergeGroupMessages, type QueuedMessage } from "./message-queue.js";
+import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 
 function groupMsg(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
   return {
@@ -23,100 +23,6 @@ function requireMergeMetadata(message: QueuedMessage): NonNullable<QueuedMessage
 }
 
 describe("engine/gateway/message-queue", () => {
-  describe("mergeGroupMessages", () => {
-    it("returns the single message unchanged", () => {
-      const m = groupMsg();
-      const merged = mergeGroupMessages([m]);
-      expect(merged).toBe(m);
-    });
-
-    it("joins content with sender prefix per line", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ senderName: "A", content: "hi" }),
-        groupMsg({ senderName: "B", content: "yo" }),
-      ]);
-      expect(merged.content).toBe("[A]: hi\n[B]: yo");
-      const merge = requireMergeMetadata(merged);
-      expect(merge.count).toBe(2);
-      expect(merge.messages).toHaveLength(2);
-    });
-
-    it("takes messageId / msgIdx / timestamp from the last message", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ messageId: "M1", msgIdx: "I1", timestamp: "T1" }),
-        groupMsg({ messageId: "M2", msgIdx: "I2", timestamp: "T2" }),
-      ]);
-      expect(merged.messageId).toBe("M2");
-      expect(merged.msgIdx).toBe("I2");
-      expect(merged.timestamp).toBe("T2");
-    });
-
-    it("takes refMsgIdx from the first message", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ refMsgIdx: "R1" }),
-        groupMsg({ refMsgIdx: "R2" }),
-      ]);
-      expect(merged.refMsgIdx).toBe("R1");
-    });
-
-    it("concatenates attachments in order", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({
-          attachments: [{ content_type: "image/png", url: "a" }],
-        }),
-        groupMsg({
-          attachments: [
-            { content_type: "image/png", url: "b" },
-            { content_type: "image/png", url: "c" },
-          ],
-        }),
-      ]);
-      if (!merged.attachments) {
-        throw new Error("expected QQBot merged attachments");
-      }
-      expect(merged.attachments.map((a) => a.url)).toEqual(["a", "b", "c"]);
-    });
-
-    it("deduplicates mentions by member/user openid", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Y" }] }),
-        groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Z" }] }),
-      ]);
-      if (!merged.mentions) {
-        throw new Error("expected QQBot merged mentions");
-      }
-      expect(merged.mentions.map((m) => m.member_openid)).toEqual(["X", "Y", "Z"]);
-    });
-
-    it("flags merged turn as @bot when ANY source was GROUP_AT_MESSAGE_CREATE", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ eventType: "GROUP_MESSAGE_CREATE" }),
-        groupMsg({ eventType: "GROUP_AT_MESSAGE_CREATE" }),
-      ]);
-      expect(merged.eventType).toBe("GROUP_AT_MESSAGE_CREATE");
-    });
-
-    it("keeps last eventType when no @bot event was present", () => {
-      const merged = mergeGroupMessages([
-        groupMsg({ eventType: "GROUP_MESSAGE_CREATE" }),
-        groupMsg({ eventType: "GROUP_MESSAGE_CREATE" }),
-      ]);
-      expect(merged.eventType).toBe("GROUP_MESSAGE_CREATE");
-    });
-
-    it("marks as bot only when every source is a bot", () => {
-      expect(
-        mergeGroupMessages([groupMsg({ senderIsBot: true }), groupMsg({ senderIsBot: false })])
-          .senderIsBot,
-      ).toBe(false);
-
-      expect(
-        mergeGroupMessages([groupMsg({ senderIsBot: true }), groupMsg({ senderIsBot: true })])
-          .senderIsBot,
-      ).toBe(true);
-    });
-  });
-
   describe("createMessageQueue enqueue / evict", () => {
     it("uses group peerId for group messages", () => {
       const q = createMessageQueue({ accountId: "a", isAborted: () => true });

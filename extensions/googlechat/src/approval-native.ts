@@ -1,7 +1,4 @@
-import {
-  createApproverRestrictedNativeApprovalCapability,
-  splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -55,7 +52,11 @@ function isGoogleChatAccountConfigured(params: {
   accountId?: string | null;
 }): boolean {
   const account = resolveGoogleChatAccount(params);
-  return account.enabled && account.credentialSource !== "none";
+  return (
+    account.enabled &&
+    account.credentialSource !== "none" &&
+    account.tokenStatus !== "configured_unavailable"
+  );
 }
 
 function hasGoogleChatWebhookApprovalAuthConfig(params: {
@@ -149,6 +150,7 @@ function resolveSessionGoogleChatOriginTarget(sessionTarget: {
 export function shouldHandleGoogleChatNativeApprovalRequest(params: {
   cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
   accountId?: string | null;
+  approvalKind?: "exec" | "plugin";
   request: ApprovalRequest;
 }): boolean {
   return (
@@ -200,7 +202,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
         accountId && accountId !== "default"
           ? `channels.googlechat.accounts.${accountId}`
           : "channels.googlechat";
-      return `Approve it from the Web UI or terminal UI for now. Google Chat supports native approvals for this account when the webhook and service account are configured. Configure \`${prefix}.dm.allowFrom\` or \`${prefix}.defaultTo\` with numeric \`users/{id}\` approvers.`;
+      return `Approve it from the Web UI or terminal UI for now. Google Chat supports native approvals for this account when the webhook and service account are configured. Configure \`${prefix}.allowFrom\` or \`${prefix}.defaultTo\` with numeric \`users/{id}\` approvers.`;
     },
     listAccountIds: listGoogleChatAccountIds,
     hasApprovers: ({ cfg, accountId }) =>
@@ -233,14 +235,10 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
       eventKinds: ["exec", "plugin"],
       isConfigured: ({ cfg, accountId }) =>
         isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
-      shouldHandle: ({ cfg, accountId, request }) =>
-        shouldHandleGoogleChatNativeApprovalRequest({ cfg, accountId, request }),
+      shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
+        shouldHandleGoogleChatNativeApprovalRequest({ cfg, accountId, approvalKind, request }),
       load: async () =>
         (await import("./approval-handler.runtime.js"))
           .googleChatApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
   });
-
-export const googleChatNativeApprovalAdapter = splitChannelApprovalCapability(
-  googleChatApprovalCapability,
-);

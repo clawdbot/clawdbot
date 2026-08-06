@@ -4,6 +4,7 @@ import {
   isInboundPathAllowed,
   isValidInboundPathRootPattern,
   mergeInboundPathRoots,
+  resolveInboundPathRoot,
 } from "./inbound-path-policy.js";
 
 describe("inbound-path-policy", () => {
@@ -45,6 +46,54 @@ describe("inbound-path-policy", () => {
     },
   ] as const)("matches wildcard roots for %s => $expected", ({ filePath, expected }) => {
     expectInboundPathAllowedCase(filePath, expected);
+  });
+
+  it("matches Windows drive roots case-insensitively", () => {
+    expect(
+      isInboundPathAllowed({
+        filePath: "C:\\Users\\Alice\\Library\\Messages\\Attachments\\12\\34\\ABCDEF\\IMG_0001.jpeg",
+        roots: ["c:/users/*/library/messages/attachments"],
+      }),
+    ).toBe(true);
+  });
+
+  it("resolves wildcard patterns to the concrete matched root", () => {
+    expect(
+      resolveInboundPathRoot({
+        filePath: "/Users/alice/Library/Messages/Attachments/12/34/IMG_0001.jpeg",
+        roots: ["/Users/*/Library/Messages/Attachments"],
+      }),
+    ).toEqual({
+      anchorRoot: "/Users",
+      matchedRoot: "/Users/alice/Library/Messages/Attachments",
+    });
+    expect(
+      resolveInboundPathRoot({
+        filePath: "C:\\Users\\Alice\\Library\\Messages\\Attachments\\12\\IMG_0001.jpeg",
+        roots: ["c:/users/*/library/messages/attachments"],
+      }),
+    ).toEqual({
+      anchorRoot: "c:/users",
+      matchedRoot: "c:/users/alice/library/messages/attachments",
+    });
+    expect(
+      resolveInboundPathRoot({
+        filePath: "/tmp/inbound/file.bin",
+        roots: ["/*"],
+      }),
+    ).toEqual({
+      anchorRoot: "/",
+      matchedRoot: "/tmp",
+    });
+    expect(
+      resolveInboundPathRoot({
+        filePath: "C:\\inbound\\file.bin",
+        roots: ["c:/*"],
+      }),
+    ).toEqual({
+      anchorRoot: "c:/",
+      matchedRoot: "c:/inbound",
+    });
   });
 
   it.each([

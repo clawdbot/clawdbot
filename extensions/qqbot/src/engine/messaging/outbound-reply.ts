@@ -6,7 +6,7 @@ const replyLimiter = new ReplyLimiter();
 
 export type { ReplyLimitResult };
 
-export const MESSAGE_REPLY_LIMIT = 4;
+export const MESSAGE_REPLY_LIMIT = 5;
 
 export function checkMessageReplyLimit(messageId: string): ReplyLimitResult {
   return replyLimiter.checkLimit(messageId);
@@ -17,6 +17,17 @@ export function recordMessageReply(messageId: string): void {
   debugLog(
     `[qqbot] recordMessageReply: ${messageId}, count=${replyLimiter.getStats().totalReplies}`,
   );
+}
+
+/** Reserve one slot before a passive request so concurrent sends share one budget. */
+export function claimMessageReply(messageId: string, reserve = 0): ReplyLimitResult {
+  const result = replyLimiter.claim(messageId, reserve);
+  if (result.allowed) {
+    debugLog(
+      `[qqbot] claimMessageReply: ${messageId}, remaining=${result.remaining}/${MESSAGE_REPLY_LIMIT}`,
+    );
+  }
+  return result;
 }
 
 export function getMessageReplyStats(): { trackedMessages: number; totalReplies: number } {

@@ -40,7 +40,7 @@ export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | un
  * Returns `true` when any proxy-related env var is set that could
  * interfere with loopback connections.
  */
-export function hasProxyEnv(): boolean {
+function hasProxyEnv(): boolean {
   return hasProxyEnvConfigured();
 }
 
@@ -65,10 +65,6 @@ function noProxyAlreadyCoversLocalhost(): boolean {
 
 function appendLoopbackEntries(value: string | undefined): string {
   return value ? `${value},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
-}
-
-export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
-  return await withNoProxyForCdpUrl("http://127.0.0.1", fn);
 }
 
 function isLoopbackCdpUrl(url: string): boolean {

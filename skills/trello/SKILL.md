@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📋",
-        "requires": { "bins": ["jq"], "env": ["TRELLO_API_KEY", "TRELLO_TOKEN"] },
+        "requires": { "bins": ["curl", "jq"], "env": ["TRELLO_API_KEY", "TRELLO_TOKEN"] },
         "install":
           [
             {

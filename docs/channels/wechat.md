@@ -10,14 +10,15 @@ title: "WeChat"
 OpenClaw connects to WeChat through Tencent's external
 `@tencent-weixin/openclaw-weixin` channel plugin.
 
-Status: external plugin. Direct chats and media are supported. Group chats are not
-advertised by the current plugin capability metadata.
+Status: external plugin, maintained by the Tencent Weixin team. Direct chats and
+media are supported. Group chats are not advertised by the plugin capability
+metadata (it declares direct chats only).
 
 ## Naming
 
 - **WeChat** is the user-facing name in these docs.
 - **Weixin** is the name used by Tencent's package and by the plugin id.
-- `openclaw-weixin` is the OpenClaw channel id.
+- `openclaw-weixin` is the OpenClaw channel id (`weixin` and `wechat` work as aliases).
 - `@tencent-weixin/openclaw-weixin` is the npm package.
 
 Use `openclaw-weixin` in CLI commands and config paths.
@@ -32,13 +33,14 @@ WeChat-specific runtime:
 2. The Gateway discovers the plugin manifest and loads the plugin entrypoint.
 3. The plugin registers channel id `openclaw-weixin`.
 4. `openclaw channels login --channel openclaw-weixin` starts QR login.
-5. The plugin stores account credentials under the OpenClaw state directory.
+5. The plugin stores account credentials under the OpenClaw state directory
+   (`~/.openclaw` by default).
 6. When the Gateway starts, the plugin starts its Weixin monitor for each
    configured account.
 7. Inbound WeChat messages are normalized through the channel contract, routed to
    the selected OpenClaw agent, and sent back through the plugin outbound path.
 
-That separation matters: OpenClaw core should stay channel-agnostic. WeChat login,
+That separation matters: OpenClaw core stays channel-agnostic. WeChat login,
 Tencent iLink API calls, media upload/download, context tokens, and account
 monitoring are owned by the external plugin.
 
@@ -99,10 +101,10 @@ For the full access-control model, see [Pairing](/channels/pairing).
 
 The plugin checks the host OpenClaw version at startup.
 
-| Plugin line | OpenClaw version        | npm tag  |
-| ----------- | ----------------------- | -------- |
-| `2.x`       | `>=2026.3.22`           | `latest` |
-| `1.x`       | `>=2026.1.0 <2026.3.22` | `legacy` |
+| Plugin line | OpenClaw version                                                | npm tag  |
+| ----------- | --------------------------------------------------------------- | -------- |
+| `2.x`       | `>=2026.5.12` (current 2.4.6; early 2.x accepted `>=2026.3.22`) | `latest` |
+| `1.x`       | `>=2026.1.0 <2026.3.22`                                         | `legacy` |
 
 If the plugin reports that your OpenClaw version is too old, either update
 OpenClaw or install the legacy plugin line:
@@ -119,7 +121,7 @@ generic stale-Gateway cleanup: a child process could try to clean up the parent
 Gateway process, causing restart loops under process managers such as systemd.
 
 Current OpenClaw startup cleanup excludes the current process and its ancestors,
-so a channel helper must not kill the Gateway that launched it. This fix is
+so a channel helper cannot kill the Gateway that launched it. This fix is
 generic; it is not a WeChat-specific path in core.
 
 ## Troubleshooting

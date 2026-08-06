@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Provider flow runtime helpers load provider setup behavior behind runtime imports.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -60,8 +61,12 @@ export function resolveProviderModelPickerFlowContributions(params?: {
   return sortFlowContributionsByLabel(
     providerWizard.resolveProviderModelPickerEntries(params ?? {}).map((entry) => {
       const providerId = entry.value.startsWith("provider-plugin:")
-        ? entry.value.slice("provider-plugin:".length).split(":")[0]
+        ? expectDefined(
+            entry.value.slice("provider-plugin:".length).split(":").at(0),
+            "provider id",
+          )
         : entry.value;
+      const docsPath = docsByProvider.get(providerId);
       // Provider-plugin values encode plugin/provider in the option value; docs attach by provider id.
       return {
         id: `provider:model-picker:${entry.value}`,
@@ -72,9 +77,7 @@ export function resolveProviderModelPickerFlowContributions(params?: {
           value: entry.value,
           label: entry.label,
           ...(entry.hint ? { hint: entry.hint } : {}),
-          ...(docsByProvider.get(providerId)
-            ? { docs: { path: docsByProvider.get(providerId)! } }
-            : {}),
+          ...(docsPath ? { docs: { path: docsPath } } : {}),
         },
         source: "runtime" as const,
       };

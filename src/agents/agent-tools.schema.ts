@@ -1,17 +1,14 @@
-/**
- * Tool schema normalization wrappers.
- * Applies provider-compatible parameter schema cleanup while preserving plugin
- * and channel metadata on normalized tools.
- */
-import { copyPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeToolParameterSchema,
   type ToolParameterSchemaOptions,
-} from "./agent-tools-parameter-schema.js";
+} from "@openclaw/ai/internal/openai";
+/**
+ * Tool schema normalization wrappers.
+ * Applies provider-compatible parameter schema cleanup while preserving
+ * identity-backed metadata on normalized tools.
+ */
+import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { copyChannelAgentToolMeta } from "./channel-tools.js";
-
-export { normalizeToolParameterSchema };
 
 function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
@@ -69,11 +66,6 @@ export function normalizeToolParameters(
   tool: AnyAgentTool,
   options?: ToolParameterSchemaOptions,
 ): AnyAgentTool {
-  function preserveToolMeta(target: AnyAgentTool): AnyAgentTool {
-    copyPluginToolMeta(tool, target);
-    copyChannelAgentToolMeta(tool as never, target as never);
-    return target;
-  }
   const schema =
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
@@ -82,17 +74,9 @@ export function normalizeToolParameters(
     return tool;
   }
   const parameters = normalizeToolParameterSchema(schema, options);
-  return preserveToolMeta({
+  return copyAgentToolMetadata(tool, {
     ...tool,
     ...addEmptyObjectArgumentPreparation(tool, parameters),
     parameters,
   });
-}
-
-/**
- * @deprecated Use normalizeToolParameters with modelProvider instead.
- * This function should only be used for Gemini providers.
- */
-export function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
-  return normalizeToolParameterSchema(schema, { modelProvider: "gemini" });
 }

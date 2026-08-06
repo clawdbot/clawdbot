@@ -1,11 +1,9 @@
 // Covers provider-specific transcript turn validation and repair.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
-import {
-  mergeConsecutiveUserTurns,
-  validateAnthropicTurns,
-  validateGeminiTurns,
-} from "./embedded-agent-helpers.js";
+import { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers.js";
 
 function asMessages(messages: unknown[]): AgentMessage[] {
   return messages as AgentMessage[];
@@ -284,7 +282,7 @@ describe("validateAnthropicTurns", () => {
     const result = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
 
     expect(result).toHaveLength(1);
-    const merged = result[0];
+    const merged = expectDefined(result[0], "merged user message");
     expect(merged.timestamp).toBe(2000);
     expect((merged as { attachments?: unknown[] }).attachments).toEqual([
       { type: "image", url: "new.png" },
@@ -315,7 +313,7 @@ describe("validateAnthropicTurns", () => {
     ]);
 
     const [merged] = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
-    expect(merged.content).toEqual([
+    expect(expectDefined(merged, "merged test invariant").content).toEqual([
       { type: "text", text: "first" },
       { type: "image", url: "img1" },
       { type: "image", url: "img2" },
@@ -323,7 +321,7 @@ describe("validateAnthropicTurns", () => {
     ]);
   });
 
-  it("should not merge consecutive assistant messages", () => {
+  it("merges consecutive assistant messages", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Question" }] },
       {
@@ -338,7 +336,60 @@ describe("validateAnthropicTurns", () => {
 
     const result = validateAnthropicTurns(msgs);
 
-    expect(result).toEqual(msgs);
+    expect(result).toEqual([
+      { role: "user", content: [{ type: "text", text: "Question" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Answer 1" },
+          { type: "text", text: "Answer 2" },
+        ],
+      },
+    ]);
+  });
+
+  it("merges an injected assistant turn before validating signed tool-result pairing", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use the gateway" }] },
+      {
+        role: "assistant",
+        content: makeSignedThinkingGatewayToolCall("tool-1"),
+        stopReason: "toolUse",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Subagent completion delivered." }],
+        stopReason: "stop",
+      },
+      {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        toolName: "gateway",
+        content: [{ type: "text", text: "done" }],
+        isError: false,
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toEqual([
+      { role: "user", content: [{ type: "text", text: "Use the gateway" }] },
+      {
+        role: "assistant",
+        content: [
+          ...makeSignedThinkingGatewayToolCall("tool-1"),
+          { type: "text", text: "Subagent completion delivered." },
+        ],
+        stopReason: "stop",
+      },
+      {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        toolName: "gateway",
+        content: [{ type: "text", text: "done" }],
+        isError: false,
+      },
+    ]);
   });
 
   it("should handle mixed scenario with steering messages", () => {
@@ -379,7 +430,7 @@ describe("validateAnthropicTurns", () => {
   });
 });
 
-describe("mergeConsecutiveUserTurns", () => {
+describe("validateAnthropicTurns consecutive user turns", () => {
   it("keeps newest metadata while merging content", () => {
     const previous = {
       role: "user",
@@ -395,7 +446,11 @@ describe("mergeConsecutiveUserTurns", () => {
       someCustomField: "keep-me",
     } as Extract<AgentMessage, { role: "user" }>;
 
-    const merged = mergeConsecutiveUserTurns(previous, current);
+    const [merged] = validateAnthropicTurns([previous, current]);
+    expect(merged?.role).toBe("user");
+    if (merged?.role !== "user") {
+      throw new Error("expected merged user turn");
+    }
 
     expect(merged.content).toEqual([
       { type: "text", text: "before" },
@@ -420,7 +475,11 @@ describe("mergeConsecutiveUserTurns", () => {
       timestamp: 2000,
     } as Extract<AgentMessage, { role: "user" }>;
 
-    const merged = mergeConsecutiveUserTurns(previous, current);
+    const [merged] = validateAnthropicTurns([previous, current]);
+    expect(merged?.role).toBe("user");
+    if (merged?.role !== "user") {
+      throw new Error("expected merged user turn");
+    }
 
     expect(merged.content).toEqual([
       { type: "text", text: "before" },
@@ -439,7 +498,11 @@ describe("mergeConsecutiveUserTurns", () => {
       content: [{ type: "text", text: "after" }],
     } as Extract<AgentMessage, { role: "user" }>;
 
-    const merged = mergeConsecutiveUserTurns(previous, current);
+    const [merged] = validateAnthropicTurns([previous, current]);
+    expect(merged?.role).toBe("user");
+    if (merged?.role !== "user") {
+      throw new Error("expected merged user turn");
+    }
 
     expect(merged.timestamp).toBe(1000);
   });

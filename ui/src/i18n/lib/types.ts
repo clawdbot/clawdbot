@@ -11,6 +11,7 @@ export type Locale =
   | "ja-JP"
   | "ko"
   | "fr"
+  | "hi"
   | "ar"
   | "it"
   | "tr"
@@ -20,10 +21,5 @@ export type Locale =
   | "th"
   | "vi"
   | "nl"
-  | "fa";
-
-export interface I18nConfig {
-  locale: Locale;
-  fallbackLocale: Locale;
-  translations: Record<Locale, TranslationMap>;
-}
+  | "fa"
+  | "ru";

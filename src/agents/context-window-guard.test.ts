@@ -3,11 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
-  CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
-  resolveContextWindowGuardThresholds,
   resolveContextWindowInfo,
 } from "./context-window-guard.js";
 
@@ -231,6 +229,23 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("uses the selected agent cap instead of the default", () => {
+    const info = resolveContextWindowInfo({
+      cfg: { agents: { defaults: { contextTokens: 20_000 } } },
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      agentContextTokens: 40_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "agentContextTokens",
+      tokens: 40_000,
+      referenceTokens: 200_000,
+    });
+  });
+
   it("does not override when cap exceeds base window", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 128_000 } },
@@ -297,24 +312,22 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
-  it("exports threshold floors as expected", () => {
+  it("exports the public hard-min floor as expected", () => {
     expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(4_000);
-    expect(CONTEXT_WINDOW_WARN_BELOW_TOKENS).toBe(8_000);
   });
 
-  it("derives percentage-based thresholds above the safe floors", () => {
-    expect(resolveContextWindowGuardThresholds(1_000_000)).toEqual({
-      hardMinTokens: 100_000,
-      warnBelowTokens: 200_000,
+  it("derives percentage-based guard thresholds above the safe floors", () => {
+    const largeGuard = evaluateContextWindowGuard({
+      info: { tokens: 1_000_000, source: "model" },
     });
-    expect(resolveContextWindowGuardThresholds(64_000)).toEqual({
-      hardMinTokens: 6_400,
-      warnBelowTokens: 12_800,
+    expect(largeGuard.hardMinTokens).toBe(100_000);
+    expect(largeGuard.warnBelowTokens).toBe(200_000);
+
+    const mediumGuard = evaluateContextWindowGuard({
+      info: { tokens: 64_000, source: "model" },
     });
-    expect(resolveContextWindowGuardThresholds(Number.NaN)).toEqual({
-      hardMinTokens: 4_000,
-      warnBelowTokens: 8_000,
-    });
+    expect(mediumGuard.hardMinTokens).toBe(6_400);
+    expect(mediumGuard.warnBelowTokens).toBe(12_800);
   });
 
   it("derives guard thresholds from the reference window when capped", () => {

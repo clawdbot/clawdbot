@@ -56,6 +56,36 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
+  it("ignores blank fallback values when no SecretRef is configured", async () => {
+    const resolved = await resolveConfiguredSecretInputWithFallback({
+      config: createConfig(""),
+      env: {} as NodeJS.ProcessEnv,
+      value: "",
+      path: "gateway.auth.token",
+      readFallback: () => "   ",
+    });
+
+    expect(resolved).toEqual({
+      secretRefConfigured: false,
+    });
+  });
+
+  it("normalizes fallback values when no SecretRef is configured", async () => {
+    const resolved = await resolveConfiguredSecretInputWithFallback({
+      config: createConfig(""),
+      env: {} as NodeJS.ProcessEnv,
+      value: "",
+      path: "gateway.auth.token",
+      readFallback: () => "  env-token  ",
+    });
+
+    expect(resolved).toEqual({
+      value: "env-token",
+      source: "fallback",
+      secretRefConfigured: false,
+    });
+  });
+
   it("returns resolved SecretRef value with fallback metadata", async () => {
     const resolved = await resolveConfiguredSecretInputWithFallback({
       config: createConfig("${CUSTOM_GATEWAY_TOKEN}"),
@@ -86,6 +116,21 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
       source: "fallback",
       secretRefConfigured: true,
     });
+  });
+
+  it("ignores blank fallback values when SecretRef cannot be resolved", async () => {
+    const resolved = await resolveConfiguredSecretInputWithFallback({
+      config: createConfig("${MISSING_GATEWAY_TOKEN}"),
+      env: {} as NodeJS.ProcessEnv,
+      value: "${MISSING_GATEWAY_TOKEN}",
+      path: "gateway.auth.token",
+      readFallback: () => "   ",
+    });
+
+    expect(resolved.value).toBeUndefined();
+    expect(resolved.source).toBeUndefined();
+    expect(resolved.secretRefConfigured).toBe(true);
+    expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
   });
 
   it("returns unresolved reason when SecretRef cannot be resolved and no fallback exists", async () => {

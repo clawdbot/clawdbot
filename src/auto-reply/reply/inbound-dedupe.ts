@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -30,7 +29,7 @@ const inboundDedupeInFlight = resolveGlobalSingleton(
   () => new Set<string>(),
 );
 
-export type InboundDedupeClaimResult =
+type InboundDedupeClaimResult =
   | { status: "invalid" }
   | { status: "duplicate"; key: string }
   | { status: "inflight"; key: string }
@@ -54,7 +53,7 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   return `agent:${parsed.agentId}`;
 }
 
-export function buildInboundDedupeKey(ctx: MsgContext): string | null {
+function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider =
     normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
   const messageId = normalizeOptionalString(ctx.MessageSid);
@@ -74,22 +73,6 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     threadId: ctx.MessageThreadId,
   });
   return JSON.stringify([sessionScope, routeKey, messageId]);
-}
-
-export function shouldSkipDuplicateInbound(
-  ctx: MsgContext,
-  opts?: { cache?: DedupeCache; now?: number },
-): boolean {
-  const key = buildInboundDedupeKey(ctx);
-  if (!key) {
-    return false;
-  }
-  const cache = opts?.cache ?? inboundDedupeCache;
-  const skipped = cache.check(key, opts?.now);
-  if (skipped && shouldLogVerbose()) {
-    logVerbose(`inbound dedupe: skipped ${key}`);
-  }
-  return skipped;
 }
 
 export function claimInboundDedupe(

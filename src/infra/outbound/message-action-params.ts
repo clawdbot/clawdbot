@@ -3,6 +3,7 @@
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringArrayParam, readStringParam } from "../../agents/tools/common.js";
@@ -11,6 +12,7 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
+import { createBoundedOutboundMediaReadFile } from "../../media/bounded-read-file.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import {
   buildOutboundMediaLoadOptions,
@@ -62,10 +64,6 @@ type StructuredAttachmentMode = "selected" | "all";
 
 function readMediaParam(args: Record<string, unknown>, key: string): string | undefined {
   return readStringParam(args, key, { trim: false });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function resolveMediaParamEntry(
@@ -399,7 +397,7 @@ async function hydrateSendBufferMediaParams(params: {
 }
 
 /** Media access policy used when hydrating attachment action parameters. */
-export type AttachmentMediaPolicy =
+type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
       sandboxRoot: string;
@@ -463,10 +461,11 @@ function buildAttachmentMediaLoadOptions(params: {
   if (params.policy.mode === "sandbox") {
     const sandboxRoot = params.policy.sandboxRoot.trim();
     let sandboxFsPromise: ReturnType<typeof root> | undefined;
-    const readSandboxFile = async (filePath: string): Promise<Buffer> => {
+    const readSandboxFile = createBoundedOutboundMediaReadFile(async (filePath, options) => {
       sandboxFsPromise ??= root(sandboxRoot);
-      return await (await sandboxFsPromise).readBytes(filePath);
-    };
+      const sandboxFs = await sandboxFsPromise;
+      return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
+    });
     return {
       maxBytes: params.maxBytes,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),

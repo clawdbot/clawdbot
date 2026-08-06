@@ -1,21 +1,22 @@
 // Tests execution wrapper resolution for shell commands.
 import { describe, expect, test } from "vitest";
+import { unwrapEnvInvocation } from "./command-carriers.js";
 import {
-  basenameLower,
+  isDispatchWrapperExecutable,
+  resolveDispatchWrapperTrustPlan,
+} from "./dispatch-wrapper-resolution.js";
+import {
   extractEnvAssignmentKeysFromDispatchWrappers,
   extractShellWrapperCommand,
-  extractShellWrapperInlineCommand,
   hasEnvManipulationBeforeShellWrapper,
-  isDispatchWrapperExecutable,
   isShellWrapperExecutable,
   isShellWrapperInvocation,
   normalizeExecutableToken,
-  resolveDispatchWrapperTrustPlan,
   resolveShellWrapperTransportArgv,
-  unwrapEnvInvocation,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
+import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 
 function supportsScriptPositionalCommandForTests(): boolean {
   return process.platform === "darwin" || process.platform === "freebsd";
@@ -39,16 +40,6 @@ function expectTransparentDispatchWrapperCase(params: {
   });
 }
 
-describe("basenameLower", () => {
-  test.each([
-    { token: " Bun.CMD ", expected: "bun.cmd" },
-    { token: "C:\\tools\\PwSh.EXE", expected: "pwsh.exe" },
-    { token: "/tmp/bash", expected: "bash" },
-  ])("normalizes basenames for %j", ({ token, expected }) => {
-    expect(basenameLower(token)).toBe(expected);
-  });
-});
-
 describe("normalizeExecutableToken", () => {
   test.each([
     { token: "bun.cmd", expected: "bun" },
@@ -69,10 +60,20 @@ describe("wrapper classification", () => {
     { token: "caffeinate", dispatch: true, shell: false },
     { token: "sandbox-exec", dispatch: true, shell: false },
     { token: "script", dispatch: true, shell: false },
+    { token: "flock", dispatch: true, shell: false },
     { token: "time", dispatch: true, shell: false },
     { token: "timeout.exe", dispatch: true, shell: false },
     { token: "bash", dispatch: false, shell: true },
+    { token: "csh", dispatch: false, shell: true },
+    { token: "elvish", dispatch: false, shell: true },
+    { token: "mksh", dispatch: false, shell: true },
+    { token: "nu", dispatch: false, shell: true },
+    { token: "nu.exe", dispatch: false, shell: true },
+    { token: "osh", dispatch: false, shell: true },
     { token: "pwsh.exe", dispatch: false, shell: true },
+    { token: "tcsh", dispatch: false, shell: true },
+    { token: "xonsh", dispatch: false, shell: true },
+    { token: "yash", dispatch: false, shell: true },
     { token: "node", dispatch: false, shell: false },
   ])("classifies wrappers for %j", ({ token, dispatch, shell }) => {
     expect(isDispatchWrapperExecutable(token)).toBe(dispatch);
@@ -89,6 +90,10 @@ describe("unwrapKnownShellMultiplexerInvocation", () => {
     {
       argv: ["busybox", "sh", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "busybox", argv: ["sh", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["busybox", "tcsh", "-c", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "busybox", argv: ["tcsh", "-c", "echo hi"] },
     },
     {
       argv: ["toybox", "--", "pwsh.exe", "-Command", "Get-Date"],
@@ -187,6 +192,34 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "unwrapped", wrapper: "time", argv: ["bash", "-lc", "echo hi"] },
     },
     {
+      argv: ["flock", "-n", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["flock", "-en", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["flock", "-E", "1", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["flock", "-F", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["flock", "-o", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["flock", "--nb", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["flock", "--wait", "1", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
       argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "timeout", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -226,6 +259,18 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "blocked", wrapper: "timeout" },
     },
     {
+      argv: ["flock", "/tmp/openclaw.lock", "-c", "echo hi"],
+      expected: { kind: "blocked", wrapper: "flock" },
+    },
+    {
+      argv: ["flock", "-un", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "flock" },
+    },
+    {
+      argv: ["flock", "-u", "9"],
+      expected: { kind: "blocked", wrapper: "flock" },
+    },
+    {
       argv: ["arch", "-e", "FOO=bar", "bash", "-lc", "echo hi"],
       expected: { kind: "blocked", wrapper: "arch" },
     },
@@ -254,15 +299,28 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     });
   });
 
-  test.each(["chrt", "doas", "ionice", "setsid", "sudo", "taskset"])(
-    "fails closed for blocked dispatch wrapper %s",
-    (wrapper) => {
-      expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
-        kind: "blocked",
-        wrapper,
-      });
-    },
-  );
+  test.each([
+    "catchsegv",
+    "chrt",
+    "doas",
+    "ionice",
+    "linux32",
+    "linux64",
+    "numactl",
+    "proxychains",
+    "proxychains4",
+    "setarch",
+    "setsid",
+    "sudo",
+    "taskset",
+    "torify",
+    "unbuffer",
+  ])("fails closed for blocked dispatch wrapper %s", (wrapper) => {
+    expect(unwrapKnownDispatchWrapperInvocation([wrapper, "bash", "-lc", "echo hi"])).toEqual({
+      kind: "blocked",
+      wrapper,
+    });
+  });
 });
 
 describe("resolveDispatchWrapperTrustPlan", () => {
@@ -273,6 +331,23 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       policyBlocked: false,
     });
   });
+
+  test.each([
+    ["npm", "install"],
+    ["pnpm", "install"],
+    ["pnpm", "run", "build"],
+  ])(
+    "does not classify ordinary package-manager subcommands as dispatch wrappers: %s %s",
+    (executable, ...args) => {
+      const argv = [executable, ...args];
+      expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual({ kind: "not-wrapper" });
+      expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
+        argv,
+        wrappers: [],
+        policyBlocked: false,
+      });
+    },
+  );
 
   test.each([
     {
@@ -308,6 +383,21 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     {
       argv: ["time", "-p", "bash", "-lc", "echo hi"],
       wrapper: "time",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["flock", "--timeout=2", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      wrapper: "flock",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["flock", "--close", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      wrapper: "flock",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["flock", "--no-fork", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      wrapper: "flock",
       effectiveArgv: ["bash", "-lc", "echo hi"],
     },
     {
@@ -523,6 +613,51 @@ describe("extractShellWrapperCommand", () => {
     },
     {
       argv: ["cmd", "-k", "echo", "hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["tcsh", "-c", "echo hi"],
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
+    },
+    {
+      argv: ["nu", "--commands", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--execute", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--execute=echo Hi"],
+      expectedInline: "echo Hi",
+      expectedCommand: { isWrapper: true, command: "echo Hi" },
+    },
+    {
+      argv: ["nu", "--commands=echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--interactive", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
+    },
+    {
+      argv: ["nu", "--interactive", "--execute=echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
+    },
+    {
+      argv: ["elvish", "-c", "echo hi"],
       expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: "echo hi" },
     },

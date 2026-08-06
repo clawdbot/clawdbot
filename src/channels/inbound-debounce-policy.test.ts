@@ -12,14 +12,15 @@ describe("shouldDebounceTextInbound", () => {
     expect(shouldDebounceTextInbound({ text: "   ", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "hello", cfg, hasMedia: true })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "/status", cfg })).toBe(false);
+    expect(shouldDebounceTextInbound({ text: "/status plugins", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "stop", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "abort", cfg })).toBe(false);
-    expect(shouldDebounceTextInbound({ text: "wait", cfg })).toBe(false);
   });
 
   it("accepts normal text when debounce is allowed", () => {
     const cfg = {} as Parameters<typeof shouldDebounceTextInbound>[0]["cfg"];
     expect(shouldDebounceTextInbound({ text: "hello there", cfg })).toBe(true);
+    expect(shouldDebounceTextInbound({ text: "wait", cfg })).toBe(true);
     expect(shouldDebounceTextInbound({ text: "hello there", cfg, allowDebounce: false })).toBe(
       false,
     );
@@ -46,8 +47,10 @@ describe("createChannelInboundDebouncer", () => {
         cfg,
         channel: "demo-channel",
         buildKey: (item) => item.id,
-        onFlush: async (items) => {
+        onFlush: (items) => {
           flushed.push(items.map((entry) => entry.id));
+          const completion = Promise.resolve();
+          return { admission: completion, completion };
         },
       });
 

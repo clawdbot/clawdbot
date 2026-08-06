@@ -297,7 +297,7 @@ export default definePluginEntry({
   name: "OpenClaw Kitchen Sink",
   description: "Docker E2E kitchen-sink plugin fixture",
   register(api) {
-    api.on("before_agent_start", async (event, context) => ({
+    api.on("before_prompt_build", async (event, context) => ({
       kitchenSink: true,
       observedEventKeys: Object.keys(event || {}),
       observedContextKeys: Object.keys(context || {}),
@@ -359,9 +359,90 @@ export default definePluginEntry({
   },
 };
 
+profiles["catalog-search"] = {
+  ...profiles.plugins,
+  catalogSearch: {
+    packages: {
+      "code-plugin": [
+        {
+          score: 4,
+          package: {
+            name: "@acme/calendar",
+            displayName: "Calendar",
+            family: "code-plugin",
+            channel: "community",
+            isOfficial: false,
+            summary: "Calendar integration",
+            createdAt: 1,
+            updatedAt: 2,
+            latestVersion: "1.2.3",
+          },
+        },
+        {
+          score: 8,
+          package: {
+            name: "@acme/calendar-code",
+            displayName: "Calendar Code Plugin",
+            family: "code-plugin",
+            channel: "community",
+            isOfficial: false,
+            summary: "Code-only calendar integration",
+            createdAt: 1,
+            updatedAt: 2,
+            latestVersion: "2.0.0",
+          },
+        },
+      ],
+      "bundle-plugin": [
+        {
+          score: 12,
+          package: {
+            name: "@acme/calendar",
+            displayName: "Calendar Bundle",
+            family: "bundle-plugin",
+            channel: "official",
+            isOfficial: true,
+            summary: "Official calendar bundle",
+            createdAt: 1,
+            updatedAt: 3,
+            latestVersion: "3.0.0",
+          },
+        },
+        {
+          score: 6,
+          package: {
+            name: "@acme/calendar-bundle",
+            displayName: "Calendar Bundle Plugin",
+            family: "bundle-plugin",
+            channel: "community",
+            isOfficial: false,
+            summary: "Community calendar bundle",
+            createdAt: 1,
+            updatedAt: 2,
+            latestVersion: "1.0.0",
+          },
+        },
+      ],
+    },
+    skills: [
+      {
+        score: 99,
+        slug: "calendar-skill",
+        ownerHandle: "acme",
+        displayName: "Calendar Skill",
+        summary: "Skill-only calendar result",
+        version: "4.0.0",
+        updatedAt: 4,
+      },
+    ],
+  },
+};
+
 const fixture = profiles[profile];
 if (!fixture || !portFile) {
-  console.error("usage: clawhub-fixture-server.cjs <kitchen-sink-plugin|plugins> <port-file>");
+  console.error(
+    "usage: clawhub-fixture-server.cjs <catalog-search|kitchen-sink-plugin|plugins> <port-file>",
+  );
   process.exit(1);
 }
 
@@ -403,12 +484,48 @@ async function main() {
       npmShasum: clawpack.npmShasum,
     },
   };
+  const securityDetail = {
+    package: artifactResolverDetail.package,
+    release: {
+      version: fixture.version,
+    },
+    trust: {
+      scanStatus: "clean",
+      moderationState: null,
+      blockedFromDownload: false,
+      reasons: [],
+      pending: false,
+      stale: false,
+    },
+  };
+  const requestLog = [];
 
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     if (request.method !== "GET") {
       response.writeHead(405);
       response.end("method not allowed");
+      return;
+    }
+    if (url.pathname === "/__fixture__/requests") {
+      json(response, { requests: requestLog });
+      return;
+    }
+    requestLog.push(`${request.method} ${url.pathname}${url.search}`);
+    if (fixture.catalogSearch && url.pathname === "/api/v1/packages/search") {
+      if (url.searchParams.get("q") === "unavailable") {
+        json(response, { error: "catalog unavailable" }, 503);
+        return;
+      }
+      const family = url.searchParams.get("family");
+      const results =
+        url.searchParams.get("q") === "empty" ? [] : (fixture.catalogSearch.packages[family] ?? []);
+      json(response, { results });
+      return;
+    }
+    if (fixture.catalogSearch && url.pathname === "/api/v1/search") {
+      const results = url.searchParams.get("q") === "empty" ? [] : fixture.catalogSearch.skills;
+      json(response, { results });
       return;
     }
     if (url.pathname === `/api/v1/packages/${encodeURIComponent(packageName)}`) {
@@ -427,6 +544,13 @@ async function main() {
       `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/artifact`
     ) {
       json(response, artifactResolverDetail);
+      return;
+    }
+    if (
+      url.pathname ===
+      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/security`
+    ) {
+      json(response, securityDetail);
       return;
     }
     if (

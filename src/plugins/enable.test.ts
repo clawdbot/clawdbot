@@ -1,7 +1,7 @@
 // Covers plugin enablement decisions and disabled-state handling.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { enablePluginInConfig } from "./enable.js";
+import { enableExplicitlySelectedPluginInConfig, enablePluginInConfig } from "./enable.js";
 
 function expectEnableResult(
   cfg: OpenClawConfig,
@@ -78,6 +78,32 @@ describe("enablePluginInConfig", () => {
       },
     },
     {
+      name: "enables a canonical plugin allowed through a mixed-case compatibility id",
+      cfg: {
+        plugins: {
+          allow: [" GOOGLE-GEMINI-CLI "],
+        },
+      } as OpenClawConfig,
+      pluginId: "google",
+      expectedEnabled: true,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.pluginId).toBe("google");
+        expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+        expectEnabledAllowlist(result, ["google"]);
+      },
+    },
+    {
+      name: "canonicalizes a mixed-case compatibility target before enabling it",
+      cfg: {} as OpenClawConfig,
+      pluginId: " GOOGLE-GEMINI-CLI ",
+      expectedEnabled: true,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.pluginId).toBe("google");
+        expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+        expect(result.config.plugins?.entries?.[" GOOGLE-GEMINI-CLI "]).toBeUndefined();
+      },
+    },
+    {
       name: "refuses enable when plugin is denylisted",
       cfg: {
         plugins: {
@@ -88,6 +114,21 @@ describe("enablePluginInConfig", () => {
       expectedEnabled: false,
       assert: (result: ReturnType<typeof enablePluginInConfig>) => {
         expect(result.reason).toBe("blocked by denylist");
+      },
+    },
+    {
+      name: "refuses a canonical plugin denied through a mixed-case compatibility id",
+      cfg: {
+        plugins: {
+          deny: [" GOOGLE-GEMINI-CLI "],
+        },
+      } as OpenClawConfig,
+      pluginId: "google",
+      expectedEnabled: false,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.pluginId).toBe("google");
+        expect(result.reason).toBe("blocked by denylist");
+        expect(result.config.plugins?.entries?.google).toBeUndefined();
       },
     },
     {
@@ -160,5 +201,58 @@ describe("enablePluginInConfig", () => {
     expect(result.enabled).toBe(true);
     expect(result.config.plugins?.entries?.twitch?.enabled).toBe(true);
     expect(result.config.channels?.twitch).toBeUndefined();
+  });
+});
+
+describe("enableExplicitlySelectedPluginInConfig", () => {
+  it("appends ClickClack to a restrictive allowlist before enabling it", () => {
+    const result = enableExplicitlySelectedPluginInConfig(
+      {
+        plugins: {
+          allow: ["memory-core"],
+        },
+      } as OpenClawConfig,
+      "clickclack",
+    );
+
+    expect(result.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["memory-core", "clickclack"]);
+    expect(result.config.plugins?.entries?.clickclack?.enabled).toBe(true);
+    expect(result.config.channels?.clickclack?.enabled).toBe(true);
+  });
+
+  it("keeps unrelated explicit plugin enables blocked by a restrictive allowlist", () => {
+    const cfg = {
+      plugins: {
+        allow: ["memory-core"],
+      },
+    } as OpenClawConfig;
+
+    const result = enableExplicitlySelectedPluginInConfig(cfg, "google");
+
+    expect(result).toEqual({
+      config: cfg,
+      enabled: false,
+      pluginId: "google",
+      reason: "blocked by allowlist",
+    });
+  });
+
+  it("keeps ClickClack blocked by the denylist without changing the allowlist", () => {
+    const cfg = {
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["clickclack"],
+      },
+    } as OpenClawConfig;
+
+    const result = enableExplicitlySelectedPluginInConfig(cfg, "clickclack");
+
+    expect(result).toEqual({
+      config: cfg,
+      enabled: false,
+      pluginId: "clickclack",
+      reason: "blocked by denylist",
+    });
   });
 });

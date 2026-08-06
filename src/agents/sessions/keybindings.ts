@@ -13,10 +13,11 @@ import {
   TUI_KEYBINDINGS,
   KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentDir } from "../config.js";
 
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
-export interface AppKeybindings {
+interface AppKeybindings {
   "app.interrupt": true;
   "app.clear": true;
   "app.exit": true;
@@ -60,15 +61,12 @@ export interface AppKeybindings {
   "app.tree.filter.cycleBackward": true;
 }
 
-/** Union of OpenClaw-specific app key ids. */
-export type AppKeybinding = keyof AppKeybindings;
-
 declare module "@earendil-works/pi-tui" {
   interface Keybindings extends AppKeybindings {}
 }
 
 /** Complete keybinding definition map consumed by the TUI keybinding manager. */
-export const KEYBINDINGS = {
+const KEYBINDINGS = {
   ...TUI_KEYBINDINGS,
   "app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
   "app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
@@ -271,10 +269,6 @@ const KEYBINDING_NAME_MIGRATIONS = {
   deleteSessionNoninvasive: "app.session.deleteNoninvasive",
 } as const satisfies Record<string, Keybinding>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
   return key in KEYBINDING_NAME_MIGRATIONS;
 }
@@ -298,7 +292,7 @@ function toKeybindingsConfig(value: unknown): KeybindingsConfig {
 }
 
 /** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
-export function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
+function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
   config: Record<string, unknown>;
   migrated: boolean;
 } {
@@ -389,4 +383,4 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 }
 
-export type { Keybinding, KeyId, KeybindingsConfig };
+export type { KeybindingsConfig };

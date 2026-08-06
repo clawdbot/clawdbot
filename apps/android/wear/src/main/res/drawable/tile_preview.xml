@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#030303" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+    <item
+        android:bottom="66dp"
+        android:left="18dp"
+        android:right="18dp"
+        android:top="42dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFF" />
+            <corners android:radius="30dp" />
+        </shape>
+    </item>
+    <item
+        android:width="50dp"
+        android:height="50dp"
+        android:drawable="@mipmap/ic_launcher_foreground"
+        android:gravity="left|center_vertical"
+        android:left="25dp" />
+    <item
+        android:bottom="14dp"
+        android:left="32dp"
+        android:right="32dp"
+        android:top="142dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#111111" />
+            <stroke
+                android:width="1dp"
+                android:color="#3A3A3A" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+</layer-list>

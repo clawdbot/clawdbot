@@ -14,6 +14,7 @@ export type ActiveChannelPluginRuntimeShape = {
   } | null;
   conversationBindings?: {
     supportsCurrentConversationBinding?: boolean;
+    isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
   } | null;
 };
 
@@ -21,7 +22,7 @@ export type ActiveChannelPluginRuntimeShape = {
 export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
   pluginId?: string | null;
-  origin?: string | null;
+  origin?: import("./plugin-origin.types.js").PluginOrigin | null;
 };
 
 /** Active runtime channel registry snapshot. */

@@ -64,6 +64,31 @@ struct ExecSystemRunCommandValidatorTests {
         }
     }
 
+    @Test func `canonical display preserves padded argv bytes`() {
+        let command = ["/usr/bin/printf", "<%s>", "  padded  "]
+        let canonical = "/usr/bin/printf \"<%s>\" \"  padded  \""
+
+        switch ExecSystemRunCommandValidator.resolve(command: command, rawCommand: canonical) {
+        case let .ok(resolved):
+            #expect(resolved.displayCommand == canonical)
+        case let .invalid(message):
+            Issue.record("unexpected invalid result: \(message)")
+        }
+    }
+
+    @Test func `canonical display makes metacharacters and escapes unambiguous`() {
+        let command = ["printf", "<%s>", #"a\"b"#, "$(id)", "x;y", "a\nb"]
+        let canonical = #"printf "<%s>" "a\\\"b" "$(id)" "x;y" "a\nb""#
+        #expect(ExecCommandFormatter.displayString(for: command) == canonical)
+
+        switch ExecSystemRunCommandValidator.resolve(command: ["printf", "<%s>"], rawCommand: "printf <%s>") {
+        case let .ok(resolved):
+            #expect(resolved.displayCommand == #"printf "<%s>""#)
+        case let .invalid(message):
+            Issue.record("legacy display spelling was rejected: \(message)")
+        }
+    }
+
     @Test func `env dash shell wrapper requires canonical raw command binding`() {
         let command = ["/usr/bin/env", "-", "bash", "-lc", "echo hi"]
 

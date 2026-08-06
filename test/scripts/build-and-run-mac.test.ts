@@ -108,9 +108,33 @@ afterEach(() => {
 });
 
 describe("scripts/build-and-run-mac.sh", () => {
+  it("prints help before build or launch side effects", () => {
+    const result = spawnSync("bash", [scriptPath, "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: build-and-run-mac.sh");
+    expect(result.stdout).toContain("Build, stop, and relaunch");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects unknown options before build or launch side effects", () => {
+    const result = spawnSync("bash", [scriptPath, "--wat"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("ERROR: Unknown build-and-run-mac option: --wat");
+  });
+
   it("keeps launch logs isolated unless an explicit log path is provided", () => {
     const script = readFileSync(scriptPath, "utf8");
 
+    expect(script).toContain('cd "$APP_DIR"');
     expect(script).toContain(
       'LOG_PATH="${OPENCLAW_MAC_RUN_LOG:-$(mktemp "${TMPDIR:-/tmp}/openclaw-${PRODUCT}.XXXXXX.log")}"',
     );

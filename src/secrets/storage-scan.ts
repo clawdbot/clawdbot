@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -15,35 +14,18 @@ export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
 }
 
-/** Lists canonical auth-profile stores visible to secrets audit/apply storage scanners. */
-export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
-  return listAuthProfileStoreAgentDirs(config, stateDir).map((agentDir) =>
-    resolveAuthProfileDatabasePath(agentDir),
-  );
-}
-
 /** Lists agent directories that own canonical auth-profile stores. */
 export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: string): string[] {
   return listAuthProfileStoreAgentDirsFromAuthStorePaths(config, stateDir);
 }
 
-/** Lists legacy per-agent auth.json stores that can contain static credentials. */
-export function listLegacyAuthJsonPaths(stateDir: string): string[] {
-  const out: string[] = [];
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (!fs.existsSync(agentsRoot)) {
-    return out;
-  }
-  for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(agentsRoot, entry.name, "agent", "auth.json");
-    if (fs.existsSync(candidate)) {
-      out.push(candidate);
-    }
-  }
-  return out;
+/** Lists global dotenv files that can supply secrets for the selected config and state roots. */
+export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: string }): string[] {
+  const candidates = [
+    path.join(params.stateDir, ".env"),
+    path.join(path.dirname(params.configPath), ".env"),
+  ];
+  return [...new Map(candidates.map((candidate) => [path.resolve(candidate), candidate])).values()];
 }
 
 function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -92,7 +74,7 @@ export function listAgentModelsJsonPaths(
 }
 
 /** Limits for safe opportunistic JSON reads during local storage scans. */
-export type ReadJsonObjectOptions = {
+type ReadJsonObjectOptions = {
   /** Reject files larger than this byte count before reading content. */
   maxBytes?: number;
   /** Reject directories, symlinks, and other non-regular paths before JSON parsing. */

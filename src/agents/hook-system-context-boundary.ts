@@ -1,7 +1,7 @@
 /**
  * Wraps plugin-provided system context in stable prompt-cache boundaries.
  */
-import { normalizeStructuredPromptSection } from "./prompt-cache-stability.js";
+import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 
 // Labels plugin-provided system context so harness prompt compaction and user-facing
 // transcript views can distinguish it from real workspace files or chat content.

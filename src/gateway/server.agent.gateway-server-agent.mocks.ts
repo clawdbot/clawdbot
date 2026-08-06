@@ -6,7 +6,7 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/regis
 import { setActivePluginRegistry as setActivePluginRegistryLocal } from "../plugins/runtime.js";
 import { setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
-export const registryState: { registry: PluginRegistry } = {
+const registryState: { registry: PluginRegistry } = {
   registry: createEmptyPluginRegistry(),
 };
 

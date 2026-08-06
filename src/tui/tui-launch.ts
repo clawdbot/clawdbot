@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
+import { filterTuiExecArgv } from "./tui-exec-argv.js";
 import type { TuiOptions } from "./tui.js";
 
 // Relaunch helper used when setup wants to hand control to an inherited-stdio TUI process.
@@ -17,40 +18,6 @@ function appendOption(args: string[], flag: string, value: string | number | und
     return;
   }
   args.push(flag, String(value));
-}
-
-function filterTuiExecArgv(execArgv: readonly string[]): string[] {
-  const filtered: string[] = [];
-  for (let index = 0; index < execArgv.length; index += 1) {
-    const arg = execArgv[index] ?? "";
-    // Strip inspector flags so a relaunched TUI does not fight the parent debug port.
-    if (
-      arg === "--inspect" ||
-      arg.startsWith("--inspect=") ||
-      arg === "--inspect-brk" ||
-      arg.startsWith("--inspect-brk=") ||
-      arg === "--inspect-wait" ||
-      arg.startsWith("--inspect-wait=")
-    ) {
-      const next = execArgv[index + 1];
-      if (!arg.includes("=") && typeof next === "string" && !next.startsWith("-")) {
-        index += 1;
-      }
-      continue;
-    }
-    if (arg === "--inspect-port") {
-      const next = execArgv[index + 1];
-      if (typeof next === "string" && !next.startsWith("-")) {
-        index += 1;
-      }
-      continue;
-    }
-    if (arg.startsWith("--inspect-port=")) {
-      continue;
-    }
-    filtered.push(arg);
-  }
-  return filtered;
 }
 
 function buildCurrentCliEntryArgs(): string[] {
@@ -69,6 +36,7 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   appendOption(args, "--url", opts.url);
   appendOption(args, "--token", opts.token);
   appendOption(args, "--password", opts.password);
+  appendOption(args, "--tls-fingerprint", opts.tlsFingerprint);
   appendOption(args, "--session", opts.session);
   appendOption(args, "--thinking", opts.thinking);
   appendOption(args, "--message", opts.message);
@@ -96,10 +64,8 @@ export async function launchTuiCli(
             : {}),
         }
       : process.env;
-  const stdinWasPaused =
-    typeof process.stdin.isPaused === "function" ? process.stdin.isPaused() : false;
-
-  // Pause parent stdin while the child owns the terminal, then restore the previous state.
+  // Pause parent stdin while the inherited-stdio child owns the terminal.
+  // Keep it paused afterward so setup/container parents with stdin_open can exit.
   process.stdin.pause();
 
   await new Promise<void>((resolve, reject) => {
@@ -126,9 +92,5 @@ export async function launchTuiCli(
       }
       resolve();
     });
-  }).finally(() => {
-    if (!stdinWasPaused) {
-      process.stdin.resume();
-    }
   });
 }

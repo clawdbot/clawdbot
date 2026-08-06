@@ -3,17 +3,19 @@ import type {
   HealthCheckInput,
   HealthCheckRunResult,
   RegisteredHealthCheck,
+  SplitHealthCheckInput,
 } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
+import type { HealthRepairContext } from "./health-checks.js";
 
 // Adapts legacy split detect/repair checks and newer runnable checks to one runner contract.
 /** Wraps a detect/repair health check in the runnable health-check contract. */
-export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthCheck {
+function defineSplitHealthCheck(check: SplitHealthCheckInput): RegisteredHealthCheck {
   return {
     id: check.id,
     kind: check.kind,
     description: check.description,
     source: check.source,
+    defaultEnabled: check.defaultEnabled,
     sourceContract: "split",
     detect: (ctx, scope) => check.detect(ctx, scope),
     repair:
@@ -73,6 +75,7 @@ export function normalizeHealthCheck(check: HealthCheckInput): RegisteredHealthC
       kind: check.kind,
       description: check.description,
       source: check.source,
+      defaultEnabled: check.defaultEnabled,
       sourceContract: "run",
       async detect(ctx, scope) {
         const result = await check.run({ ...ctx, repair: false }, scope);

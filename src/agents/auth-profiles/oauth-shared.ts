@@ -6,7 +6,14 @@
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential as hasUsableStoredOAuthCredential } from "./credential-state.js";
+import {
+  isSafeToCopyOAuthIdentity,
+  normalizeAuthEmailToken,
+  normalizeAuthIdentityToken,
+} from "./oauth-identity.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+export { normalizeAuthEmailToken, normalizeAuthIdentityToken } from "./oauth-identity.js";
 
 /** OAuth profile imported from a runtime external CLI source. */
 export type RuntimeExternalOAuthProfile = {
@@ -74,17 +81,6 @@ export function hasUsableOAuthCredential(
   return hasUsableStoredOAuthCredential(credential, { now });
 }
 
-/** Normalizes account identity tokens for equality checks. */
-export function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-/** Normalizes auth email identity tokens for equality checks. */
-export function normalizeAuthEmailToken(value: string | undefined): string | undefined {
-  return normalizeAuthIdentityToken(value)?.toLowerCase();
-}
-
 /** Returns true when an OAuth credential has account or email identity. */
 export function hasOAuthIdentity(
   credential: Pick<OAuthCredential, "accountId" | "email">,
@@ -100,19 +96,7 @@ export function hasMatchingOAuthIdentity(
   existing: Pick<OAuthCredential, "accountId" | "email">,
   incoming: Pick<OAuthCredential, "accountId" | "email">,
 ): boolean {
-  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
-  const incomingAccountId = normalizeAuthIdentityToken(incoming.accountId);
-  if (existingAccountId !== undefined && incomingAccountId !== undefined) {
-    return existingAccountId === incomingAccountId;
-  }
-
-  const existingEmail = normalizeAuthEmailToken(existing.email);
-  const incomingEmail = normalizeAuthEmailToken(incoming.email);
-  if (existingEmail !== undefined && incomingEmail !== undefined) {
-    return existingEmail === incomingEmail;
-  }
-
-  return false;
+  return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
 // Different adoption paths have different safety thresholds. Bootstrap can
@@ -140,17 +124,6 @@ function isSafeOAuthIdentityTransition(
     return policy.whenExistingIdentityMissing;
   }
   return hasMatchingOAuthIdentity(existing, incoming);
-}
-
-/** Returns true when stored OAuth identity can be overwritten. */
-export function isSafeToOverwriteStoredOAuthIdentity(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, {
-    whenExistingCredentialMissing: true,
-    whenExistingIdentityMissing: false,
-  });
 }
 
 /** Returns true when bootstrap may adopt an external OAuth identity. */
@@ -196,8 +169,15 @@ export function overlayRuntimeExternalOAuthProfiles(
 ): AuthProfileStore {
   const externalProfiles = Array.from(profiles);
   const next = cloneAuthProfileStore(store);
+  const overlaidProfileIds = new Set(externalProfiles.map((profile) => profile.profileId));
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
+  }
+  next.runtimePersistedProfileIds = store.runtimePersistedProfileIds
+    ?.filter((profileId) => next.profiles[profileId] && !overlaidProfileIds.has(profileId))
+    .toSorted();
+  if (next.runtimePersistedProfileIds?.length === 0) {
+    next.runtimePersistedProfileIds = undefined;
   }
   const runtimeOnlyProfileIds = new Set(
     externalProfiles

@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import android.annotation.TargetApi
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.DnsResolver
@@ -12,6 +11,7 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.CancellationSignal
 import android.util.Log
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,6 +49,39 @@ import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+private fun createDnsResolver(context: Context): DnsResolver =
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+    createContextDnsResolver(context)
+  } else {
+    createLegacyDnsResolver()
+  }
+
+@RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
+private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolver(context, null)
+
+@Suppress("DEPRECATION")
+private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
+
+internal fun gatewayDiscoveryStatusText(
+  localCount: Int,
+  wideAreaRcode: Int?,
+  wideAreaCount: Int,
+): String {
+  val wide =
+    when (wideAreaRcode) {
+      null -> "Wide: ?"
+      Rcode.NOERROR -> "Wide: $wideAreaCount"
+      Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
+      else -> "Wide: ${Rcode.string(wideAreaRcode)}"
+    }
+
+  return when {
+    localCount == 0 && wideAreaRcode == null -> "Searching for gateways…"
+    localCount == 0 -> wide
+    else -> "Local: $localCount • $wide"
+  }
+}
+
 /**
  * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
  */
@@ -58,7 +91,7 @@ class GatewayDiscovery(
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-  private val dns = DnsResolver.getInstance()
+  private val dns = createDnsResolver(context)
   private val serviceType = "_openclaw-gw._tcp."
   private val wideAreaDomain = System.getenv("OPENCLAW_WIDE_AREA_DOMAIN")
   private val logTag = "OpenClaw/GatewayDiscovery"
@@ -153,14 +186,6 @@ class GatewayDiscovery(
     }
   }
 
-  private fun stopLocalDiscovery() {
-    try {
-      nsd.stopServiceDiscovery(discoveryListener)
-    } catch (_: Throwable) {
-      // ignore (best-effort)
-    }
-  }
-
   private fun startUnicastDiscovery(domain: String) {
     unicastJob =
       scope.launch(Dispatchers.IO) {
@@ -184,7 +209,7 @@ class GatewayDiscovery(
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+  @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
   private fun resolveWithServiceInfoCallback(serviceInfo: NsdServiceInfo) {
     val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
     val id = stableId(serviceName, "local.")
@@ -301,27 +326,12 @@ class GatewayDiscovery(
     _gateways.value =
       // Merge local and wide-area results deterministically for stable UI selection.
       (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
-    _statusText.value = buildStatusText()
-  }
-
-  private fun buildStatusText(): String {
-    val localCount = localById.size
-    val wideRcode = lastWideAreaRcode
-    val wideCount = lastWideAreaCount
-
-    val wide =
-      when (wideRcode) {
-        null -> "Wide: ?"
-        Rcode.NOERROR -> "Wide: $wideCount"
-        Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
-        else -> "Wide: ${Rcode.string(wideRcode)}"
-      }
-
-    return when {
-      localCount == 0 && wideRcode == null -> "Searching for gateways…"
-      localCount == 0 -> "$wide"
-      else -> "Local: $localCount • $wide"
-    }
+    _statusText.value =
+      gatewayDiscoveryStatusText(
+        localCount = localById.size,
+        wideAreaRcode = lastWideAreaRcode,
+        wideAreaCount = lastWideAreaCount,
+      )
   }
 
   private fun stableId(

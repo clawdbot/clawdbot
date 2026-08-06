@@ -22,19 +22,19 @@ import {
 /**
  * Proof callback used to verify one declared durable-final delivery capability.
  */
-export type DurableFinalCapabilityProof = () => Promise<void> | void;
+type DurableFinalCapabilityProof = () => Promise<void> | void;
 
 /**
  * Proof callbacks keyed by durable-final delivery capability.
  */
-export type DurableFinalCapabilityProofMap = Partial<
+type DurableFinalCapabilityProofMap = Partial<
   Record<DurableFinalDeliveryCapability, DurableFinalCapabilityProof>
 >;
 
 /**
  * Verification result for one durable-final delivery capability.
  */
-export type DurableFinalCapabilityProofResult = {
+type DurableFinalCapabilityProofResult = {
   capability: DurableFinalDeliveryCapability;
   status: "verified" | "not_declared";
 };
@@ -42,43 +42,43 @@ export type DurableFinalCapabilityProofResult = {
 /**
  * Proof callback used to verify one live-preview finalizer capability.
  */
-export type LivePreviewFinalizerCapabilityProof = () => Promise<void> | void;
+type LivePreviewFinalizerCapabilityProof = () => Promise<void> | void;
 
 /**
  * Proof callback used to verify one live message capability.
  */
-export type ChannelMessageLiveCapabilityProof = () => Promise<void> | void;
+type ChannelMessageLiveCapabilityProof = () => Promise<void> | void;
 
 /**
  * Proof callback used to verify one receive acknowledgement policy.
  */
-export type ChannelMessageReceiveAckPolicyProof = () => Promise<void> | void;
+type ChannelMessageReceiveAckPolicyProof = () => Promise<void> | void;
 
 /**
  * Proof callbacks keyed by live-preview finalizer capability.
  */
-export type LivePreviewFinalizerCapabilityProofMap = Partial<
+type LivePreviewFinalizerCapabilityProofMap = Partial<
   Record<LivePreviewFinalizerCapability, LivePreviewFinalizerCapabilityProof>
 >;
 
 /**
  * Proof callbacks keyed by live message capability.
  */
-export type ChannelMessageLiveCapabilityProofMap = Partial<
+type ChannelMessageLiveCapabilityProofMap = Partial<
   Record<ChannelMessageLiveCapability, ChannelMessageLiveCapabilityProof>
 >;
 
 /**
  * Proof callbacks keyed by receive acknowledgement policy.
  */
-export type ChannelMessageReceiveAckPolicyProofMap = Partial<
+type ChannelMessageReceiveAckPolicyProofMap = Partial<
   Record<ChannelMessageReceiveAckPolicy, ChannelMessageReceiveAckPolicyProof>
 >;
 
 /**
  * Verification result for one live-preview finalizer capability.
  */
-export type LivePreviewFinalizerCapabilityProofResult = {
+type LivePreviewFinalizerCapabilityProofResult = {
   capability: LivePreviewFinalizerCapability;
   status: "verified" | "not_declared";
 };
@@ -86,7 +86,7 @@ export type LivePreviewFinalizerCapabilityProofResult = {
 /**
  * Verification result for one live message capability.
  */
-export type ChannelMessageLiveCapabilityProofResult = {
+type ChannelMessageLiveCapabilityProofResult = {
   capability: ChannelMessageLiveCapability;
   status: "verified" | "not_declared";
 };
@@ -94,46 +94,15 @@ export type ChannelMessageLiveCapabilityProofResult = {
 /**
  * Verification result for one receive acknowledgement policy.
  */
-export type ChannelMessageReceiveAckPolicyProofResult = {
+type ChannelMessageReceiveAckPolicyProofResult = {
   policy: ChannelMessageReceiveAckPolicy;
   status: "verified" | "not_declared";
 };
 
 /**
- * Lists declared durable-final delivery capabilities in stable contract order.
- */
-export function listDeclaredDurableFinalCapabilities(
-  capabilities: DurableFinalDeliveryRequirementMap | undefined,
-): DurableFinalDeliveryCapability[] {
-  return durableFinalDeliveryCapabilities.filter(
-    (capability) => capabilities?.[capability] === true,
-  );
-}
-
-/**
- * Lists declared live-preview finalizer capabilities in stable contract order.
- */
-export function listDeclaredLivePreviewFinalizerCapabilities(
-  capabilities: LivePreviewFinalizerCapabilityMap | undefined,
-): LivePreviewFinalizerCapability[] {
-  return livePreviewFinalizerCapabilities.filter(
-    (capability) => capabilities?.[capability] === true,
-  );
-}
-
-/**
- * Lists declared live message capabilities in stable contract order.
- */
-export function listDeclaredChannelMessageLiveCapabilities(
-  capabilities: Partial<Record<ChannelMessageLiveCapability, boolean>> | undefined,
-): ChannelMessageLiveCapability[] {
-  return channelMessageLiveCapabilities.filter((capability) => capabilities?.[capability] === true);
-}
-
-/**
  * Lists declared receive acknowledgement policies, including the default policy fallback.
  */
-export function listDeclaredReceiveAckPolicies(
+function listDeclaredReceiveAckPolicies(
   receive: ChannelMessageAdapterShape["receive"] | undefined,
 ): ChannelMessageReceiveAckPolicy[] {
   const declared = receive?.supportedAckPolicies?.length
@@ -175,7 +144,7 @@ export async function verifyDurableFinalCapabilityProofs(params: {
 /**
  * Verifies proof callbacks for every declared live-preview finalizer capability.
  */
-export async function verifyLivePreviewFinalizerCapabilityProofs(params: {
+async function verifyLivePreviewFinalizerCapabilityProofs(params: {
   adapterName: string;
   capabilities?: LivePreviewFinalizerCapabilityMap;
   proofs: LivePreviewFinalizerCapabilityProofMap;
@@ -201,7 +170,7 @@ export async function verifyLivePreviewFinalizerCapabilityProofs(params: {
 /**
  * Verifies proof callbacks for every declared live message capability.
  */
-export async function verifyChannelMessageLiveCapabilityProofs(params: {
+async function verifyChannelMessageLiveCapabilityProofs(params: {
   adapterName: string;
   capabilities?: Partial<Record<ChannelMessageLiveCapability, boolean>>;
   proofs: ChannelMessageLiveCapabilityProofMap;
@@ -227,7 +196,7 @@ export async function verifyChannelMessageLiveCapabilityProofs(params: {
 /**
  * Verifies proof callbacks for every declared receive acknowledgement policy.
  */
-export async function verifyChannelMessageReceiveAckPolicyProofs(params: {
+async function verifyChannelMessageReceiveAckPolicyProofs(params: {
   adapterName: string;
   receive?: ChannelMessageAdapterShape["receive"];
   proofs: ChannelMessageReceiveAckPolicyProofMap;

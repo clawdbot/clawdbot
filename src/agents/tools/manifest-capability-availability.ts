@@ -20,7 +20,7 @@ import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
 /** Manifest contract keys that represent provider-backed tool capabilities. */
-export type CapabilityContractKey =
+type CapabilityContractKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"

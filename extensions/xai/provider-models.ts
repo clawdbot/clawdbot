@@ -4,12 +4,15 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
-import { normalizeXaiModelId } from "./model-id.js";
+import { normalizeXaiModelId, XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
-const XAI_MODERN_MODEL_PREFIXES = ["grok-build-0.1", "grok-4.3", "grok-4.20"] as const;
+const XAI_MODERN_MODEL_PREFIXES = ["grok-4.5", "grok-build-0.1", "grok-4.3", "grok-4.20"] as const;
 
 export function isModernXaiModel(modelId: string): boolean {
   const normalized = normalizeXaiModelId(modelId.trim());
@@ -35,7 +38,7 @@ export function resolveXaiForwardCompatModel(params: {
       name: definition.name,
       api: params.ctx.providerConfig?.api ?? "openai-responses",
       provider: params.providerId,
-      baseUrl: params.ctx.providerConfig?.baseUrl ?? XAI_BASE_URL,
+      baseUrl: normalizeOptionalString(params.ctx.providerConfig?.baseUrl) ?? XAI_BASE_URL,
       reasoning: definition.reasoning,
       input: definition.input,
       cost: definition.cost,
@@ -43,4 +46,16 @@ export function resolveXaiForwardCompatModel(params: {
       maxTokens: definition.maxTokens,
     } as ProviderRuntimeModel),
   );
+}
+
+export function normalizeXaiResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
+  const canonicalModelId =
+    typeof model.params?.canonicalModelId === "string"
+      ? model.params.canonicalModelId.trim()
+      : undefined;
+  const resolved =
+    model.id === XAI_OAUTH_AUTO_MODEL_ID && canonicalModelId
+      ? { ...model, id: canonicalModelId }
+      : model;
+  return applyXaiRuntimeModelCompat(resolved);
 }

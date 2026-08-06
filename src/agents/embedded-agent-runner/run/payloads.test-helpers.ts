@@ -3,7 +3,7 @@
 import { expect } from "vitest";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
-export type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
+type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
 type RunPayloads = ReturnType<typeof buildEmbeddedRunPayloads>;
 
 export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {

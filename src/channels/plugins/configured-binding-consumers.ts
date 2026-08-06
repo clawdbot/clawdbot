@@ -4,6 +4,7 @@
  * Stores target-family consumers that compile and materialize configured binding rules.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type {
   CompiledConfiguredBinding,
   ConfiguredBindingRecordResolution,
@@ -15,7 +16,7 @@ import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.j
 /**
  * Parsed session-key facts used by configured binding consumers.
  */
-export type ParsedConfiguredBindingSessionKey = {
+type ParsedConfiguredBindingSessionKey = {
   channel: string;
   accountId: string;
 };
@@ -43,7 +44,10 @@ export type ConfiguredBindingConsumer = {
   }) => boolean;
 };
 
-const registeredConfiguredBindingConsumers = new Map<string, ConfiguredBindingConsumer>();
+const registeredConfiguredBindingConsumers = resolveGlobalMap<string, ConfiguredBindingConsumer>(
+  Symbol.for("openclaw.configuredBindingConsumers"),
+  "plugin-registry",
+);
 
 /**
  * Lists registered configured binding consumers in registration order.

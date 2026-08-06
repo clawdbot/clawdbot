@@ -3,10 +3,12 @@
 // Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
 // report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mjs";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
@@ -14,10 +16,27 @@ import { formatErrorMessage } from "./lib/error-format.mjs";
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
+const DEFAULT_CHILD_SHUTDOWN_GRACE_MS = 1_000;
 const DEFAULT_TOP = 10;
 const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
 const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
 const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const PARENT_SIGNAL_EXIT_CODES = new Map([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+const activeCaseChildren = new Map();
+const parentSignalHandlers = new Map();
+let parentSignalHandlersInstalled = false;
+let parentSignalShutdownStarted = false;
+
+function defaultJsonReportPath() {
+  return path.join(
+    os.tmpdir(),
+    `openclaw-extension-memory-${process.pid}-${Date.now()}-${randomUUID()}.json`,
+  );
+}
 
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
@@ -78,7 +97,7 @@ export function parseArgs(argv) {
       case "--extension":
       case "-e": {
         const next = args[index + 1];
-        if (!next) {
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.extensions.push(next);
@@ -103,7 +122,7 @@ export function parseArgs(argv) {
         break;
       case "--json": {
         const next = args[index + 1];
-        if (!next) {
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.jsonPath = path.resolve(next);
@@ -186,6 +205,7 @@ export async function runCase({
   name,
   body,
   timeoutMs,
+  shutdownGraceMs = DEFAULT_CHILD_SHUTDOWN_GRACE_MS,
   spawnImpl = spawn,
 }) {
   return await new Promise((resolve) => {
@@ -194,10 +214,12 @@ export async function runCase({
       ["--import", hookPath, "--input-type=module", "--eval", body],
       {
         cwd: repoRoot,
+        detached: process.platform !== "win32",
         env,
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    trackActiveCaseChild(child, shutdownGraceMs);
 
     let stdout = createOutputCapture();
     let stderr = createOutputCapture();
@@ -207,7 +229,7 @@ export async function runCase({
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      signalChildProcessTree(child, "SIGKILL");
     }, timeoutMs);
     timer.unref?.();
 
@@ -217,6 +239,7 @@ export async function runCase({
       }
       settled = true;
       clearTimeout(timer);
+      untrackActiveCaseChild(child);
       resolve(result);
     }
 
@@ -243,19 +266,135 @@ export async function runCase({
       });
     });
     child.on("close", (code, signal) => {
-      const stderrText = formatCapturedOutput(stderr);
-      settle({
-        name,
-        code,
-        signal,
-        timedOut,
-        error: null,
-        stdout: formatCapturedOutput(stdout),
-        stderr: stderrText,
-        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
-      });
+      void (async () => {
+        if (timedOut) {
+          await waitForChildProcessTreeExit(child, shutdownGraceMs);
+        }
+        const stderrText = formatCapturedOutput(stderr);
+        settle({
+          name,
+          code,
+          signal,
+          timedOut,
+          error: null,
+          stdout: formatCapturedOutput(stdout),
+          stderr: stderrText,
+          maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
+        });
+      })();
     });
   });
+}
+
+function signalChildProcessTree(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      child.kill(signal);
+      return;
+    }
+  }
+  child.kill(signal);
+}
+
+async function waitForChildProcessTreeExit(child, timeoutMs) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!childProcessTreeIsAlive(child)) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+  return !childProcessTreeIsAlive(child);
+}
+
+function childProcessTreeIsAlive(child) {
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function trackActiveCaseChild(child, shutdownGraceMs) {
+  activeCaseChildren.set(child, shutdownGraceMs);
+  installParentSignalHandlers();
+}
+
+function untrackActiveCaseChild(child) {
+  activeCaseChildren.delete(child);
+  if (activeCaseChildren.size === 0) {
+    removeParentSignalHandlers();
+  }
+}
+
+function installParentSignalHandlers() {
+  if (parentSignalHandlersInstalled) {
+    return;
+  }
+  parentSignalHandlersInstalled = true;
+  for (const signal of PARENT_SIGNAL_EXIT_CODES.keys()) {
+    const handler = () => handleParentSignal(signal);
+    parentSignalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+}
+
+function removeParentSignalHandlers() {
+  if (!parentSignalHandlersInstalled || parentSignalShutdownStarted) {
+    return;
+  }
+  removeInstalledParentSignalHandlers();
+}
+
+function removeInstalledParentSignalHandlers() {
+  if (!parentSignalHandlersInstalled) {
+    return;
+  }
+  parentSignalHandlersInstalled = false;
+  for (const [signal, handler] of parentSignalHandlers) {
+    process.off(signal, handler);
+  }
+  parentSignalHandlers.clear();
+}
+
+function handleParentSignal(signal) {
+  if (parentSignalShutdownStarted) {
+    for (const child of activeCaseChildren.keys()) {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+    return;
+  }
+  parentSignalShutdownStarted = true;
+  void cleanupActiveCaseChildrenForParentSignal(signal);
+}
+
+async function cleanupActiveCaseChildrenForParentSignal(signal) {
+  const children = [...activeCaseChildren.entries()];
+  for (const [child] of children) {
+    signalChildProcessTree(child, signal);
+  }
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
+  for (const [child] of children) {
+    if (childProcessTreeIsAlive(child)) {
+      signalChildProcessTree(child, "SIGKILL");
+    }
+  }
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
+  removeInstalledParentSignalHandlers();
+  process.exit(PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1);
 }
 
 function buildImportBody(entryFiles, label) {
@@ -305,7 +444,7 @@ async function main() {
 
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-memory-"));
   const hookPath = path.join(tmpHome, "measure-rss.mjs");
-  const jsonPath = options.jsonPath ?? path.join(os.tmpdir(), "openclaw-extension-memory.json");
+  const jsonPath = options.jsonPath ?? defaultJsonReportPath();
 
   writeFileSync(
     hookPath,
@@ -357,15 +496,9 @@ async function main() {
           timeoutMs: options.combinedTimeoutMs,
         });
 
-    const pending = [...selectedEntries];
-    const results = [];
-
-    async function worker() {
-      while (pending.length > 0) {
-        const next = pending.shift();
-        if (next === undefined) {
-          return;
-        }
+    const results = await pMap(
+      selectedEntries,
+      async (next) => {
         const result = await runCase({
           repoRoot,
           env,
@@ -374,7 +507,7 @@ async function main() {
           body: buildImportBody([next.file], "IMPORTED"),
           timeoutMs: options.timeoutMs,
         });
-        results.push({
+        const entry = {
           dir: next.dir,
           file: next.file,
           status: result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail",
@@ -384,16 +517,14 @@ async function main() {
               ? result.maxRssMb - baseline.maxRssMb
               : null,
           stderrPreview: summarizeStderr(result.stderr),
-        });
+        };
 
         const status = result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail";
         const rss = result.maxRssMb === null ? "n/a" : `${result.maxRssMb.toFixed(1)} MB`;
         console.log(`[extension-memory] ${next.dir}: ${status} ${rss}`);
-      }
-    }
-
-    await Promise.all(
-      Array.from({ length: Math.min(options.concurrency, selectedEntries.length) }, () => worker()),
+        return entry;
+      },
+      { concurrency: options.concurrency, stopOnError: true },
     );
 
     results.sort((a, b) => a.dir.localeCompare(b.dir));
@@ -434,6 +565,7 @@ async function main() {
       results,
     };
 
+    mkdirSync(path.dirname(jsonPath), { recursive: true });
     writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
     console.log(`[extension-memory] report: ${jsonPath}`);

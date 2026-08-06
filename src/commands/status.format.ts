@@ -5,12 +5,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
-import type { SessionStatus } from "./status.types.js";
+import type { SessionStatus } from "../status/types.js";
+import { formatTokenCount } from "../utils/token-format.js";
 export { shortenText } from "./text-format.js";
 
-/** Formats a token count in thousands for compact status rows. */
-export const formatKTokens = (value: number) =>
-  `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+export const formatKTokens = formatTokenCount;
 
 /** Formats a duration or returns `unknown` for missing/non-finite values. */
 export const formatDuration = (ms: number | null | undefined) => {

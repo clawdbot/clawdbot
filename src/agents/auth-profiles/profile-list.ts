@@ -19,3 +19,16 @@ export function listProfilesForProvider(store: AuthProfileStore, provider: strin
     .filter(([, cred]) => resolveProviderIdForAuth(cred.provider) === providerKey)
     .map(([id]) => id);
 }
+
+export function resolveSubscriptionAuthModeForProfiles(params: {
+  store: AuthProfileStore;
+  profileIds: ReadonlyArray<string | undefined>;
+}): "oauth" | "token" | undefined {
+  for (const profileId of params.profileIds) {
+    const type = profileId ? params.store.profiles[profileId]?.type : undefined;
+    if (type === "oauth" || type === "token") {
+      return type;
+    }
+  }
+  return undefined;
+}

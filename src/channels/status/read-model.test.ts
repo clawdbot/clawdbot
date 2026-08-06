@@ -1,7 +1,6 @@
 // Status read-model tests cover channel status projection from runtime state.
 import { describe, expect, it } from "vitest";
 import {
-  findRuntimeChannelAccount,
   getRuntimeChannelAccounts,
   hasRuntimeCredentialAvailable,
   markConfiguredUnavailableCredentialStatusesAvailable,
@@ -63,10 +62,6 @@ describe("channel status read model", () => {
       channelId: "discord",
     });
 
-    expect(findRuntimeChannelAccount({ liveAccounts, accountId: "default" })).toStrictEqual({
-      name: "default",
-      running: true,
-    });
     expect(hasRuntimeCredentialAvailable({ liveAccounts, accountId: "default" })).toBe(true);
   });
 

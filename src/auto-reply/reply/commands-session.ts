@@ -1,12 +1,16 @@
 // Implements session commands for list, show, fork, reset, and routing state.
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
@@ -16,18 +20,21 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
   buildRestartSuccessContinuation,
+  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
-  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -39,12 +46,21 @@ import {
   isSessionDefaultDirectiveValue,
   normalizeFastMode,
   normalizeUsageDisplay,
-  resolveResponseUsageMode,
+  resolveEffectiveResponseUsage,
 } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
-import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
+import {
+  commandReply as sessionCommandReply,
+  defineAuthorizedTextCommand,
+  matchCommandPrefix,
+  rejectNonOwnerCommand,
+  rejectUnauthorizedCommand,
+} from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import {
+  persistSessionEntry,
+  sessionEntryPersistenceConflictReply,
+} from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
@@ -101,11 +117,7 @@ function resolveSessionBindingDurationMs(
   key: "idleTimeoutMs" | "maxAgeMs",
   fallbackMs: number,
 ): number {
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallbackMs;
-  }
-  return Math.max(0, Math.floor(raw));
+  return resolveNonNegativeIntegerOption(binding.metadata?.[key], fallbackMs);
 }
 
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
@@ -144,20 +156,8 @@ function resolveUpdatedLifecycleDurationMs(
   binding: UpdatedLifecycleBinding | SessionBindingRecord,
   key: "idleTimeoutMs" | "maxAgeMs",
 ): number | undefined {
-  if (!isSessionBindingRecord(binding)) {
-    const raw = binding[key];
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      return Math.max(0, Math.floor(raw));
-    }
-  }
-  if (!isSessionBindingRecord(binding)) {
-    return undefined;
-  }
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  return Math.max(0, Math.floor(raw));
+  const raw = isSessionBindingRecord(binding) ? binding.metadata?.[key] : binding[key];
+  return resolveOptionalIntegerOption(raw, { min: 0 });
 }
 
 function toUpdatedLifecycleBinding(
@@ -220,241 +220,260 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
     return null;
   }
   if (!params.isGroup) {
-    return {
-      shouldContinue: false,
-      reply: { text: "⚙️ Group activation only applies to group chats." },
-    };
+    return sessionCommandReply("⚙️ Group activation only applies to group chats.");
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /activation from unauthorized sender in group: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorizedResult = rejectUnauthorizedCommand(params, "/activation");
+  if (unauthorizedResult) {
+    return unauthorizedResult;
+  }
+  const nonOwnerResult = rejectNonOwnerCommand(params, "/activation");
+  if (nonOwnerResult) {
+    return nonOwnerResult;
   }
   if (!activationCommand.mode) {
-    return {
-      shouldContinue: false,
-      reply: { text: "⚙️ Usage: /activation mention|always" },
-    };
+    return sessionCommandReply("⚙️ Usage: /activation mention|always");
   }
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     params.sessionEntry.groupActivation = activationCommand.mode;
     params.sessionEntry.groupActivationNeedsSystemIntro = true;
-    await persistSessionEntry(params);
-  }
-  return {
-    shouldContinue: false,
-    reply: {
-      text: `⚙️ Group activation set to ${activationCommand.mode}.`,
-    },
-  };
-};
-
-export const handleSendPolicyCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const sendPolicyCommand = parseSendPolicyCommand(params.command.commandBodyNormalized);
-  if (!sendPolicyCommand.hasCommand) {
-    return null;
-  }
-  const unauthorizedResult = rejectUnauthorizedCommand(params, "/send");
-  if (unauthorizedResult) {
-    return unauthorizedResult;
-  }
-  const nonOwnerResult = rejectNonOwnerCommand(params, "/send");
-  if (nonOwnerResult) {
-    return nonOwnerResult;
-  }
-  if (!sendPolicyCommand.mode) {
-    return {
-      shouldContinue: false,
-      reply: { text: "⚙️ Usage: /send on|off|inherit" },
-    };
-  }
-  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
-    if (sendPolicyCommand.mode === "inherit") {
-      delete params.sessionEntry.sendPolicy;
-    } else {
-      params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
     }
-    await persistSessionEntry(params);
   }
-  const label =
-    sendPolicyCommand.mode === "inherit"
-      ? "inherit"
-      : sendPolicyCommand.mode === "allow"
-        ? "on"
-        : "off";
-  return {
-    shouldContinue: false,
-    reply: { text: `⚙️ Send policy set to ${label}.` },
-  };
+  return sessionCommandReply(`⚙️ Group activation set to ${activationCommand.mode}.`);
 };
 
-export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/usage" && !normalized.startsWith("/usage ")) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /usage from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-
-  const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
-  const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
-  if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
-    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const sessionAgentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
-    const sessionSummary = await loadSessionCostSummary({
-      sessionId: targetSessionEntry?.sessionId,
-      sessionEntry: targetSessionEntry,
-      sessionFile: targetSessionEntry?.sessionFile,
-      config: params.cfg,
-      agentId: sessionAgentId,
-    });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
-
-    const sessionCost = formatUsd(sessionSummary?.totalCost);
-    const sessionTokens = sessionSummary?.totalTokens
-      ? formatTokenCount(sessionSummary.totalTokens)
-      : undefined;
-    const sessionMissing = sessionSummary?.missingCostEntries ?? 0;
-    const sessionSuffix = sessionMissing > 0 ? " (partial)" : "";
-    const sessionLine =
-      sessionCost || sessionTokens
-        ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
-        : "Session n/a";
-
-    const todayKey = new Date().toLocaleDateString("en-CA");
-    const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
-    const todayCost = formatUsd(todayEntry?.totalCost);
-    const todayMissing = todayEntry?.missingCostEntries ?? 0;
-    const todaySuffix = todayMissing > 0 ? " (partial)" : "";
-    const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
-
-    const last30Cost = formatUsd(summary.totals.totalCost);
-    const last30Missing = summary.totals.missingCostEntries;
-    const last30Suffix = last30Missing > 0 ? " (partial)" : "";
-    const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
-
-    return {
-      shouldContinue: false,
-      reply: { text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}` },
-    };
-  }
-
-  if (rawArgs && !requested) {
-    return {
-      shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
-    };
-  }
-
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const currentRaw = targetSessionEntry?.responseUsage;
-  const current = resolveResponseUsageMode(currentRaw);
-  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
-
-  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    if (next === "off") {
-      delete targetSessionEntry.responseUsage;
-    } else {
-      targetSessionEntry.responseUsage = next;
-    }
-    params.sessionStore[params.sessionKey] = targetSessionEntry;
-    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
-  }
-
-  return {
-    shouldContinue: false,
-    reply: {
-      text: `⚙️ Usage footer: ${next}.`,
+export const handleSendPolicyCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/send",
+    match: (body) => {
+      const command = parseSendPolicyCommand(body);
+      return command.hasCommand ? command : null;
     },
-  };
-};
-
-export const handleFastCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/fast" && !normalized.startsWith("/fast ")) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /fast from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-
-  const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
-  const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
-  if (!rawMode || rawMode === "status") {
-    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const sessionAgentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
-    const state = resolveFastModeState({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      agentId: sessionAgentId,
-      sessionEntry: targetSessionEntry,
-    });
-    const suffix =
-      state.source === "agent"
-        ? " (agent)"
-        : state.source === "config"
-          ? " (config)"
-          : state.source === "default"
-            ? " (default)"
-            : "";
-    return {
-      shouldContinue: false,
-      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
-    };
-  }
-
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
-  const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
-  if (nextMode === undefined) {
-    if (resetsToDefault) {
-      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-        delete targetSessionEntry.fastMode;
-        await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    ownerOnly: true,
+  },
+  async (params, sendPolicyCommand) => {
+    if (!sendPolicyCommand.mode) {
+      return sessionCommandReply("⚙️ Usage: /send on|off|inherit");
+    }
+    if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+      if (sendPolicyCommand.mode === "inherit") {
+        delete params.sessionEntry.sendPolicy;
+      } else {
+        params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
       }
-      return {
-        shouldContinue: false,
-        reply: { text: "⚙️ Fast mode reset to default." },
-      };
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["sendPolicy"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
     }
-    return {
-      shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
-    };
-  }
+    const label =
+      sendPolicyCommand.mode === "inherit"
+        ? "inherit"
+        : sendPolicyCommand.mode === "allow"
+          ? "on"
+          : "off";
+    return sessionCommandReply(`⚙️ Send policy set to ${label}.`);
+  },
+);
 
-  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    targetSessionEntry.fastMode = nextMode;
-    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
-  }
+export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/usage",
+    match: (body) => matchCommandPrefix(body, "/usage"),
+    silentUnauthorized: true,
+  },
+  async (params, rawArgs) => {
+    const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
+    if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
+      const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+      const sessionAgentId =
+        params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
+          ? resolveSessionAgentId({
+              sessionKey: params.sessionKey,
+              config: params.cfg,
+              agentId: params.agentId,
+            })
+          : params.agentId;
+      const usageAgentId = sessionAgentId ?? DEFAULT_AGENT_ID;
+      const sessionSummary = await loadSessionCostSummary({
+        sessionId: targetSessionEntry?.sessionId,
+        sessionEntry: targetSessionEntry,
+        ...(targetSessionEntry?.sessionId && params.sessionKey
+          ? {
+              sessionTarget: {
+                agentId: usageAgentId,
+                sessionId: targetSessionEntry.sessionId,
+                sessionKey: params.sessionKey,
+                storePath: resolveSessionStorePathForScope({
+                  agentId: usageAgentId,
+                  sessionKey: params.sessionKey,
+                  storePath:
+                    params.storePath ??
+                    resolveStorePath(params.cfg.session?.store, { agentId: usageAgentId }),
+                }),
+              },
+            }
+          : {}),
+        config: params.cfg,
+        agentId: usageAgentId,
+      });
+      const summary = await loadCostUsageSummary({
+        config: params.cfg,
+        agentId: usageAgentId,
+      });
 
-  return {
-    shouldContinue: false,
-    reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
-  };
-};
+      const sessionCost = formatUsd(sessionSummary?.totalCost);
+      const sessionTokens = sessionSummary?.totalTokens
+        ? formatTokenCount(sessionSummary.totalTokens)
+        : undefined;
+      const sessionMissing = sessionSummary?.missingCostEntries ?? 0;
+      const sessionSuffix = sessionMissing > 0 ? " (partial)" : "";
+      const sessionLine =
+        sessionCost || sessionTokens
+          ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
+          : "Session n/a";
+
+      const todayKey = new Date().toLocaleDateString("en-CA");
+      const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
+      const todayCost = formatUsd(todayEntry?.totalCost);
+      const todayMissing = todayEntry?.missingCostEntries ?? 0;
+      const todaySuffix = todayMissing > 0 ? " (partial)" : "";
+      const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
+
+      const last30Cost = formatUsd(summary.totals.totalCost);
+      const last30Missing = summary.totals.missingCostEntries;
+      const last30Suffix = last30Missing > 0 ? " (partial)" : "";
+      const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
+
+      return sessionCommandReply(`💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`);
+    }
+
+    const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
+
+    if (rawArgs && !requested && !isReset) {
+      return sessionCommandReply("⚙️ Usage: /usage off|tokens|full|reset|cost");
+    }
+
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+    if (isReset) {
+      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+        delete targetSessionEntry.responseUsage;
+        params.sessionStore[params.sessionKey] = targetSessionEntry;
+        if (
+          !(await persistSessionEntry({
+            ...params,
+            sessionEntry: targetSessionEntry,
+            touchedFields: ["responseUsage"],
+          }))
+        ) {
+          return sessionEntryPersistenceConflictReply();
+        }
+      }
+      return sessionCommandReply("⚙️ Usage footer: reset to default.");
+    }
+
+    const replyChannel = params.command.channel;
+    const currentRaw = targetSessionEntry?.responseUsage;
+    const current = resolveEffectiveResponseUsage(
+      currentRaw,
+      params.cfg.messages?.responseUsage,
+      replyChannel,
+    );
+    const next =
+      requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+
+    if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+      targetSessionEntry.responseUsage = next;
+      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      if (
+        !(await persistSessionEntry({
+          ...params,
+          sessionEntry: targetSessionEntry,
+          touchedFields: ["responseUsage"],
+        }))
+      ) {
+        return sessionEntryPersistenceConflictReply();
+      }
+    }
+
+    return sessionCommandReply(`⚙️ Usage footer: ${next}.`);
+  },
+);
+
+export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
+  { label: "/fast", match: (body) => matchCommandPrefix(body, "/fast"), silentUnauthorized: true },
+  async (params, rawArgs) => {
+    const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
+    if (!rawMode || rawMode === "status") {
+      const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+      const sessionAgentId = params.sessionKey
+        ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+        : params.agentId;
+      const state = resolveFastModeState({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        agentId: sessionAgentId,
+        sessionEntry: targetSessionEntry,
+      });
+      return sessionCommandReply(
+        formatFastModeCurrentStatus({
+          mode: state.mode,
+          source: state.source,
+          fastAutoOnSeconds: state.fastAutoOnSeconds,
+          label: "⚙️ Current fast mode",
+        }),
+      );
+    }
+
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
+    const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
+    if (nextMode === undefined) {
+      if (resetsToDefault) {
+        if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+          delete targetSessionEntry.fastMode;
+          if (
+            !(await persistSessionEntry({
+              ...params,
+              sessionEntry: targetSessionEntry,
+              touchedFields: ["fastMode"],
+            }))
+          ) {
+            return sessionEntryPersistenceConflictReply();
+          }
+        }
+        return sessionCommandReply("⚙️ Fast mode reset to default.");
+      }
+      return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|default");
+    }
+
+    if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+      targetSessionEntry.fastMode = nextMode;
+      if (
+        !(await persistSessionEntry({
+          ...params,
+          sessionEntry: targetSessionEntry,
+          touchedFields: ["fastMode"],
+        }))
+      ) {
+        return sessionEntryPersistenceConflictReply();
+      }
+    }
+
+    return sessionCommandReply(
+      nextMode === "auto"
+        ? "⚙️ Fast mode set to auto."
+        : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+    );
+  },
+);
 
 export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -475,10 +494,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const tokens = rest.split(/\s+/).filter(Boolean);
   const action = normalizeOptionalLowercaseString(tokens[0]);
   if (action !== SESSION_ACTION_IDLE && action !== SESSION_ACTION_MAX_AGE) {
-    return {
-      shouldContinue: false,
-      reply: { text: resolveSessionCommandUsage() },
-    };
+    return sessionCommandReply(resolveSessionCommandUsage());
   }
 
   const channelId =
@@ -502,19 +518,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       !commandSupportsCurrentConversationBinding ||
       !commandSupportsLifecycleUpdate
     ) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚠️ /session idle and /session max-age are currently available only on channels that support focused conversation bindings.",
-        },
-      };
+      return sessionCommandReply(
+        "⚠️ /session idle and /session max-age are currently available only on channels that support focused conversation bindings.",
+      );
     }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /session idle and /session max-age must be run inside a focused conversation.",
-      },
-    };
+    return sessionCommandReply(
+      "⚠️ /session idle and /session max-age must be run inside a focused conversation.",
+    );
   }
   const resolvedChannelId = bindingContext.channel || channelId;
   const conversationBindings = resolvedChannelId
@@ -528,22 +538,16 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       ? typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
       : typeof conversationBindings?.setMaxAgeBySessionKey === "function";
   if (!resolvedChannelId || !supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /session idle and /session max-age are currently available only on channels that support focused conversation bindings.",
-      },
-    };
+    return sessionCommandReply(
+      "⚠️ /session idle and /session max-age are currently available only on channels that support focused conversation bindings.",
+    );
   }
 
   const sessionBindingService = getSessionBindingService();
 
   const activeBinding = sessionBindingService.resolveByConversation(bindingContext);
   if (!activeBinding) {
-    return {
-      shouldContinue: false,
-      reply: { text: "ℹ️ This conversation is not currently focused." },
-    };
+    return sessionCommandReply("ℹ️ This conversation is not currently focused.");
   }
 
   const idleTimeoutMs = resolveSessionBindingDurationMs(
@@ -566,17 +570,11 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
         Number.isFinite(idleExpiresAt) &&
         idleExpiresAt > Date.now()
       ) {
-        return {
-          shouldContinue: false,
-          reply: {
-            text: `ℹ️ Idle timeout active (${formatThreadBindingDurationLabel(idleTimeoutMs)}, next auto-unfocus at ${formatSessionExpiry(idleExpiresAt)}).`,
-          },
-        };
+        return sessionCommandReply(
+          `ℹ️ Idle timeout active (${formatThreadBindingDurationLabel(idleTimeoutMs)}, next auto-unfocus at ${formatSessionExpiry(idleExpiresAt)}).`,
+        );
       }
-      return {
-        shouldContinue: false,
-        reply: { text: "ℹ️ Idle timeout is currently disabled for this focused session." },
-      };
+      return sessionCommandReply("ℹ️ Idle timeout is currently disabled for this focused session.");
     }
 
     if (
@@ -584,38 +582,26 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       Number.isFinite(maxAgeExpiresAt) &&
       maxAgeExpiresAt > Date.now()
     ) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `ℹ️ Max age active (${formatThreadBindingDurationLabel(maxAgeMs)}, hard auto-unfocus at ${formatSessionExpiry(maxAgeExpiresAt)}).`,
-        },
-      };
+      return sessionCommandReply(
+        `ℹ️ Max age active (${formatThreadBindingDurationLabel(maxAgeMs)}, hard auto-unfocus at ${formatSessionExpiry(maxAgeExpiresAt)}).`,
+      );
     }
-    return {
-      shouldContinue: false,
-      reply: { text: "ℹ️ Max age is currently disabled for this focused session." },
-    };
+    return sessionCommandReply("ℹ️ Max age is currently disabled for this focused session.");
   }
 
   const senderId = normalizeOptionalString(params.command.senderId) ?? "";
   const boundBy = resolveSessionBindingBoundBy(activeBinding);
   if (boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `⚠️ Only ${boundBy} can update session lifecycle settings for this conversation.`,
-      },
-    };
+    return sessionCommandReply(
+      `⚠️ Only ${boundBy} can update session lifecycle settings for this conversation.`,
+    );
   }
 
   let durationMs: number;
   try {
     durationMs = parseSessionDurationMs(durationArgRaw);
   } catch {
-    return {
-      shouldContinue: false,
-      reply: { text: resolveSessionCommandUsage() },
-    };
+    return sessionCommandReply(resolveSessionCommandUsage());
   }
 
   const updatedBindings =
@@ -633,27 +619,19 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           maxAgeMs: durationMs,
         });
   if (updatedBindings.length === 0) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text:
-          action === SESSION_ACTION_IDLE
-            ? "⚠️ Failed to update idle timeout for the current binding."
-            : "⚠️ Failed to update max age for the current binding.",
-      },
-    };
+    return sessionCommandReply(
+      action === SESSION_ACTION_IDLE
+        ? "⚠️ Failed to update idle timeout for the current binding."
+        : "⚠️ Failed to update max age for the current binding.",
+    );
   }
 
   if (durationMs <= 0) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text:
-          action === SESSION_ACTION_IDLE
-            ? `✅ Idle timeout disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`
-            : `✅ Max age disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`,
-      },
-    };
+    return sessionCommandReply(
+      action === SESSION_ACTION_IDLE
+        ? `✅ Idle timeout disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`
+        : `✅ Max age disabled for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"}.`,
+    );
   }
 
   const nextExpiry = resolveUpdatedBindingExpiry({
@@ -665,15 +643,11 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       ? formatSessionExpiry(nextExpiry)
       : "n/a";
 
-  return {
-    shouldContinue: false,
-    reply: {
-      text:
-        action === SESSION_ACTION_IDLE
-          ? `✅ Idle timeout set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (next auto-unfocus at ${expiryLabel}).`
-          : `✅ Max age set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (hard auto-unfocus at ${expiryLabel}).`,
-    },
-  };
+  return sessionCommandReply(
+    action === SESSION_ACTION_IDLE
+      ? `✅ Idle timeout set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (next auto-unfocus at ${expiryLabel}).`
+      : `✅ Max age set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (hard auto-unfocus at ${expiryLabel}).`,
+  );
 };
 export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -693,17 +667,12 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     return nonOwner;
   }
   if (!isRestartEnabled(params.cfg)) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /restart is disabled (commands.restart=false).",
-      },
-    };
+    return sessionCommandReply("⚠️ /restart is disabled (commands.restart=false).");
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {
-    let sentinelPath: string | null = null;
+    let sentinelWritten = false;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
       // Sibling session-routing guard: /restart writes a session-scoped sentinel
@@ -713,52 +682,44 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {
-              sentinelPath = await writeRestartSentinel(sentinelPayload);
+              await writeRestartSentinel(sentinelPayload);
+              sentinelWritten = true;
             },
             afterEmitRejected: async () => {
-              await removeRestartSentinelFile(sentinelPath);
+              if (sentinelWritten) {
+                await clearRestartSentinel();
+              }
             },
           }
         : undefined,
     });
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
-      },
-    };
+    return sessionCommandReply(
+      "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+    );
   }
-  let sentinelPath: string | null = null;
+  let sentinelWritten = false;
   try {
     if (sentinelPayload) {
-      sentinelPath = await writeRestartSentinel(sentinelPayload);
+      await writeRestartSentinel(sentinelPayload);
+      sentinelWritten = true;
     }
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
-      },
-    };
+    return sessionCommandReply(
+      "⚠️ Restart failed: could not persist the post-restart acknowledgement.",
+    );
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    await removeRestartSentinelFile(sentinelPath);
+    if (sentinelWritten) {
+      await clearRestartSentinel();
+    }
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `⚠️ Restart failed (${restartMethod.method}).${detail}`,
-      },
-    };
+    return sessionCommandReply(`⚠️ Restart failed (${restartMethod.method}).${detail}`);
   }
-  return {
-    shouldContinue: false,
-    reply: {
-      text: `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
-    },
-  };
+  return sessionCommandReply(
+    `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+  );
 };
 
 export { handleAbortTrigger, handleStopCommand };

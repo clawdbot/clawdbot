@@ -3,8 +3,17 @@ import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { resolveTwitchToken } from "./token.js";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelLogSink,
+  TwitchAccountConfig,
+  TwitchChatMessage,
+} from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
 const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
@@ -19,7 +28,24 @@ export class TwitchClientManager {
   private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
   private messageHandlerTokens = new Map<string, symbol>();
 
-  constructor(private logger: ChannelLogSink) {}
+  constructor(
+    private logger: ChannelLogSink,
+    private statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void,
+  ) {}
+
+  setStatusSink(statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void): void {
+    if (statusSink) {
+      this.statusSink = statusSink;
+    }
+  }
+
+  private publishReady(): void {
+    this.statusSink?.(channelReadyPatch());
+  }
+
+  private publishRecovering(lastError: string): void {
+    this.statusSink?.({ connected: false, lifecycle: "recovering", lastError });
+  }
 
   /**
    * Create an auth provider for the account.
@@ -172,8 +198,6 @@ export class TwitchClientManager {
       },
     });
 
-    this.setupClientHandlers(client, account);
-
     this.pendingClients.set(key, client);
     try {
       await this.connectClient(client, account);
@@ -189,6 +213,7 @@ export class TwitchClientManager {
       throw error;
     }
 
+    this.setupClientHandlers(client, account);
     this.clients.set(key, client);
     this.logger.info(`Connected to Twitch as ${account.username}`);
 
@@ -224,14 +249,21 @@ export class TwitchClientManager {
         resolve();
       };
       listeners.push(
-        client.onAuthenticationSuccess(() => finish()),
+        client.onAuthenticationSuccess(() => {
+          this.publishReady();
+          finish();
+        }),
         client.onAuthenticationFailure((text) => {
           authRetryPending = true;
+          this.publishRecovering(text);
           this.logger.warn(
             `Twitch authentication failed for ${account.username}; waiting for retry, disconnect, or timeout: ${text}`,
           );
         }),
         client.onDisconnect((manual, reason) => {
+          if (!manual) {
+            this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
+          }
           if (authRetryPending && !manual) {
             this.logger.debug?.(
               `Twitch disconnected during auth retry for ${account.username}: ${formatErrorMessage(reason)}`,
@@ -271,11 +303,10 @@ export class TwitchClientManager {
     client.onMessage((channelName, _user, messageText, msg) => {
       const handler = this.messageHandlers.get(key);
       if (handler) {
-        const normalizedChannel = channelName.startsWith("#") ? channelName.slice(1) : channelName;
         const from = `twitch:${msg.userInfo.userName}`;
-        const preview = messageText.slice(0, 100).replace(/\n/g, "\\n");
+        const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
         this.logger.debug?.(
-          `twitch inbound: channel=${normalizedChannel} from=${from} len=${messageText.length} preview="${preview}"`,
+          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length} preview="${preview}"`,
         );
 
         handler({
@@ -283,15 +314,25 @@ export class TwitchClientManager {
           displayName: msg.userInfo.displayName,
           userId: msg.userInfo.userId,
           message: messageText,
-          channel: normalizedChannel,
+          // Preserve the raw callback channel; durable dispatch normalizes it.
+          channel: channelName,
           id: msg.id,
-          timestamp: new Date(),
+          timestamp: Date.now(),
           isMod: msg.userInfo.isMod,
           isOwner: msg.userInfo.isBroadcaster,
           isVip: msg.userInfo.isVip,
           isSub: msg.userInfo.isSubscriber,
           chatType: "group",
         });
+      }
+    });
+    client.onAuthenticationSuccess(() => this.publishReady());
+    client.onAuthenticationFailure((text) => {
+      this.publishRecovering(text);
+    });
+    client.onDisconnect((manual, reason) => {
+      if (!manual) {
+        this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
       }
     });
 
@@ -378,8 +419,10 @@ export class TwitchClientManager {
       // Generate a message ID (Twurple's say() doesn't return the message ID, so we generate one)
       const messageId = crypto.randomUUID();
 
-      // Send message (Twurple handles rate limiting)
-      await client.say(channel, message);
+      // Pre-chunk so Twurple's raw UTF-16 fallback cannot split surrogate pairs.
+      for (const chunk of chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT)) {
+        await client.say(channel, chunk);
+      }
 
       return { ok: true, messageId };
     } catch (error) {

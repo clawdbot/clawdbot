@@ -5,19 +5,25 @@
  * like command processing, session lifecycle, etc.
  */
 
-import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema.js";
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  clearLegacyPluginInternalHooks,
+  listLegacyPluginInternalHookEventKeys,
+  listLegacyPluginInternalHooks,
+} from "../plugins/legacy-internal-hook-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   InternalHookEvent,
   InternalHookEventType,
   InternalHookHandler,
 } from "./internal-hook-types.js";
+import type { MessageHookMediaFact } from "./message-hook-media.js";
 export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
 
 export type AgentBootstrapHookContext = {
@@ -66,6 +72,12 @@ export type MessageReceivedHookContext = {
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
+  /** Staged, locally usable attachments in stable source order. */
+  media?: MessageHookMediaFact[];
+  /** Original attachment facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
   /** Additional provider-specific metadata */
   metadata?: Record<string, unknown>;
 };
@@ -132,9 +144,15 @@ type MessageEnrichedBodyHookContext = {
   provider?: string;
   /** Surface name */
   surface?: string;
-  /** Path to the media file that was transcribed */
+  /** Ordered media facts available to preprocessing/transcription hooks. */
+  media?: MessageHookMediaFact[];
+  /** Original facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
+  /** @deprecated Use `media?.[0]?.path`. */
   mediaPath?: string;
-  /** MIME type of the media */
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   mediaType?: string;
 };
 
@@ -252,6 +270,7 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
  */
 export function clearInternalHooks(): void {
   handlers.clear();
+  clearLegacyPluginInternalHooks();
 }
 
 export function setInternalHooksEnabled(enabled: boolean): void {
@@ -262,12 +281,15 @@ export function setInternalHooksEnabled(enabled: boolean): void {
  * Get all registered event keys (useful for debugging)
  */
 export function getRegisteredEventKeys(): string[] {
-  return Array.from(handlers.keys());
+  return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
   return (
-    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+    (handlers.get(type)?.length ?? 0) + listLegacyPluginInternalHooks(type).length > 0 ||
+    (handlers.get(`${type}:${action}`)?.length ?? 0) +
+      listLegacyPluginInternalHooks(`${type}:${action}`).length >
+      0
   );
 }
 
@@ -291,8 +313,15 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const typeHandlers = [
+    ...(handlers.get(event.type) ?? []),
+    ...listLegacyPluginInternalHooks(event.type),
+  ];
+  const specificKey = `${event.type}:${event.action}`;
+  const specificHandlers = [
+    ...(handlers.get(specificKey) ?? []),
+    ...listLegacyPluginInternalHooks(specificKey),
+  ];
   const allHandlers = [...typeHandlers, ...specificHandlers];
 
   for (const handler of allHandlers) {

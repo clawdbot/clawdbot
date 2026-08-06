@@ -1,12 +1,11 @@
 #!/usr/bin/env -S node --import tsx
 // Telegram User Credential script supports OpenClaw repository automation.
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { normalizeCredentialPayloadForKind } from "../../qa/convex-credential-broker/convex/payload-validation.js";
 import { fetchJsonWithTimeout, runCommand } from "./telegram-user-credential-io.ts";
 import { expandHome, writePrivateJson } from "./telegram-user-credential-paths.ts";
 
@@ -18,23 +17,30 @@ const DEFAULT_BOT_CREDENTIALS_FILE =
 const DEFAULT_CONVEX_ENV_FILE = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
+const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
+const TELEGRAM_USER_ID_RE = /^\d+$/u;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
 const COMMAND_TIMEOUT_MS = optionalPositiveInteger(
   process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_COMMAND_TIMEOUT_MS?.trim(),
   120_000,
+  "OPENCLAW_TELEGRAM_USER_CREDENTIAL_COMMAND_TIMEOUT_MS",
 );
 const BROKER_TIMEOUT_MS = optionalPositiveInteger(
   process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_BROKER_TIMEOUT_MS?.trim(),
   30_000,
+  "OPENCLAW_TELEGRAM_USER_CREDENTIAL_BROKER_TIMEOUT_MS",
 );
 const CHUNKED_PAYLOAD_MAX_BYTES = optionalPositiveInteger(
   process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES?.trim(),
   DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES,
+  "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES",
 );
 const CHUNKED_PAYLOAD_MAX_CHUNKS = optionalPositiveInteger(
   process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS?.trim(),
   DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS,
+  "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS",
 );
 
 function usage(): never {
@@ -78,7 +84,7 @@ function parseArgs(argv: string[]) {
       usage();
     }
     const value = args[index + 1];
-    if (!value || value.startsWith("--")) {
+    if (!value || value.startsWith("-")) {
       usage();
     }
     opts.set(key.slice(2), value);
@@ -156,19 +162,98 @@ function optionalString(source: JsonObject, key: string) {
   return undefined;
 }
 
-function optionalPositiveInteger(value: string | undefined, fallback: number) {
-  if (!value) {
+function optionalPositiveInteger(value: string | undefined, fallback: number, label = "value") {
+  const text = value?.trim();
+  if (!text) {
     return fallback;
   }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(`Expected positive integer, got ${value}.`);
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}.`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}.`);
   }
   return parsed;
 }
 
+function throwCredentialPayloadError(message: string): never {
+  throw new Error(message);
+}
+
+function requireTelegramUserPayloadString(payload: Record<string, unknown>, key: string): string {
+  const raw = payload[key];
+  if (typeof raw !== "string") {
+    throwCredentialPayloadError(
+      `Credential payload for kind "${TELEGRAM_USER_QA_CREDENTIAL_KIND}" must include "${key}" as a string.`,
+    );
+  }
+  const value = raw.trim();
+  if (!value) {
+    throwCredentialPayloadError(
+      `Credential payload for kind "${TELEGRAM_USER_QA_CREDENTIAL_KIND}" must include a non-empty "${key}" value.`,
+    );
+  }
+  return value;
+}
+
 function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>): JsonObject {
-  return normalizeCredentialPayloadForKind(TELEGRAM_USER_QA_CREDENTIAL_KIND, payload);
+  const groupId = requireTelegramUserPayloadString(payload, "groupId");
+  if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include a numeric "groupId" string.',
+    );
+  }
+  const testerUserId = requireTelegramUserPayloadString(payload, "testerUserId");
+  if (!TELEGRAM_USER_ID_RE.test(testerUserId)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include a numeric "testerUserId" string.',
+    );
+  }
+  const telegramApiId = requireTelegramUserPayloadString(payload, "telegramApiId");
+  if (!TELEGRAM_USER_ID_RE.test(telegramApiId)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include a numeric "telegramApiId" string.',
+    );
+  }
+  const tdlibArchiveSha256 = requireTelegramUserPayloadString(
+    payload,
+    "tdlibArchiveSha256",
+  ).toLowerCase();
+  const desktopTdataArchiveSha256 = requireTelegramUserPayloadString(
+    payload,
+    "desktopTdataArchiveSha256",
+  ).toLowerCase();
+  if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include "tdlibArchiveSha256" as a SHA-256 hex string.',
+    );
+  }
+  if (!SHA256_HEX_RE.test(desktopTdataArchiveSha256)) {
+    throwCredentialPayloadError(
+      'Credential payload for kind "telegram-user" must include "desktopTdataArchiveSha256" as a SHA-256 hex string.',
+    );
+  }
+
+  return {
+    groupId,
+    sutToken: requireTelegramUserPayloadString(payload, "sutToken"),
+    testerUserId,
+    testerUsername: requireTelegramUserPayloadString(payload, "testerUsername"),
+    telegramApiId,
+    telegramApiHash: requireTelegramUserPayloadString(payload, "telegramApiHash"),
+    tdlibDatabaseEncryptionKey: requireTelegramUserPayloadString(
+      payload,
+      "tdlibDatabaseEncryptionKey",
+    ),
+    tdlibArchiveBase64: requireTelegramUserPayloadString(payload, "tdlibArchiveBase64"),
+    tdlibArchiveSha256,
+    desktopTdataArchiveBase64: requireTelegramUserPayloadString(
+      payload,
+      "desktopTdataArchiveBase64",
+    ),
+    desktopTdataArchiveSha256,
+  };
 }
 
 async function fileSha256(pathValue: string) {
@@ -224,6 +309,10 @@ async function postBroker(params: {
   return payload;
 }
 
+export function buildTelegramUserCredentialOwnerId() {
+  return `telegram-user-${randomUUID()}`;
+}
+
 async function resolveConvexLeaseConfig(opts: Map<string, string>) {
   const envFile = opts.get("env-file") || DEFAULT_CONVEX_ENV_FILE;
   const fileEnv = await readEnvFile(envFile);
@@ -249,17 +338,19 @@ async function resolveConvexLeaseConfig(opts: Map<string, string>) {
         process.env.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS?.trim() ||
         fileEnv.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS,
       20 * 60 * 1_000,
+      "OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS",
     ),
     heartbeatIntervalMs: optionalPositiveInteger(
       opts.get("heartbeat-interval-ms") ||
         process.env.OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS?.trim() ||
         fileEnv.OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS,
       30_000,
+      "OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS",
     ),
     ownerId:
       opts.get("owner-id") ||
       process.env.OPENCLAW_QA_CREDENTIAL_OWNER_ID?.trim() ||
-      `telegram-user-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`,
+      buildTelegramUserCredentialOwnerId(),
   };
 }
 
@@ -310,7 +401,7 @@ async function hydratePayloadFromLease(params: {
   const credentialId = requireString(params.acquired, "credentialId");
   const leaseToken = requireString(params.acquired, "leaseToken");
   const chunks: string[] = [];
-  let serializedLength = 0;
+  let serializedBytes = 0;
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const chunk = await postBroker({
       action: "payload-chunk",
@@ -326,14 +417,14 @@ async function hydratePayloadFromLease(params: {
       },
     });
     const data = requireString(chunk, "data");
-    serializedLength += data.length;
-    if (serializedLength > marker.byteLength) {
+    serializedBytes += Buffer.byteLength(data, "utf8");
+    if (serializedBytes > marker.byteLength) {
       throw new Error("Chunked payload exceeded declared byteLength.");
     }
     chunks.push(data);
   }
   const serialized = chunks.join("");
-  if (serializedLength !== marker.byteLength) {
+  if (serializedBytes !== marker.byteLength) {
     throw new Error("Chunked payload length mismatch.");
   }
   return parseTelegramUserQaCredentialPayload(JSON.parse(serialized));
@@ -626,4 +717,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   await main();
 }
 
-export { parseChunkedPayloadMarker };
+export { hydratePayloadFromLease, optionalPositiveInteger, parseArgs, parseChunkedPayloadMarker };

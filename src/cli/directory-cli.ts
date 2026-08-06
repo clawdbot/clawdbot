@@ -15,9 +15,9 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatHelpExamples } from "./help-format.js";
-import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 function parseLimit(value: unknown): number | null {
   if (value === undefined || value === null || value === "") {

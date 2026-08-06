@@ -1,10 +1,7 @@
 // Status scan config tests cover scan command config loading and cold-start resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  loadStatusScanCommandConfig,
-  resolveStatusScanColdStart,
-  shouldSkipStatusScanMissingConfigFastPath,
-} from "./status.scan.config-shared.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfigPath: vi.fn(),
@@ -22,22 +19,11 @@ describe("status.scan.config-shared", () => {
     );
   });
 
-  it("detects the test fast-path env toggle", () => {
-    expect(shouldSkipStatusScanMissingConfigFastPath({ ...process.env, VITEST: "true" })).toBe(
-      true,
-    );
-    expect(shouldSkipStatusScanMissingConfigFastPath({ ...process.env, NODE_ENV: "test" })).toBe(
-      true,
-    );
-    expect(shouldSkipStatusScanMissingConfigFastPath({})).toBe(false);
-  });
-
-  it("treats missing config as cold-start when fast-path bypass is disabled", () => {
-    expect(resolveStatusScanColdStart({ env: {}, allowMissingConfigFastPath: false })).toBe(true);
-  });
-
   it("skips read/resolve on fast-json cold-start outside tests", async () => {
-    const readBestEffortConfig = vi.fn(async () => ({ channels: { quietchat: {} } }));
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: { channels: { quietchat: {} } },
+      sourceConfig: { channels: { quietchat: {} } },
+    }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: { channels: { quietchat: {} } },
       diagnostics: ["resolved"],
@@ -45,13 +31,13 @@ describe("status.scan.config-shared", () => {
 
     const result = await loadStatusScanCommandConfig({
       commandName: "status --json",
-      readBestEffortConfig,
+      readConfigSnapshot,
       resolveConfig,
       env: {},
       allowMissingConfigFastPath: true,
     });
 
-    expect(readBestEffortConfig).not.toHaveBeenCalled();
+    expect(readConfigSnapshot).not.toHaveBeenCalled();
     expect(resolveConfig).not.toHaveBeenCalled();
     expect(result).toEqual({
       coldStart: true,
@@ -64,7 +50,10 @@ describe("status.scan.config-shared", () => {
   it("still reads and resolves during tests even when the config path is missing", async () => {
     const sourceConfig = { channels: { quietchat: {} } };
     const resolvedConfig = { channels: { quietchat: {} } };
-    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig,
       diagnostics: ["resolved"],
@@ -72,13 +61,13 @@ describe("status.scan.config-shared", () => {
 
     const result = await loadStatusScanCommandConfig({
       commandName: "status --json",
-      readBestEffortConfig,
+      readConfigSnapshot,
       resolveConfig,
       env: { VITEST: "true" },
       allowMissingConfigFastPath: true,
     });
 
-    expect(readBestEffortConfig).toHaveBeenCalled();
+    expect(readConfigSnapshot).toHaveBeenCalled();
     expect(resolveConfig).toHaveBeenCalledWith(sourceConfig);
     expect(result).toEqual({
       coldStart: false,
@@ -88,10 +77,49 @@ describe("status.scan.config-shared", () => {
     });
   });
 
+  it("keeps raw source config separate from materialized resolution input", async () => {
+    const loadedConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [{ id: "claude-sonnet-4-6", contextWindow: 200_000 }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const sourceConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [{ id: "claude-sonnet-4-6" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const resolvedConfig = structuredClone(loadedConfig);
+    const resolveConfig = vi.fn(async () => ({ resolvedConfig, diagnostics: [] }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status",
+      readConfigSnapshot: async () => ({ config: loadedConfig, sourceConfig }),
+      resolveConfig,
+      env: { VITEST: "true" },
+    });
+
+    expect(resolveConfig).toHaveBeenCalledWith(loadedConfig);
+    expect(result.sourceConfig).toBe(sourceConfig);
+    expect(result.resolvedConfig).toBe(resolvedConfig);
+  });
+
   it("adds a status diagnostic for gateway token source conflicts", async () => {
     const sourceConfig = { gateway: { auth: { token: "config-token" } } };
     const resolvedConfig = sourceConfig;
-    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig,
       diagnostics: [],
@@ -99,7 +127,7 @@ describe("status.scan.config-shared", () => {
 
     const result = await loadStatusScanCommandConfig({
       commandName: "status --json",
-      readBestEffortConfig,
+      readConfigSnapshot,
       resolveConfig,
       env: { VITEST: "true", OPENCLAW_GATEWAY_TOKEN: "env-token" },
       allowMissingConfigFastPath: true,
@@ -112,7 +140,10 @@ describe("status.scan.config-shared", () => {
 
   it("does not add a token conflict diagnostic inside the managed gateway service context", async () => {
     const sourceConfig = { gateway: { auth: { token: "config-token" } } };
-    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: sourceConfig,
       diagnostics: [],
@@ -120,7 +151,7 @@ describe("status.scan.config-shared", () => {
 
     const result = await loadStatusScanCommandConfig({
       commandName: "status --json",
-      readBestEffortConfig,
+      readConfigSnapshot,
       resolveConfig,
       env: {
         VITEST: "true",
@@ -138,7 +169,10 @@ describe("status.scan.config-shared", () => {
       gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
       secrets: { providers: { default: { source: "env" as const } } },
     };
-    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: sourceConfig,
       diagnostics: [],
@@ -146,7 +180,7 @@ describe("status.scan.config-shared", () => {
 
     const result = await loadStatusScanCommandConfig({
       commandName: "status --json",
-      readBestEffortConfig,
+      readConfigSnapshot,
       resolveConfig,
       env: { VITEST: "true", OPENCLAW_GATEWAY_TOKEN: "env-token" },
       allowMissingConfigFastPath: true,
@@ -163,7 +197,10 @@ describe("status.scan.config-shared", () => {
         auth: { token: "local-token" },
       },
     };
-    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig: sourceConfig,
       diagnostics: [],
@@ -171,7 +208,7 @@ describe("status.scan.config-shared", () => {
 
     const result = await loadStatusScanCommandConfig({
       commandName: "status --json",
-      readBestEffortConfig,
+      readConfigSnapshot,
       resolveConfig,
       env: { VITEST: "true", OPENCLAW_GATEWAY_TOKEN: "env-token" },
       allowMissingConfigFastPath: true,

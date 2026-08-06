@@ -4,8 +4,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const repoRoot = resolveRepoRoot(import.meta.url);
 
 const LOCAL_WILDCARD_REEXPORT_PATTERN = /^\s*export\s+(?:type\s+)?\*\s+from\s+["'](?:\.{1,2}\/)/u;
 
@@ -52,7 +52,7 @@ export function findLocalWildcardReexports(source) {
 /**
  * Collects guarded extension API/runtime barrels that use wildcard re-exports.
  */
-export async function collectExtensionWildcardReexports(rootDir = repoRoot) {
+async function collectExtensionWildcardReexports(rootDir = repoRoot) {
   const files = await listGuardedFiles(rootDir);
   const violations = [];
   for (const filePath of files) {

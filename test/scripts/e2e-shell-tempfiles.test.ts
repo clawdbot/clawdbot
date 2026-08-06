@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function listShellScripts(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -19,6 +22,22 @@ async function listShellScripts(dir: string): Promise<string[]> {
   }
 
   return scripts;
+}
+
+async function extractClawhubSkillInstallVerifier(): Promise<string> {
+  const script = await readFile("scripts/e2e/lib/skills/clawhub-install-proof.sh", "utf8");
+  const marker =
+    'node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" <<\'NODE\'\n';
+  const start = script.indexOf(marker);
+  if (start === -1) {
+    throw new Error("ClawHub skill install verifier heredoc was not found");
+  }
+  const verifierStart = start + marker.length;
+  const verifierEnd = script.indexOf("\nNODE", verifierStart);
+  if (verifierEnd === -1) {
+    throw new Error("ClawHub skill install verifier heredoc was not terminated");
+  }
+  return script.slice(verifierStart, verifierEnd);
 }
 
 describe("e2e shell tempfile hygiene", () => {
@@ -75,6 +94,40 @@ run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }
+  });
+
+  it("does not wait for a skills prompt after the ready state renders", async () => {
+    const tempRoot = tempDirs.make("openclaw-onboard-skills-ready-");
+    const fixturePath = path.join(tempRoot, "skills-ready.sh");
+    const sentPath = path.join(tempRoot, "sent.txt");
+    const wizardLogPath = path.join(tempRoot, "skills.log");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+OPENCLAW_ENTRY=node
+source scripts/e2e/lib/onboard/scenario.sh
+
+sleep() { :; }
+WIZARD_LOG_PATH=${JSON.stringify(wizardLogPath)}
+printf 'Skills status\\nAll skills ready\\n' >"$WIZARD_LOG_PATH"
+exec 3>${JSON.stringify(sentPath)}
+send_skills_flow
+exec 3>&-
+test ! -s ${JSON.stringify(sentPath)}
+`,
+    );
+
+    const result = spawnSync("bash", [fixturePath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain("Timeout waiting");
   });
 
   it("checks local onboarding logs for systemd noise", async () => {
@@ -177,6 +230,47 @@ test ! -e "$ONBOARD_TMP_DIR"
     }
   });
 
+  it("rejects invalid onboarding gateway wait attempts before probing", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-onboard-gateway-attempts-"));
+    const fixturePath = path.join(tempRoot, "gateway-attempts.sh");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+export OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS=2x
+OPENCLAW_ENTRY=node
+source scripts/e2e/lib/onboard/scenario.sh
+
+openclaw_e2e_probe_tcp() {
+  echo "probe should not run" >&2
+  return 1
+}
+set +e
+wait_for_gateway
+status="$?"
+set -e
+cleanup_onboard_artifacts
+exit "$status"
+`,
+    );
+
+    try {
+      const result = spawnSync("bash", [fixturePath], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("invalid OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS: 2x");
+      expect(result.stderr).not.toContain("probe should not run");
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("removes fallback ClawHub skill install HOME on failure", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-home-test-"));
     const fakeBin = path.join(tempRoot, "bin");
@@ -209,6 +303,58 @@ exit 42
       expect(
         scratchEntries.filter((entry) => entry.startsWith("openclaw-skill-install-home.")),
       ).toEqual([]);
+    } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects ClawHub skill info paths that only share a resolved prefix", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-clawhub-info-path-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const slug = "demo";
+    const skillDir = path.join(workspaceDir, "skills", slug);
+    const escapedInfoPath = path.join(workspaceDir, "skills", `${slug}-escape`, "SKILL.md");
+    const configPath = path.join(tempRoot, "openclaw.json");
+    const originPath = path.join(skillDir, ".clawhub", "origin.json");
+    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+    const infoPath = path.join(tempRoot, "info.json");
+
+    try {
+      await mkdir(path.dirname(originPath), { recursive: true });
+      await mkdir(path.dirname(lockPath), { recursive: true });
+      await writeFile(path.join(skillDir, "SKILL.md"), `---\nname: Demo\n---\n`);
+      await writeFile(
+        configPath,
+        `${JSON.stringify({ skills: { install: { allowUploadedArchives: false } } })}\n`,
+      );
+      await writeFile(
+        originPath,
+        `${JSON.stringify({
+          installedVersion: "1.0.0",
+          registry: "https://clawhub.ai",
+          slug,
+        })}\n`,
+      );
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({ skills: { [slug]: { version: "1.0.0" } } })}\n`,
+      );
+      await writeFile(
+        infoPath,
+        `${JSON.stringify({ filePath: escapedInfoPath, skillKey: "wrong-skill" })}\n`,
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", configPath, skillDir, originPath, lockPath, infoPath, slug],
+        {
+          encoding: "utf8",
+          input: await extractClawhubSkillInstallVerifier(),
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("skills info did not report installed skill demo");
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }

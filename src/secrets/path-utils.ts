@@ -1,5 +1,6 @@
 /** Strict dotted-path get/set/delete helpers for secrets migration targets. */
 import { isDeepStrictEqual } from "node:util";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
 
@@ -23,6 +24,16 @@ function expectedContainer(nextSegment: string): "array" | "object" {
   return looksLikeArrayIndexSegment(nextSegment) ? "array" : "object";
 }
 
+function assertSafeMutationPath(segments: string[]): void {
+  if (segments.length === 0) {
+    throw new Error("Target path is empty.");
+  }
+  const blockedSegment = segments.find(isBlockedObjectKey);
+  if (blockedSegment) {
+    throw new Error(`Refusing to mutate prototype-polluting path segment "${blockedSegment}".`);
+  }
+}
+
 function parseArrayLeafTarget(
   cursor: unknown,
   leaf: string,
@@ -39,9 +50,7 @@ function traverseToLeafParent(params: {
   segments: string[];
   requireExistingSegment: boolean;
 }): unknown {
-  if (params.segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
+  assertSafeMutationPath(params.segments);
 
   let cursor: unknown = params.root;
   for (let index = 0; index < params.segments.length - 1; index += 1) {
@@ -108,9 +117,7 @@ export function setPathCreateStrict(
   segments: string[],
   value: unknown,
 ): boolean {
-  if (segments.length === 0) {
-    throw new Error("Target path is empty.");
-  }
+  assertSafeMutationPath(segments);
   let cursor: unknown = root;
   let changed = false;
 

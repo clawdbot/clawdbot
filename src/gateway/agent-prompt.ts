@@ -10,6 +10,12 @@ export type ConversationEntry = {
   internalStreamError?: boolean;
 };
 
+// Placeholder user text for an image-only turn. The agent command requires a
+// non-empty message even when the real payload is the attached image, so both
+// the /v1/chat/completions and /v1/responses prompt builders substitute this
+// for the active user turn. Keep it shared so the two endpoints stay in sync.
+export const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
+
 /**
  * Coerce body to string. Handles cases where body is a content array
  * (e.g. [{type:"text", text:"hello"}]) that would serialize as

@@ -4,13 +4,13 @@ import {
   decorativeEmoji,
   decorativePrefix,
   stripDecorativeEmojiForTerminal,
-  supportsDecorativeEmoji,
   type DecorativeEmojiOptions,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { parseTaglineMode, readCliBannerTaglineMode } from "./banner-config-lite.js";
+import { parseTaglineMode } from "./banner-config-lite.js";
+import { pickCliLobsterArt } from "./lobster-art.js";
 import { pickTagline, type TaglineMode, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
@@ -24,23 +24,6 @@ type BannerOptions = TaglineOptions & {
 
 let bannerEmitted = false;
 
-// Use grapheme segmentation so decorative emoji and block art split without corrupting clusters.
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
-function splitGraphemes(value: string): string[] {
-  if (!graphemeSegmenter) {
-    return Array.from(value);
-  }
-  try {
-    return Array.from(graphemeSegmenter.segment(value), (seg) => seg.segment);
-  } catch {
-    return Array.from(value);
-  }
-}
-
 const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
@@ -52,7 +35,7 @@ function resolveTaglineMode(options: BannerOptions): TaglineMode | undefined {
   if (explicit) {
     return explicit;
   }
-  return readCliBannerTaglineMode(options.env);
+  return undefined;
 }
 
 function resolveEmojiOptions(options: BannerOptions): DecorativeEmojiOptions {
@@ -110,67 +93,19 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   return `${line1}\n${line2}`;
 }
 
-const LOBSTER_ASCII_BODY = [
-  "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-  "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-  "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-  "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-  "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-];
-
-function centerText(text: string, width: number): string {
-  const pad = Math.max(0, width - visibleWidth(text));
-  const left = Math.floor(pad / 2);
-  const right = pad - left;
-  return `${" ".repeat(left)}${text}${" ".repeat(right)}`;
-}
-
-function formatCliBannerArtLines(options: BannerOptions): string[] {
-  const width = visibleWidth(LOBSTER_ASCII_BODY[0] ?? "");
-  const emojiOptions = resolveEmojiOptions(options);
-  const title = supportsDecorativeEmoji(emojiOptions) ? "🦞 OPENCLAW 🦞" : "OPENCLAW";
-  return [...LOBSTER_ASCII_BODY, centerText(title, width), " "];
-}
-
-/** Format the large decorative OpenClaw banner art. */
-export function formatCliBannerArt(options: BannerOptions = {}): string {
-  const rich = options.richTty ?? isRich();
-  const lines = formatCliBannerArtLines(options);
-  if (!rich) {
-    return lines.join("\n");
+// Rare day-seeded ASCII lobster above the banner: random-tagline mode only,
+// rich terminals only, never in CI (see lobster-art.ts for the odds).
+function resolveLobsterArt(options: BannerOptions): string | null {
+  const mode = resolveTaglineMode(options);
+  if (mode === "off" || mode === "default") {
+    return null;
   }
-
-  const colorChar = (ch: string) => {
-    if (ch === "█") {
-      return theme.accentBright(ch);
-    }
-    if (ch === "░") {
-      return theme.accentDim(ch);
-    }
-    if (ch === "▀") {
-      return theme.accent(ch);
-    }
-    return theme.muted(ch);
-  };
-
-  const emojiOptions = resolveEmojiOptions(options);
-  const icon = decorativeEmoji("🦞", emojiOptions);
-  const colored = lines.map((line) => {
-    if (line.includes("OPENCLAW")) {
-      if (!icon) {
-        return theme.info(centerText("OPENCLAW", visibleWidth(line)));
-      }
-      return (
-        theme.muted("              ") +
-        theme.accent(icon) +
-        theme.info(" OPENCLAW ") +
-        theme.accent(icon)
-      );
-    }
-    return splitGraphemes(line).map(colorChar).join("");
-  });
-
-  return colored.join("\n");
+  if (!(options.richTty ?? isRich())) {
+    return null;
+  }
+  const now = options.now ? options.now() : new Date();
+  const art = pickCliLobsterArt(now, options.env ?? process.env);
+  return art ? theme.accentDim(art) : null;
 }
 
 /** Emit the CLI banner once for interactive, non-JSON, non-version invocations. */
@@ -190,7 +125,8 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const line = formatCliBannerLine(version, options);
-  process.stdout.write(`\n${line}\n\n`);
+  const art = resolveLobsterArt(options);
+  process.stdout.write(`\n${art ? `${art}\n` : ""}${line}\n\n`);
   bannerEmitted = true;
 }
 
@@ -198,3 +134,9 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
 export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }
+
+export const testing = {
+  resetBannerEmittedForTests(): void {
+    bannerEmitted = false;
+  },
+};

@@ -4,9 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMSTeamsConversationStoreMemory } from "./conversation-store-memory.js";
+import {
+  findPreferredDmConversationByUserId,
+  mergeStoredConversationReference,
+  normalizeStoredConversationId,
+  toConversationStoreEntries,
+} from "./conversation-store-helpers.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type {
+  MSTeamsConversationStore,
+  MSTeamsConversationStoreEntry,
+  StoredConversationReference,
+} from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
@@ -14,6 +23,38 @@ type StoreFactory = {
   name: string;
   createStore: () => Promise<MSTeamsConversationStore>;
 };
+
+function createMemoryConversationStore(
+  initial: MSTeamsConversationStoreEntry[] = [],
+): MSTeamsConversationStore {
+  const map = new Map<string, StoredConversationReference>();
+  for (const { conversationId, reference } of initial) {
+    map.set(normalizeStoredConversationId(conversationId), reference);
+  }
+
+  const findPreferredDmByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> =>
+    findPreferredDmConversationByUserId(toConversationStoreEntries(map.entries()), id);
+
+  return {
+    upsert: async (conversationId, reference) => {
+      const normalizedId = normalizeStoredConversationId(conversationId);
+      map.set(
+        normalizedId,
+        mergeStoredConversationReference(
+          map.get(normalizedId),
+          reference,
+          new Date().toISOString(),
+        ),
+      );
+    },
+    get: async (conversationId) => map.get(normalizeStoredConversationId(conversationId)) ?? null,
+    list: async () => toConversationStoreEntries(map.entries()),
+    remove: async (conversationId) => map.delete(normalizeStoredConversationId(conversationId)),
+    findPreferredDmByUserId,
+  };
+}
 
 const storeFactories: StoreFactory[] = [
   {
@@ -28,7 +69,7 @@ const storeFactories: StoreFactory[] = [
   },
   {
     name: "memory",
-    createStore: async () => createMSTeamsConversationStoreMemory(),
+    createStore: async () => createMemoryConversationStore(),
   },
 ];
 
@@ -133,9 +174,6 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
           lastSeenAt: "2026-03-25T20:00:00.000Z",
         },
       });
-      await expect(store.findByUserId("user-a")).resolves.toEqual(
-        await store.findPreferredDmByUserId("user-a"),
-      );
       await expect(store.findPreferredDmByUserId("   ")).resolves.toBeNull();
 
       await expect(store.remove("conv-a")).resolves.toBe(true);
@@ -174,42 +212,6 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
         serviceUrl: "https://service.example.com",
         user: { id: "u1" },
         timezone: "Europe/London",
-        lastSeenAt: "2026-03-25T20:01:00.000Z",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("preserves graphChatId across upserts that omit it", async () => {
-    const store = await createStore();
-
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-03-25T20:00:00.000Z"));
-      await store.upsert("conv-graph", {
-        conversation: { id: "conv-graph", conversationType: "personal" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "u1" },
-        graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
-      });
-
-      vi.setSystemTime(new Date("2026-03-25T20:01:00.000Z"));
-      // Second upsert without graphChatId (normal activity-based upsert)
-      await store.upsert("conv-graph", {
-        conversation: { id: "conv-graph", conversationType: "personal" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "u1" },
-      });
-
-      await expect(store.get("conv-graph")).resolves.toEqual({
-        conversation: { id: "conv-graph", conversationType: "personal" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "u1" },
-        graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
         lastSeenAt: "2026-03-25T20:01:00.000Z",
       });
     } finally {

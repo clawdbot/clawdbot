@@ -5,7 +5,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const XIAOMI_PROVIDER_ID = "xiaomi";
 export const XIAOMI_TOKEN_PLAN_PROVIDER_ID = "xiaomi-token-plan";
-export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
+export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2.5";
 export const XIAOMI_TOKEN_PLAN_DEFAULT_MODEL_ID = "mimo-v2.5-pro";
 
 const XIAOMI_TOKEN_PLAN_BASE_URLS = {

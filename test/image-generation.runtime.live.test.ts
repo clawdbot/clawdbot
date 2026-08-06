@@ -15,7 +15,6 @@ import {
   parseCaseFilter,
   parseCsvFilter,
   parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveImageModels,
   resolveLiveImageAuthStore,
 } from "../src/image-generation/live-test-helpers.js";
@@ -42,6 +41,7 @@ type LiveProviderCase = {
   pluginId: string;
   pluginName: string;
   providerId: string;
+  defaultEditEnabled?: boolean;
 };
 
 type LiveImageCase = {
@@ -88,6 +88,12 @@ const PROVIDER_CASES: LiveProviderCase[] = [
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
+  },
+  {
+    pluginId: "microsoft-foundry",
+    pluginName: "Microsoft Foundry Provider",
+    providerId: "microsoft-foundry",
+    defaultEditEnabled: false,
   },
   {
     pluginId: "openai",
@@ -257,14 +263,14 @@ describeLive("image generation live (provider sweep)", () => {
             agentDir,
             store: authStore,
           });
-          authLabel = `${auth.source} ${redactLiveApiKey(auth.apiKey)}`;
+          authLabel = auth.source;
         } catch {
           skipped.push(`${providerCase.providerId}: no usable auth`);
           continue;
         }
 
         const { imageProviders } = await registerProviderPlugin({
-          plugin: loadBundledProviderPlugin(providerCase.pluginId),
+          plugin: await loadBundledProviderPlugin(providerCase.pluginId),
           id: providerCase.pluginId,
           name: providerCase.pluginName,
         });
@@ -277,7 +283,8 @@ describeLive("image generation live (provider sweep)", () => {
         const liveCases = buildLiveCases({
           providerId: providerCase.providerId,
           modelRef,
-          editEnabled: provider.capabilities.edit?.enabled ?? false,
+          editEnabled:
+            providerCase.defaultEditEnabled ?? provider.capabilities.edit?.enabled ?? false,
         }).filter((entry) => (caseFilter ? caseFilter.has(entry.id.toLowerCase()) : true));
 
         for (const testCase of liveCases) {

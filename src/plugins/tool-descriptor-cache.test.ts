@@ -1,4 +1,5 @@
 // Covers plugin tool descriptor cache lifecycle and invalidation.
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -15,16 +16,22 @@ vi.mock("../config/runtime-snapshot.js", () => ({
   resolveRuntimeConfigCacheKey: hoisted.resolveRuntimeConfigCacheKey,
 }));
 
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
-  resetPluginToolDescriptorCache,
+  pluginToolDescriptorCacheState,
+  readCachedPluginToolDescriptors,
+  writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
+import { resetPluginToolDescriptorCacheForTest } from "./tools.test-fixtures.js";
 
 describe("plugin tool descriptor cache keys", () => {
   afterEach(() => {
     hoisted.resolveRuntimeConfigCacheKey.mockClear();
-    resetPluginToolDescriptorCache();
+    resetPluginToolDescriptorCacheForTest();
   });
 
   it("memoizes config cache keys across plugin descriptor keys in one resolution pass", () => {
@@ -58,6 +65,122 @@ describe("plugin tool descriptor cache keys", () => {
     }
 
     expect(hoisted.resolveRuntimeConfigCacheKey).toHaveBeenCalledTimes(1);
+  });
+
+  it("builds stable descriptor cache keys without polling plugin source files", () => {
+    const sourceStat = vi.spyOn(fs, "statSync");
+
+    try {
+      const params = {
+        pluginId: "demo",
+        source: "/tmp/demo.js",
+        rootDir: "/tmp/demo",
+        contractToolNames: ["demo_tool"],
+        ctx: { workspaceDir: "/tmp/workspace" },
+      };
+
+      expect(buildPluginToolDescriptorCacheKey(params)).toBe(
+        buildPluginToolDescriptorCacheKey(params),
+      );
+      expect(sourceStat).not.toHaveBeenCalled();
+    } finally {
+      sourceStat.mockRestore();
+    }
+  });
+
+  it("retires cached descriptors and retained registries with plugin metadata", () => {
+    const params = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      rootDir: "/tmp/demo",
+      contractToolNames: ["demo_tool"],
+      ctx: { workspaceDir: "/tmp/workspace" },
+    };
+    const cacheKey = buildPluginToolDescriptorCacheKey(params);
+    const descriptor = capturePluginToolDescriptor({
+      pluginId: "demo",
+      optional: false,
+      tool: {
+        name: "demo_tool",
+        label: "Demo tool",
+        description: "Demo tool",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [], details: {} }),
+      },
+    });
+    const retainedRegistry = createEmptyPluginRegistry();
+    const contextIdentity = {};
+
+    writeCachedPluginToolDescriptors({ cacheKey, descriptors: [descriptor] });
+    pluginToolDescriptorCacheState.objectIds.set(contextIdentity, 1);
+    pluginToolDescriptorCacheState.nextObjectId = 2;
+    pluginToolDescriptorCacheState.runtimeRegistries.set(descriptor, retainedRegistry);
+
+    expect(readCachedPluginToolDescriptors(cacheKey)).toEqual([descriptor]);
+    expect(pluginToolDescriptorCacheState.runtimeRegistries.get(descriptor)).toBe(retainedRegistry);
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(buildPluginToolDescriptorCacheKey(params)).toBe(cacheKey);
+    expect(readCachedPluginToolDescriptors(cacheKey)).toBeUndefined();
+    expect(pluginToolDescriptorCacheState.objectIds.get(contextIdentity)).toBeUndefined();
+    expect(pluginToolDescriptorCacheState.nextObjectId).toBe(1);
+    expect(pluginToolDescriptorCacheState.runtimeRegistries.get(descriptor)).toBeUndefined();
+  });
+
+  it("preserves required gateway client capabilities in cached descriptors", () => {
+    const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } } as const;
+    const cached = capturePluginToolDescriptor({
+      pluginId: "demo",
+      optional: false,
+      tool: {
+        name: "inline_demo",
+        label: "Inline demo",
+        description: "Render a demo",
+        parameters: { type: "object", properties: {} },
+        outputSchema,
+        requiredClientCaps: ["inline-widgets"],
+        resultContentSource: "network",
+        execute: async () => ({ content: [], details: {} }),
+      },
+    });
+
+    expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
+    expect(cached.descriptor.outputSchema).toBe(outputSchema);
+    expect(cached).toHaveProperty("resultContentSource", "network");
+  });
+
+  it("does not add network provenance to descriptors for ordinary plugin tools", () => {
+    const cached = capturePluginToolDescriptor({
+      pluginId: "demo",
+      optional: false,
+      tool: {
+        name: "ordinary_demo",
+        label: "Ordinary demo",
+        description: "Read trusted local data",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [], details: {} }),
+      },
+    });
+
+    expect(cached).not.toHaveProperty("resultContentSource");
+  });
+
+  it("isolates descriptor caches by declared gateway client capabilities", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["show_widget"],
+      ctx: { workspaceDir: "/tmp/workspace" },
+    };
+
+    const caplessKey = buildPluginToolDescriptorCacheKey(base);
+    const inlineKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      clientCaps: ["inline-widgets"],
+    });
+
+    expect(caplessKey).not.toBe(inlineKey);
   });
 
   it("keeps distinct config objects distinct within the memo", () => {
@@ -118,6 +241,52 @@ describe("plugin tool descriptor cache keys", () => {
           modelId: "openrouter/auto",
           modelRef: "openrouter/auto",
         },
+      },
+    });
+
+    expect(firstKey).not.toBe(secondKey);
+  });
+
+  it("varies descriptor keys by trusted owner state", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["owner_tool"],
+      ctx: {
+        workspaceDir: "/tmp/workspace",
+        agentId: "main",
+      },
+    };
+
+    const ownerKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: { ...base.ctx, senderIsOwner: true },
+    });
+    const nonOwnerKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: { ...base.ctx, senderIsOwner: false },
+    });
+
+    expect(ownerKey).not.toBe(nonOwnerKey);
+  });
+
+  it("varies descriptor keys by native channel identity", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["demo"],
+      ctx: {
+        messageChannel: "feishu",
+        nativeChannelId: "oc_first",
+      },
+    };
+
+    const firstKey = buildPluginToolDescriptorCacheKey(base);
+    const secondKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        nativeChannelId: "oc_second",
       },
     });
 

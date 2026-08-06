@@ -19,4 +19,16 @@ describe("provider registry shared", () => {
     expect(aliases.get("ms")?.id).toBe("Microsoft");
     expect(aliases.get("openai")?.id).toBe("OpenAI");
   });
+
+  it("ignores prototype-like ids and aliases", () => {
+    const { canonical, aliases } = buildCapabilityProviderMaps([
+      { id: "__proto__", aliases: ["constructor", "prototype"] },
+      { id: "safe", aliases: ["safe-alias", "constructor"] },
+    ]);
+
+    expect([...canonical.keys()]).toEqual(["safe"]);
+    expect(aliases.get("__proto__")).toBeUndefined();
+    expect(aliases.get("constructor")).toBeUndefined();
+    expect(aliases.get("safe-alias")?.id).toBe("safe");
+  });
 });

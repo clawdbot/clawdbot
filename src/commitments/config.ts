@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 // heartbeat delivery limits.
 const DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS = 15_000;
 const DEFAULT_COMMITMENT_BATCH_MAX_ITEMS = 8;
-export const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
+const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 const DEFAULT_COMMITMENT_CONFIDENCE_THRESHOLD = 0.72;
 const DEFAULT_COMMITMENT_CARE_CONFIDENCE_THRESHOLD = 0.86;
 const DEFAULT_COMMITMENT_EXTRACTION_TIMEOUT_SECONDS = 45;
@@ -27,18 +27,11 @@ type ResolvedCommitmentsConfig = {
   };
 };
 
-function positiveInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
-}
-
 /** Resolves commitment extraction config with conservative defaults. */
-export function resolveCommitmentsConfig(cfg?: OpenClawConfig): ResolvedCommitmentsConfig {
-  const raw = cfg?.commitments;
+export function resolveCommitmentsConfig(_cfg?: OpenClawConfig): ResolvedCommitmentsConfig {
   return {
-    enabled: raw?.enabled === true,
-    maxPerDay: positiveInt(raw?.maxPerDay, DEFAULT_COMMITMENT_MAX_PER_DAY),
+    enabled: false,
+    maxPerDay: DEFAULT_COMMITMENT_MAX_PER_DAY,
     extraction: {
       debounceMs: DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS,
       batchMaxItems: DEFAULT_COMMITMENT_BATCH_MAX_ITEMS,

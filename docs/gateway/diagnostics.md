@@ -7,13 +7,12 @@ read_when:
   - Reviewing what diagnostics data is recorded or redacted
 ---
 
-OpenClaw can create a local diagnostics zip for bug reports. It combines
-sanitized Gateway status, health, logs, config shape, and recent payload-free
-stability events.
+OpenClaw can build a local diagnostics `.zip` for bug reports: sanitized Gateway
+status, health, logs, config shape, and recent payload-free stability events.
 
-Treat diagnostics bundles like secrets until you have reviewed them. They are
-designed to omit or redact payloads and credentials, but they still summarize
-local Gateway logs and host-level runtime state.
+Treat diagnostics bundles like secrets until reviewed. Payloads and credentials
+are redacted by design, but the bundle still summarizes local Gateway logs and
+host-level runtime state.
 
 ## Quick start
 
@@ -21,7 +20,7 @@ local Gateway logs and host-level runtime state.
 openclaw gateway diagnostics export
 ```
 
-The command prints the written zip path. To choose a path:
+Prints the written zip path. Choose an output path:
 
 ```bash
 openclaw gateway diagnostics export --output openclaw-diagnostics.zip
@@ -35,46 +34,38 @@ openclaw gateway diagnostics export --json
 
 ## Chat command
 
-Owners can use `/diagnostics [note]` in chat to request a local Gateway export.
-Use this when the bug happened in a real conversation and you want one
-copy-pasteable report for support:
+Owners can run `/diagnostics [note]` in any conversation to request a local
+Gateway export as one copy-pasteable support report:
 
-1. Send `/diagnostics` in the conversation where you noticed the problem. Add a
-   short note if it helps, for example `/diagnostics bad tool choice`.
-2. OpenClaw sends the diagnostics preamble and asks for one explicit exec
-   approval. The approval runs `openclaw gateway diagnostics export --json`.
-   Do not approve diagnostics through an allow-all rule.
-3. After approval, OpenClaw replies with a pasteable report containing the local
-   bundle path, manifest summary, privacy notes, and relevant session ids.
+1. Send `/diagnostics`, optionally with a short note (`/diagnostics bad tool choice`).
+2. OpenClaw sends a preamble and asks for one explicit exec approval, which runs
+   `openclaw gateway diagnostics export --json`. Do not approve diagnostics via
+   an allow-all rule.
+3. After approval, OpenClaw replies with the local bundle path, manifest
+   summary, privacy notes, and relevant session ids.
 
-In group chats, an owner can still run `/diagnostics`, but OpenClaw does not
-post the diagnostic details back into the shared chat. It sends the preamble,
-approval prompts, Gateway export result, and Codex session/thread breakdown to
-the owner through the private approval route. The group only gets a short notice
-that the diagnostics flow was sent privately. If OpenClaw cannot find a private
-owner route, the command fails closed and asks the owner to run it from a DM.
+In group chats, an owner can still run `/diagnostics`, but OpenClaw sends the
+export result, approval prompts, and Codex session/thread breakdown to the
+owner privately. The group only sees a short notice that diagnostics were sent
+privately. If no private owner route exists, the command fails closed and asks
+the owner to run it from a DM.
 
-When the active OpenClaw session is using the native OpenAI Codex harness,
-the same exec approval also covers an OpenAI feedback upload for the Codex
-runtime threads OpenClaw knows about. That upload is separate from the local
-Gateway zip and appears only for Codex harness sessions. Before approval, the
-prompt explains that approving diagnostics will also send Codex feedback, but it
-does not list Codex session or thread ids. After approval, the chat reply lists
-the channels, OpenClaw session ids, Codex thread ids, and local resume commands
-for the threads that were sent to OpenAI servers. If you deny or ignore the
-approval, OpenClaw does not run the export, does not send Codex feedback, and
-does not print the Codex ids.
+When the active session uses the native OpenAI Codex harness, the same exec
+approval also covers an OpenAI feedback upload for the Codex threads OpenClaw
+knows about. That upload is separate from the local Gateway zip and only
+happens for Codex harness sessions. The approval prompt states that approving
+also sends Codex feedback, without listing Codex session or thread ids. After
+approval, the reply lists channels, OpenClaw session ids, Codex thread ids, and
+local resume commands for the threads that were sent to OpenAI. Denying or
+ignoring the approval skips the export, the Codex feedback upload, and the
+Codex id list.
 
-That makes the common Codex debugging loop short: notice the bad behavior in
-Telegram, Discord, or another channel, run `/diagnostics`, approve once, share
-the report with support, then run the printed `codex resume <thread-id>` command
-locally if you want to inspect the native Codex thread yourself. See
-[Codex harness](/plugins/codex-harness#inspect-codex-threads-locally) for
-that inspection workflow.
+That makes the Codex debugging loop short: notice bad behavior in a channel,
+run `/diagnostics`, approve once, share the report, then run the printed
+`codex resume <thread-id>` command locally if you want to inspect the thread
+yourself. See [Codex harness](/plugins/codex-harness#inspect-codex-threads-locally).
 
 ## What the export contains
-
-The zip includes:
 
 - `summary.md`: human-readable overview for support.
 - `diagnostics.json`: machine-readable summary of config, logs, status, health,
@@ -85,51 +76,44 @@ The zip includes:
 - Best-effort Gateway status and health snapshots.
 - `stability/latest.json`: newest persisted stability bundle, when available.
 
-The export is useful even when the Gateway is unhealthy. If the Gateway cannot
-answer status or health requests, the local logs, config shape, and latest
-stability bundle are still collected when available.
+The export is still useful when the Gateway is unhealthy: if status/health
+requests fail, local logs, config shape, and the latest stability bundle are
+still collected when available.
 
 ## Privacy model
 
-Diagnostics are designed to be shareable. The export keeps operational data
-that helps debugging, such as:
+Kept: subsystem names, plugin ids, provider ids, channel ids, configured
+modes, status codes, durations, byte counts, queue state, memory readings,
+sanitized log metadata, redacted operational messages, config shape, and
+non-secret feature settings.
 
-- subsystem names, plugin ids, provider ids, channel ids, and configured modes
-- status codes, durations, byte counts, queue state, and memory readings
-- sanitized log metadata and redacted operational messages
-- config shape and non-secret feature settings
-
-The export omits or redacts:
-
-- chat text, prompts, instructions, webhook bodies, and tool outputs
-- credentials, API keys, tokens, cookies, and secret values
-- raw request or response bodies
-- account ids, message ids, raw session ids, hostnames, and local usernames
+Omitted or redacted: chat text, prompts, instructions, webhook bodies, tool
+outputs, credentials, API keys, tokens, cookies, secret values, raw
+request/response bodies, account ids, message ids, raw session ids,
+hostnames, and local usernames.
 
 When a log message looks like user, chat, prompt, or tool payload text, the
-export keeps only that a message was omitted and the byte count.
+export keeps only that a message was omitted plus its byte count.
 
 ## Stability recorder
 
 The Gateway records a bounded, payload-free stability stream by default when
-diagnostics are enabled. It is for operational facts, not content.
+diagnostics are enabled. It captures operational facts, not content.
 
-The same diagnostic heartbeat records liveness samples when the Gateway keeps
-running but the Node.js event loop or CPU looks saturated. These
-`diagnostic.liveness.warning` events include event-loop delay, event-loop
-utilization, CPU-core ratio, active/waiting/queued session counts, the current
-startup/runtime phase when known, recent phase spans, and bounded active/queued
-work labels. Idle samples stay in telemetry at `info` level. Liveness samples
-become Gateway warnings only when work is waiting or queued, or when active work
-overlaps with sustained event-loop delay. Transient max-delay spikes during
-otherwise healthy background work stay in debug logs. They do not restart the
-Gateway by themselves.
+The same heartbeat also samples liveness when the event loop or CPU looks
+saturated, emitting `diagnostic.liveness.warning` events with event-loop delay,
+event-loop utilization, CPU-core ratio, active/waiting/queued session counts,
+the current startup/runtime phase (when known), recent phase spans, and
+bounded work labels. These become Gateway `warn`-level log lines only when
+work is waiting or queued, or when active work overlaps sustained event-loop
+delay; otherwise they log at `debug`. Idle liveness samples are still recorded
+as diagnostic events but never escalate to a warning by themselves.
 
-Startup phases also emit `diagnostic.phase.completed` events with wall-clock and
+Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 CPU timing. Stalled embedded-run diagnostics mark `terminalProgressStale=true`
-when the last bridge progress looked terminal, such as a raw response item or
-response completion event, but the Gateway still considers the embedded run
-active.
+when the last bridge progress looked terminal (for example a raw response
+item or response-completion event) but the Gateway still considers the
+embedded run active.
 
 Inspect the live recorder:
 
@@ -139,8 +123,8 @@ openclaw gateway stability --type payload.large
 openclaw gateway stability --json
 ```
 
-Inspect the newest persisted stability bundle after a fatal exit, shutdown
-timeout, or restart startup failure:
+Inspect the newest persisted bundle after a fatal exit, shutdown timeout, or
+restart startup failure:
 
 ```bash
 openclaw gateway stability --bundle latest
@@ -163,15 +147,17 @@ openclaw gateway diagnostics export \
   --log-bytes 1000000
 ```
 
-- `--output <path>`: write to a specific zip path.
-- `--log-lines <count>`: maximum sanitized log lines to include.
-- `--log-bytes <bytes>`: maximum log bytes to inspect.
-- `--url <url>`: Gateway WebSocket URL for status and health snapshots.
-- `--token <token>`: Gateway token for status and health snapshots.
-- `--password <password>`: Gateway password for status and health snapshots.
-- `--timeout <ms>`: status and health snapshot timeout.
-- `--no-stability-bundle`: skip persisted stability bundle lookup.
-- `--json`: print machine-readable export metadata.
+| Flag                    | Default                                                                       | Description                                        |
+| ----------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------- |
+| `--output <path>`       | `$OPENCLAW_STATE_DIR/logs/support/openclaw-diagnostics-<timestamp>-<pid>.zip` | Write to a specific zip path (or directory).       |
+| `--log-lines <count>`   | `5000`                                                                        | Maximum sanitized log lines to include.            |
+| `--log-bytes <bytes>`   | `1000000`                                                                     | Maximum log bytes to inspect.                      |
+| `--url <url>`           | -                                                                             | Gateway WebSocket URL for status/health snapshots. |
+| `--token <token>`       | -                                                                             | Gateway token for status/health snapshots.         |
+| `--password <password>` | -                                                                             | Gateway password for status/health snapshots.      |
+| `--timeout <ms>`        | `3000`                                                                        | Status/health snapshot timeout.                    |
+| `--no-stability-bundle` | off                                                                           | Skip persisted stability bundle lookup.            |
+| `--json`                | off                                                                           | Print machine-readable export metadata.            |
 
 ## Disable diagnostics
 
@@ -186,28 +172,17 @@ diagnostic event collection:
 }
 ```
 
-Disabling diagnostics reduces bug-report detail. It does not affect normal
+Disabling diagnostics reduces bug-report detail; it does not affect normal
 Gateway logging.
 
-Critical memory pressure snapshots are off by default. To keep diagnostics
-events and also capture the pre-OOM stability snapshot:
-
-```json5
-{
-  diagnostics: {
-    memoryPressureSnapshot: true,
-  },
-}
-```
-
-Use this only on hosts that can tolerate the extra file-system scan and snapshot
-write during critical memory pressure. Normal memory pressure events still
-record RSS, heap, threshold, and growth facts when the snapshot is off.
+Memory pressure events record RSS, heap, threshold, and growth facts
+(`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
+file-system scan or writing a pre-OOM snapshot.
 
 ## Related
 
 - [Health checks](/gateway/health)
 - [Gateway CLI](/cli/gateway#gateway-diagnostics-export)
-- [Gateway protocol](/gateway/protocol#system-and-identity)
+- [Gateway protocol](/gateway/protocol#rpc-method-families)
 - [Logging](/logging)
-- [OpenTelemetry export](/gateway/opentelemetry) — separate flow for streaming diagnostics to a collector
+- [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector

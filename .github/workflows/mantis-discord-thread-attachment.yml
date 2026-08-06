@@ -56,7 +56,7 @@ jobs:
     steps:
       - name: Require maintainer-level repository access
         id: permission
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -91,7 +91,7 @@ jobs:
     steps:
       - name: Resolve refs and target PR
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const defaultBaseline = "synthetic-reverted-thread-filepath-fix";
@@ -177,7 +177,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -235,7 +235,7 @@ jobs:
       output_dir: ${{ steps.run_mantis.outputs.output_dir }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -250,7 +250,7 @@ jobs:
         run: pnpm build
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.26.x"
           cache: false
@@ -261,7 +261,7 @@ jobs:
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          timeout --signal=TERM --kill-after=10s 120s git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
@@ -328,7 +328,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
           MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64: ${{ secrets.MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64 }}
           MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR: ${{ vars.MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR }}
           CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
@@ -451,8 +450,17 @@ jobs:
 
           capture_candidate_discord_web
 
-          baseline_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/baseline/discord-qa-summary.json")"
-          candidate_status="$(jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/candidate/discord-qa-summary.json")"
+          read_discord_thread_attachment_status() {
+            local lane="$1"
+            if [[ -f "$root/$lane/qa-evidence.json" ]]; then
+              jq -r '.entries[] | select(.test.id == "discord-thread-reply-filepath-attachment") | .result.status' "$root/$lane/qa-evidence.json"
+              return
+            fi
+            jq -r '.scenarios[] | select(.id == "discord-thread-reply-filepath-attachment") | .status' "$root/$lane/discord-qa-summary.json"
+          }
+
+          baseline_status="$(read_discord_thread_attachment_status baseline)"
+          candidate_status="$(read_discord_thread_attachment_status candidate)"
           comparison_status="fail"
           if [[ "$baseline_status" == "fail" && "$candidate_status" == "pass" ]]; then
             comparison_status="pass"
@@ -534,17 +542,17 @@ jobs:
       - name: Upload Mantis thread attachment artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-discord-thread-attachment-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -603,7 +611,7 @@ jobs:
       issues: write
     steps:
       - name: Remove workflow eyes reaction
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { owner, repo } = context.repo;

@@ -5,12 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   evaluateRuntimeEligibility,
-  evaluateRuntimeRequires,
   hasBinary,
   isConfigPathTruthyWithDefaults,
-  isTruthy,
-  resolveConfigPath,
-  resolveRuntimePlatform,
 } from "./config-eval.js";
 
 const originalPath = process.env.PATH;
@@ -32,15 +28,19 @@ afterEach(() => {
 
 describe("config-eval helpers", () => {
   it("normalizes truthy values across primitive types", () => {
-    expect(isTruthy(undefined)).toBe(false);
-    expect(isTruthy(null)).toBe(false);
-    expect(isTruthy(false)).toBe(false);
-    expect(isTruthy(true)).toBe(true);
-    expect(isTruthy(0)).toBe(false);
-    expect(isTruthy(1)).toBe(true);
-    expect(isTruthy("   ")).toBe(false);
-    expect(isTruthy(" ok ")).toBe(true);
-    expect(isTruthy({})).toBe(true);
+    for (const [value, expected] of [
+      [undefined, false],
+      [null, false],
+      [false, false],
+      [true, true],
+      [0, false],
+      [1, true],
+      ["   ", false],
+      [" ok ", true],
+      [{}, true],
+    ] as const) {
+      expect(isConfigPathTruthyWithDefaults({ value }, "value", {})).toBe(expected);
+    }
   });
 
   it("resolves nested config paths and missing branches safely", () => {
@@ -53,10 +53,23 @@ describe("config-eval helpers", () => {
       },
     };
 
-    expect(resolveConfigPath(config, "browser.enabled")).toBe(true);
-    expect(resolveConfigPath(config, ".browser..nested.count.")).toBe(1);
-    expect(resolveConfigPath(config, "browser.missing.value")).toBeUndefined();
-    expect(resolveConfigPath("not-an-object", "browser.enabled")).toBeUndefined();
+    expect(isConfigPathTruthyWithDefaults(config, "browser.enabled", {})).toBe(true);
+    expect(isConfigPathTruthyWithDefaults(config, ".browser..nested.count.", {})).toBe(true);
+    expect(isConfigPathTruthyWithDefaults(config, "browser.missing.value", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults("not-an-object", "browser.enabled", {})).toBe(false);
+  });
+
+  it("blocks prototype keys while resolving config paths", () => {
+    const config = {
+      safe: {
+        enabled: true,
+      },
+    };
+
+    expect(isConfigPathTruthyWithDefaults(config, "safe.enabled", {})).toBe(true);
+    expect(isConfigPathTruthyWithDefaults(config, "__proto__", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults(config, "constructor.name", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults(config, "prototype.polluted", {})).toBe(false);
   });
 
   it("uses defaults only when config paths are unresolved", () => {
@@ -75,9 +88,22 @@ describe("config-eval helpers", () => {
     expect(isConfigPathTruthyWithDefaults(config, "browser.other", {})).toBe(false);
   });
 
+  it("does not use inherited defaults for blocked config paths", () => {
+    expect(isConfigPathTruthyWithDefaults({}, "constructor", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults({}, "__proto__.enabled", {})).toBe(false);
+    expect(isConfigPathTruthyWithDefaults({}, "prototype.enabled", {})).toBe(false);
+  });
+
   it("returns the active runtime platform", () => {
     setPlatform("darwin");
-    expect(resolveRuntimePlatform()).toBe("darwin");
+    expect(
+      evaluateRuntimeEligibility({
+        os: ["darwin"],
+        hasBin: () => true,
+        hasEnv: () => true,
+        isConfigPathTruthy: () => true,
+      }),
+    ).toBe(true);
   });
 
   it("caches binary lookups until PATH changes", () => {
@@ -128,9 +154,9 @@ describe("config-eval helpers", () => {
   });
 });
 
-describe("evaluateRuntimeRequires", () => {
+describe("runtime requirements through eligibility", () => {
   it("accepts remote bins and remote any-bin matches", () => {
-    const result = evaluateRuntimeRequires({
+    const result = evaluateRuntimeEligibility({
       requires: {
         bins: ["node"],
         anyBins: ["bun", "deno"],
@@ -149,7 +175,7 @@ describe("evaluateRuntimeRequires", () => {
 
   it("rejects when any required runtime check is still unsatisfied", () => {
     expect(
-      evaluateRuntimeRequires({
+      evaluateRuntimeEligibility({
         requires: { bins: ["node"] },
         hasBin: () => false,
         hasEnv: () => true,
@@ -158,7 +184,7 @@ describe("evaluateRuntimeRequires", () => {
     ).toBe(false);
 
     expect(
-      evaluateRuntimeRequires({
+      evaluateRuntimeEligibility({
         requires: { anyBins: ["bun", "node"] },
         hasBin: () => false,
         hasAnyRemoteBin: () => false,

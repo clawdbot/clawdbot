@@ -20,6 +20,8 @@ type StartLazyPluginServiceModuleParamsWithValidator = {
 const runtimeMocks = vi.hoisted(() => ({
   startLazyPluginServiceModule: vi.fn(async (_params: StartLazyPluginServiceModuleParams) => null),
   stopBrowserControlService: vi.fn(async () => undefined),
+  createGatewayPageShareSink: vi.fn(() => ({ id: "gateway-page-share-sink" })),
+  setPageShareSink: vi.fn(),
 }));
 
 vi.mock("./sdk-node-runtime.js", () => ({
@@ -30,10 +32,19 @@ vi.mock("./control-service.js", () => ({
   stopBrowserControlService: runtimeMocks.stopBrowserControlService,
 }));
 
+vi.mock("./browser/extension-relay/page-share.js", () => ({
+  createGatewayPageShareSink: runtimeMocks.createGatewayPageShareSink,
+  setPageShareSink: runtimeMocks.setPageShareSink,
+}));
+
 describe("createBrowserPluginService", () => {
   beforeEach(() => {
-    runtimeMocks.startLazyPluginServiceModule.mockClear();
-    runtimeMocks.stopBrowserControlService.mockClear();
+    runtimeMocks.startLazyPluginServiceModule.mockReset().mockResolvedValue(null);
+    runtimeMocks.stopBrowserControlService.mockReset().mockResolvedValue(undefined);
+    runtimeMocks.createGatewayPageShareSink
+      .mockReset()
+      .mockReturnValue({ id: "gateway-page-share-sink" });
+    runtimeMocks.setPageShareSink.mockReset();
   });
 
   afterEach(() => {
@@ -58,6 +69,18 @@ describe("createBrowserPluginService", () => {
     await service.start(SERVICE_CONTEXT);
 
     expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
+  });
+
+  it("marks page-share delivery available for the full service lifecycle", async () => {
+    const service = createBrowserPluginService();
+
+    await service.start(SERVICE_CONTEXT);
+    expect(runtimeMocks.setPageShareSink).toHaveBeenCalledWith({
+      id: "gateway-page-share-sink",
+    });
+
+    await service.stop?.(SERVICE_CONTEXT);
+    expect(runtimeMocks.setPageShareSink).toHaveBeenLastCalledWith(null);
   });
 
   for (const value of ["0", "", "disabled"]) {
@@ -105,6 +128,30 @@ describe("createBrowserPluginService", () => {
     await service.stop?.(SERVICE_CONTEXT);
 
     expect(runtimeMocks.stopBrowserControlService).toHaveBeenCalledOnce();
+  });
+
+  it("propagates on-demand cleanup failures", async () => {
+    runtimeMocks.stopBrowserControlService.mockRejectedValueOnce(new Error("cleanup failed"));
+    const service = createBrowserPluginService();
+
+    await expect(service.stop?.(SERVICE_CONTEXT)).rejects.toThrow("cleanup failed");
+  });
+
+  it("retains a loaded service handle until failed cleanup can be retried", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
+    const stop = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("loaded cleanup failed"))
+      .mockResolvedValue(undefined);
+    runtimeMocks.startLazyPluginServiceModule.mockResolvedValue({ stop } as never);
+    const service = createBrowserPluginService();
+    await service.start(SERVICE_CONTEXT);
+
+    await expect(service.stop?.(SERVICE_CONTEXT)).rejects.toThrow("loaded cleanup failed");
+    await expect(service.stop?.(SERVICE_CONTEXT)).resolves.toBeUndefined();
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.stopBrowserControlService).not.toHaveBeenCalled();
   });
 });
 

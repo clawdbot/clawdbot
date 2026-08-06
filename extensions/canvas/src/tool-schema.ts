@@ -3,14 +3,13 @@
  */
 import {
   optionalFiniteNumberSchema,
-  optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
   stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 
 /** Agent tool actions supported by the Canvas plugin. */
-export const CANVAS_ACTIONS = [
+const CANVAS_ACTIONS = [
   "present",
   "hide",
   "navigate",
@@ -21,7 +20,7 @@ export const CANVAS_ACTIONS = [
 ] as const;
 
 /** Snapshot formats accepted by the Canvas tool. */
-export const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
 
 /** TypeBox schema for the model-facing Canvas tool arguments. */
 export const CanvasToolSchema = Type.Object({
@@ -40,7 +39,6 @@ export const CanvasToolSchema = Type.Object({
   outputFormat: Type.Optional(stringEnum(CANVAS_SNAPSHOT_FORMATS)),
   maxWidth: optionalPositiveIntegerSchema(),
   quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
-  delayMs: optionalNonNegativeIntegerSchema(),
   jsonl: Type.Optional(Type.String()),
   jsonlPath: Type.Optional(Type.String()),
 });

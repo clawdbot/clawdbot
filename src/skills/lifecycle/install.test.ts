@@ -6,14 +6,15 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry } from "../types.js";
-import { installSkill, testing as skillsInstallTesting } from "./install.js";
+import { installSkill } from "./install.js";
+import { skillsInstallTesting } from "./install.test-support.js";
 
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -109,7 +110,7 @@ async function withWorkspaceCase(
   }
 }
 
-describe("installSkill install policy hooks", () => {
+describe("installSkill before_install hooks", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
     runCommandWithTimeoutMock.mockClear();
@@ -273,7 +274,7 @@ describe("installSkill install policy hooks", () => {
   it("blocks install when before_install rejects the skill", async () => {
     const handler = vi.fn().mockReturnValue({
       block: true,
-      blockReason: "Blocked by enterprise policy",
+      blockReason: "Blocked by plugin lifecycle hook",
     });
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
@@ -287,7 +288,7 @@ describe("installSkill install policy hooks", () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(result.message).toBe("Blocked by enterprise policy");
+      expect(result.message).toBe("Blocked by plugin lifecycle hook");
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });

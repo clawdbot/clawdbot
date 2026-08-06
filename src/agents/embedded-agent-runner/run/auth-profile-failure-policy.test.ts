@@ -33,6 +33,40 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
   });
 
+  it("keeps only transient local failures out of shared auth state", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "rate_limit",
+        policy: "local_transient",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "rate_limit",
+        policy: "local_transient",
+        transientRateLimit: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "overloaded",
+        policy: "local_transient",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "auth",
+        policy: "local_transient",
+      }),
+    ).toBe("auth");
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "billing",
+        policy: "local_transient",
+      }),
+    ).toBe("billing");
+  });
+
   it("only persists timeouts when the provider request started", () => {
     // Pre-provider timeout says nothing about credential health; started
     // provider timeouts can cool down the active profile.
@@ -59,6 +93,11 @@ describe("resolveAuthProfileFailureReason", () => {
     expect(
       resolveAuthProfileFailureReason({
         failoverReason: "server_error",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "tls_certificate",
       }),
     ).toBeNull();
   });

@@ -18,7 +18,6 @@ import {
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   loadVoiceWakeRoutingConfig,
-  normalizeVoiceWakeTriggerWord,
   resolveVoiceWakeRouteByTrigger,
   setVoiceWakeRoutingConfig,
 } from "./voicewake-routing.js";
@@ -110,7 +109,7 @@ describe("infra store", () => {
       });
     });
 
-    it("sanitizes malformed persisted config values", async () => {
+    it("ignores retired JSON trigger files at runtime", async () => {
       await withTempDir("openclaw-voicewake-", async (baseDir) => {
         await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
         await fs.writeFile(
@@ -123,7 +122,7 @@ describe("infra store", () => {
         );
 
         const loaded = await loadVoiceWakeConfig(baseDir);
-        expect(loaded.triggers).toEqual(["wake"]);
+        expect(loaded.triggers).toEqual(defaultVoiceWakeTriggers());
         expect(loaded.updatedAtMs).toBe(0);
       });
     });
@@ -150,17 +149,17 @@ describe("infra store", () => {
     });
 
     it("resolves routes by normalized trigger", () => {
-      const result = resolveVoiceWakeRouteByTrigger({
-        trigger: "  HELLO   BOT ",
-        config: {
-          version: 1,
-          defaultTarget: { mode: "current" },
-          routes: [{ trigger: "hello bot", target: { sessionKey: "agent:main:main" } }],
-          updatedAtMs: 0,
-        },
-      });
-      expect(result).toEqual({ sessionKey: "agent:main:main" });
-      expect(normalizeVoiceWakeTriggerWord("  X  Y ")).toBe("x y");
+      expect(
+        resolveVoiceWakeRouteByTrigger({
+          trigger: "  HELLO   BOT ",
+          config: {
+            version: 1,
+            defaultTarget: { mode: "current" },
+            routes: [{ trigger: "hello bot", target: { sessionKey: "agent:main:main" } }],
+            updatedAtMs: 0,
+          },
+        }),
+      ).toEqual({ sessionKey: "agent:main:main" });
     });
   });
 

@@ -1,58 +1,9 @@
 // Lobster tests cover lobster runner plugin behavior.
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createEmbeddedLobsterRunner,
-  loadEmbeddedToolRuntimeFromPackage,
-  resolveLobsterCwd,
-} from "./lobster-runner.js";
-
-const requireForTest = createRequire(import.meta.url);
-const ajvInternalCacheKey = "_cache";
-
-type AjvInstance = {
-  compile: (schema: unknown) => unknown;
-};
-type AjvConstructor = new (opts?: object) => AjvInstance;
-
-function readAjvInternalCacheSize(ajv: unknown): number {
-  return (ajv as Record<string, { size: number } | undefined>)[ajvInternalCacheKey]?.size ?? 0;
-}
-
-async function importLobsterAjvConstructor(): Promise<AjvConstructor> {
-  const lobsterEntry = requireForTest.resolve("@clawdbot/lobster");
-  const lobsterRequire = createRequire(lobsterEntry);
-  const ajvPath = lobsterRequire.resolve("ajv");
-  const ajvModule = (await import(pathToFileURL(ajvPath).href)) as { default?: unknown };
-  return ajvModule.default as AjvConstructor;
-}
-
-function createRepeatedResponseSchema() {
-  return {
-    type: "object",
-    properties: {
-      ok: { type: "boolean" },
-      output: {
-        type: "array",
-        items: { type: "object" },
-      },
-    },
-  };
-}
-
-function createUniqueResponseSchema(index: number) {
-  return {
-    ...createRepeatedResponseSchema(),
-    properties: {
-      ...createRepeatedResponseSchema().properties,
-      [`unique_${index}`]: { type: "string" },
-    },
-  };
-}
+import { createEmbeddedLobsterRunner, resolveLobsterCwd } from "./lobster-runner.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -134,6 +85,46 @@ describe("createEmbeddedLobsterRunner", () => {
     });
   });
 
+  it.each([
+    "exec --json=true cat data.json",
+    "exec --json=true cat config.yaml",
+    "exec --json=true cat flow.lobster",
+    "exec --json=true cat /tmp/missing.json",
+    "http.fetch https://example.test/workflows/flow.lobster",
+    "exec --json=true echo nested/path",
+  ])("keeps inline pipeline with file-like args as a pipeline: %s", async (pipeline) => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    await runner.run({
+      action: "run",
+      pipeline,
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(runtime.runToolRequest).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(runtime.runToolRequest.mock.calls, "inline run tool request"),
+      "inline run tool request",
+    );
+    expect(request.pipeline).toBe(pipeline);
+    expect(request.filePath).toBeUndefined();
+  });
+
   it("detects workflow files and parses argsJson", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
     const workflowPath = path.join(tempDir, "workflow.lobster");
@@ -172,6 +163,80 @@ describe("createEmbeddedLobsterRunner", () => {
       expect(request.filePath).toBe(workflowPath);
       expect(request.args).toEqual({ limit: 3 });
       expectToolContext(request.ctx, { cwd: tempDir, mode: "tool" });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects existing workflow file paths that contain spaces", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+    const workflowPath = path.join(tempDir, "daily inbox.lobster");
+    await fs.writeFile(workflowPath, "steps: []\n", "utf8");
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue({
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [],
+          requiresApproval: null,
+        }),
+        resumeToolRequest: vi.fn(),
+      };
+
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await runner.run({
+        action: "run",
+        pipeline: "daily inbox.lobster",
+        cwd: tempDir,
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      });
+
+      expect(runtime.runToolRequest).toHaveBeenCalledOnce();
+      const request = requireRecord(
+        requireFirstCallParam(runtime.runToolRequest.mock.calls, "workflow file with spaces"),
+        "workflow file with spaces",
+      );
+      expect(request.filePath).toBe(workflowPath);
+      expect(request.pipeline).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["missing.lobster", "missing.lobster"],
+    ["nested/missing.yaml", path.join("nested", "missing.yaml")],
+  ])("surfaces missing workflow path errors for %s", async (pipeline, expectedRelativePath) => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-runner-"));
+
+    try {
+      const runtime = {
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await expect(
+        runner.run({
+          action: "run",
+          pipeline,
+          cwd: tempDir,
+          timeoutMs: 2000,
+          maxStdoutBytes: 4096,
+        }),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+        path: path.join(tempDir, expectedRelativePath),
+      });
+      expect(runtime.runToolRequest).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -426,104 +491,16 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(loadRuntime).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the installed package core file when the core export is unavailable", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-package-"));
-    const packageRoot = path.join(tempDir, "node_modules", "@clawdbot", "lobster");
-    const packageEntryPath = path.join(packageRoot, "dist", "src", "sdk", "index.js");
-    const packageCorePath = path.join(packageRoot, "dist", "src", "core", "index.js");
-
-    try {
-      await fs.mkdir(path.dirname(packageEntryPath), { recursive: true });
-      await fs.mkdir(path.dirname(packageCorePath), { recursive: true });
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({
-          name: "@clawdbot/lobster",
-          type: "module",
-          main: "./dist/src/sdk/index.js",
-        }),
-        "utf8",
-      );
-      await fs.writeFile(packageEntryPath, "export {};\n", "utf8");
-      await fs.writeFile(
-        packageCorePath,
-        [
-          "export async function runToolRequest() {",
-          "  return { ok: true, status: 'ok', output: [{ source: 'fallback' }], requiresApproval: null };",
-          "}",
-          "export async function resumeToolRequest() {",
-          "  return { ok: true, status: 'cancelled', output: [], requiresApproval: null };",
-          "}",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-
-      const runtime = await loadEmbeddedToolRuntimeFromPackage({
-        importModule: async (specifier) => {
-          if (specifier === "@clawdbot/lobster/core") {
-            throw new Error("package export missing");
-          }
-          return (await import(`${specifier}?t=${Date.now()}`)) as object;
-        },
-        resolvePackageEntry: () => packageEntryPath,
-      });
-
-      await expect(runtime.runToolRequest({ pipeline: "commands.list" })).resolves.toEqual({
-        ok: true,
-        status: "ok",
-        output: [{ source: "fallback" }],
-        requiresApproval: null,
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("installs an Ajv content cache before loading the embedded runtime", async () => {
-    const AjvCtor = await importLobsterAjvConstructor();
-    const ajv = new AjvCtor({ allErrors: true, strict: false, addUsedSchema: false });
-    const before = readAjvInternalCacheSize(ajv);
-
-    await loadEmbeddedToolRuntimeFromPackage({
-      importModule: async () => ({
-        runToolRequest: vi.fn(),
-        resumeToolRequest: vi.fn(),
+  it("loads the published package core runtime", async () => {
+    await expect(
+      createEmbeddedLobsterRunner().run({
+        action: "run",
+        pipeline: "commands.list",
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
       }),
-    });
-
-    const first = ajv.compile(createRepeatedResponseSchema());
-    const second = ajv.compile(createRepeatedResponseSchema());
-    const afterRepeated = readAjvInternalCacheSize(ajv);
-
-    expect(second).toBe(first);
-    expect(afterRepeated - before).toBe(1);
-
-    for (let index = 0; index < 520; index += 1) {
-      ajv.compile(createUniqueResponseSchema(index));
-    }
-
-    expect(readAjvInternalCacheSize(ajv)).toBeLessThanOrEqual(before + 512);
-  });
-
-  it("deduplicates content-identical schema compilation in the installed Lobster runtime", async () => {
-    await loadEmbeddedToolRuntimeFromPackage();
-
-    const corePath = requireForTest.resolve("@clawdbot/lobster/core");
-    const validationPath = path.join(path.dirname(path.dirname(corePath)), "validation.js");
-    const validationModule = (await import(pathToFileURL(validationPath).href)) as {
-      sharedAjv: AjvInstance;
-    };
-    const before = readAjvInternalCacheSize(validationModule.sharedAjv);
-
-    const first = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
-    for (let index = 0; index < 1000; index += 1) {
-      validationModule.sharedAjv.compile(createRepeatedResponseSchema());
-    }
-    const second = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
-
-    expect(second).toBe(first);
-    expect(readAjvInternalCacheSize(validationModule.sharedAjv) - before).toBe(1);
+    ).resolves.toMatchObject({ ok: true, status: "ok" });
   });
 
   it("requires a pipeline for run", async () => {

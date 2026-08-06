@@ -4,13 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
 import { getFreeGatewayPort } from "./test-helpers.e2e.js";
 
@@ -49,21 +47,17 @@ async function closeTestDispatcher(dispatcher: unknown): Promise<void> {
 
 describe("gateway network runtime", () => {
   beforeEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    clearGatewaySubagentRuntime();
   });
 
   afterEach(() => {
+    resetAgentEventsForTest({ preserveListeners: true });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    clearGatewaySubagentRuntime();
   });
 
   it("bootstraps env proxy dispatching when the gateway starts directly", async () => {
@@ -76,12 +70,12 @@ describe("gateway network runtime", () => {
       const testDispatcher = new Agent();
       setGlobalDispatcher(testDispatcher);
       for (const key of NETWORK_GATEWAY_ENV_KEYS) {
-        delete process.env[key];
+        deleteTestEnvValue(key);
       }
       process.env.HTTPS_PROXY = "http://127.0.0.1:9";
 
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+      setTestEnvValue("HOME", tempHome);
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";
@@ -100,7 +94,7 @@ describe("gateway network runtime", () => {
         configPath,
         `${JSON.stringify({ gateway: { auth: { mode: "token", token } } }, null, 2)}\n`,
       );
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
       server = await startGatewayServer(await getFreeGatewayPort(), {
         bind: "loopback",

@@ -5,14 +5,16 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 
 const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
+const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
 
 function usage() {
   // keep this tiny; it's invoked from npm scripts too
@@ -35,7 +37,6 @@ export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
  */
 export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   const platform = params.platform ?? process.platform;
-  const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
   const options = {
     cwd: params.cwd ?? uiDir,
     stdio: "inherit",
@@ -44,6 +45,7 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 
   if (shouldUseCmdExeForCommand(cmd, platform)) {
+    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(options.env);
     return {
       command: comSpec,
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(cmd, args)],
@@ -67,18 +69,21 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
 export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
   const env = envOverride ?? process.env;
   const platform = params.platform ?? process.platform;
+  const cwd = params.cwd ?? uiDir;
   const runner = resolvePnpmRunner({
+    cwd,
+    env,
     pnpmArgs,
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform,
   });
   return {
     command: runner.command,
     args: runner.args,
     options: {
-      cwd: params.cwd ?? uiDir,
+      cwd,
       stdio: "inherit",
       env,
       shell: runner.shell,
@@ -99,17 +104,47 @@ function runSpawnCall(spawnCall, label) {
   }
 
   let forwardedSignal = null;
+  let forwardedSignalPids = [];
   let forceKillTimer = null;
+  let forwardedSignalDrainTimer = null;
+  const clearForwardedSignalTimers = () => {
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+      forceKillTimer = null;
+    }
+    if (forwardedSignalDrainTimer) {
+      clearInterval(forwardedSignalDrainTimer);
+      forwardedSignalDrainTimer = null;
+    }
+  };
+  const finishForwardedSignal = () => {
+    cleanupSignalHandlers();
+    process.kill(process.pid, forwardedSignal);
+  };
+  const waitForForwardedSignalChildren = () => {
+    if (!forwardedSignal || processTreeIsAlive(forwardedSignalPids)) {
+      return;
+    }
+    finishForwardedSignal();
+  };
   // Keep UI dev children in the foreground process group for native TTY
-  // resize/job-control behavior. Forward direct wrapper shutdown signals.
+  // resize/job-control behavior. Forward wrapper shutdown signals to the
+  // captured child tree instead of using a detached process group.
   const forwardedSignals = ["SIGTERM", "SIGHUP"];
   const signalHandlers = new Map(
     forwardedSignals.map((signal) => [
       signal,
       () => {
-        forwardedSignal ??= signal;
-        child.kill(signal);
-        forceKillTimer ??= setTimeout(() => child.kill("SIGKILL"), 5_000);
+        if (!forwardedSignal) {
+          forwardedSignal = signal;
+          forwardedSignalPids = collectChildProcessTreePids(child);
+          signalProcessTree(child, signal, forwardedSignalPids);
+          forwardedSignalDrainTimer = setInterval(waitForForwardedSignalChildren, 25);
+          forceKillTimer = setTimeout(() => {
+            signalProcessTree(child, "SIGKILL", forwardedSignalPids);
+          }, FORWARDED_SIGNAL_KILL_GRACE_MS);
+          forceKillTimer.unref?.();
+        }
       },
     ]),
   );
@@ -117,9 +152,7 @@ function runSpawnCall(spawnCall, label) {
     for (const [signal, handler] of signalHandlers) {
       process.off(signal, handler);
     }
-    if (forceKillTimer) {
-      clearTimeout(forceKillTimer);
-    }
+    clearForwardedSignalTimers();
   };
   for (const [signal, handler] of signalHandlers) {
     process.on(signal, handler);
@@ -131,11 +164,11 @@ function runSpawnCall(spawnCall, label) {
     process.exit(1);
   });
   child.on("exit", (code, signal) => {
-    cleanupSignalHandlers();
     if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
+      waitForForwardedSignalChildren();
       return;
     }
+    cleanupSignalHandlers();
     if (signal) {
       process.kill(process.pid, signal);
       return;
@@ -144,6 +177,66 @@ function runSpawnCall(spawnCall, label) {
       process.exit(code ?? 1);
     }
   });
+}
+
+function collectChildProcessTreePids(child) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return typeof child.pid === "number" ? [child.pid] : [];
+  }
+  const ps = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
+  if (ps.status !== 0) {
+    return [child.pid];
+  }
+  const childrenByParent = new Map();
+  for (const line of ps.stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const siblings = childrenByParent.get(ppid) ?? [];
+    siblings.push(pid);
+    childrenByParent.set(ppid, siblings);
+  }
+  const pids = [child.pid];
+  for (const parentPid of pids) {
+    for (const pid of childrenByParent.get(parentPid) ?? []) {
+      pids.push(pid);
+    }
+  }
+  return [...new Set(pids)];
+}
+
+function processTreeIsAlive(pids) {
+  return pids.some((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === "EPERM";
+    }
+  });
+}
+
+function signalProcessTree(child, signal, pids) {
+  if (process.platform === "win32") {
+    child.kill(signal);
+    return;
+  }
+  if (pids.length === 0) {
+    child.kill(signal);
+    return;
+  }
+  for (const pid of pids.toReversed()) {
+    try {
+      process.kill(pid, signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
 }
 
 function run(cmd, args) {
@@ -209,6 +302,10 @@ function resolveScriptAction(action) {
   return null;
 }
 
+export function assertUiBuildOutputRoot(params = {}) {
+  assertRealOutputRoot(path.join(params.rootDir ?? repoRoot, "dist"), { fs: params.fs ?? fs });
+}
+
 export function main(argv = process.argv.slice(2)) {
   const [action, ...rest] = argv;
   if (!action) {
@@ -220,6 +317,9 @@ export function main(argv = process.argv.slice(2)) {
   if (action !== "install" && !script) {
     usage();
     process.exit(2);
+  }
+  if (action === "build") {
+    assertUiBuildOutputRoot();
   }
 
   if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
@@ -241,7 +341,7 @@ export function main(argv = process.argv.slice(2)) {
   runPnpm(["run", script, ...rest]);
 }
 
-export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
   const resolved = path.resolve(entry);
   try {
     return realpath(resolved);

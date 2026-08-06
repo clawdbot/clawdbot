@@ -44,7 +44,7 @@ describe("moonshot provider plugin", () => {
     });
   });
 
-  it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {
+  it("rewrites duplicate tool-call ids with OpenAI-style ids for Moonshot replay", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     const policy = provider.buildReplayPolicy?.({
@@ -57,10 +57,28 @@ describe("moonshot provider plugin", () => {
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      duplicateToolCallIdStyle: "openai",
     });
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
-    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
-    expect(policy).not.toHaveProperty("toolCallIdMode");
+  });
+
+  it("preserves responses-family replay behavior", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const policy = provider.buildReplayPolicy?.({
+      provider: "moonshot",
+      modelApi: "openai-responses",
+      modelId: "kimi-k2.6",
+    } as never);
+
+    expect(policy).toEqual({
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
+    });
   });
 
   it("wires moonshot-thinking stream hooks", async () => {
@@ -88,5 +106,103 @@ describe("moonshot provider plugin", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });
+  });
+
+  it.each(["kimi-k2.7-code", "kimi-k2.7-code-highspeed"])(
+    "keeps %s thinking always on without sending a thinking field",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const capturedStream = createCapturedThinkingConfigStream();
+
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        provider: "moonshot",
+        modelId,
+        thinkingLevel: "off",
+        streamFn: capturedStream.streamFn,
+      } as never);
+
+      void wrapped?.(
+        {
+          api: "openai-completions",
+          provider: "moonshot",
+          id: modelId,
+        } as Model<"openai-completions">,
+        { messages: [] } as Context,
+        {},
+      );
+
+      expect(capturedStream.getCapturedPayload()).toEqual({
+        config: { thinkingConfig: { thinkingBudget: -1 } },
+      });
+      expect(
+        provider.wrapSimpleCompletionStreamFn?.({
+          provider: "moonshot",
+          modelId: "kimi-k2.6",
+          streamFn: capturedStream.streamFn,
+        } as never),
+      ).toBe(capturedStream.streamFn);
+      expect(
+        provider.resolveThinkingProfile?.({
+          provider: "moonshot",
+          modelId,
+          reasoning: true,
+        } as never),
+      ).toEqual({
+        levels: [{ id: "low", label: "on" }],
+        defaultLevel: "low",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+      expect(
+        provider.isModernModelRef?.({
+          provider: "moonshot",
+          modelId,
+        }),
+      ).toBe(true);
+      expect(
+        provider.isModernModelRef?.({
+          provider: "moonshot",
+          modelId: "kimi-k2.6",
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("exposes Kimi K3 as an always-max-thinking modern model", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedStream = createCapturedThinkingConfigStream();
+
+    const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k3",
+      thinkingLevel: "off",
+      streamFn: capturedStream.streamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "moonshot",
+        id: "kimi-k3",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedStream.getCapturedPayload()).toEqual({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      reasoning_effort: "max",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k3",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "max", label: "max" }],
+      defaultLevel: "max",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(provider.isModernModelRef?.({ provider: "moonshot", modelId: "kimi-k3" })).toBe(true);
   });
 });

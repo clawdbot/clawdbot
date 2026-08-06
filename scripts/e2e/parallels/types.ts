@@ -24,6 +24,7 @@ export interface ProviderAuth {
   apiKeyEnv: string;
   apiKeyValue: string;
   modelId: string;
+  tokenProvider?: Provider;
 }
 
 export interface SnapshotInfo {
@@ -43,5 +44,17 @@ export interface HostServer {
   hostIp: string;
   port: number;
   urlFor(filePath: string): string;
+  stop(): Promise<void>;
+}
+
+export interface NpmRegistryPackage {
+  name: string;
+  version: string;
+  tarballPath: string;
+}
+
+export interface NpmRegistryServer {
+  hostUrl: string;
+  url: string;
   stop(): Promise<void>;
 }

@@ -1,7 +1,10 @@
-// Covers context-token lookup caches, discovery warmup, and provider-qualified
+// Covers context-token lookup caches, catalog warmup, and provider-qualified
 // model resolution.
-import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { replaceDiscoveredContextTokenCache } from "./context-cache.js";
+import { ANTHROPIC_CONTEXT_1M_TOKENS } from "./context-resolution.js";
+import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 
 type DiscoveredModel = {
   id: string;
@@ -15,11 +18,35 @@ const contextTestState = vi.hoisted(() => {
   const state = {
     loadConfigImpl: () => ({}) as unknown,
     discoveredModels: [] as DiscoveredModel[],
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
-    discoverAuthStorage: vi.fn(() => ({})),
-    discoverModels: vi.fn(
-      (_authStorage: unknown, _agentDir: string, _options?: { normalizeModels?: boolean }) => ({
-        getAll: () => state.discoveredModels,
+    staticCatalogModels: [] as DiscoveredModel[],
+    runtimeConfigSnapshot: null as OpenClawConfig | null,
+    runtimeConfigSourceSnapshot: null as OpenClawConfig | null,
+    loadModelCatalogOwnerSnapshot: vi.fn(async (_params: unknown) => ({
+      modelCatalog: {
+        entries: state.discoveredModels,
+        routeVariants: [],
+        staticEntries: state.staticCatalogModels,
+      },
+    })),
+    getPublishedModelCatalogOwnerSnapshot: vi.fn(
+      (
+        _params: unknown,
+      ):
+        | {
+            config: OpenClawConfig;
+            modelCatalog: {
+              entries: DiscoveredModel[];
+              routeVariants: never[];
+              staticEntries: DiscoveredModel[];
+            };
+          }
+        | undefined => ({
+        config: state.loadConfigImpl() as OpenClawConfig,
+        modelCatalog: {
+          entries: state.discoveredModels,
+          routeVariants: [],
+          staticEntries: state.staticCatalogModels,
+        },
       }),
     ),
   };
@@ -30,13 +57,17 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => contextTestState.loadConfigImpl(),
 }));
 
-vi.mock("./models-config.runtime.js", () => ({
-  ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
+vi.mock("../config/runtime-source-projection.js", () => ({
+  projectConfigOntoRuntimeSourceSnapshot: (config: OpenClawConfig) =>
+    contextTestState.runtimeConfigSnapshot && contextTestState.runtimeConfigSourceSnapshot
+      ? contextTestState.runtimeConfigSourceSnapshot
+      : config,
 }));
 
-vi.mock("./agent-model-discovery.js", () => ({
-  discoverAuthStorage: contextTestState.discoverAuthStorage,
-  discoverModels: contextTestState.discoverModels,
+vi.mock("./prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogOwnerSnapshot: contextTestState.loadModelCatalogOwnerSnapshot,
+  getPublishedPreparedModelCatalogOwnerSnapshot:
+    contextTestState.getPublishedModelCatalogOwnerSnapshot,
 }));
 
 function mockContextDeps(params: {
@@ -47,8 +78,6 @@ function mockContextDeps(params: {
   // dependency seams before asking the already-imported module for values.
   contextTestState.loadConfigImpl = params.getRuntimeConfig;
   contextTestState.discoveredModels = params.discoveredModels ?? [];
-  contextTestState.ensureOpenClawModelsJson.mockClear();
-  return { ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
@@ -66,12 +95,17 @@ function mockDiscoveryDeps(
   });
 }
 
-function createContextOverrideConfig(provider: string, model: string, contextWindow: number) {
+function createContextOverrideConfig(
+  provider: string,
+  model: string,
+  contextWindow: number,
+): OpenClawConfig {
   return {
     models: {
       providers: {
         [provider]: {
-          models: [{ id: model, contextWindow }],
+          baseUrl: "https://example.invalid",
+          models: [{ id: model, contextWindow } as never],
         },
       },
     },
@@ -113,15 +147,32 @@ async function importResolveContextTokensForModel() {
 
 describe("lookupContextTokens", () => {
   beforeAll(async () => {
-    contextModule = await import("./context.js");
+    contextModule = await importFreshContextModule();
   });
 
   beforeEach(() => {
     contextTestState.loadConfigImpl = () => ({});
     contextTestState.discoveredModels = [];
-    contextTestState.ensureOpenClawModelsJson.mockClear();
-    contextTestState.discoverAuthStorage.mockClear();
-    contextTestState.discoverModels.mockClear();
+    contextTestState.staticCatalogModels = [];
+    contextTestState.runtimeConfigSnapshot = null;
+    contextTestState.runtimeConfigSourceSnapshot = null;
+    contextTestState.loadModelCatalogOwnerSnapshot.mockClear();
+    contextTestState.loadModelCatalogOwnerSnapshot.mockImplementation(async () => ({
+      modelCatalog: {
+        entries: contextTestState.discoveredModels,
+        routeVariants: [],
+        staticEntries: contextTestState.staticCatalogModels,
+      },
+    }));
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockClear();
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockImplementation(() => ({
+      config: contextTestState.loadConfigImpl() as OpenClawConfig,
+      modelCatalog: {
+        entries: contextTestState.discoveredModels,
+        routeVariants: [],
+        staticEntries: contextTestState.staticCatalogModels,
+      },
+    }));
     contextModule.resetContextWindowCacheForTest();
   });
 
@@ -175,6 +226,20 @@ describe("lookupContextTokens", () => {
 
     const { lookupContextTokens } = await importContextModule();
     expect(lookupContextTokens("gpt-5.4", { allowAsyncLoad: false })).toBe(272_000);
+  });
+
+  it("keeps a lower configured window as a cap on discovered context tokens", async () => {
+    mockDiscoveryDeps([{ provider: "openai", id: "gpt-5.5", contextTokens: 272_000 }], {
+      openai: {
+        models: [{ id: "gpt-5.5", contextWindow: 128_000 }],
+      },
+    });
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("gpt-5.5");
+    await flushAsyncWarmup();
+
+    expect(lookupContextTokens("gpt-5.5")).toBe(128_000);
   });
 
   it("rehydrates config-backed cache entries after module reload when runtime config survives", async () => {
@@ -244,6 +309,40 @@ describe("lookupContextTokens", () => {
     }
   });
 
+  it("replaces a configured token override before refreshing discovery", async () => {
+    mockContextDeps({
+      getRuntimeConfig: () => ({
+        models: {
+          providers: {
+            openrouter: {
+              models: [
+                {
+                  id: "claude-sonnet",
+                  contextWindow: 321_000,
+                  contextTokens: 111_000,
+                },
+              ],
+            },
+          },
+        },
+      }),
+      discoveredModels: [{ provider: "openrouter", id: "claude-sonnet", contextWindow: 654_321 }],
+    });
+
+    const { lookupContextTokens, refreshContextWindowCache } = await importContextModule();
+    expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(111_000);
+
+    const nextConfig = createContextOverrideConfig("openrouter", "claude-sonnet", 222_000);
+    contextTestState.discoveredModels = [
+      { provider: "openrouter", id: "claude-sonnet", contextWindow: 222_000 },
+    ];
+    const refreshPromise = refreshContextWindowCache(nextConfig);
+    expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
+    await refreshPromise;
+
+    expect(lookupContextTokens("claude-sonnet", { allowAsyncLoad: false })).toBe(222_000);
+  });
+
   it("returns the smaller window when the same bare model id is discovered under multiple providers", async () => {
     // Bare model ids are ambiguous across providers; the conservative minimum
     // prevents over-budget prompts when callers lack provider context.
@@ -259,7 +358,41 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
   });
 
-  it("skips model normalization during warmup but preserves provider-owned context metadata", async () => {
+  it("loads the read-only catalog during warmup and preserves provider-owned context metadata", async () => {
+    const config = {
+      agents: { defaults: { workspace: "/tmp/context-catalog-workspace" } },
+    } as OpenClawConfig;
+    mockDiscoveryDeps([
+      {
+        id: "anthropic/claude-opus-4.7-20260219",
+        provider: "anthropic",
+        contextWindow: 200_000,
+      },
+    ]);
+    contextTestState.loadConfigImpl = () => config;
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("anthropic/claude-opus-4.7-20260219");
+    await flushAsyncWarmup();
+
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        agentDir: expect.any(String),
+        readOnly: true,
+      }),
+    );
+    expect(contextTestState.loadModelCatalogOwnerSnapshot.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
+    );
+    expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(
+      ANTHROPIC_CONTEXT_1M_TOKENS,
+    );
+  });
+
+  it("keeps ordinary cache loading on the exact owner path", async () => {
+    const config = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
     mockDiscoveryDeps([
       {
         id: "anthropic/claude-opus-4.7-20260219",
@@ -268,43 +401,230 @@ describe("lookupContextTokens", () => {
       },
     ]);
 
-    const { lookupContextTokens } = await importContextModule();
-    lookupContextTokens("anthropic/claude-opus-4.7-20260219");
-    await flushAsyncWarmup();
+    const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
+    await ensureContextWindowCacheLoaded(config);
 
-    expect(contextTestState.discoverModels).toHaveBeenCalledTimes(1);
-    const discoverCall = contextTestState.discoverModels.mock.calls.at(0);
-    if (!discoverCall) {
-      throw new Error("expected discoverModels to be called");
-    }
-    const discoverAgentDir = discoverCall[1];
-    expect(discoverCall[0]).toEqual({});
-    expect(typeof discoverAgentDir).toBe("string");
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ config, readOnly: true }),
+    );
+    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
     expect(
-      path.normalize(discoverAgentDir).endsWith(path.join(".openclaw", "agents", "main", "agent")),
-    ).toBe(true);
-    expect(discoverCall[2]).toEqual({
-      normalizeModels: false,
-      workspaceDir: expect.any(String),
-    });
-    expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
+      lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
+    ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("resolveContextTokensForModel returns discovery value when provider-qualified entry exists in cache", async () => {
-    // Registry returns provider-qualified entries (real-world scenario from #35976).
-    // When no explicit config override exists, the bare cache lookup hits the
-    // provider-qualified raw discovery entry.
+  it("warms from the current Gateway-published owner without hashing a fallback owner key", async () => {
+    const requestedConfig = createContextOverrideConfig("synthetic", "stale-model", 111_000);
+    const publishedConfig = createContextOverrideConfig("synthetic", "current-model", 222_000);
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValueOnce({
+      config: publishedConfig,
+      modelCatalog: {
+        entries: [{ id: "discovered-model", provider: "synthetic", contextWindow: 64_000 }],
+        routeVariants: [],
+        staticEntries: [],
+      },
+    });
+
+    const { lookupContextTokens, prewarmContextWindowCacheAfterReady } =
+      await importContextModule();
+    await prewarmContextWindowCacheAfterReady({ config: requestedConfig });
+
+    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: requestedConfig,
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expect(
+      contextTestState.getPublishedModelCatalogOwnerSnapshot.mock.calls[0]?.[0],
+    ).not.toHaveProperty("readOnly");
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
+    expect(
+      lookupContextTokens("current-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(222_000);
+    expect(
+      lookupContextTokens("discovered-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(64_000);
+    expect(
+      lookupContextTokens("stale-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retires a failed published-owner load so exact request-time loading can recover", async () => {
+    contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValueOnce(undefined);
+    const config = createContextOverrideConfig("synthetic", "recovered-model", 96_000);
+    contextTestState.loadConfigImpl = () => config;
+
+    const { ensureContextWindowCacheLoaded, prewarmContextWindowCacheAfterReady } =
+      await importContextModule();
+    await expect(prewarmContextWindowCacheAfterReady({ config })).resolves.toBeUndefined();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig).toBeUndefined();
+
+    await ensureContextWindowCacheLoaded();
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ config, readOnly: true }),
+    );
+  });
+
+  it("retires stale discovered metadata when exact catalog loading fails", async () => {
+    replaceDiscoveredContextTokenCache(new Map([["stale-model", 999_000]]));
+    contextTestState.loadModelCatalogOwnerSnapshot.mockRejectedValueOnce(
+      new Error("catalog unavailable"),
+    );
+
+    const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
+    await ensureContextWindowCacheLoaded(
+      createContextOverrideConfig("synthetic", "current-model", 96_000),
+    );
+
+    expect(
+      lookupContextTokens("stale-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retires an unpublished prewarm marker when shutdown cancels during import", async () => {
+    let cancelled = false;
+    const pending = contextModule.prewarmContextWindowCacheAfterReady({
+      config: {},
+      isCancelled: () => cancelled,
+    });
+    cancelled = true;
+
+    await pending;
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).toBeNull();
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBeNull();
+  });
+
+  it("warms fresh caches instead of reusing a pre-generation load promise", async () => {
+    const legacyLoadPromise = Promise.resolve();
+    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = legacyLoadPromise;
+    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
+    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = createContextOverrideConfig(
+      "fresh-provider",
+      "fresh-model",
+      123_456,
+    );
+
+    await contextModule.ensureContextWindowCacheLoaded();
+
+    expect(
+      contextModule.lookupContextTokens("fresh-model", {
+        allowAsyncLoad: false,
+        skipRuntimeConfigLoad: true,
+      }),
+    ).toBe(123_456);
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadPromise).not.toBe(legacyLoadPromise);
+    expect(CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration).toBe(
+      CONTEXT_WINDOW_RUNTIME_STATE.generation,
+    );
+  });
+
+  it("status waits for pending context warmup but releases on timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      contextTestState.loadModelCatalogOwnerSnapshot.mockImplementationOnce(
+        () => new Promise<never>(() => {}),
+      );
+
+      const { ensureContextWindowCacheLoaded, waitForContextWindowCacheLoad } =
+        await importContextModule();
+      void ensureContextWindowCacheLoaded(
+        createContextOverrideConfig("anthropic", "claude", 200_000),
+      );
+
+      const waitResult = waitForContextWindowCacheLoad({ timeoutMs: 5 });
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(waitResult).resolves.toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("warms context metadata from bundled provider static catalogs", async () => {
+    contextTestState.staticCatalogModels = [
+      {
+        id: "gemini-3.1-pro-preview",
+        provider: "google",
+        contextWindow: 1_048_576,
+      },
+    ];
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("gemini-3.1-pro-preview");
+    await flushAsyncWarmup();
+
+    expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(1_048_576);
+  });
+
+  it("keeps discovered context metadata when no static rows exist", async () => {
     mockDiscoveryDeps([
-      { id: "github-copilot/gemini-3.1-pro-preview", contextWindow: 128_000 },
-      { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      {
+        id: "claude-sonnet",
+        provider: "openrouter",
+        contextWindow: 654_321,
+      },
+    ]);
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("claude-sonnet");
+    await flushAsyncWarmup();
+
+    expect(lookupContextTokens("claude-sonnet")).toBe(654_321);
+  });
+
+  it("uses projected source config for a cloned runtime config", async () => {
+    const runtimeConfig = createContextOverrideConfig(
+      "anthropic-vertex",
+      "claude-sonnet-4-6",
+      200_000,
+    );
+    contextTestState.runtimeConfigSnapshot = runtimeConfig;
+    contextTestState.runtimeConfigSourceSnapshot = {};
+    const clonedConfig = structuredClone(runtimeConfig);
+
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+    expect(
+      resolveContextTokensForModel({
+        cfg: clonedConfig,
+        provider: "anthropic-vertex",
+        model: "claude-sonnet-4-6",
+        allowAsyncLoad: false,
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("resolveContextTokensForModel handles self-prefixed provider-owned discovery ids", async () => {
+    mockDiscoveryDeps([
+      {
+        provider: "github-copilot",
+        id: "github-copilot/gemini-3.1-pro-preview",
+        contextWindow: 128_000,
+      },
+      {
+        provider: "google-gemini-cli",
+        id: "google-gemini-cli/gemini-3.1-pro-preview",
+        contextWindow: 1_048_576,
+      },
     ]);
 
     const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
-    // With provider specified and no config override, bare lookup finds the
-    // provider-qualified discovery entry.
     const result = resolveContextTokensForModel({
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
@@ -369,7 +689,13 @@ describe("lookupContextTokens", () => {
     // override, the config direct scan returns it before any cache lookup —
     // so the OpenRouter raw "google/gemini-2.5-pro" qualified entry is never hit.
     // Real callers (status.summary.ts) always pass cfg when provider is explicit.
-    mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
+    mockDiscoveryDeps([
+      {
+        provider: "openrouter",
+        id: "google/gemini-2.5-pro",
+        contextWindow: 999_000,
+      },
+    ]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
     const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
@@ -388,8 +714,17 @@ describe("lookupContextTokens", () => {
     const openrouterResult = resolveContextTokensForModel({
       provider: "openrouter",
       model: "google/gemini-2.5-pro",
+      contextTokensOverride: 2_000_000,
     });
     expect(openrouterResult).toBe(999_000);
+
+    // The same raw key must not be treated as provider-owned Google metadata.
+    const googleUnconfiguredResult = resolveContextTokensForModel({
+      provider: "google",
+      model: "gemini-2.5-pro",
+      contextTokensOverride: 2_000_000,
+    });
+    expect(googleUnconfiguredResult).toBe(2_000_000);
   });
 
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
@@ -475,17 +810,24 @@ describe("lookupContextTokens", () => {
     // an explicit-provider call must return the provider-specific qualified value,
     // not the collided bare minimum.
     mockDiscoveryDeps([
-      { id: "github-copilot/gemini-3.1-pro-preview", contextWindow: 128_000 },
+      {
+        provider: "github-copilot",
+        id: "gemini-3.1-pro-preview",
+        contextWindow: 128_000,
+      },
       { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
-      { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
+      {
+        provider: "google-gemini-cli",
+        id: "gemini-3.1-pro-preview",
+        contextWindow: 1_048_576,
+      },
     ]);
 
     const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
-    // Qualified "google-gemini-cli/gemini-3.1-pro-preview" → 1M wins over
-    // bare "gemini-3.1-pro-preview" → 128k (cross-provider minimum).
+    // Provider-owned 1M metadata wins over the bare 128k cross-provider minimum.
     const result = resolveContextTokensForModel({
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",

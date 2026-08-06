@@ -12,12 +12,12 @@ Adds Chutes model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/chutes-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/chutes-provider`
 
 ## Surface
 
-providers: chutes
+providers: `chutes`
 
 ## Related docs
 
-- [chutes](/providers/chutes)
+- [Chutes](/providers/chutes)

@@ -6,6 +6,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import {
   HEARTBEAT_TOKEN,
+  isInternalFormattingArtifact,
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -21,7 +22,7 @@ import {
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
-export type NormalizeReplyOptions = {
+type NormalizeReplyOptions = {
   responsePrefix?: string;
   applyChannelTransforms?: boolean;
   /** Context for template variable interpolation in responsePrefix */
@@ -95,6 +96,11 @@ export function normalizeReplyPayload(
       return null;
     }
     text = stripped.text;
+  }
+
+  if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+    opts.onSkip?.("silent");
+    return null;
   }
 
   if (text) {

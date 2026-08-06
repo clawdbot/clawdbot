@@ -1,10 +1,10 @@
 // Covers sanitized provider-error observation fields for embedded-agent runs.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 
@@ -104,13 +104,13 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("truncates oversized raw and provider previews", () => {
-    const longMessage = "X".repeat(260);
+    const longMessage = `${"X".repeat(199)}🚀tail`;
     const observed = buildApiErrorObservationFields(
       `{"type":"error","error":{"type":"server_error","message":"${longMessage}"},"request_id":"req_long"}`,
     );
 
     expect(observed.rawErrorPreview).toBeTypeOf("string");
-    expect(observed.providerErrorMessagePreview).toBeTypeOf("string");
+    expect(observed.providerErrorMessagePreview).toBe(`${"X".repeat(199)}…`);
     expect(observed.rawErrorPreview?.length).toBeLessThanOrEqual(401);
     expect(observed.providerErrorMessagePreview?.length).toBeLessThanOrEqual(201);
     expect(observed.providerErrorMessagePreview?.endsWith("…")).toBe(true);
@@ -119,12 +119,27 @@ describe("buildApiErrorObservationFields", () => {
   it("caps oversized raw inputs before hashing and fingerprinting", () => {
     // Hashing a bounded prefix keeps diagnostic work predictable for huge
     // provider payloads.
-    const oversized = "X".repeat(70_000);
-    const bounded = "X".repeat(64_000);
+    const oversized = `${"X".repeat(63_999)}🚀tail`;
+    const bounded = "X".repeat(63_999);
 
     const observed = buildApiErrorObservationFields(oversized);
     const boundedObserved = buildApiErrorObservationFields(bounded);
     expect(observed.rawErrorHash).toBe(boundedObserved.rawErrorHash);
+    expect(observed.rawErrorFingerprint).toBe(boundedObserved.rawErrorFingerprint);
+  });
+
+  it("keeps fingerprint message bounds on a UTF-16 boundary", () => {
+    const prefix = "X".repeat(7_999);
+    const observed = buildApiErrorObservationFields(
+      JSON.stringify({
+        type: "error",
+        error: { type: "server_error", message: `${prefix}🚀tail` },
+      }),
+    );
+    const boundedObserved = buildApiErrorObservationFields(
+      JSON.stringify({ type: "error", error: { type: "server_error", message: prefix } }),
+    );
+
     expect(observed.rawErrorFingerprint).toBe(boundedObserved.rawErrorFingerprint);
   });
 

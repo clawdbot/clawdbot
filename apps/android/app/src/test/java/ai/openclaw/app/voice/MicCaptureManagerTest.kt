@@ -1,5 +1,6 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ChatSendAck
 import android.Manifest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -34,11 +35,11 @@ class MicCaptureManagerTest {
           sendToGateway = { message, onRunIdKnown ->
             sentMessages += message
             onRunIdKnown("run-1")
-            null
+            ChatSendAck(runId = "run-1", status = "started")
           },
         )
 
-      setPrivateField(manager, "transcriptionSessionId", "transcription-1")
+      setTranscriptionSession(manager, "transcription-1")
       manager.onGatewayConnectionChanged(true)
       manager.handleGatewayEvent(
         "talk.event",
@@ -63,7 +64,7 @@ class MicCaptureManagerTest {
   fun transcriptionErrorDisablesMic() {
     val manager = createManager()
 
-    setPrivateField(manager, "transcriptionSessionId", "transcription-1")
+    setTranscriptionSession(manager, "transcription-1")
     manager.handleGatewayEvent(
       "talk.event",
       """{"transcriptionSessionId":"transcription-1","type":"error","message":"provider unavailable"}""",
@@ -84,11 +85,11 @@ class MicCaptureManagerTest {
           sendToGateway = { message, onRunIdKnown ->
             sentMessages += message
             onRunIdKnown("run-1")
-            "run-1"
+            ChatSendAck(runId = "run-1", status = "started")
           },
         )
 
-      setPrivateField(manager, "transcriptionSessionId", "transcription-1")
+      setTranscriptionSession(manager, "transcription-1")
       manager.onGatewayConnectionChanged(true)
       manager.handleGatewayEvent(
         "talk.event",
@@ -111,7 +112,7 @@ class MicCaptureManagerTest {
           sendToGateway = { message, onRunIdKnown ->
             sentMessages += message
             onRunIdKnown("run-voice-e2e")
-            "run-voice-e2e"
+            ChatSendAck(runId = "run-voice-e2e", status = "started")
           },
         )
 
@@ -132,6 +133,116 @@ class MicCaptureManagerTest {
           .last()
           .text,
       )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalGatewayTimeoutSendDoesNotAcceptDelayedOldRunEvents() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { _, onRunIdKnown ->
+            onRunIdKnown("run-terminal")
+            ChatSendAck(runId = "run-terminal", status = "timeout")
+          },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("terminal ack message")
+      runCurrent()
+
+      assertNull(privateField<String?>(manager, "pendingRunId"))
+      assertEquals(false, manager.isSending.value)
+      assertEquals("Send failed: Chat failed before the run started; try again.", manager.statusText.value)
+
+      manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-terminal", text = "stale reply"))
+      advanceUntilIdle()
+
+      assertEquals(
+        listOf(VoiceConversationRole.User),
+        manager.conversation.value.map { it.role },
+      )
+      assertEquals(
+        "terminal ack message",
+        manager.conversation.value
+          .single()
+          .text,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalGatewayErrorSurfacesFailureWithoutWaitingForRunEvents() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { _, onRunIdKnown ->
+            onRunIdKnown("run-error")
+            ChatSendAck(runId = "run-error", status = "error")
+          },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("terminal error message")
+      runCurrent()
+
+      assertNull(privateField<String?>(manager, "pendingRunId"))
+      assertEquals(false, manager.isSending.value)
+      assertEquals("Send failed: Chat failed before the run started; try again.", manager.statusText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun chatFailureRetainsLocalizedSourceForLaterLocaleChanges() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { _, onRunIdKnown ->
+            onRunIdKnown("run-localized-error")
+            ChatSendAck(runId = "run-localized-error", status = "started")
+          },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("trigger failure")
+      runCurrent()
+      manager.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-localized-error","state":"error"}""",
+      )
+      advanceUntilIdle()
+
+      val failure = manager.conversation.value.last()
+      assertEquals(VoiceConversationRole.Assistant, failure.role)
+      assertEquals("Voice request failed", failure.text)
+      assertEquals("Voice request failed", failure.localizedSource)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalGatewayOkRefreshesHistoryWithoutWaitingForRunEvents() =
+    runTest {
+      var refreshCalls = 0
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { _, onRunIdKnown ->
+            onRunIdKnown("run-ok")
+            ChatSendAck(runId = "run-ok", status = "ok")
+          },
+          refreshAfterTerminalSuccess = { refreshCalls += 1 },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("terminal ok message")
+      runCurrent()
+
+      assertNull(privateField<String?>(manager, "pendingRunId"))
+      assertEquals(false, manager.isSending.value)
+      assertEquals(1, refreshCalls)
     }
 
   @Test
@@ -177,7 +288,7 @@ class MicCaptureManagerTest {
       val manager = createManager(scope = this)
 
       setPrivateMutableStateFlowValue(manager, "_micEnabled", true)
-      setPrivateField(manager, "transcriptionSessionId", "transcription-1")
+      setTranscriptionSession(manager, "transcription-1")
       manager.setMicEnabled(false)
       manager.handleGatewayEvent(
         "talk.event",
@@ -191,8 +302,35 @@ class MicCaptureManagerTest {
           .single()
           .text,
       )
-      assertEquals("transcription-1", privateField<String?>(manager, "transcriptionSessionId"))
+      assertEquals("transcription-1", privateField<GatewayTranscriptionSession?>(manager, "transcriptionSession")?.id)
       privateField<Job?>(manager, "transcriptionDrainJob")?.cancel()
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun gatewayScopeChangeDropsQueuedVoiceBeforeReconnect() =
+    runTest {
+      val sentMessages = mutableListOf<String>()
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { message, onRunIdKnown ->
+            sentMessages += message
+            onRunIdKnown("run-b")
+            ChatSendAck(runId = "run-b", status = "started")
+          },
+        )
+
+      manager.submitTranscribedMessage("gateway A only")
+      assertEquals(listOf("gateway A only"), manager.queuedMessages.value)
+
+      manager.onGatewayScopeChanging()
+      manager.onGatewayConnectionChanged(true)
+      runCurrent()
+
+      assertEquals(emptyList<String>(), manager.queuedMessages.value)
+      assertEquals(emptyList<String>(), sentMessages)
+      assertEquals(emptyList<VoiceConversationEntry>(), manager.conversation.value)
     }
 
   @Test
@@ -230,10 +368,11 @@ class MicCaptureManagerTest {
     scope: CoroutineScope = CoroutineScope(Dispatchers.Unconfined),
     createTranscriptionSession: suspend () -> String = { "transcription-1" },
     closeTranscriptionSession: suspend (String) -> Unit = { _ -> },
-    sendToGateway: suspend (String, (String) -> Unit) -> String? = { _, onRunIdKnown ->
+    sendToGateway: suspend (String, (String) -> Unit) -> ChatSendAck = { _, onRunIdKnown ->
       onRunIdKnown("run-1")
-      "run-1"
+      ChatSendAck(runId = "run-1", status = "started")
     },
+    refreshAfterTerminalSuccess: suspend () -> Unit = {},
   ): MicCaptureManager =
     MicCaptureManager(
       context =
@@ -241,11 +380,28 @@ class MicCaptureManagerTest {
           shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
         },
       scope = scope,
-      createTranscriptionSession = createTranscriptionSession,
+      createTranscriptionSession = {
+        GatewayTranscriptionSession(
+          id = createTranscriptionSession(),
+          gatewayId = "gateway-a",
+        )
+      },
       appendTranscriptionAudio = { _, _, _ -> },
-      closeTranscriptionSession = closeTranscriptionSession,
+      closeTranscriptionSession = { session -> closeTranscriptionSession(session.id) },
       sendToGateway = sendToGateway,
+      refreshAfterTerminalSuccess = refreshAfterTerminalSuccess,
     )
+
+  private fun setTranscriptionSession(
+    manager: MicCaptureManager,
+    id: String,
+  ) {
+    setPrivateField(
+      manager,
+      "transcriptionSession",
+      GatewayTranscriptionSession(id = id, gatewayId = "gateway-a"),
+    )
+  }
 
   private fun setPrivateField(
     target: Any,

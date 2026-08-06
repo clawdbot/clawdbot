@@ -13,11 +13,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
-import {
-  resolveAcpCommandBindingContext,
-  resolveAcpCommandConversationId,
-  resolveAcpCommandParentConversationId,
-} from "./context.js";
+import { resolveAcpCommandBindingContext, resolveAcpCommandConversationId } from "./context.js";
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -663,7 +659,6 @@ describe("commands-acp context", () => {
       parentConversationId: "!room:example.org",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("$thread-root");
-    expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
   });
 
   it("resolves iMessage DM conversation ids from current targets", () => {
@@ -874,7 +869,6 @@ describe("commands-acp context", () => {
       AccountId: "work",
     });
 
-    expect(resolveAcpCommandParentConversationId(params)).toBeUndefined();
     expect(resolveAcpCommandBindingContext(params)).toEqual({
       channel: "feishu",
       accountId: "work",

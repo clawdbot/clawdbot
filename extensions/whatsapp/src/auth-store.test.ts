@@ -76,10 +76,10 @@ describe("auth-store", () => {
     expect(fsSync.existsSync(credsPath)).toBe(false);
   });
 
-  it("restores creds from a regular backup file", async () => {
+  it("restores malformed creds from a valid backup", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-restore");
     const credsPath = path.join(authDir, "creds.json");
-    fsSync.writeFileSync(credsPath, "{", "utf-8");
+    fsSync.writeFileSync(credsPath, "{x", "utf-8");
     fsSync.writeFileSync(
       path.join(authDir, "creds.json.bak"),
       JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
@@ -90,6 +90,37 @@ describe("auth-store", () => {
     expect(JSON.parse(fsSync.readFileSync(credsPath, "utf-8"))).toEqual({
       me: { id: "123@s.whatsapp.net" },
     });
+  });
+
+  it("revalidates setup ownership immediately before restoring backup credentials", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-guarded-restore");
+    const credsPath = path.join(authDir, "creds.json");
+    const guardError = new Error("verified inference route changed");
+    fsSync.writeFileSync(credsPath, "{x", "utf-8");
+    fsSync.writeFileSync(
+      path.join(authDir, "creds.json.bak"),
+      JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
+      "utf-8",
+    );
+
+    await expect(
+      restoreCredsFromBackupIfNeeded(authDir, {
+        beforeCredentialPersistence: async () => {
+          throw guardError;
+        },
+      }),
+    ).rejects.toBe(guardError);
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
+  });
+
+  it("leaves malformed creds unchanged when the backup is malformed", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-malformed-backup");
+    const credsPath = path.join(authDir, "creds.json");
+    fsSync.writeFileSync(credsPath, "{x", "utf-8");
+    fsSync.writeFileSync(path.join(authDir, "creds.json.bak"), "{y", "utf-8");
+
+    await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
   });
 
   it("preserves valid large creds instead of treating them as corrupt", async () => {
@@ -269,6 +300,24 @@ describe("auth-store", () => {
     });
   });
 
+  it("revalidates setup ownership immediately before deleting linked credentials", async () => {
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-guarded-logout", async (authDir) => {
+      const credsPath = path.join(authDir, "creds.json");
+      const guardError = new Error("verified inference route changed");
+      fsSync.writeFileSync(credsPath, "{}", "utf-8");
+
+      await expect(
+        logoutWeb({
+          authDir,
+          beforeCredentialPersistence: async () => {
+            throw guardError;
+          },
+        }),
+      ).rejects.toBe(guardError);
+      expect(fsSync.existsSync(credsPath)).toBe(true);
+    });
+  });
+
   it("does not delete the whole legacy auth root when targeted cleanup fails", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-legacy-failure");
     const previousOAuthDir = hoisted.oauthDir;
@@ -298,6 +347,56 @@ describe("auth-store", () => {
     } finally {
       hoisted.oauthDir = previousOAuthDir;
       rmSpy.mockRestore();
+      fsSync.rmSync(authDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears every Baileys auth category from the shared legacy root without touching other files", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-legacy-categories");
+    const previousOAuthDir = hoisted.oauthDir;
+    const authFiles = [
+      "creds.json",
+      "creds.json.bak",
+      "pre-key-1.json",
+      "session-contact.json",
+      "sender-key-group.json",
+      "sender-key-memory-group.json",
+      "app-state-sync-key-contact.json",
+      "app-state-sync-version-contact.json",
+      "lid-mapping-15551234567.json",
+      "device-list-15551234567.json",
+      "tctoken-15551234567.json",
+      "identity-key-15551234567.json",
+    ];
+    const unrelatedFiles = ["oauth.json", "google-oauth.json", "notes.txt"];
+    const nestedAuthFile = path.join(authDir, "nested", "session-keep.json");
+    hoisted.oauthDir = authDir;
+
+    try {
+      for (const file of [...authFiles, ...unrelatedFiles]) {
+        fsSync.writeFileSync(path.join(authDir, file), "{}", "utf-8");
+      }
+      fsSync.mkdirSync(path.dirname(nestedAuthFile));
+      fsSync.writeFileSync(nestedAuthFile, "keep", "utf-8");
+      fsSync.symlinkSync(
+        path.join(authDir, "notes.txt"),
+        path.join(authDir, "session-linked.json"),
+      );
+
+      await expect(logoutWeb({ authDir, isLegacyAuthDir: true })).resolves.toBe(true);
+
+      for (const file of authFiles) {
+        expect(fsSync.existsSync(path.join(authDir, file)), file).toBe(false);
+      }
+      for (const file of unrelatedFiles) {
+        expect(fsSync.existsSync(path.join(authDir, file)), file).toBe(true);
+      }
+      expect(fsSync.readFileSync(nestedAuthFile, "utf-8")).toBe("keep");
+      expect(fsSync.lstatSync(path.join(authDir, "session-linked.json")).isSymbolicLink()).toBe(
+        true,
+      );
+    } finally {
+      hoisted.oauthDir = previousOAuthDir;
       fsSync.rmSync(authDir, { recursive: true, force: true });
     }
   });

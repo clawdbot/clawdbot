@@ -22,11 +22,4 @@ enum SessionKey {
         let agentId = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
         return agentId.isEmpty ? nil : agentId
     }
-
-    static func isCanonicalMainSessionKey(_ value: String?) -> Bool {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return false }
-        if trimmed == "global" { return true }
-        return trimmed.hasPrefix("agent:")
-    }
 }

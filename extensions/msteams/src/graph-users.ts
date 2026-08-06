@@ -1,5 +1,12 @@
 // Msteams plugin module implements graph users behavior.
-import { escapeOData, fetchGraphJson, type GraphResponse, type GraphUser } from "./graph.js";
+import {
+  escapeOData,
+  fetchAllGraphPages,
+  fetchGraphJson,
+  type GraphResponse,
+  type GraphUser,
+  type PaginatedResult,
+} from "./graph.js";
 
 export async function searchGraphUsers(params: {
   token: string;
@@ -27,4 +34,22 @@ export async function searchGraphUsers(params: {
     headers: { ConsistencyLevel: "eventual" },
   });
   return res.value ?? [];
+}
+
+export async function findGraphUsersByExactIdentity(params: {
+  token: string;
+  query: string;
+}): Promise<PaginatedResult<GraphUser>> {
+  const query = params.query.trim();
+  if (!query) {
+    return { items: [], truncated: false };
+  }
+  const escaped = escapeOData(query);
+  const filter =
+    `(displayName eq '${escaped}' or mail eq '${escaped}' or ` +
+    `userPrincipalName eq '${escaped}')`;
+  const path =
+    `/users?$filter=${encodeURIComponent(filter)}` +
+    "&$select=id,displayName,mail,userPrincipalName";
+  return await fetchAllGraphPages<GraphUser>({ token: params.token, path });
 }

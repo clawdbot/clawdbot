@@ -1,10 +1,10 @@
 // Windowed channel history facade over caller-owned pending-history maps.
 import {
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryIfEnabled,
-  recordPendingHistoryEntryWithMedia,
+  buildChannelInboundHistory,
+  buildChannelPendingHistoryContext,
+  clearChannelHistoryIfEnabled,
+  recordChannelHistoryEntryIfEnabled,
+  recordChannelHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
 import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 
@@ -46,14 +46,14 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
   const { historyMap } = params;
   return {
     record: (recordParams) =>
-      recordPendingHistoryEntryIfEnabled({
+      recordChannelHistoryEntryIfEnabled({
         historyMap,
         historyKey: recordParams.historyKey,
         limit: recordParams.limit,
         entry: recordParams.entry,
       }),
     recordWithMedia: (recordParams) =>
-      recordPendingHistoryEntryWithMedia({
+      recordChannelHistoryEntryWithMedia({
         historyMap,
         historyKey: recordParams.historyKey,
         limit: recordParams.limit,
@@ -64,7 +64,7 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         shouldRecord: recordParams.shouldRecord,
       }),
     buildPendingContext: (contextParams) =>
-      buildPendingHistoryContextFromMap({
+      buildChannelPendingHistoryContext({
         historyMap,
         historyKey: contextParams.historyKey,
         limit: contextParams.limit,
@@ -73,13 +73,13 @@ export function createChannelHistoryWindow<T extends HistoryEntry = HistoryEntry
         lineBreak: contextParams.lineBreak,
       }),
     buildInboundHistory: (historyParams) =>
-      buildInboundHistoryFromMap({
+      buildChannelInboundHistory({
         historyMap,
         historyKey: historyParams.historyKey,
         limit: historyParams.limit,
       }),
     clear: (clearParams) =>
-      clearHistoryEntriesIfEnabled({
+      clearChannelHistoryIfEnabled({
         historyMap,
         historyKey: clearParams.historyKey,
         limit: clearParams.limit,

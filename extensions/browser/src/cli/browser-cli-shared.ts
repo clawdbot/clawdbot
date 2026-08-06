@@ -11,6 +11,7 @@ import {
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
 import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
+import { danger, defaultRuntime, runCommandWithRuntime } from "../core-api.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
 /** Parent Browser CLI options inherited by subcommands. */
@@ -29,6 +30,32 @@ type BrowserRequestParams = {
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
 };
+
+/** Runs a Browser CLI command with the standard runtime error handling. */
+export function runBrowserCliCommand(action: () => Promise<void>) {
+  return runCommandWithRuntime(defaultRuntime, action, (error) => {
+    defaultRuntime.error(danger(String(error)));
+    defaultRuntime.exit(1);
+  });
+}
+
+/** Writes a Browser command result when structured output was requested. */
+export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
+  if (!parent?.json) {
+    return false;
+  }
+  defaultRuntime.writeJson(payload);
+  return true;
+}
+
+/** Combines the selected Browser profile with optional request query fields. */
+export function resolveBrowserProfileQuery(
+  profile?: string,
+  extra?: BrowserRequestParams["query"],
+): BrowserRequestParams["query"] {
+  const query = { ...(profile ? { profile } : {}), ...extra };
+  return Object.keys(query).length > 0 ? query : undefined;
+}
 
 function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, string> | undefined {
   if (!query) {
@@ -78,17 +105,13 @@ export async function callBrowserRequest<T>(
   params: BrowserRequestParams,
   extra?: { timeoutMs?: number; progress?: boolean },
 ): Promise<T> {
-  const resolvedTimeoutMs =
+  const resolvedTimeout =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
       ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
       : typeof opts.timeout === "string"
         ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
         : undefined;
-  const resolvedTimeout =
-    typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)
-      ? resolvedTimeoutMs
-      : undefined;
-  const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
+  const timeout = resolvedTimeout === undefined ? opts.timeout : String(resolvedTimeout);
   const payload = await callGatewayFromCli(
     BROWSER_REQUEST_GATEWAY_METHOD,
     { ...opts, timeout },

@@ -13,19 +13,24 @@ import {
   defaultJavaScriptRegexConstructor,
 } from "@shikijs/engine-javascript";
 import { createOnigurumaEngine, loadWasm } from "@shikijs/engine-oniguruma";
-import { bundledLanguages } from "../extensions/diffs/src/shiki-curated-languages.js";
-export * from "@shikijs/core";
-export {
-  bundledLanguages,
-  bundledLanguagesAlias,
+import {
   bundledLanguagesBase,
   bundledLanguagesInfo,
 } from "../extensions/diffs/src/shiki-curated-languages.js";
+export * from "@shikijs/core";
+export { bundledLanguagesBase, bundledLanguagesInfo };
 export { bundledThemes, bundledThemesInfo } from "shiki/themes";
 import { bundledThemes } from "shiki/themes";
 
-export type BundledLanguage = keyof typeof bundledLanguages;
-export type BundledTheme = keyof typeof bundledThemes;
+export const bundledLanguagesAlias = Object.fromEntries(
+  bundledLanguagesInfo.flatMap((language) =>
+    ("aliases" in language ? language.aliases : []).map((alias) => [alias, language.import]),
+  ),
+);
+export const bundledLanguages = {
+  ...bundledLanguagesBase,
+  ...bundledLanguagesAlias,
+};
 
 export const createHighlighter = createBundledHighlighter({
   langs: bundledLanguages,

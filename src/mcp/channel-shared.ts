@@ -71,6 +71,7 @@ export type ChatHistoryResult = {
 /** Gateway session.message payload fields consumed by the MCP event bridge. */
 export type SessionMessagePayload = {
   sessionKey?: string;
+  senderIsOwner?: boolean;
   messageId?: string;
   messageSeq?: number;
   message?: { role?: string; content?: unknown; [key: string]: unknown };
@@ -126,13 +127,6 @@ export type QueueEvent =
       type: "plugin_approval_requested" | "plugin_approval_resolved";
       raw: Record<string, unknown>;
     };
-
-/** Claude channel permission notification payload before it is assigned an event cursor. */
-export type ClaudePermissionRequest = {
-  toolName: string;
-  description: string;
-  inputPreview: string;
-};
 
 /** Cursor and optional session filter used by event polling and waiting. */
 export type WaitFilter = {

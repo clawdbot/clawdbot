@@ -5,7 +5,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fsSafe from "../infra/fs-safe.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
@@ -27,6 +29,11 @@ describe("media understanding scope", () => {
 });
 
 const originalFetch = globalThis.fetch;
+const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function restoreProcessState() {
+  stateDirEnvSnapshot.restore();
+}
 
 async function withLocalAttachmentCache(
   prefix: string,
@@ -54,6 +61,7 @@ async function withLocalAttachmentCache(
 describe("media understanding attachments SSRF", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    restoreProcessState();
     vi.restoreAllMocks();
   });
 
@@ -145,13 +153,163 @@ describe("media understanding attachments SSRF", () => {
       await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
       await fs.writeFile(attachmentPath, "ok");
 
-      const cache = new MediaAttachmentCache([{ index: 0, path: "media/inbound/report.pdf" }], {
-        localPathRoots: [workspaceDir],
-        workspaceDir,
-      });
+      const cache = new MediaAttachmentCache(
+        [{ index: 0, path: "media/inbound/report.pdf", workspaceDir }],
+        { localPathRoots: [workspaceDir] },
+      );
 
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
       expect(result.buffer.toString()).toBe("ok");
+    });
+  });
+
+  it("resolves each relative attachment against its own workspace", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-workspaces-" }, async (base) => {
+      const workspaces = ["first", "second"].map((name) => path.join(base, name));
+      await Promise.all(
+        workspaces.map(async (workspaceDir, index) => {
+          await fs.mkdir(workspaceDir, { recursive: true });
+          await fs.writeFile(path.join(workspaceDir, "attachment.txt"), `slot-${index}`);
+        }),
+      );
+      const cache = new MediaAttachmentCache(
+        workspaces.map((workspaceDir, index) => ({
+          index,
+          path: "attachment.txt",
+          workspaceDir,
+        })),
+        { localPathRoots: workspaces },
+      );
+
+      await expect(
+        Promise.all(
+          workspaces.map((_workspaceDir, attachmentIndex) =>
+            cache.getBuffer({ attachmentIndex, maxBytes: 1024, timeoutMs: 1000 }),
+          ),
+        ),
+      ).resolves.toEqual([
+        expect.objectContaining({ buffer: Buffer.from("slot-0") }),
+        expect.objectContaining({ buffer: Buffer.from("slot-1") }),
+      ]);
+    });
+  });
+
+  it("resolves existing state-relative media paths when cwd differs from state dir", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-state-relative-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const cwd = path.join(base, "cwd");
+      const relativePath = "media/inbound/telegram.jpg";
+      const attachmentPath = path.join(stateDir, relativePath);
+      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+      await fs.mkdir(cwd, { recursive: true });
+      await fs.writeFile(attachmentPath, "state-media");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
+        localPathRoots: [path.join(stateDir, "media")],
+      });
+
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+      expect(result.buffer.toString()).toBe("state-media");
+      expect(result.fileName).toBe("telegram.jpg");
+    });
+  });
+
+  it("resolves managed inbound media URI attachments", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-managed-inbound-" }, async (stateDir) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const saved = await saveMediaBuffer(Buffer.from("managed-media"), "text/plain", "inbound");
+
+      const cache = new MediaAttachmentCache(
+        [{ index: 0, path: `media://inbound/${encodeURIComponent(saved.id)}` }],
+        {
+          localPathRoots: [path.join(stateDir, "media")],
+        },
+      );
+
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+
+      expect(result.buffer.toString()).toBe("managed-media");
+      expect(result.fileName).toBe(saved.id);
+    });
+  });
+
+  it("blocks nested managed inbound media URI attachments", async () => {
+    const cache = new MediaAttachmentCache([
+      { index: 0, path: "media://inbound/nested%2Ffile.pdf" },
+    ]);
+
+    await expect(
+      cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).rejects.toThrow(/outside allowed roots/i);
+  });
+
+  it("keeps cwd-relative fallback when a state-relative candidate does not exist", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-cwd-relative-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const cwd = path.join(base, "cwd");
+      const relativePath = "media/inbound/local.jpg";
+      const attachmentPath = path.join(cwd, relativePath);
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+      await fs.writeFile(attachmentPath, "cwd-media");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
+        localPathRoots: [path.join(cwd, "media")],
+      });
+
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+      expect(result.buffer.toString()).toBe("cwd-media");
+      expect(result.fileName).toBe("local.jpg");
+    });
+  });
+
+  it("prefers an existing cwd-relative attachment over a state-relative collision", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-relative-collision-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const cwd = path.join(base, "cwd");
+      const relativePath = "media/inbound/photo.jpg";
+      const cwdPath = path.join(cwd, relativePath);
+      const statePath = path.join(stateDir, relativePath);
+      await fs.mkdir(path.dirname(cwdPath), { recursive: true });
+      await fs.mkdir(path.dirname(statePath), { recursive: true });
+      await fs.writeFile(cwdPath, "cwd-media");
+      await fs.writeFile(statePath, "state-media");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
+        localPathRoots: [path.join(cwd, "media"), path.join(stateDir, "media")],
+      });
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+
+      expect(result.buffer.toString()).toBe("cwd-media");
+    });
+  });
+
+  it("falls back to state media when a cwd collision is outside allowed roots", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-blocked-cwd-collision-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const cwd = path.join(base, "cwd");
+      const relativePath = "media/inbound/photo.jpg";
+      const cwdPath = path.join(cwd, relativePath);
+      const statePath = path.join(stateDir, relativePath);
+      await fs.mkdir(path.dirname(cwdPath), { recursive: true });
+      await fs.mkdir(path.dirname(statePath), { recursive: true });
+      await fs.writeFile(cwdPath, "blocked-cwd-media");
+      await fs.writeFile(statePath, "state-media");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: relativePath }], {
+        localPathRoots: [path.join(stateDir, "media")],
+      });
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+
+      expect(result.buffer.toString()).toBe("state-media");
     });
   });
 
@@ -248,7 +406,10 @@ describe("media understanding attachments SSRF", () => {
         expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
           canonicalAttachmentPath,
         );
-        expect(openedFlags).toBe(fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        // fs-safe 0.5.2 may add O_NONBLOCK so a raced FIFO cannot pin a worker.
+        expect(Number(openedFlags) & ~fsConstants.O_NONBLOCK).toBe(
+          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+        );
       },
     );
   });

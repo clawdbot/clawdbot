@@ -1,24 +1,36 @@
 // Exercises agent harness registration, ownership metadata, and selection handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRegistrationContext } from "../../plugins/runtime.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
-  getAgentHarness,
   getRegisteredAgentHarness,
-  listAgentHarnessIds,
   listRegisteredAgentHarnesses,
   registerAgentHarness,
   resetRegisteredAgentHarnessSessions,
-  restoreRegisteredAgentHarnesses,
 } from "./registry.js";
 import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
+
+const resolveProviderRefOwnership = vi.hoisted(() => vi.fn(() => ({ status: "unowned" as const })));
+
+// Registry tests exercise selection handoff; provider owner/route tests own the real artifacts,
+// which would cold-load bundled plugin surfaces for this synthetic provider config.
+vi.mock("../../plugins/providers.js", () => ({
+  resolveProviderRefOwnership,
+}));
+vi.mock("../../plugins/provider-model-routes.js", () => ({
+  resolveProviderModelCatalogId: () => null,
+  resolveProviderModelRoutes: () => null,
+}));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
 beforeEach(() => {
   clearAgentHarnesses();
+  resolveProviderRefOwnership.mockClear();
 });
 
 afterEach(() => {
@@ -72,21 +84,46 @@ describe("agent harness registry", () => {
     const harness = makeHarness("custom");
     registerAgentHarness(harness, { ownerPluginId: "plugin-a" });
 
-    const registeredHarness = getAgentHarness("custom");
-    expect(registeredHarness?.id).toBe("custom");
-    expect(registeredHarness?.pluginId).toBe("plugin-a");
-    expect(getRegisteredAgentHarness("custom")?.ownerPluginId).toBe("plugin-a");
-    expect(listAgentHarnessIds()).toEqual(["custom"]);
+    const registeredHarness = getRegisteredAgentHarness("custom");
+    expect(registeredHarness?.harness.id).toBe("custom");
+    expect(registeredHarness?.harness.pluginId).toBe("plugin-a");
+    expect(registeredHarness?.ownerPluginId).toBe("plugin-a");
+    expect(listRegisteredAgentHarnesses().map((entry) => entry.harness.id)).toEqual(["custom"]);
   });
 
-  it("restores a registry snapshot", () => {
-    registerAgentHarness(makeHarness("a"));
-    const snapshot = listRegisteredAgentHarnesses();
-    registerAgentHarness(makeHarness("b"));
+  it("keeps explicit ownership distinct from harness metadata", () => {
+    const harness = { ...makeHarness("custom"), pluginId: "harness-declared" };
+    registerAgentHarness(harness, { ownerPluginId: "registry-owner" });
 
-    restoreRegisteredAgentHarnesses(snapshot);
+    expect(getRegisteredAgentHarness("custom")).toEqual({
+      harness,
+      ownerPluginId: "registry-owner",
+    });
+    expect(listRegisteredAgentHarnesses()).toEqual([{ harness, ownerPluginId: "registry-owner" }]);
+  });
 
-    expect(listAgentHarnessIds()).toEqual(["a"]);
+  it("uses builder ownership and preserves a harness registered by another plugin", () => {
+    const building = createEmptyPluginRegistry();
+    const original = makeHarness("shared");
+    building.agentHarnesses.push({
+      pluginId: "first-plugin",
+      source: "runtime",
+      harness: original,
+    });
+
+    expect(() =>
+      withPluginRegistrationContext(building, "failing-plugin", () => {
+        registerAgentHarness(makeHarness("shared"));
+      }),
+    ).toThrow("agent harness shared already registered by first-plugin");
+    expect(building.agentHarnesses).toEqual([
+      { pluginId: "first-plugin", source: "runtime", harness: original },
+    ]);
+
+    withPluginRegistrationContext(building, "builder-plugin", () => {
+      registerAgentHarness(makeHarness("owned"));
+    });
+    expect(building.agentHarnesses[1]?.pluginId).toBe("builder-plugin");
   });
 
   it("dispatches generic session reset to registered harnesses", async () => {
@@ -180,13 +217,18 @@ describe("agent harness registry", () => {
     registerAgentHarness(makeHarness("custom", { providers: ["anthropic"] }), {
       ownerPluginId: "plugin-a",
     });
+    const config = providerRuntimeConfig("anthropic", "custom");
 
     expect(
       selectAgentHarness({
         provider: "anthropic",
         modelId: "sonnet-4.6",
-        config: providerRuntimeConfig("anthropic", "custom"),
+        config,
       }).id,
     ).toBe("custom");
+    expect(resolveProviderRefOwnership).toHaveBeenCalledWith({
+      provider: "anthropic",
+      config,
+    });
   });
 });

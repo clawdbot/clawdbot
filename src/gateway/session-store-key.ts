@@ -6,6 +6,7 @@ import {
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
+  resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -103,10 +104,14 @@ export function resolveSessionStoreKey(params: {
 
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  const storeAgentId = params.storeAgentId ? normalizeAgentId(params.storeAgentId) : undefined;
   if (lowered === "main" || lowered === rawMainKey) {
+    if (storeAgentId) {
+      return resolveAgentMainSessionKey({ cfg: params.cfg, agentId: storeAgentId });
+    }
     return resolveMainSessionKey(params.cfg);
   }
-  const agentId = resolveDefaultStoreAgentId(params.cfg);
+  const agentId = storeAgentId ?? resolveDefaultStoreAgentId(params.cfg);
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
@@ -155,31 +160,4 @@ export function resolveStoredSessionOwnerAgentId(params: {
     return null;
   }
   return resolveSessionStoreAgentId(params.cfg, canonicalKey);
-}
-
-/** Canonicalize spawned-by parent references while preserving main-session aliases. */
-export function canonicalizeSpawnedByForAgent(
-  cfg: OpenClawConfig,
-  agentId: string,
-  spawnedBy?: string,
-): string | undefined {
-  const raw = normalizeOptionalString(spawnedBy) ?? "";
-  if (!raw) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (lower === "global" || lower === "unknown") {
-    return lower;
-  }
-  let result: string;
-  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
-  if (normalized.startsWith("agent:")) {
-    result = normalized;
-  } else {
-    result = `agent:${normalizeAgentId(agentId)}:${normalized}`;
-  }
-  // Resolve main-alias references (e.g. agent:ops:main -> configured main key).
-  const parsed = parseAgentSessionKey(result);
-  const resolvedAgent = parsed?.agentId ? normalizeAgentId(parsed.agentId) : agentId;
-  return canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgent, sessionKey: result });
 }

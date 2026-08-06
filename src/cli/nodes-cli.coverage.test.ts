@@ -2,9 +2,11 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
+import { callGatewayCli } from "./nodes-cli/rpc.js";
 
 type NodeInvokeCall = {
   method?: string;
+  timeoutMs?: number | null;
   params?: {
     idempotencyKey?: string;
     command?: string;
@@ -15,7 +17,7 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 
-const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
+const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   if (opts.method === "node.list") {
     return {
       nodes: [
@@ -123,6 +125,130 @@ describe("nodes-cli coverage", () => {
     });
   });
 
+  it("shows the registered pending command in node pairing help", () => {
+    const nodes = sharedProgram.commands.find((command) => command.name() === "nodes");
+    const output: string[] = [];
+
+    expect(nodes).toBeDefined();
+    nodes?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    nodes?.outputHelp();
+
+    expect(output.join("")).toContain("openclaw nodes pending");
+    expect(output.join("")).not.toContain("openclaw nodes pairing pending");
+  });
+
+  it("explains unknown nodes approve request ids with the current pending requests", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],
+      paired: [],
+    });
+
+    await expect(
+      sharedProgram.parseAsync(
+        [
+          "nodes",
+          "approve",
+          "stale-request",
+          "--url",
+          "wss://gateway.example.test",
+          "--token",
+          "secret-token",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: stale-request");
+    expect(output).toContain("Pending requestIds: current-request");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).not.toContain("gateway.example.test");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("nodes approve failed: Error:");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.list"]);
+  });
+
+  it("explains when a nodes approve request disappears after the preflight", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "expired-request", nodeId: "n1", ts: Date.now() }],
+        paired: [],
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unknown requestId"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      );
+
+    await expect(
+      sharedProgram.parseAsync(["nodes", "approve", "expired-request"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: expired-request");
+    expect(output).not.toContain("No pending node pairing requests are currently visible.");
+    expect(output).not.toContain("Pending requestIds:");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual([
+      "node.pair.list",
+      "node.pair.approve",
+    ]);
+  });
+
+  it("still approves when the pairing preflight is unavailable", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("pairing list unavailable"))
+      .mockResolvedValueOnce({ approved: true });
+
+    await sharedProgram.parseAsync(["nodes", "approve", "request-1"], { from: "user" });
+
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual([
+      "node.pair.list",
+      "node.pair.approve",
+    ]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ approved: true });
+  });
+
+  it("explains unknown nodes reject request ids without leaking connection credentials", async () => {
+    callGateway.mockRejectedValueOnce(
+      Object.assign(new Error("unknown requestId"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    );
+
+    await expect(
+      sharedProgram.parseAsync(
+        [
+          "nodes",
+          "reject",
+          "stale-request",
+          "--url",
+          "wss://gateway.example.test",
+          "--token",
+          "secret-token",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: stale-request");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).not.toContain("gateway.example.test");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.reject"]);
+  });
+
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
@@ -130,6 +256,19 @@ describe("nodes-cli coverage", () => {
       }),
     ).rejects.toThrow("__exit__:1");
     expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
+  });
+
+  it("rejects malformed nodes invoke params before opening a gateway call", async () => {
+    await expect(
+      sharedProgram.parseAsync(
+        ["nodes", "invoke", "--node", "mac-1", "--command", "canvas.eval", "--params", "not-json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON.");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(lastNodeInvokeCall).toBeNull();
   });
 
   it("invokes system.notify with provided fields", async () => {
@@ -156,6 +295,148 @@ describe("nodes-cli coverage", () => {
       sound: undefined,
       priority: undefined,
       delivery: "overlay",
+    });
+    expect(invoke.params?.timeoutMs).toBe(15_000);
+    expect(invoke.timeoutMs).toBe(25_000);
+    expect(
+      callGateway.mock.calls.find(([call]) => call.method === "node.list")?.[0].timeoutMs,
+    ).toBe(10_000);
+  });
+
+  it.each([
+    ["--priority", "urgent"],
+    ["--priority", "timesensitive"],
+    ["--delivery", "desktop"],
+  ])("rejects unsupported %s %s before calling the gateway", async (flag, value) => {
+    await withSuppressedStderr(async () => {
+      await expect(
+        sharedProgram.parseAsync(
+          ["nodes", "notify", "--node", "mac-1", "--title", "Ping", flag, value],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ code: "commander.invalidArgument" });
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(lastNodeInvokeCall).toBeNull();
+  });
+
+  it.each(["passive", "active", "timeSensitive"])(
+    "forwards the supported %s notification priority",
+    async (priority) => {
+      const invoke = await runNodesCommand([
+        "nodes",
+        "notify",
+        "--node",
+        "mac-1",
+        "--title",
+        "Ping",
+        "--priority",
+        priority,
+      ]);
+
+      expect(invoke.params?.params).toMatchObject({ priority, delivery: "system" });
+    },
+  );
+
+  it.each(["system", "overlay", "auto"])(
+    "forwards the supported %s notification delivery mode",
+    async (delivery) => {
+      const invoke = await runNodesCommand([
+        "nodes",
+        "notify",
+        "--node",
+        "mac-1",
+        "--title",
+        "Ping",
+        "--delivery",
+        delivery,
+      ]);
+
+      expect(invoke.params?.params).toMatchObject({ delivery });
+    },
+  );
+
+  it.each([
+    {
+      label: "a custom node invoke timeout",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "120000",
+      ],
+      invokeTimeoutMs: 120_000,
+      transportTimeoutMs: 130_000,
+      lookupTimeoutMs: 30_000,
+    },
+    {
+      label: "a larger explicit gateway timeout",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "120000",
+        "--timeout",
+        "200000",
+      ],
+      invokeTimeoutMs: 120_000,
+      transportTimeoutMs: 200_000,
+      lookupTimeoutMs: 200_000,
+    },
+    {
+      label: "a shorter explicit gateway timeout",
+      args: [
+        "nodes",
+        "invoke",
+        "--node",
+        "mac-1",
+        "--command",
+        "canvas.eval",
+        "--invoke-timeout",
+        "15000",
+        "--timeout",
+        "5000",
+      ],
+      invokeTimeoutMs: 15_000,
+      transportTimeoutMs: 25_000,
+      lookupTimeoutMs: 5_000,
+    },
+  ])(
+    "keeps the gateway transport alive for $label",
+    async ({ args, invokeTimeoutMs, transportTimeoutMs, lookupTimeoutMs }) => {
+      const invoke = await runNodesCommand(args);
+
+      expect(invoke.params?.timeoutMs).toBe(invokeTimeoutMs);
+      expect(invoke.timeoutMs).toBe(transportTimeoutMs);
+      expect(
+        callGateway.mock.calls.find(([call]) => call.method === "node.list")?.[0].timeoutMs,
+      ).toBe(lookupTimeoutMs);
+    },
+  );
+
+  it("disables the gateway request deadline for an unbounded node invocation", async () => {
+    const params = {
+      nodeId: "mac-1",
+      command: "canvas.eval",
+      timeoutMs: 0,
+      idempotencyKey: "rk_test",
+    };
+
+    await callGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
+
+    expect(getNodeInvokeCall()).toMatchObject({
+      method: "node.invoke",
+      timeoutMs: null,
+      params,
     });
   });
 

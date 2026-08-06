@@ -1,7 +1,7 @@
 // Sms type declarations define plugin contracts.
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
-export type SmsChannelConfigFields = {
+type SmsChannelConfigFields = {
   enabled?: boolean;
   accountSid?: string;
   authToken?: SecretInput;
@@ -21,7 +21,7 @@ export interface SmsChannelConfig extends SmsChannelConfigFields {
   defaultAccount?: string;
 }
 
-export interface SmsAccountRaw extends SmsChannelConfigFields {}
+interface SmsAccountRaw extends SmsChannelConfigFields {}
 
 export interface ResolvedSmsAccount {
   accountId: string;
@@ -42,10 +42,18 @@ export interface ResolvedSmsAccount {
 export interface SmsInboundMessage {
   messageSid: string;
   accountSid: string;
+  messagingServiceSid?: string;
   from: string;
   to: string;
   body: string;
+  media: SmsInboundMedia[];
+  unavailableMediaCount?: number;
 }
+
+type SmsInboundMedia = {
+  url: string;
+  contentType?: string;
+};
 
 export type SmsSendResult = {
   sid: string;

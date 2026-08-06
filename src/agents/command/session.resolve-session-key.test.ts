@@ -4,14 +4,18 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionStoreMock:
-    vi.fn<(storePath: string, opts?: { clone?: boolean }) => Record<string, SessionEntry>>(),
+  listSessionEntriesMock: vi.fn<
+    (scope?: { storePath?: string; clone?: boolean }) => Array<{
+      entry: SessionEntry;
+      sessionKey: string;
+    }>
+  >(),
   listAgentIdsMock: vi.fn<() => string[]>(),
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: (storePath: string, opts?: { clone?: boolean }) =>
-    hoisted.loadSessionStoreMock(storePath, opts),
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: (scope?: { storePath?: string; clone?: boolean }) =>
+    hoisted.listSessionEntriesMock(scope),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -33,9 +37,12 @@ const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
   await import("./session.js");
 
 function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
-  // Store paths are the routing boundary here; returning the exact object lets
-  // tests assert whether callers borrowed or cloned the selected store.
-  hoisted.loadSessionStoreMock.mockImplementation((storePath) => storesByPath[storePath] ?? {});
+  hoisted.listSessionEntriesMock.mockImplementation((scope) =>
+    Object.entries(storesByPath[scope?.storePath ?? ""] ?? {}).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
+  );
 }
 
 function expectResolvedRequestSession(params: {
@@ -54,13 +61,13 @@ function expectResolvedRequestSession(params: {
   });
 
   expect(result.sessionKey).toBe(params.sessionKey);
-  expect(result.sessionStore).toBe(params.sessionStore);
+  expect(result.sessionStore).toEqual(params.sessionStore);
   expect(result.storePath).toBe(params.storePath);
 }
 
 describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
-    hoisted.loadSessionStoreMock.mockReset();
+    hoisted.listSessionEntriesMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
   });
@@ -112,12 +119,7 @@ describe("resolveSessionKeyForRequest", () => {
       "agent:embedded-agent:main": { sessionId: "other-session", updatedAt: 2 },
       "agent:embedded-agent:work": { sessionId: "resume-agent-1", updatedAt: 1 },
     } satisfies Record<string, SessionEntry>;
-    hoisted.loadSessionStoreMock.mockImplementation((storePath) => {
-      if (storePath === "/stores/embedded-agent.json") {
-        return embeddedAgentStore;
-      }
-      return {};
-    });
+    mockSessionStores({ "/stores/embedded-agent.json": embeddedAgentStore });
 
     const result = resolveStoredSessionKeyForSessionId({
       cfg: {
@@ -130,9 +132,9 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:embedded-agent:work");
-    expect(result.sessionStore).toBe(embeddedAgentStore);
+    expect(result.sessionStore).toEqual(embeddedAgentStore);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
   });
 
   it("borrows session stores when requested", () => {
@@ -160,12 +162,18 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:other:acp:sid");
-    expect(result.sessionStore).toBe(otherStore);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/stores/main.json", {
-      clone: false,
-    });
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/stores/other.json", {
-      clone: false,
-    });
+    expect(result.sessionStore).toEqual(otherStore);
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/stores/main.json",
+        clone: false,
+      }),
+    );
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/stores/other.json",
+        clone: false,
+      }),
+    );
   });
 });

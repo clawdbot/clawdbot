@@ -1,9 +1,6 @@
 // Cron heartbeat policy tests cover heartbeat status classification.
 import { describe, expect, it } from "vitest";
-import {
-  shouldEnqueueCronMainSummary,
-  shouldSkipHeartbeatOnlyDelivery,
-} from "./heartbeat-policy.js";
+import { shouldSkipHeartbeatOnlyDelivery } from "./heartbeat-policy.js";
 
 describe("shouldSkipHeartbeatOnlyDelivery", () => {
   it("suppresses empty payloads", () => {
@@ -41,36 +38,6 @@ describe("shouldSkipHeartbeatOnlyDelivery", () => {
         ],
         300,
       ),
-    ).toBe(false);
-  });
-});
-
-describe("shouldEnqueueCronMainSummary", () => {
-  const isSystemEvent = (text: string) => text.includes("HEARTBEAT_OK");
-
-  it("enqueues only when delivery was requested but did not run", () => {
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "HEARTBEAT_OK",
-        deliveryRequested: true,
-        delivered: false,
-        deliveryAttempted: false,
-        suppressMainSummary: false,
-        isCronSystemEvent: isSystemEvent,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not enqueue after attempted outbound delivery", () => {
-    expect(
-      shouldEnqueueCronMainSummary({
-        summaryText: "HEARTBEAT_OK",
-        deliveryRequested: true,
-        delivered: false,
-        deliveryAttempted: true,
-        suppressMainSummary: false,
-        isCronSystemEvent: isSystemEvent,
-      }),
     ).toBe(false);
   });
 });

@@ -3,10 +3,8 @@
 
 import os from "node:os";
 
-const DEFAULT_LOCAL_FULL_SUITE_PARALLELISM = 4;
-const LARGE_LOCAL_FULL_SUITE_PARALLELISM = 10;
-const DEFAULT_LOCAL_FULL_SUITE_VITEST_WORKERS = 1;
-const LARGE_LOCAL_FULL_SUITE_VITEST_WORKERS = 2;
+const MAX_LOCAL_FULL_SUITE_PARALLELISM = 10;
+const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -30,10 +28,16 @@ function isSystemThrottleDisabled(env) {
   return normalized === "1" || normalized === "true";
 }
 
-export function isCiLikeEnv(env = process.env) {
-  return env.CI === "true" || env.GITHUB_ACTIONS === "true";
+function isTruthyEnvValue(value) {
+  return TRUTHY_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
 }
 
+/** @internal Shared repository-script contract. */
+export function isCiLikeEnv(env = process.env) {
+  return isTruthyEnvValue(env.CI) || isTruthyEnvValue(env.GITHUB_ACTIONS);
+}
+
+/** @internal Shared repository-script contract. */
 export function resolveLocalVitestEnv(env = process.env) {
   const normalizedLocalCheck = env.OPENCLAW_LOCAL_CHECK?.trim().toLowerCase();
   if (isCiLikeEnv(env) || (normalizedLocalCheck !== "0" && normalizedLocalCheck !== "false")) {
@@ -46,6 +50,7 @@ export function resolveLocalVitestEnv(env = process.env) {
   };
 }
 
+/** @internal Directly tested script implementation detail. */
 export function detectVitestHostInfo() {
   return {
     cpuCount:
@@ -70,6 +75,7 @@ function resolveMemoryPressureWorkerLimit(system) {
   return null;
 }
 
+/** @internal Shared repository-script contract. */
 export function resolveLocalVitestMaxWorkers(
   env = process.env,
   system = detectVitestHostInfo(),
@@ -83,6 +89,7 @@ export function resolveLocalVitestMaxWorkers(
  * @param {VitestHostInfo} system
  * @param {"forks" | "threads"} pool
  * @returns {LocalVitestScheduling}
+ * @internal Shared repository-script contract.
  */
 export function resolveLocalVitestScheduling(
   env = process.env,
@@ -189,42 +196,13 @@ export function resolveLocalVitestScheduling(
   };
 }
 
-export function shouldUseLargeLocalFullSuiteProfile(
-  env = process.env,
-  system = detectVitestHostInfo(),
-) {
-  if (isCiLikeEnv(env)) {
-    return false;
-  }
-  const scheduling = resolveLocalVitestScheduling(env, system, "threads");
-  return scheduling.maxWorkers >= 5 && !scheduling.throttledBySystem;
-}
-
+/** @internal Shared repository-script contract. */
 export function resolveLocalFullSuiteProfile(env = process.env, system = detectVitestHostInfo()) {
-  if (!isSystemThrottleDisabled(env)) {
-    const memoryPressureLimit = resolveMemoryPressureWorkerLimit(system);
-    if (memoryPressureLimit === 1) {
-      return {
-        shardParallelism: 1,
-        vitestMaxWorkers: 1,
-      };
-    }
-    if (memoryPressureLimit === 2) {
-      return {
-        shardParallelism: 2,
-        vitestMaxWorkers: 1,
-      };
-    }
-  }
-
-  if (shouldUseLargeLocalFullSuiteProfile(env, system)) {
-    return {
-      shardParallelism: LARGE_LOCAL_FULL_SUITE_PARALLELISM,
-      vitestMaxWorkers: LARGE_LOCAL_FULL_SUITE_VITEST_WORKERS,
-    };
-  }
+  const scheduling = resolveLocalVitestScheduling(env, system, "threads");
   return {
-    shardParallelism: DEFAULT_LOCAL_FULL_SUITE_PARALLELISM,
-    vitestMaxWorkers: DEFAULT_LOCAL_FULL_SUITE_VITEST_WORKERS,
+    // Each shard is a separate Vitest process with its own module graph. Spend the
+    // host worker budget once across shards instead of multiplying it inside them.
+    shardParallelism: Math.min(scheduling.maxWorkers, MAX_LOCAL_FULL_SUITE_PARALLELISM),
+    vitestMaxWorkers: 1,
   };
 }

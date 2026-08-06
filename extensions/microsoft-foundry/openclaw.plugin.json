@@ -13,6 +13,18 @@
       }
     ]
   },
+  "contracts": {
+    "imageGenerationProviders": ["microsoft-foundry"]
+  },
+  "imageGenerationProviderMetadata": {
+    "microsoft-foundry": {
+      "authSignals": [
+        {
+          "provider": "microsoft-foundry"
+        }
+      ]
+    }
+  },
   "providerAuthChoices": [
     {
       "provider": "microsoft-foundry",
@@ -20,6 +32,7 @@
       "choiceId": "microsoft-foundry-entra",
       "choiceLabel": "Microsoft Foundry (Entra ID / az login)",
       "choiceHint": "Use your Azure login — no API key needed",
+      "onboardingScopes": ["text-inference", "image-generation"],
       "groupId": "microsoft-foundry",
       "groupLabel": "Microsoft Foundry",
       "groupHint": "Entra ID + API key"
@@ -30,6 +43,7 @@
       "choiceId": "microsoft-foundry-apikey",
       "choiceLabel": "Microsoft Foundry (API key)",
       "choiceHint": "Use an Azure OpenAI API key directly",
+      "onboardingScopes": ["text-inference", "image-generation"],
       "groupId": "microsoft-foundry",
       "groupLabel": "Microsoft Foundry",
       "groupHint": "Entra ID + API key"

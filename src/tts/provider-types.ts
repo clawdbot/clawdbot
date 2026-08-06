@@ -131,6 +131,8 @@ export type SpeechListVoicesRequest = {
   providerConfig?: SpeechProviderConfig;
   apiKey?: string;
   baseUrl?: string;
+  /** Core-resolved request timeout after config and provider defaults. */
+  timeoutMs?: number;
 };
 
 /** Provider hook input for resolving normalized config from raw OpenClaw config. */

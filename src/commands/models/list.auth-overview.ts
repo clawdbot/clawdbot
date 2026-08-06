@@ -19,8 +19,8 @@ import {
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
+import { maskApiKey } from "../../security/secret-mask.js";
 import { shortenHomePath } from "../../utils.js";
-import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
 
 function formatMarkerOrSecret(value: string): string {
@@ -218,6 +218,16 @@ export function resolveProviderAuthOverview(params: {
           },
         }
       : {}),
-    ...(params.syntheticAuth ? { syntheticAuth: params.syntheticAuth } : {}),
+    // Re-project instead of passing the caller's object through: status callers
+    // hand richer runtime shapes that also carry the raw synthetic credential,
+    // and structural typing would let it leak into `--json` output verbatim.
+    ...(params.syntheticAuth
+      ? {
+          syntheticAuth: {
+            value: params.syntheticAuth.value,
+            source: params.syntheticAuth.source,
+          },
+        }
+      : {}),
   };
 }

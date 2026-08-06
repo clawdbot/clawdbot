@@ -9,7 +9,7 @@ import {
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-export type LingerPrompter = {
+type LingerPrompter = {
   confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
   note: (message: string, title?: string) => Promise<void> | void;
 };

@@ -2,14 +2,9 @@
 import {
   DEFAULT_LOCAL_MODEL,
   listMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviderAdapters,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
-import { formatErrorMessage } from "../dreaming-shared.js";
-import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
-
-const NODE_LLAMA_CPP_RUNTIME_PACKAGE = "node-llama-cpp";
 
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;
@@ -19,103 +14,12 @@ export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   autoSelectPriority?: number;
 };
 
-function isNodeLlamaCppMissing(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const code = (err as Error & { code?: unknown }).code;
-  return code === "ERR_MODULE_NOT_FOUND" && err.message.includes(NODE_LLAMA_CPP_RUNTIME_PACKAGE);
-}
-
-function listRemoteEmbeddingSetupHints(): string[] {
-  try {
-    return listMemoryEmbeddingProviders()
-      .filter(
-        (adapter) =>
-          adapter.transport === "remote" && typeof adapter.autoSelectPriority === "number",
-      )
-      .toSorted((a, b) => (a.autoSelectPriority ?? 0) - (b.autoSelectPriority ?? 0))
-      .map((adapter) => `Or set agents.defaults.memorySearch.provider = "${adapter.id}" (remote).`);
-  } catch {
-    return [];
-  }
-}
-
-function formatLocalSetupError(err: unknown): string {
-  const detail = formatErrorMessage(err);
-  const missing = isNodeLlamaCppMissing(err);
-  return [
-    "Local embeddings unavailable.",
-    missing
-      ? "Reason: optional dependency node-llama-cpp is missing (or failed to install)."
-      : detail
-        ? `Reason: ${detail}`
-        : undefined,
-    missing && detail ? `Detail: ${detail}` : null,
-    "To enable local embeddings:",
-    "1) Use Node 24 (recommended for installs/updates; Node 22 LTS, currently 22.19+, remains supported)",
-    missing
-      ? `2) Install ${NODE_LLAMA_CPP_RUNTIME_PACKAGE} next to the OpenClaw package or source checkout`
-      : null,
-    `3) If you use pnpm: pnpm approve-builds (select ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}), then pnpm rebuild ${NODE_LLAMA_CPP_RUNTIME_PACKAGE}`,
-    ...listRemoteEmbeddingSetupHints(),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-const localAdapter: MemoryEmbeddingProviderAdapter = {
-  id: "local",
-  defaultModel: DEFAULT_LOCAL_MODEL,
-  transport: "local",
-  autoSelectPriority: 10,
-  formatSetupError: formatLocalSetupError,
-  shouldContinueAutoSelection: () => true,
-  create: async (options) => {
-    const { createLocalEmbeddingProvider } =
-      await import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
-    const provider = await createLocalEmbeddingProvider({
-      ...options,
-      provider: "local",
-      fallback: "none",
-    });
-    return {
-      provider,
-      runtime: {
-        id: "local",
-        inlineQueryTimeoutMs: 5 * 60_000,
-        inlineBatchTimeoutMs: 10 * 60_000,
-        cacheKeyData: {
-          provider: "local",
-          model: provider.model,
-        },
-      },
-    };
-  },
-};
-
-const builtinMemoryEmbeddingProviderAdapters = [localAdapter] as const;
-
 export { DEFAULT_LOCAL_MODEL };
 
 function getBuiltinMemoryEmbeddingProviderAdapter(
   id: string,
 ): MemoryEmbeddingProviderAdapter | undefined {
   return listMemoryEmbeddingProviders().find((adapter) => adapter.id === id);
-}
-
-export function registerBuiltInMemoryEmbeddingProviders(register: {
-  registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
-}): void {
-  // Only inspect providers already registered in the current load. Falling back
-  // to capability discovery here can recursively trigger plugin loading while
-  // memory-core itself is still registering.
-  for (const adapter of filterUnregisteredMemoryEmbeddingProviderAdapters({
-    builtinAdapters: builtinMemoryEmbeddingProviderAdapters,
-    registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
-  })) {
-    register.registerMemoryEmbeddingProvider(adapter);
-  }
 }
 
 export function getBuiltinMemoryEmbeddingProviderDoctorMetadata(

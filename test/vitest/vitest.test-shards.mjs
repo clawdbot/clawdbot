@@ -1,5 +1,10 @@
 // Full-suite Vitest shard definitions used by test-projects and CI planning.
-export const autoReplyCoreTestInclude = ["src/auto-reply/*.test.ts"];
+import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
+
+export const autoReplyCoreTestInclude = [
+  "src/auto-reply/*.test.ts",
+  "src/auto-reply/usage-bar/*.test.ts",
+];
 
 export const autoReplyCoreTestExclude = ["src/auto-reply/reply*.test.ts"];
 
@@ -13,6 +18,7 @@ export const fullSuiteVitestShards = [
     name: "core-unit-fast",
     projects: [
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
     ],
   },
@@ -27,11 +33,6 @@ export const fullSuiteVitestShards = [
     projects: ["test/vitest/vitest.unit-security.config.ts"],
   },
   {
-    config: "test/vitest/vitest.full-core-unit-ui.config.ts",
-    name: "core-unit-ui",
-    projects: ["test/vitest/vitest.unit-ui.config.ts"],
-  },
-  {
     config: "test/vitest/vitest.full-core-unit-support.config.ts",
     name: "core-unit-support",
     projects: ["test/vitest/vitest.unit-support.config.ts"],
@@ -39,9 +40,14 @@ export const fullSuiteVitestShards = [
   {
     config: "test/vitest/vitest.full-core-support-boundary.config.ts",
     name: "core-support-boundary",
+    projects: ["test/vitest/vitest.boundary.config.ts"],
+  },
+  {
+    config: "test/vitest/vitest.full-core-tooling.config.ts",
+    name: "core-tooling",
     projects: [
-      "test/vitest/vitest.boundary.config.ts",
       "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
     ],
   },
@@ -80,6 +86,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
       "test/vitest/vitest.utils.config.ts",
       "test/vitest/vitest.wizard.config.ts",
     ],
@@ -92,13 +99,11 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
       "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.cli-process.config.ts",
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents-core.config.ts",
-      "test/vitest/vitest.agents-embedded-agent.config.ts",
-      "test/vitest/vitest.agents-support.config.ts",
-      "test/vitest/vitest.agents-tools.config.ts",
+      ...agentVitestProjectConfigs,
       "test/vitest/vitest.daemon.config.ts",
       "test/vitest/vitest.plugin-sdk-light.config.ts",
       "test/vitest/vitest.plugin-sdk.config.ts",

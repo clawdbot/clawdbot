@@ -6,9 +6,4 @@ export {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "./reply-payloads-base.js";
-export {
-  filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
-  resolveMessagingToolPayloadDedupe,
-  shouldDedupeMessagingToolRepliesForRoute,
-} from "./reply-payloads-dedupe.js";
+export { filterMessagingToolReplyPayload } from "./reply-payloads-dedupe.js";

@@ -168,7 +168,7 @@ describe("probeGatewayStatus", () => {
     });
   });
 
-  it("forwards configured handshake timeout to the connect probe and status RPC", async () => {
+  it("forwards the resolved handshake timeout to the connect probe and status RPC", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
     callGatewayMock.mockResolvedValueOnce({ status: "ok" });
@@ -180,7 +180,7 @@ describe("probeGatewayStatus", () => {
         capability: "admin_capable",
       },
     });
-    const config = { gateway: { handshakeTimeoutMs: 30_000 } };
+    const config = {};
 
     await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",
@@ -211,6 +211,85 @@ describe("probeGatewayStatus", () => {
       method: "status",
       timeoutMs: 30_000,
     });
+  });
+
+  it("omits config-backed credentials from the status RPC when disabled", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        capability: "admin_capable",
+      },
+    });
+    const config = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "vault", id: "gateway/token" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    } as const;
+
+    await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      config,
+      timeoutMs: 5_000,
+      requireRpc: true,
+      allowRpcConfigCredentials: false,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      password: undefined,
+      tlsFingerprint: undefined,
+      method: "status",
+      timeoutMs: 5_000,
+    });
+  });
+
+  it("fails before the status RPC when config credentials are disabled without explicit auth", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "exec", provider: "vault", id: "gateway/token" },
+          },
+        },
+        secrets: {
+          providers: {
+            vault: { source: "exec", command: "/bin/false" },
+          },
+        },
+      },
+      timeoutMs: 5_000,
+      requireRpc: true,
+      allowRpcConfigCredentials: false,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      kind: "read",
+      error:
+        "gateway status RPC skipped because configured gateway credentials are disabled for this status request",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(probeGatewayMock).not.toHaveBeenCalled();
   });
 
   it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {

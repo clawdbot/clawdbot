@@ -2,15 +2,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import dotenv from "dotenv";
+import { parse as parseDotEnv } from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
+import { readRegularFileSync } from "./regular-file.js";
 
 // Global dotenv loading imports operator-level gateway env files without
 // overriding variables already present in the process environment.
 const logger = createSubsystemLogger("infra:dotenv");
+
+/** Maximum bytes to read from any dotenv file. */
+const MAX_DOTENV_FILE_BYTES = 1024 * 1024;
 
 type DotEnvEntry = {
   key: string;
@@ -22,13 +26,28 @@ type LoadedDotEnvFile = {
   entries: DotEnvEntry[];
 };
 
-function readGlobalRuntimeDotEnvFile(params: {
+type GlobalRuntimeDotEnvOptions = {
+  additionalEnvPaths?: string[];
+  entryFilter?: (key: string, value: string) => boolean;
+  quiet?: boolean;
+  stateEnvPath?: string;
+};
+
+export function readDotEnvFile(params: {
+  entryFilter?: (key: string, value: string) => boolean;
   filePath: string;
   quiet?: boolean;
 }): LoadedDotEnvFile | null {
-  let content: string;
+  let content: Buffer;
   try {
-    content = fs.readFileSync(params.filePath, "utf8");
+    // Resolve symlinks so a symlinked .env file works while the bounded
+    // read still rejects oversized targets.
+    const resolved = fs.realpathSync(params.filePath);
+    const { buffer } = readRegularFileSync({
+      filePath: resolved,
+      maxBytes: MAX_DOTENV_FILE_BYTES,
+    });
+    content = buffer;
   } catch (error) {
     if (!params.quiet) {
       const code =
@@ -36,33 +55,32 @@ function readGlobalRuntimeDotEnvFile(params: {
       if (code !== "ENOENT") {
         logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
       }
+      // Surface oversized files so operators know a configured file was
+      // skipped rather than leaving them silently ignored.
+      if (error instanceof Error && error.message?.startsWith("File exceeds")) {
+        logger.warn(
+          `skipping oversized .env file (max ${MAX_DOTENV_FILE_BYTES} bytes): ${params.filePath}`,
+        );
+      }
     }
     return null;
   }
 
-  let parsed: Record<string, string>;
-  try {
-    parsed = dotenv.parse(content);
-  } catch (error) {
-    if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
-    }
-    return null;
-  }
   const entries: DotEnvEntry[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
+  for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (key) {
+    if (key && (params.entryFilter?.(key, value) ?? true)) {
       entries.push({ key, value });
     }
   }
   return { filePath: params.filePath, entries };
 }
 
-function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
+function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]): Map<string, string[]> {
   const preExistingKeys = new Set(Object.keys(process.env));
   const conflicts = new Map<string, { keptPath: string; ignoredPath: string; keys: Set<string> }>();
   const firstSeen = new Map<string, { value: string; filePath: string }>();
+  const appliedKeysByFile = new Map<string, string[]>();
 
   for (const file of files) {
     for (const { key, value } of file.entries) {
@@ -91,6 +109,12 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
       firstSeen.set(key, { value, filePath: file.filePath });
       if (process.env[key] === undefined) {
         process.env[key] = value;
+        const appliedKeys = appliedKeysByFile.get(file.filePath);
+        if (appliedKeys) {
+          appliedKeys.push(key);
+        } else {
+          appliedKeysByFile.set(file.filePath, [key]);
+        }
       }
     }
   }
@@ -105,12 +129,14 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
       { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },
     );
   }
+  return appliedKeysByFile;
 }
 
 /** Load global runtime dotenv files into `process.env` with first-wins precedence. */
-export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvPath?: string }) {
+export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) {
   const quiet = opts?.quiet ?? true;
   const stateEnvPath = opts?.stateEnvPath ?? path.join(resolveConfigDir(process.env), ".env");
+  const globalEnvPaths = [...new Set([stateEnvPath, ...(opts?.additionalEnvPaths ?? [])])];
   const defaultStateEnvPath = path.join(
     resolveRequiredHomeDir(process.env, os.homedir),
     ".openclaw",
@@ -119,20 +145,30 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvP
   const hasExplicitNonDefaultStateDir =
     process.env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
-  const parsedFiles = [readGlobalRuntimeDotEnvFile({ filePath: stateEnvPath, quiet })];
+  const globalEnvs = globalEnvPaths.map((filePath) =>
+    readDotEnvFile({ entryFilter: opts?.entryFilter, filePath, quiet }),
+  );
+  const parsedFiles = [...globalEnvs];
+  let gatewayEnv: LoadedDotEnvFile | null = null;
   if (!hasExplicitNonDefaultStateDir) {
-    parsedFiles.push(
-      readGlobalRuntimeDotEnvFile({
-        filePath: path.join(
-          resolveRequiredHomeDir(process.env, os.homedir),
-          ".config",
-          "openclaw",
-          "gateway.env",
-        ),
-        quiet,
-      }),
-    );
+    gatewayEnv = readDotEnvFile({
+      entryFilter: opts?.entryFilter,
+      filePath: path.join(
+        resolveRequiredHomeDir(process.env, os.homedir),
+        ".config",
+        "openclaw",
+        "gateway.env",
+      ),
+      quiet,
+    });
+    parsedFiles.push(gatewayEnv);
   }
   const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
-  loadParsedDotEnvFiles(parsed);
+  const appliedKeysByFile = loadParsedDotEnvFiles(parsed);
+  return {
+    stateEnvAppliedKeys: globalEnvs.flatMap((file) =>
+      file ? (appliedKeysByFile.get(file.filePath) ?? []) : [],
+    ),
+    gatewayEnvAppliedKeys: gatewayEnv ? (appliedKeysByFile.get(gatewayEnv.filePath) ?? []) : [],
+  };
 }

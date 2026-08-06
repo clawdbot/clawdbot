@@ -5,12 +5,12 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
+  type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
-  transformStreamContextText,
   wrapStreamFnTextTransforms,
 } from "./plugin-text-transforms.js";
 
@@ -38,6 +38,14 @@ function makeAssistantMessage(text: string): AssistantMessage {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     timestamp: 0,
+  };
+}
+
+function makeAssistantToolMessage(toolCall: ToolCall): AssistantMessage {
+  return {
+    ...makeAssistantMessage(""),
+    content: [toolCall],
+    stopReason: "toolUse",
   };
 }
 
@@ -71,28 +79,46 @@ describe("plugin text transforms", () => {
     ).toBe("counter receipt on the right shelf");
   });
 
-  it("rewrites system prompt and message text content before transport", () => {
-    const context = transformStreamContextText(
-      {
-        systemPrompt: "Use orchid mailbox inside north tower",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Please use the red basket" },
-              { type: "image", url: "data:image/png;base64,abc" },
-            ],
-          },
-        ],
-      } as Context,
-      [
+  it("rewrites system prompt and message text content before transport", async () => {
+    let capturedContext: Context | undefined;
+    const wrapped = wrapStreamFnTextTransforms({
+      streamFn: (_model, context) => {
+        capturedContext = context;
+        const stream = createAssistantMessageEventStream();
+        stream.end();
+        return stream;
+      },
+      input: [
         {
           from: /orchid mailbox/g,
           to: "pine mailbox",
         },
         { from: /red basket/g, to: "blue basket" },
       ],
-    ) as unknown as { systemPrompt: string; messages: Array<{ content: unknown[] }> };
+    });
+    await Promise.resolve(
+      wrapped(
+        model,
+        {
+          systemPrompt: "Use orchid mailbox inside north tower",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Please use the red basket" },
+                { type: "image", url: "data:image/png;base64,abc" },
+              ],
+            },
+          ],
+        } as Context,
+        undefined,
+      ),
+    );
+
+    const context = capturedContext as unknown as {
+      systemPrompt: string;
+      messages: Array<{ content: unknown[] }>;
+    };
 
     expect(context.systemPrompt).toBe("Use pine mailbox inside north tower");
     const textContent = context.messages[0]?.content[0] as
@@ -162,5 +188,92 @@ describe("plugin text transforms", () => {
     expect(firstEvent?.type).toBe("text_delta");
     expect(firstEvent?.delta).toBe("red basket on the left shelf");
     expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
+  });
+
+  it("applies output replacements to structured tool-call arguments", async () => {
+    const partialToolCall: ToolCall = {
+      type: "toolCall",
+      id: "call-1",
+      name: "search",
+      arguments: {
+        query: "[MASKED]",
+        nested: { note: "ask [MASKED] again" },
+        entries: ["[MASKED]", 7],
+      },
+    };
+    const finalToolCall: ToolCall = {
+      type: "toolCall",
+      id: "call-2",
+      name: "send_msg",
+      arguments: { text: "[MASKED]" },
+    };
+    const partial = makeAssistantToolMessage(partialToolCall);
+    const baseStreamFn: StreamFn = (_model, _context) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: '{"query":"[MASKED]"}',
+          partial,
+        });
+        stream.push({
+          type: "toolcall_end",
+          contentIndex: 0,
+          toolCall: partialToolCall,
+          partial,
+        });
+        stream.push({
+          type: "done",
+          reason: "toolUse",
+          message: makeAssistantToolMessage(finalToolCall),
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const wrapped = wrapStreamFnTextTransforms({
+      streamFn: baseStreamFn,
+      output: [{ from: /\[MASKED\]/g, to: "John" }],
+    });
+    const stream = await Promise.resolve(wrapped(model, {} as Context, undefined));
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const deltaEvent = events.find((event) => event.type === "toolcall_delta") as
+      | { delta?: string; partial?: AssistantMessage }
+      | undefined;
+    // Raw JSON fragments are provider bytes and may split a replacement token.
+    // Structured arguments are the safe, canonical transform surface.
+    expect(deltaEvent?.delta).toBe('{"query":"[MASKED]"}');
+    expect(deltaEvent?.partial?.content[0]).toMatchObject({
+      name: "search",
+      arguments: {
+        query: "John",
+        nested: { note: "ask John again" },
+        entries: ["John", 7],
+      },
+    });
+
+    const endEvent = events.find((event) => event.type === "toolcall_end") as
+      | { toolCall?: { name?: string; arguments?: Record<string, unknown> } }
+      | undefined;
+    // Tool name is preserved — only arguments are transformed to avoid
+    // breaking tool routing by renaming a registered tool identifier.
+    expect(endEvent?.toolCall?.name).toBe("search");
+    expect(endEvent?.toolCall?.arguments).toEqual({
+      query: "John",
+      nested: { note: "ask John again" },
+      entries: ["John", 7],
+    });
+
+    const result = await stream.result();
+    expect(result.content[0]).toMatchObject({
+      name: "send_msg",
+      arguments: { text: "John" },
+    });
   });
 });

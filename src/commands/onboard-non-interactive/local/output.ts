@@ -24,7 +24,7 @@ export type GatewayHealthFailureDiagnostics = {
 };
 
 /** Coarse recovery category for gateway health failures. */
-export type GatewayHealthFailureClassification =
+type GatewayHealthFailureClassification =
   | "not-listening"
   | "auth-mismatch"
   | "service-missing"

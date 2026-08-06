@@ -2,7 +2,7 @@
 import { theme } from "../../packages/terminal-core/src/theme.js";
 
 /** Command plus short description tuple used in help epilogues. */
-export type HelpExample = readonly [command: string, description: string];
+type HelpExample = readonly [command: string, description: string];
 
 function formatHelpExample(command: string, description: string): string {
   return `  ${theme.command(command)}\n    ${theme.muted(description)}`;

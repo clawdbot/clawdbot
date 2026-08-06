@@ -1,9 +1,11 @@
 // Vercel Ai Gateway plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyVercelAiGatewayConfig, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildStaticVercelAiGatewayProvider,
   buildVercelAiGatewayProvider,
+  resolveVercelAiGatewayModel,
 } from "./provider-catalog.js";
 import { resolveVercelAiGatewayThinkingProfile } from "./thinking.js";
 
@@ -13,30 +15,19 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Vercel AI Gateway Provider",
   description: "Bundled Vercel AI Gateway provider plugin",
+  manifest,
   provider: {
     label: "Vercel AI Gateway",
     docsPath: "/providers/vercel-ai-gateway",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Vercel AI Gateway API key",
-        hint: "API key",
-        optionKey: "aiGatewayApiKey",
-        flagName: "--ai-gateway-api-key",
-        envVar: "AI_GATEWAY_API_KEY",
-        promptMessage: "Enter Vercel AI Gateway API key",
-        defaultModel: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyVercelAiGatewayConfig(cfg),
-        wizard: {
-          choiceId: "ai-gateway-api-key",
-          groupId: "ai-gateway",
-        },
-      },
-    ],
+    manifestAuth: {
+      defaultModel: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+      applyConfig: applyVercelAiGatewayConfig,
+    },
     catalog: {
       buildProvider: buildVercelAiGatewayProvider,
       buildStaticProvider: buildStaticVercelAiGatewayProvider,
     },
+    resolveDynamicModel: ({ modelId }) => resolveVercelAiGatewayModel(modelId),
     resolveThinkingProfile: ({ modelId }) => resolveVercelAiGatewayThinkingProfile(modelId),
   },
 });

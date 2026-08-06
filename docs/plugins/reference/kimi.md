@@ -12,11 +12,11 @@ Adds Kimi, Kimi Coding model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/kimi-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/kimi-provider`
 
 ## Surface
 
-providers: kimi, kimi-coding
+providers: `kimi`, `kimi-coding`
 
 ## Related docs
 

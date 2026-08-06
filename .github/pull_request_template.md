@@ -1,118 +1,65 @@
-## Summary
+<!--
+Optional linked context:
+Add a visible `Closes #<issue-number>` or `Related: #<issue-number>` line
+below this comment.
 
-What problem does this PR solve?
+Required PR title:
+type: user-facing description
+Use a parenthesized scope only when it adds clarity:
+fix(auth): login redirect loops when session cookie is expired
 
-Why does this matter now?
-
-What is the intended outcome?
-
-What is intentionally out of scope?
-
-What does success look like?
-
-What should reviewers focus on?
+Types: feat, fix, improve, refactor, docs, chore.
+For fixes, describe the user-visible symptom and trigger:
+fix: task list fails to load when user has no environments
+Avoid implementation details such as:
+fix: add null check to task query
+-->
 
 <details>
-<summary>Summary guidance</summary>
+<summary>Additional instructions</summary>
 
-This PR description is the contributor's durable explanation of the change. Write it for human maintainers first; ClawSweeper and Barnacle use the same text to understand intent, proof, risk, and current review state.
-
-Describe the intent and outcome in 2-5 bullets. Avoid restating the diff; reviewers and bots can read the changed files.
-
-If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
+**MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers
+can help update the branch when needed.
 
 </details>
 
-## Linked context
+## What Problem This Solves
 
-Which issue does this close?
+<!--
+Describe the concrete user, product, or operational problem.
+For fixes, begin with:
+"Fixes an issue where users <do X> would <experience Y> when <condition>."
+or:
+"Resolves a problem where..."
 
-Closes #
+Name the affected UI surface or workflow. Do not describe the code-level cause here.
+-->
 
-Which issues, PRs, or discussions are related?
+## Why This Change Was Made
 
-Related #
+<!--
+In one or two sentences, explain the complete shipped solution, key design
+decisions, and relevant boundaries or non-goals. Include implementation detail
+only when it helps reviewers understand user-visible behavior or risk.
+Avoid file-by-file narration.
+-->
 
-Was this requested by a maintainer or owner?
+## User Impact
 
-<details>
-<summary>Linked context guidance</summary>
+<!--
+State what users, operators, or developers can now do or expect. Lead with the
+concrete benefit and use user-facing language. If there is no user-visible
+impact, say so plainly.
+-->
 
-Link the issue, PR, discussion, maintainer request, or owner request that explains why this PR should exist. Maintainer context helps reviewers and automation distinguish intended work from drive-by churn.
+## Evidence
 
-</details>
+<!--
+Show the most useful proof that this change works. Screenshots, screencasts,
+terminal output, focused tests, CI results, live observations, redacted logs,
+and artifact links are all useful. Include before/after evidence for visual
+changes when it clarifies the result.
 
-## Real behavior proof (required for external PRs)
-
-- Behavior or issue addressed:
-- Real environment tested:
-- Exact steps or command run after this patch:
-- Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):
-- Observed result after fix:
-- What was not tested:
-- Proof limitations or environment constraints:
-- Before evidence (optional but encouraged):
-
-<details>
-<summary>Real behavior proof guidance</summary>
-
-External contributors must show after-fix evidence from a real OpenClaw setup. Unit tests, mocks, lint, typechecks, snapshots, and CI are supplemental only.
-
-Screenshots are encouraged even for CLI, console, text, or log changes. Terminal screenshots, copied live output, redacted runtime logs, recordings, and linked artifacts count.
-
-If your environment cannot produce the ideal proof, explain that under `Proof limitations or environment constraints` so reviewers and ClawSweeper can direct the next step properly.
-
-Be mindful of private information like IP addresses, API keys, phone numbers, non-public endpoints, or other private details when providing evidence.
-
-</details>
-
-## Tests and validation
-
-Which commands did you run?
-
-What regression coverage was added or updated?
-
-What failed before this fix, if known?
-
-If no test was added, why not?
-
-<details>
-<summary>Testing guidance</summary>
-
-List focused commands, not every incidental check. CI is useful support, but external PRs still need real behavior proof above when behavior changes.
-
-</details>
-
-## Risk checklist
-
-Did user-visible behavior change? (`Yes/No`)
-
-Did config, environment, or migration behavior change? (`Yes/No`)
-
-Did security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)
-
-What is the highest-risk area?
-
-How is that risk mitigated?
-
-<details>
-<summary>Risk guidance</summary>
-
-Use this for author judgment that is not obvious from the diff. ClawSweeper can see touched files, but it cannot know which behavior you think is risky, why the risk is acceptable, or what mitigation reviewers should verify.
-
-</details>
-
-## Current review state
-
-What is the next action?
-
-What is still waiting on author, maintainer, CI, or external proof?
-
-Which bot or reviewer comments were addressed?
-
-<details>
-<summary>Review state guidance</summary>
-
-Keep this as the durable state for review progress. If useful information appears in comments, fold the current next action or blocker back here so maintainers and ClawSweeper do not need to reconstruct state from comment history.
-
-</details>
+Reviewers will inspect the code, tests, and CI. Use this section to make the
+validation easy to understand, not to restate the diff.
+-->

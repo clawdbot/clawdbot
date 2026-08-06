@@ -181,16 +181,6 @@ final class ScreenController {
         return try await WebViewJavaScriptSupport.evaluateToString(webView: webView, javaScript: javaScript)
     }
 
-    func snapshotPNGBase64(maxWidth: CGFloat? = nil) async throws -> String {
-        let image = try await self.snapshotImage(maxWidth: maxWidth)
-        guard let data = image.pngData() else {
-            throw NSError(domain: "Screen", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "snapshot encode failed",
-            ])
-        }
-        return data.base64EncodedString()
-    }
-
     func snapshotBase64(
         maxWidth: CGFloat? = nil,
         format: OpenClawCanvasSnapshotFormat,

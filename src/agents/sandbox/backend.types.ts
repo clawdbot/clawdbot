@@ -33,10 +33,13 @@ export type SandboxBackendManager = {
 export type CreateSandboxBackendParams = {
   sessionKey: string;
   scopeKey: string;
+  /** Runtime IDs already registered for this backend and scope, newest first. */
+  registeredRuntimeIds?: readonly string[];
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
+  requireCurrentConfig?: boolean;
 };
 
 /** Factory that creates a backend handle for a sandbox session. */
@@ -44,24 +47,24 @@ export type SandboxBackendFactory = (
   params: CreateSandboxBackendParams,
 ) => Promise<SandboxBackendHandle>;
 
+/** Resolve the runtime workdir without creating or starting the backend. */
+export type SandboxBackendWorkdirResolver = (params: CreateSandboxBackendParams) => string;
+
 /** Registry input accepted for sandbox backend registration. */
 export type SandboxBackendRegistration =
   | SandboxBackendFactory
   | {
       factory: SandboxBackendFactory;
       manager?: SandboxBackendManager;
+      resolveWorkdir?: SandboxBackendWorkdirResolver;
     };
 
 /** Normalized backend registration stored in the sandbox backend registry. */
 export type RegisteredSandboxBackend = {
   factory: SandboxBackendFactory;
   manager?: SandboxBackendManager;
+  resolveWorkdir?: SandboxBackendWorkdirResolver;
 };
 
 export type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
-export type {
-  SandboxBackendCommandParams,
-  SandboxBackendCommandResult,
-  SandboxBackendExecSpec,
-  SandboxFsBridgeContext,
-} from "./backend-handle.types.js";
+export type { SandboxBackendWorkdirValidation } from "./backend-handle.types.js";

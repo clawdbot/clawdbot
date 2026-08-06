@@ -8,10 +8,10 @@ import { isRecord } from "../utils.js";
 /** Whether native Codex search may use cached or live external web access. */
 export type CodexNativeSearchMode = "cached" | "live";
 /** OpenAI search context-size hint for Codex native web search. */
-export type CodexNativeSearchContextSize = "low" | "medium" | "high";
+type CodexNativeSearchContextSize = "low" | "medium" | "high";
 
 /** Optional approximate user location for Codex native web search. */
-export type CodexNativeSearchUserLocation = {
+type CodexNativeSearchUserLocation = {
   country?: string;
   region?: string;
   city?: string;
@@ -19,7 +19,7 @@ export type CodexNativeSearchUserLocation = {
 };
 
 /** Normalized Codex native web-search settings. */
-export type ResolvedCodexNativeWebSearchConfig = {
+type ResolvedCodexNativeWebSearchConfig = {
   enabled: boolean;
   mode: CodexNativeSearchMode;
   allowedDomains?: string[];

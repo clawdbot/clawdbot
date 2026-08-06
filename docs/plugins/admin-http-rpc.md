@@ -7,27 +7,22 @@ read_when:
 title: "Admin HTTP RPC plugin"
 ---
 
-The bundled `admin-http-rpc` plugin exposes selected Gateway control-plane methods over HTTP for trusted host automation that cannot use the normal Gateway WebSocket RPC client.
+The bundled `admin-http-rpc` plugin exposes an allowlisted set of Gateway control-plane methods over HTTP, for trusted host automation that cannot keep a Gateway WebSocket connection open.
 
-The plugin is included with OpenClaw, but it is off by default. When disabled, the route is not registered. When enabled, it adds:
+It ships with OpenClaw but is disabled by default; when disabled, the route is not registered. When enabled, it adds `POST /api/v1/admin/rpc` on the same listener as the Gateway (`http://<gateway-host>:<port>/api/v1/admin/rpc`).
 
-- `POST /api/v1/admin/rpc`
-- same listener as the Gateway: `http://<gateway-host>:<port>/api/v1/admin/rpc`
-
-Enable it only for private host tooling, tailnet automation, or a trusted internal ingress. Do not expose this route directly to the public internet.
+Enable it only for private host tooling, tailnet automation, or a trusted internal ingress. Never expose this route directly to the public internet.
 
 ## Before you enable it
 
-Admin HTTP RPC is a full operator control-plane surface. Any caller that passes Gateway HTTP auth can invoke the allowlisted methods on this page.
-
-Use it when all of these are true:
+Admin HTTP RPC is a full operator control-plane surface: any caller that passes Gateway HTTP auth can invoke the allowlisted methods below. Enable it only when all of these are true:
 
 - The caller is trusted to operate the Gateway.
 - The caller cannot use the WebSocket RPC client.
 - The route is reachable only on loopback, a tailnet, or a private authenticated ingress.
 - You have reviewed the allowed methods and they match the automation you plan to run.
 
-Use the WebSocket RPC path for OpenClaw clients and interactive tools that can keep a Gateway WebSocket connection open.
+For OpenClaw clients and interactive tools that can keep a Gateway WebSocket connection open, use WebSocket RPC instead.
 
 ## Enable
 
@@ -53,7 +48,7 @@ Enable the bundled plugin:
   </Tab>
 </Tabs>
 
-The route is registered during plugin startup. Restart the Gateway after changing plugin config.
+The route is registered during plugin startup, so restart the Gateway after changing plugin config.
 
 Disable it when you no longer need the HTTP surface:
 
@@ -102,16 +97,13 @@ Common authentication paths:
 Treat this plugin as a full Gateway operator surface.
 
 - Enabling the plugin intentionally offers access to the allowlisted admin RPC methods at `/api/v1/admin/rpc`.
-- The plugin declares the reserved `contracts.gatewayMethodDispatch: ["authenticated-request"]` manifest contract so its Gateway-authenticated HTTP route can dispatch control-plane methods in process.
-- Shared-secret bearer auth proves possession of the gateway operator secret.
-- For `token` and `password` auth, narrower `x-openclaw-scopes` headers are ignored and the normal full operator defaults are restored.
-- Trusted identity-bearing HTTP modes honor `x-openclaw-scopes` when present.
+- The plugin declares the reserved `contracts.gatewayMethodDispatch: ["authenticated-request"]` manifest contract, which is what lets its Gateway-authenticated HTTP route dispatch control-plane methods in process. This is not a sandbox: the contract prevents accidental use of reserved SDK helpers, but trusted plugins still run in the Gateway process.
+- Shared-secret bearer auth (`token`/`password` modes) proves possession of the gateway operator secret; narrower `x-openclaw-scopes` headers are ignored on that path and normal full operator defaults are restored.
+- Trusted identity-bearing HTTP auth (`trusted-proxy` mode) honors `x-openclaw-scopes` when present.
 - `gateway.auth.mode="none"` means this route is unauthenticated if the plugin is enabled. Use that only behind a private ingress you fully trust.
-- Requests dispatch through the same Gateway method handlers and scope checks as WebSocket RPC after the plugin route auth passes.
-- Keep this route on loopback, tailnet, or a private trusted ingress. Do not expose it directly to the public internet.
-- Plugin manifest contracts are not a sandbox. They prevent accidental use of reserved SDK helpers; trusted plugins still run in the Gateway process.
-
-Use separate gateways when callers cross trust boundaries.
+- Requests dispatch through the same Gateway method handlers and scope checks as WebSocket RPC, after the plugin route auth passes.
+- The route remains reachable during a prepared suspension lease. Bounded request validation and the local `commands.list` discovery response remain available. Of the methods dispatched into the Gateway, only `gateway.suspend.prepare`, `gateway.suspend.status`, and `gateway.suspend.resume` may run while admission is closed; other allowlisted methods return the normal retryable Gateway `UNAVAILABLE` response.
+- Keep this route on loopback, tailnet, or a private trusted ingress. Do not expose it directly to the public internet. Use separate gateways when callers cross trust boundaries.
 
 ## Request
 
@@ -162,13 +154,22 @@ Gateway method errors use:
 }
 ```
 
-HTTP status follows the Gateway error when possible. For example, `INVALID_REQUEST` returns `400`, and `UNAVAILABLE` returns `503`.
+HTTP status follows the error code:
+
+| Error code                 | HTTP status |
+| -------------------------- | ----------- |
+| `INVALID_REQUEST`          | 400         |
+| `APPROVAL_NOT_FOUND`       | 404         |
+| `NOT_LINKED`, `NOT_PAIRED` | 409         |
+| `UNAVAILABLE`              | 503         |
+| `AGENT_TIMEOUT`            | 504         |
+| any other code             | 500         |
 
 ## Allowed methods
 
 - discovery: `commands.list`
   Returns the HTTP RPC method names allowed by this plugin.
-- gateway: `health`, `status`, `logs.tail`, `usage.status`, `usage.cost`, `gateway.restart.request`
+- gateway: `health`, `status`, `logs.tail`, `usage.status`, `usage.cost`, `gateway.restart.request`, `gateway.suspend.prepare`, `gateway.suspend.status`, `gateway.suspend.resume`
 - config: `config.get`, `config.schema`, `config.schema.lookup`, `config.set`, `config.patch`, `config.apply`
 - channels: `channels.status`, `channels.start`, `channels.stop`, `channels.logout`
 - web: `web.login.start`, `web.login.wait`
@@ -199,18 +200,26 @@ Shared-token WebSocket clients without a trusted device identity cannot self-dec
 
 : The request did not satisfy Gateway HTTP auth. Check the bearer token or the trusted-proxy identity headers.
 
+`405 Method Not Allowed`
+
+: The request used something other than `POST`.
+
+`413 Payload Too Large`
+
+: The request body exceeded the 1 MB limit.
+
 `400 INVALID_REQUEST`
 
-: The request body is not valid JSON, the `method` field is missing, or the method is not in the plugin allowlist.
+: The request body is not valid JSON, the `method` field is missing, the method is not in the plugin allowlist, or a suspension resume ID does not match the active lease.
 
 `503 UNAVAILABLE`
 
-: The Gateway method handler is unavailable. Check Gateway logs and retry after the Gateway finishes startup.
+: The Gateway method is starting, rate-limited, suspended, or waiting on a competing suspension/resume operation. Inspect `error.details` when present and honor `error.retryAfterMs` before retrying.
 
 ## Related
 
 - [Operator scopes](/gateway/operator-scopes)
 - [Gateway security](/gateway/security)
 - [Remote access](/gateway/remote)
-- [Plugin manifest](/plugins/manifest#contracts)
+- [Plugin manifest](/plugins/manifest#contracts-reference)
 - [SDK subpaths](/plugins/sdk-subpaths)

@@ -19,6 +19,12 @@ type MediaGenerateActionResult = {
 };
 
 type TaskStatusTextBuilder<Task> = (task: Task, params?: { duplicateGuard?: boolean }) => string;
+type MediaGenerateTaskStatusParams<Task> = {
+  inactiveText: string;
+  findActiveTask: (sessionKey?: string) => Task | undefined;
+  buildStatusText: TaskStatusTextBuilder<Task>;
+  buildStatusDetails: (task: Task) => Record<string, unknown>;
+};
 type MediaGenerateProvider = {
   id: string;
   aliases?: string[];
@@ -26,6 +32,7 @@ type MediaGenerateProvider = {
   defaultModel?: string;
   models?: readonly string[];
   capabilities: unknown;
+  catalogByModel?: Readonly<Record<string, { capabilities?: unknown; modes?: readonly string[] }>>;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -39,6 +46,11 @@ type MediaGenerateListProviderDetails<TProvider extends MediaGenerateProvider> =
   authEnvVars: string[];
   capabilities: TProvider["capabilities"];
   catalog: ReturnType<typeof synthesizeMediaGenerationCatalogEntries<TProvider["capabilities"]>>;
+};
+
+type MediaGenerateCapabilitySummaryOptions = {
+  modes?: readonly string[];
+  includeModes?: boolean;
 };
 
 /** Common tool result shape for media generation list/status actions. */
@@ -56,7 +68,10 @@ export function createMediaGenerateProviderListActionResult<
   agentDir?: string;
   authStore?: AuthProfileStore;
   listModes: (provider: TProvider) => string[];
-  summarizeCapabilities: (provider: TProvider) => string;
+  summarizeCapabilities: (
+    provider: TProvider,
+    options?: MediaGenerateCapabilitySummaryOptions,
+  ) => string;
   formatAuthHint?: (provider: { id: string; authEnvVars: readonly string[] }) => string | undefined;
 }): MediaGenerateActionResult {
   if (params.providers.length === 0) {
@@ -97,13 +112,32 @@ export function createMediaGenerateProviderListActionResult<
   );
 
   const lines = providerDetails.flatMap((details, index) => {
-    const provider = params.providers[index];
+    const provider = params.providers.at(index);
+    if (!provider) {
+      return [];
+    }
     const authHints = getProviderEnvVars(provider.id);
     const capabilities = params.summarizeCapabilities(provider);
     const modelLine = details.models.length > 0 ? details.models.join(", ") : "unknown";
     const authHint =
       params.formatAuthHint?.({ id: details.id, authEnvVars: authHints }) ??
       (authHints.length > 0 ? `set ${authHints.join(" / ")} to use ${details.id}/*` : undefined);
+    const modelCapabilityLines = details.catalog.flatMap((entry) => {
+      if (!provider.catalogByModel?.[entry.model]) {
+        return [];
+      }
+      const modelProvider = {
+        ...provider,
+        capabilities: entry.capabilities ?? provider.capabilities,
+      } as TProvider;
+      const modelCapabilities = params.summarizeCapabilities(modelProvider, {
+        modes: entry.modes,
+        includeModes: false,
+      });
+      const modelModes = entry.modes?.length ? `modes=${entry.modes.join("/")}` : undefined;
+      const modelSummary = [modelModes, modelCapabilities || undefined].filter(Boolean).join(", ");
+      return [`  model ${entry.model}: ${modelSummary || "no capabilities declared"}`];
+    });
     return [
       `${details.id}${details.defaultModel ? ` (default ${details.defaultModel})` : ""}`,
       `  models: ${modelLine}`,
@@ -111,6 +145,7 @@ export function createMediaGenerateProviderListActionResult<
       ...(authHint ? [`  auth: ${authHint}`] : []),
       "  source: static",
       ...(capabilities ? [`  capabilities: ${capabilities}`] : []),
+      ...modelCapabilityLines,
     ];
   });
 
@@ -123,83 +158,77 @@ export function createMediaGenerateProviderListActionResult<
   };
 }
 
-/** Creates status and duplicate-guard action helpers for a media generation task type. */
-export function createMediaGenerateTaskStatusActions<Task>(params: {
-  inactiveText: string;
-  findActiveTask: (sessionKey?: string) => Task | undefined;
-  buildStatusText: TaskStatusTextBuilder<Task>;
-  buildStatusDetails: (task: Task) => Record<string, unknown>;
-}) {
+/** Creates status action helpers for a media generation task type. */
+export function createMediaGenerateTaskStatusActions<Task>(
+  params: MediaGenerateTaskStatusParams<Task>,
+) {
   return {
-    createStatusActionResult(sessionKey?: string): MediaGenerateActionResult {
-      return createMediaGenerateStatusActionResult({
-        sessionKey,
-        inactiveText: params.inactiveText,
-        findActiveTask: params.findActiveTask,
-        buildStatusText: params.buildStatusText,
-        buildStatusDetails: params.buildStatusDetails,
-      });
-    },
-
-    createDuplicateGuardResult(sessionKey?: string): MediaGenerateActionResult | undefined {
-      return createMediaGenerateDuplicateGuardResult({
-        sessionKey,
-        findActiveTask: params.findActiveTask,
-        buildStatusText: params.buildStatusText,
-        buildStatusDetails: params.buildStatusDetails,
-      });
+    createStatusActionResult(this: void, sessionKey?: string): MediaGenerateActionResult {
+      const activeTask = params.findActiveTask(sessionKey);
+      return activeTask
+        ? {
+            content: [{ type: "text", text: params.buildStatusText(activeTask) }],
+            details: { action: "status", ...params.buildStatusDetails(activeTask) },
+          }
+        : {
+            content: [{ type: "text", text: params.inactiveText }],
+            details: { action: "status", active: false },
+          };
     },
   };
 }
 
-function createMediaGenerateStatusActionResult<Task>(params: {
-  sessionKey?: string;
-  inactiveText: string;
-  findActiveTask: (sessionKey?: string) => Task | undefined;
-  buildStatusText: TaskStatusTextBuilder<Task>;
-  buildStatusDetails: (task: Task) => Record<string, unknown>;
-}): MediaGenerateActionResult {
-  const activeTask = params.findActiveTask(params.sessionKey);
-  if (!activeTask) {
-    return {
-      content: [{ type: "text", text: params.inactiveText }],
-      details: {
-        action: "status",
-        active: false,
-      },
-    };
-  }
+/** Creates status and duplicate-guard actions from one media-task owner. */
+export function createMediaGenerateTaskActions<Task>(
+  params: MediaGenerateTaskStatusParams<Task> & {
+    findDuplicateTask: (
+      sessionKey?: string,
+      request?: { prompt?: string; requestKey?: string },
+    ) => Task | undefined;
+  },
+) {
   return {
-    content: [{ type: "text", text: params.buildStatusText(activeTask) }],
-    details: {
-      action: "status",
-      ...params.buildStatusDetails(activeTask),
+    ...createMediaGenerateTaskStatusActions(params),
+    createDuplicateGuardResult(
+      this: void,
+      sessionKey?: string,
+      request?: { prompt?: string; requestKey?: string },
+    ) {
+      return createMediaGenerateDuplicateGuardResult({ sessionKey, ...request, ...params });
     },
   };
 }
 
-function createMediaGenerateDuplicateGuardResult<Task>(params: {
+/** Builds duplicate-guard status output for a media generation task type. */
+export function createMediaGenerateDuplicateGuardResult<Task>(params: {
   sessionKey?: string;
-  findActiveTask: (sessionKey?: string) => Task | undefined;
+  prompt?: string;
+  requestKey?: string;
+  findDuplicateTask: (
+    sessionKey?: string,
+    params?: { prompt?: string; requestKey?: string },
+  ) => Task | undefined;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
 }): MediaGenerateActionResult | undefined {
-  const activeTask = params.findActiveTask(params.sessionKey);
-  if (!activeTask) {
+  const blockingTask = params.findDuplicateTask(params.sessionKey, {
+    prompt: params.prompt,
+    requestKey: params.requestKey,
+  });
+  if (!blockingTask) {
     return undefined;
   }
-  // Duplicate guard returns the active status payload so callers can show current progress.
   return {
     content: [
       {
         type: "text",
-        text: params.buildStatusText(activeTask, { duplicateGuard: true }),
+        text: params.buildStatusText(blockingTask, { duplicateGuard: true }),
       },
     ],
     details: {
       action: "status",
       duplicateGuard: true,
-      ...params.buildStatusDetails(activeTask),
+      ...params.buildStatusDetails(blockingTask),
     },
   };
 }

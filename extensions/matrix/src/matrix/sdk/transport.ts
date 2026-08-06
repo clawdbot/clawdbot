@@ -14,6 +14,16 @@ import {
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
+// Default ceiling for non-raw JSON control-plane responses (whoami, receipts,
+// directory search, key-backup status, generic doRequest). Matrix homeservers
+// are untrusted, so bound the body the same way the raw media path is bounded
+// instead of buffering an unbounded stream via response.text().
+const MATRIX_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+
+// matrix-js-sdk also uses the injected fetch for raw encrypted key bundles.
+// Keep that path bounded without applying the tighter control-plane JSON cap.
+const MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+
 type QueryValue =
   | string
   | number
@@ -90,7 +100,7 @@ function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
 
 function buildBufferedResponse(params: {
   source: Response;
-  body: ArrayBuffer;
+  body: BodyInit;
   url: string;
 }): Response {
   const response = new Response(params.body, {
@@ -107,6 +117,32 @@ function buildBufferedResponse(params: {
     // Response.url is read-only in some runtimes; metadata is best-effort only.
   }
   return response;
+}
+
+async function enforceDeclaredResponseSize(params: {
+  response: Response;
+  maxBytes: number;
+  createError: (length: number) => Error;
+}): Promise<void> {
+  const contentLength = params.response.headers.get("content-length");
+  if (!contentLength) {
+    return;
+  }
+
+  let length: number | null;
+  try {
+    length = parseMediaContentLength(contentLength);
+  } catch (error) {
+    await params.response.body?.cancel(error).catch(() => undefined);
+    throw error;
+  }
+  if (length === null || length <= params.maxBytes) {
+    return;
+  }
+
+  const error = params.createError(length);
+  await params.response.body?.cancel(error).catch(() => undefined);
+  throw error;
 }
 
 async function fetchWithMatrixDispatcher(params: {
@@ -214,7 +250,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
         headers.delete("content-length");
       }
 
-      void response.body?.cancel();
+      void response.body?.cancel().catch(() => undefined);
       await closeDispatcher(dispatcher);
       currentUrl = nextUrl;
     } catch (error) {
@@ -244,10 +280,21 @@ export function createMatrixGuardedFetch(params: {
     });
 
     try {
-      const body = await response.arrayBuffer();
+      await enforceDeclaredResponseSize({
+        response,
+        maxBytes: MATRIX_SDK_RESPONSE_MAX_BYTES,
+        createError: (length) =>
+          new Error(
+            `Matrix SDK response exceeds size limit (${length} bytes > ${MATRIX_SDK_RESPONSE_MAX_BYTES} bytes)`,
+          ),
+      });
+      const body = await readResponseWithLimit(response, MATRIX_SDK_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes, size }) =>
+          new Error(`Matrix SDK response exceeds size limit (${size} bytes > ${maxBytes} bytes)`),
+      });
       return buildBufferedResponse({
         source: response,
-        body,
+        body: Uint8Array.from(body),
         url,
       });
     } finally {
@@ -281,7 +328,7 @@ export async function performMatrixRequest(params: {
 
   const baseUrl = isAbsoluteEndpoint
     ? new URL(params.endpoint)
-    : new URL(normalizeEndpoint(params.endpoint), params.homeserver);
+    : new URL(`${params.homeserver.replace(/\/+$/u, "")}${normalizeEndpoint(params.endpoint)}`);
   applyQuery(baseUrl, params.qs);
 
   const headers = new Headers();
@@ -318,35 +365,50 @@ export async function performMatrixRequest(params: {
 
   try {
     if (params.raw) {
-      const contentLength = response.headers.get("content-length");
-      if (params.maxBytes && contentLength) {
-        const length = parseMediaContentLength(contentLength);
-        if (length !== null && length > params.maxBytes) {
-          throw new MatrixMediaSizeLimitError(
-            `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
-          );
-        }
-      }
-      const bytes = params.maxBytes
-        ? await readResponseWithLimit(response, params.maxBytes, {
-            onOverflow: ({ maxBytes, size }) =>
-              new MatrixMediaSizeLimitError(
-                `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
-              ),
-            chunkTimeoutMs: params.readIdleTimeoutMs,
-          })
-        : Buffer.from(await response.arrayBuffer());
+      const rawMaxBytes = params.maxBytes ?? MATRIX_SDK_RESPONSE_MAX_BYTES;
+      await enforceDeclaredResponseSize({
+        response,
+        maxBytes: rawMaxBytes,
+        createError: (length) =>
+          new MatrixMediaSizeLimitError(
+            `Matrix media exceeds configured size limit (${length} bytes > ${rawMaxBytes} bytes)`,
+          ),
+      });
+      const bytes = await readResponseWithLimit(response, rawMaxBytes, {
+        onOverflow: ({ maxBytes, size }) =>
+          new MatrixMediaSizeLimitError(
+            `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
+          ),
+        chunkTimeoutMs: params.readIdleTimeoutMs,
+      });
       return {
         response,
         text: bytes.toString("utf8"),
         buffer: bytes,
       };
     }
-    const text = await response.text();
+    const jsonMaxBytes = params.maxBytes ?? MATRIX_JSON_RESPONSE_MAX_BYTES;
+    await enforceDeclaredResponseSize({
+      response,
+      maxBytes: jsonMaxBytes,
+      createError: (length) =>
+        new Error(
+          `Matrix JSON response exceeds configured size limit (${length} bytes > ${jsonMaxBytes} bytes)`,
+        ),
+    });
+    const buffer = await readResponseWithLimit(response, jsonMaxBytes, {
+      onOverflow: ({ maxBytes, size }) =>
+        new Error(
+          `Matrix JSON response exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
+        ),
+      chunkTimeoutMs: params.readIdleTimeoutMs,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Matrix JSON response stalled: no data received for ${chunkTimeoutMs}ms`),
+    });
     return {
       response,
-      text,
-      buffer: Buffer.from(text, "utf8"),
+      text: buffer.toString("utf8"),
+      buffer,
     };
   } finally {
     await release();

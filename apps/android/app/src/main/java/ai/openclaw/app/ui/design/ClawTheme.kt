@@ -4,7 +4,6 @@ import ai.openclaw.app.ui.LocalMobileColors
 import ai.openclaw.app.ui.darkMobileColors
 import ai.openclaw.app.ui.lightMobileColors
 import ai.openclaw.app.ui.mobileFontFamily
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -189,12 +188,6 @@ internal fun ClawDesignTheme(
     )
   }
 }
-
-/**
- * Returns the system dark-mode preference for callers that expose theme selection.
- */
-@Composable
-internal fun rememberClawDarkPreference(): Boolean = isSystemInDarkTheme()
 
 private fun clawTypography(fontFamily: FontFamily) =
   ClawTypography(

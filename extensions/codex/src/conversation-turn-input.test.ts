@@ -24,6 +24,31 @@ describe("codex conversation turn input", () => {
     ]);
   });
 
+  it("uses staged remote-cache paths for remote iMessage image attachments", () => {
+    const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+    const stagedPath = "/tmp/openclaw-proof/.openclaw/media/remote-cache/imessage/photo.jpg";
+
+    const input = buildCodexConversationTurnInput({
+      prompt: "what is this?",
+      event: {
+        content: "what is this?",
+        channel: "imessage",
+        isGroup: false,
+        metadata: {
+          mediaPaths: [stagedPath],
+          mediaTypes: ["image/jpeg"],
+          originalMediaPaths: [rawPath],
+        },
+      },
+    });
+
+    expect(input).toEqual([
+      { type: "text", text: "what is this?", text_elements: [] },
+      { type: "localImage", path: stagedPath },
+    ]);
+    expect(input).not.toContainEqual({ type: "localImage", path: rawPath });
+  });
+
   it("uses remote image urls when no local path is available", () => {
     expect(
       buildCodexConversationTurnInput({

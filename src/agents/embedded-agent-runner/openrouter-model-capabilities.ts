@@ -19,6 +19,7 @@
  */
 
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readResponseWithLimit } from "../../infra/http-body.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -28,6 +29,10 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
+// Cap the catalog body so an untrusted/oversized OpenRouter response cannot force
+// the runtime to buffer an unbounded payload before parsing. Mirrors the bound
+// applied to the sibling pricing-cache endpoint (16 MiB).
+const OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SQLITE_CACHE_OWNER_ID = "core:openrouter-model-capabilities";
 const SQLITE_CACHE_NAMESPACE = "models.v3";
 const SQLITE_CACHE_MAX_ENTRIES = 10_000;
@@ -59,7 +64,7 @@ interface OpenRouterApiModel {
   };
 }
 
-export interface OpenRouterModelCapabilities {
+interface OpenRouterModelCapabilities {
   name: string;
   input: Array<"text" | "image">;
   reasoning: boolean;
@@ -172,6 +177,12 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   };
 }
 
+async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
+  if (response && !response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // API fetch
 // ---------------------------------------------------------------------------
@@ -179,10 +190,11 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
 async function doFetch(): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let response: Response | undefined;
   try {
     const fetchFn = resolveProxyFetchFromEnv() ?? globalThis.fetch;
 
-    const response = await fetchFn(OPENROUTER_MODELS_URL, {
+    response = await fetchFn(OPENROUTER_MODELS_URL, {
       signal: controller.signal,
     });
 
@@ -191,7 +203,10 @@ async function doFetch(): Promise<void> {
       return;
     }
 
-    const data = (await response.json()) as { data?: OpenRouterApiModel[] };
+    const bytes = await readResponseWithLimit(response, OPENROUTER_MODELS_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size }) => new Error(`OpenRouter models response too large: ${size} bytes`),
+    });
+    const data = JSON.parse(bytes.toString("utf8")) as { data?: OpenRouterApiModel[] };
     const models = data.data ?? [];
     const map = new Map<string, OpenRouterModelCapabilities>();
 
@@ -210,6 +225,7 @@ async function doFetch(): Promise<void> {
     log.warn(`Failed to fetch OpenRouter models: ${message}`);
   } finally {
     clearTimeout(timeout);
+    await cancelUnreadResponseBody(response);
   }
 }
 
@@ -282,12 +298,17 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
 export function getOpenRouterModelCapabilities(
   modelId: string,
 ): OpenRouterModelCapabilities | undefined {
-  ensureOpenRouterModelCache();
+  // A failed awaited load, such as an oversized catalog body, already attempted
+  // a refresh. Do not let the follow-up sync lookup immediately retry it.
+  const skipMissRefresh = skipNextMissRefresh.delete(modelId);
+  if (!skipMissRefresh) {
+    ensureOpenRouterModelCache();
+  }
   const result = cache?.get(modelId);
 
   // Model not found but cache exists — may be a newly added model.
   // Trigger a refresh so the next call picks it up.
-  if (!result && skipNextMissRefresh.delete(modelId)) {
+  if (!result && skipMissRefresh) {
     return undefined;
   }
   if (!result && cache && !fetchInFlight) {

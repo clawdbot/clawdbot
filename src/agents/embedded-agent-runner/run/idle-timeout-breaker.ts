@@ -16,7 +16,7 @@
 export const MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT = 5;
 
 /** Mutable outer-loop state that survives across retry/profile attempts. */
-export type IdleTimeoutBreakerState = {
+type IdleTimeoutBreakerState = {
   consecutiveIdleTimeoutsBeforeOutput: number;
 };
 
@@ -30,14 +30,14 @@ export function createIdleTimeoutBreakerState(): IdleTimeoutBreakerState {
  * model progress means durable text/tool-call progress, not merely billed token
  * deltas from a partial stream.
  */
-export type IdleTimeoutBreakerInput = {
+type IdleTimeoutBreakerInput = {
   idleTimedOut: boolean;
   completedModelProgress: boolean;
   outputTokens?: number;
 };
 
 /** Result of applying one attempt outcome to the breaker state. */
-export type IdleTimeoutBreakerStep = {
+type IdleTimeoutBreakerStep = {
   consecutive: number;
   tripped: boolean;
 };

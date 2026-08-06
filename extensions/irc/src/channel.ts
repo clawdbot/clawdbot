@@ -15,6 +15,7 @@ import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -40,12 +41,13 @@ import {
   looksLikeIrcTargetId,
   normalizeIrcAllowEntry,
   normalizeIrcMessagingTarget,
+  resolveIrcOutboundSessionRoute,
 } from "./normalize.js";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
-import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
+import { resolveIrcGroupRequireMention, resolveIrcGroupToolPolicy } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { ircSetupAdapter } from "./setup-core.js";
+import { ircSetupContract } from "./setup-core.js";
 import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
@@ -62,14 +64,7 @@ const meta = {
   markdownCapable: true,
 };
 
-type IrcChannelRuntimeModule = typeof import("./channel-runtime.js");
-
-let ircChannelRuntimePromise: Promise<IrcChannelRuntimeModule> | undefined;
-
-async function loadIrcChannelRuntime(): Promise<IrcChannelRuntimeModule> {
-  ircChannelRuntimePromise ??= import("./channel-runtime.js");
-  return await ircChannelRuntimePromise;
-}
+const loadIrcChannelRuntime = createLazyRuntimeModule(() => import("./channel-runtime.js"));
 
 function normalizePairingTarget(raw: string): string {
   const normalized = normalizeIrcAllowEntry(raw);
@@ -175,7 +170,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       ...meta,
       quickstartAllowFrom: true,
     },
-    setup: ircSetupAdapter,
+    setupContract: ircSetupContract,
     setupWizard: ircSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group"],
@@ -202,6 +197,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
             tls: account.tls,
             nick: account.nick,
             passwordSource: account.passwordSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },
@@ -219,24 +215,20 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         if (!groupId) {
           return true;
         }
-        const match = resolveIrcGroupMatch({ groups: account.config.groups, target: groupId });
-        return resolveIrcRequireMention({
-          groupConfig: match.groupConfig,
-          wildcardConfig: match.wildcardConfig,
-        });
+        return resolveIrcGroupRequireMention({ groups: account.config.groups, target: groupId });
       },
       resolveToolPolicy: ({ cfg, accountId, groupId }) => {
         const account = resolveIrcAccount({ cfg: cfg as CoreConfig, accountId });
         if (!groupId) {
           return undefined;
         }
-        const match = resolveIrcGroupMatch({ groups: account.config.groups, target: groupId });
-        return match.groupConfig?.tools ?? match.wildcardConfig?.tools;
+        return resolveIrcGroupToolPolicy({ groups: account.config.groups, target: groupId });
       },
     },
     messaging: {
       targetPrefixes: ["irc"],
       normalizeTarget: normalizeIrcMessagingTarget,
+      resolveOutboundSessionRoute: (params) => resolveIrcOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeIrcTargetId,
         hint: "<#channel|nick>",
@@ -310,6 +302,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
           tls: account.tls,
           nick: account.nick,
           passwordSource: account.passwordSource,
+          tokenStatus: account.tokenStatus,
         },
       }),
     }),
@@ -346,22 +339,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     base: ircOutboundBaseAdapter,
     attachedResults: {
       channel: "irc",
-      sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-        const { sendMessageIrc } = await loadIrcChannelRuntime();
-        return await sendMessageIrc(to, text, {
-          cfg: cfg as CoreConfig,
-          accountId: accountId ?? undefined,
-          replyTo: replyToId ?? undefined,
-        });
-      },
-      sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
-        const { sendMessageIrc } = await loadIrcChannelRuntime();
-        return await sendMessageIrc(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
-          cfg: cfg as CoreConfig,
-          accountId: accountId ?? undefined,
-          replyTo: replyToId ?? undefined,
-        });
-      },
+      sendText: ({ onDeliveryResult: _onDeliveryResult, ...ctx }) =>
+        ircMessageAdapter.send.text(ctx),
+      sendMedia: ({ onDeliveryResult: _onDeliveryResult, mediaUrl, ...ctx }) =>
+        ircMessageAdapter.send.media({ ...ctx, mediaUrl: mediaUrl ?? "" }),
     },
   },
 });

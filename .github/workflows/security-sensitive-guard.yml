@@ -1,0 +1,55 @@
+name: Security Sensitive Guard
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] checks trusted base script only; never checks out PR head
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: security-sensitive-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  security-sensitive-guard-detect:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out trusted base workflow scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Detect security-sensitive changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
+          OPENCLAW_SECURITY_SENSITIVE_GUARD_MODE: detect
+          OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
+        run: node scripts/github/security-sensitive-guard.mjs
+
+  security-sensitive-guard:
+    if: ${{ !github.event.pull_request.draft && always() }}
+    needs:
+      - security-sensitive-guard-detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out trusted base workflow scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Enforce security-sensitive guard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
+          OPENCLAW_SECURITY_SENSITIVE_GUARD_MODE: enforce
+          OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
+        run: node scripts/github/security-sensitive-guard.mjs

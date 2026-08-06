@@ -2,7 +2,9 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import {
   openLocalFileSafely,
   readRegularFile,
@@ -11,7 +13,6 @@ import {
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { MediaFileType } from "../types.js";
-import { formatErrorMessage } from "./format.js";
 import { normalizeOptionalString } from "./string-normalize.js";
 
 /** Maximum file size accepted by the QQ Bot one-shot upload API (base64 direct). */
@@ -64,10 +65,12 @@ const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
   "*.tencentcos.com",
 ];
 
-export const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
+const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
   hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
   allowRfc2544BenchmarkRange: true,
 };
+
+const QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
 
 /** Result of local file-size validation. */
 interface FileSizeCheckResult {
@@ -124,13 +127,12 @@ export async function fileExistsAsync(filePath: string): Promise<boolean> {
 
 /** Format a byte count into a human-readable size string. */
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes}B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+  });
 }
 
 /** Infer a MIME type from the file extension. */
@@ -183,6 +185,7 @@ export async function downloadFile(
       url: parsedUrl.toString(),
       filePathHint: originalFilename,
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
+      responseHeaderTimeoutMs: QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     });
 
     let filename = normalizeOptionalString(originalFilename) ?? "";

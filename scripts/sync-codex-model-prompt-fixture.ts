@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CODEX_MODEL_PROMPT_FIXTURE_DIR } from "../test/helpers/agents/prompt-snapshot-paths.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PERSONALITY_PLACEHOLDER = "{{ personality }}";
 
-export const CODEX_MODEL_PROMPT_FIXTURE_DIR =
-  "test/fixtures/agents/prompt-snapshots/codex-model-catalog";
+export { CODEX_MODEL_PROMPT_FIXTURE_DIR };
 
 type JsonObject = Record<string, unknown>;
 type CodexPromptPersonality = "default" | "friendly" | "pragmatic";
@@ -109,7 +109,7 @@ export function renderCodexModelInstructions(params: {
   throw new Error(`Codex model ${params.model.slug} has no renderable instructions.`);
 }
 
-export async function createCodexModelPromptFixture(params: {
+async function createCodexModelPromptFixture(params: {
   catalogPath: string;
   catalogLabel?: string;
   model: string;
@@ -265,7 +265,7 @@ export async function runCodexModelPromptFixtureSync(
     );
     return { status: "skipped" as const, candidates: defaultCatalog?.candidates ?? [] };
   }
-  const model = parseArgValue(argv, "--model") ?? "gpt-5.5";
+  const model = parseArgValue(argv, "--model") ?? "gpt-5.6-sol";
   const personality = parsePersonality(parseArgValue(argv, "--personality"));
   const catalogGitHead = parseArgValue(argv, "--catalog-git-head");
   const catalogLabel = parseArgValue(argv, "--source-label");

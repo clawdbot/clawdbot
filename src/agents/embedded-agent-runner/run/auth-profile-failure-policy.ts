@@ -14,6 +14,7 @@ import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.typ
 export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
   providerStarted?: boolean;
+  transientRateLimit?: boolean;
   policy?: AuthProfileFailurePolicy;
 }): AuthProfileFailureReason | null {
   // Helper-local runs, transport/server failures, empty responses, and request-shape ("format") rejections
@@ -28,8 +29,13 @@ export function resolveAuthProfileFailureReason(params: {
   if (
     params.policy === "local" ||
     !params.failoverReason ||
+    (params.policy === "local_transient" &&
+      (params.failoverReason === "overloaded" ||
+        (params.failoverReason === "rate_limit" && params.transientRateLimit === true))) ||
     params.failoverReason === "server_error" ||
+    params.failoverReason === "tls_certificate" ||
     params.failoverReason === "empty_response" ||
+    params.failoverReason === "context_overflow" ||
     params.failoverReason === "format"
   ) {
     return null;

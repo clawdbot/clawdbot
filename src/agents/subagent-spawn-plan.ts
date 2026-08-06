@@ -5,7 +5,12 @@
  */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import type { FastMode } from "../shared/fast-mode.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+  resolveSubagentSpawnModelSelection,
+} from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
@@ -55,6 +60,7 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   modelOverride?: string;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
+  fastMode?: FastMode;
 }) {
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg: params.cfg,
@@ -80,6 +86,28 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     };
   }
 
+  const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
+  const hasConfiguredAutoModel =
+    modelOverrideSource === "auto" &&
+    Boolean(
+      resolveSubagentConfiguredModelSelection({
+        cfg: params.cfg,
+        agentId: params.targetAgentId,
+      }),
+    );
+  const configuredModelRef = hasConfiguredAutoModel ? splitModelRef(resolvedModel) : undefined;
+  const modelOrigin = configuredModelRef?.model
+    ? {
+        provider:
+          configuredModelRef.provider ??
+          resolveDefaultModelForAgent({
+            cfg: params.cfg,
+            agentId: params.targetAgentId,
+          }).provider,
+        model: configuredModelRef.model,
+      }
+    : undefined;
+
   return {
     status: "ok" as const,
     resolvedModel,
@@ -89,10 +117,19 @@ export function resolveSubagentModelAndThinkingPlan(params: {
       ...(resolvedModel
         ? {
             model: resolvedModel,
-            modelOverrideSource: params.modelOverride?.trim() ? "user" : "auto",
+            modelOverrideSource,
+            ...(modelOrigin
+              ? {
+                  // Config-selected models are session overrides, not legacy fallback residue.
+                  // Self-origin metadata keeps cleanup from discarding them before first use.
+                  modelOverrideFallbackOriginProvider: modelOrigin.provider,
+                  modelOverrideFallbackOriginModel: modelOrigin.model,
+                }
+              : {}),
           }
         : {}),
       ...thinkingPlan.initialSessionPatch,
+      ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     },
   };
 }

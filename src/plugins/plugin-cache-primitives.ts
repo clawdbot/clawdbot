@@ -1,8 +1,9 @@
 // Defines lifecycle-owned cache primitives for plugin metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 
 /** Result shape for cache lookups that need to distinguish a miss from cached `undefined`. */
-export type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
+type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
 /** Small process-local LRU cache used for stable plugin metadata and loader artifacts. */
 export class PluginLruCache<T> {
@@ -28,7 +29,7 @@ export class PluginLruCache<T> {
       typeof value === "number"
         ? normalizeMaxEntries(value, this.#defaultMaxEntries)
         : this.#defaultMaxEntries;
-    this.#evictOldestEntries();
+    pruneMapToMaxSize(this.#entries, this.#maxEntries);
   }
 
   clear(): void {
@@ -58,17 +59,7 @@ export class PluginLruCache<T> {
       this.#entries.delete(cacheKey);
     }
     this.#entries.set(cacheKey, value);
-    this.#evictOldestEntries();
-  }
-
-  #evictOldestEntries(): void {
-    while (this.#entries.size > this.#maxEntries) {
-      const oldestEntry = this.#entries.keys().next();
-      if (oldestEntry.done) {
-        break;
-      }
-      this.#entries.delete(oldestEntry.value);
-    }
+    pruneMapToMaxSize(this.#entries, this.#maxEntries);
   }
 }
 
@@ -76,7 +67,7 @@ export class PluginLruCache<T> {
 export type ConfigScopedRuntimeCache<T> = WeakMap<OpenClawConfig, Map<string, T>>;
 
 /** Promise loader that coalesces concurrent loads per config object and for the default scope. */
-export type ConfigScopedPromiseLoader<T> = {
+type ConfigScopedPromiseLoader<T> = {
   load(config?: OpenClawConfig): Promise<T>;
   clear(): void;
 };

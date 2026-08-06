@@ -1,54 +1,48 @@
+import {
+  assertDirectPluginRegistrationReplacement,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "../plugins/runtime.js";
 // Tracks detached task runtime state and spawned process handles.
 import type {
   DetachedTaskLifecycleRuntime,
   DetachedTaskLifecycleRuntimeRegistration,
 } from "./detached-task-runtime-contract.js";
 
-export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
-
-// Process-wide detached task runtime registration, owned by plugin activation.
-let detachedTaskLifecycleRuntimeRegistration: DetachedTaskLifecycleRuntimeRegistration | undefined;
+const getRegistrations = () => requireActivePluginRegistry().detachedTaskRuntimes;
 
 /** Registers the active detached task lifecycle runtime implementation. */
 export function registerDetachedTaskLifecycleRuntime(
-  pluginId: string,
+  requestedPluginId: string,
   runtime: DetachedTaskLifecycleRuntime,
 ): void {
-  detachedTaskLifecycleRuntimeRegistration = {
-    pluginId,
-    runtime,
-  };
+  const registrations = getRegistrations();
+  const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
+  if (registrations[0]) {
+    assertDirectPluginRegistrationReplacement(registrations[0].pluginId, "detached task runtime");
+  }
+  registrations.splice(0, registrations.length, { pluginId, runtime });
 }
 
 export function getDetachedTaskLifecycleRuntimeRegistration():
   | DetachedTaskLifecycleRuntimeRegistration
   | undefined {
-  if (!detachedTaskLifecycleRuntimeRegistration) {
+  const registration = getRegistrations()[0];
+  if (!registration) {
     return undefined;
   }
   return {
-    pluginId: detachedTaskLifecycleRuntimeRegistration.pluginId,
-    runtime: detachedTaskLifecycleRuntimeRegistration.runtime,
+    pluginId: registration.pluginId,
+    runtime: registration.runtime,
   };
 }
 
 export function getRegisteredDetachedTaskLifecycleRuntime():
   | DetachedTaskLifecycleRuntime
   | undefined {
-  return detachedTaskLifecycleRuntimeRegistration?.runtime;
-}
-
-export function restoreDetachedTaskLifecycleRuntimeRegistration(
-  registration: DetachedTaskLifecycleRuntimeRegistration | undefined,
-): void {
-  detachedTaskLifecycleRuntimeRegistration = registration
-    ? {
-        pluginId: registration.pluginId,
-        runtime: registration.runtime,
-      }
-    : undefined;
+  return getRegistrations()[0]?.runtime;
 }
 
 export function clearDetachedTaskLifecycleRuntimeRegistration(): void {
-  detachedTaskLifecycleRuntimeRegistration = undefined;
+  getRegistrations().length = 0;
 }

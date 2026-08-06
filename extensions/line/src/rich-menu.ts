@@ -1,19 +1,20 @@
 // Line plugin module implements rich menu behavior.
 import { messagingApi } from "@line/bot-sdk";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveLineAccount } from "./accounts.js";
-import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
+import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 
 type RichMenuRequest = messagingApi.RichMenuRequest;
 type RichMenuResponse = messagingApi.RichMenuResponse;
 type RichMenuArea = messagingApi.RichMenuArea;
 type Action = messagingApi.Action;
-const USER_BATCH_SIZE = 500;
+// LINE counts rich-menu names and chat-bar text in grapheme clusters, unlike most message fields.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface RichMenuSize {
   width: 2500;
@@ -70,12 +71,17 @@ function getBlobClient(opts: RichMenuOpts): messagingApi.MessagingApiBlobClient 
   });
 }
 
-function chunkUserIds(userIds: string[]): string[][] {
-  const batches: string[][] = [];
-  for (let i = 0; i < userIds.length; i += USER_BATCH_SIZE) {
-    batches.push(userIds.slice(i, i + USER_BATCH_SIZE));
+function truncateGraphemes(input: string, maxLength: number): string {
+  let result = "";
+  let count = 0;
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    if (count >= maxLength) {
+      break;
+    }
+    result += segment;
+    count += 1;
   }
-  return batches;
+  return result;
 }
 
 export async function createRichMenu(
@@ -87,8 +93,8 @@ export async function createRichMenu(
   const richMenuRequest: RichMenuRequest = {
     size: menu.size,
     selected: menu.selected ?? false,
-    name: menu.name.slice(0, 300),
-    chatBarText: menu.chatBarText.slice(0, 14),
+    name: truncateGraphemes(menu.name, 300),
+    chatBarText: truncateGraphemes(menu.chatBarText, 14),
     areas: menu.areas as RichMenuArea[],
   };
 
@@ -153,64 +159,6 @@ export async function getDefaultRichMenuId(opts: RichMenuOpts): Promise<string |
     return response.richMenuId ?? null;
   } catch {
     return null;
-  }
-}
-
-export async function linkRichMenuToUser(
-  userId: string,
-  richMenuId: string,
-  opts: RichMenuOpts,
-): Promise<void> {
-  const client = getClient(opts);
-  await client.linkRichMenuIdToUser(userId, richMenuId);
-
-  if (opts.verbose) {
-    logVerbose(`line: linked rich menu ${richMenuId} to user ${userId}`);
-  }
-}
-
-export async function linkRichMenuToUsers(
-  userIds: string[],
-  richMenuId: string,
-  opts: RichMenuOpts,
-): Promise<void> {
-  const client = getClient(opts);
-
-  for (const batch of chunkUserIds(userIds)) {
-    await client.linkRichMenuIdToUsers({
-      richMenuId,
-      userIds: batch,
-    });
-  }
-
-  if (opts.verbose) {
-    logVerbose(`line: linked rich menu ${richMenuId} to ${userIds.length} users`);
-  }
-}
-
-export async function unlinkRichMenuFromUser(userId: string, opts: RichMenuOpts): Promise<void> {
-  const client = getClient(opts);
-  await client.unlinkRichMenuIdFromUser(userId);
-
-  if (opts.verbose) {
-    logVerbose(`line: unlinked rich menu from user ${userId}`);
-  }
-}
-
-export async function unlinkRichMenuFromUsers(
-  userIds: string[],
-  opts: RichMenuOpts,
-): Promise<void> {
-  const client = getClient(opts);
-
-  for (const batch of chunkUserIds(userIds)) {
-    await client.unlinkRichMenuIdFromUsers({
-      userIds: batch,
-    });
-  }
-
-  if (opts.verbose) {
-    logVerbose(`line: unlinked rich menu from ${userIds.length} users`);
   }
 }
 
@@ -304,8 +252,6 @@ export function createGridLayout(
     },
   ];
 }
-
-export { datetimePickerAction, messageAction, postbackAction, uriAction };
 
 export function createDefaultMenuConfig(): CreateRichMenuParams {
   return {

@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { createParallelFreeWebSearchProviderBase } from "./parallel-free-web-search-provider.shared.js";
 import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-search-normalize.js";
@@ -18,14 +19,9 @@ const ParallelFreeSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-type ParallelFreeWebSearchRuntime = typeof import("./parallel-free-web-search-provider.runtime.js");
-
-let parallelFreeWebSearchRuntimePromise: Promise<ParallelFreeWebSearchRuntime> | undefined;
-
-function loadParallelFreeWebSearchRuntime(): Promise<ParallelFreeWebSearchRuntime> {
-  parallelFreeWebSearchRuntimePromise ??= import("./parallel-free-web-search-provider.runtime.js");
-  return parallelFreeWebSearchRuntimePromise;
-}
+const loadParallelFreeWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./parallel-free-web-search-provider.runtime.js"),
+);
 
 export function createParallelFreeWebSearchProvider(): WebSearchProviderPlugin {
   return {

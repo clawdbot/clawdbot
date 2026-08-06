@@ -1,10 +1,11 @@
 // Queue helper tests cover queue ordering and dedupe utility behavior.
 import { describe, expect, it } from "vitest";
 import {
+  applyQueueDropPolicy,
   applyQueueRuntimeSettings,
-  buildQueueSummaryPrompt,
-  clearQueueSummaryState,
-  drainCollectItemIfNeeded,
+  countPendingQueueItems,
+  drainCollectQueueStep,
+  drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
 } from "./queue-helpers.js";
@@ -62,9 +63,8 @@ describe("applyQueueRuntimeSettings", () => {
 });
 
 describe("queue summary helpers", () => {
-  it("previewQueueSummaryPrompt does not mutate state", () => {
+  it("renders pending summary state without mutating it", () => {
     const state = {
-      dropPolicy: "summarize" as const,
       droppedCount: 2,
       summaryLines: ["first", "second"],
     };
@@ -77,51 +77,34 @@ describe("queue summary helpers", () => {
     expect(prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
     expect(prompt).toContain("first");
     expect(state).toEqual({
-      dropPolicy: "summarize",
       droppedCount: 2,
       summaryLines: ["first", "second"],
     });
   });
 
-  it("buildQueueSummaryPrompt clears state after rendering", () => {
-    const state = {
+  it("keeps dropped-item previews free of lone surrogates", () => {
+    const queue = {
+      items: [{ text: `${"a".repeat(158)}😀tail` }],
+      cap: 1,
       dropPolicy: "summarize" as const,
-      droppedCount: 1,
-      summaryLines: ["line"],
-    };
-
-    const prompt = buildQueueSummaryPrompt({
-      state,
-      noun: "announce",
-    });
-
-    expect(prompt).toContain("[Queue overflow] Dropped 1 announce due to cap.");
-    expect(state).toEqual({
-      dropPolicy: "summarize",
       droppedCount: 0,
-      summaryLines: [],
-    });
-  });
-
-  it("clearQueueSummaryState resets summary counters", () => {
-    const state = {
-      dropPolicy: "summarize" as const,
-      droppedCount: 5,
-      summaryLines: ["a", "b"],
+      summaryLines: [] as string[],
     };
-    clearQueueSummaryState(state);
-    expect(state.droppedCount).toBe(0);
-    expect(state.summaryLines).toStrictEqual([]);
+
+    applyQueueDropPolicy({ queue, summarize: (item) => item.text });
+
+    expect(queue.summaryLines).toEqual([`${"a".repeat(158)}…`]);
   });
 });
 
-describe("drainCollectItemIfNeeded", () => {
+describe("drainCollectQueueStep", () => {
   it("skips when neither force mode nor cross-channel routing is active", async () => {
     const seen: number[] = [];
     const items = [1];
+    const collectState = { forceIndividualCollect: false };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: false,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: false,
       items,
       run: async (item) => {
@@ -137,9 +120,10 @@ describe("drainCollectItemIfNeeded", () => {
   it("drains one item in force mode", async () => {
     const seen: number[] = [];
     const items = [1, 2];
+    const collectState = { forceIndividualCollect: true };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: true,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: false,
       items,
       run: async (item) => {
@@ -153,20 +137,201 @@ describe("drainCollectItemIfNeeded", () => {
   });
 
   it("switches to force mode and returns empty when cross-channel with no queued item", async () => {
-    let forced = false;
+    const collectState = { forceIndividualCollect: false };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: false,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: true,
-      setForceIndividualCollect: (next) => {
-        forced = next;
-      },
       items: [],
       run: async () => {},
     });
 
     expect(result).toBe("empty");
-    expect(forced).toBe(true);
+    expect(collectState.forceIndividualCollect).toBe(true);
+  });
+});
+
+describe("drainNextQueueItem", () => {
+  it("counts only in-flight identities that still intersect the queue", () => {
+    const active = { id: "active" };
+    const pending = { id: "pending" };
+    const alreadyRemoved = { id: "already-removed" };
+
+    expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
+  });
+
+  it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
+    type Item = { id: string };
+    const queue = {
+      items: [{ id: "m1" }] as Item[],
+      cap: 3,
+      dropPolicy: "summarize" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const delivered: string[] = [];
+    const dropped: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inFlight = new Set<Item>();
+
+    const firstDrain = drainNextQueueItem(
+      queue.items,
+      async (item: Item) => {
+        delivered.push(item.id);
+        await gate;
+      },
+      { inFlight },
+    );
+    await Promise.resolve();
+
+    for (let index = 2; index <= 8; index += 1) {
+      const item = { id: `m${index}` };
+      const shouldEnqueue = applyQueueDropPolicy({
+        queue,
+        summarize: (queued) => queued.id,
+        inFlight,
+        onDrop: (items) => {
+          dropped.push(...items.map((queued) => queued.id));
+        },
+      });
+      if (shouldEnqueue) {
+        queue.items.push(item);
+      }
+    }
+
+    release();
+    await firstDrain;
+    while (
+      await drainNextQueueItem(
+        queue.items,
+        async (item) => {
+          delivered.push(item.id);
+        },
+        { inFlight },
+      )
+    ) {}
+
+    expect(delivered).toEqual(["m1", "m6", "m7", "m8"]);
+    expect(dropped).toEqual(["m2", "m3", "m4", "m5"]);
+    expect(queue.items).toEqual([]);
+  });
+
+  it("skips in-flight items when selecting drop victims", () => {
+    type Item = { id: string };
+    const m1: Item = { id: "m1" };
+    const m2: Item = { id: "m2" };
+    const m3: Item = { id: "m3" };
+    const m4: Item = { id: "m4" };
+    const queue = {
+      items: [m1, m2, m3, m4],
+      cap: 2,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const inFlight = new Set<Item>([m1]);
+    const dropped: string[] = [];
+
+    applyQueueDropPolicy({
+      queue,
+      inFlight,
+      summarize: (item) => item.id,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(dropped).toEqual(["m2", "m3"]);
+    expect(queue.items).toEqual([m1, m4]);
+  });
+
+  it("skips protected items when selecting drop victims", () => {
+    type Item = { id: string; protected?: boolean };
+    const protectedItem: Item = { id: "priority", protected: true };
+    const normalA: Item = { id: "a" };
+    const normalB: Item = { id: "b" };
+    const normalC: Item = { id: "c" };
+    const queue = {
+      items: [protectedItem, normalA, normalB, normalC],
+      cap: 3,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const dropped: string[] = [];
+
+    // pending=4, cap=3 → drop 2 oldest unprotected; protected stays.
+    const shouldEnqueue = applyQueueDropPolicy({
+      queue,
+      summarize: (item) => item.id,
+      isProtected: (item) => item.protected === true,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(shouldEnqueue).toBe(true);
+    expect(dropped).toEqual(["a", "b"]);
+    expect(queue.items).toEqual([protectedItem, normalC]);
+  });
+
+  it("rejects admission without mutating when only protected items can be dropped", () => {
+    type Item = { id: string; protected?: boolean };
+    const priority: Item = { id: "priority", protected: true };
+    const alsoProtected: Item = { id: "also", protected: true };
+    const queue = {
+      items: [priority, alsoProtected],
+      cap: 1,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const dropped: string[] = [];
+
+    const shouldEnqueue = applyQueueDropPolicy({
+      queue,
+      summarize: (item) => item.id,
+      isProtected: (item) => item.protected === true,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(shouldEnqueue).toBe(false);
+    expect(dropped).toEqual([]);
+    expect(queue.items).toEqual([priority, alsoProtected]);
+  });
+
+  it("rejects when pending work is only in-flight or protected", () => {
+    type Item = { id: string; protected?: boolean };
+    const active: Item = { id: "active" };
+    const priority: Item = { id: "priority", protected: true };
+    const queue = {
+      items: [active, priority],
+      cap: 1,
+      dropPolicy: "old" as const,
+      droppedCount: 0,
+      summaryLines: [] as string[],
+    };
+    const inFlight = new Set<Item>([active]);
+    const dropped: string[] = [];
+
+    const shouldEnqueue = applyQueueDropPolicy({
+      queue,
+      inFlight,
+      summarize: (item) => item.id,
+      isProtected: (item) => item.protected === true,
+      onDrop: (items) => {
+        dropped.push(...items.map((item) => item.id));
+      },
+    });
+
+    expect(shouldEnqueue).toBe(false);
+    expect(dropped).toEqual([]);
+    expect(queue.items).toEqual([active, priority]);
   });
 });
 

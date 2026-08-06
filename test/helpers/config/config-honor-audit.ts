@@ -27,7 +27,7 @@ type ConfigHonorProofKey =
   | "testPaths";
 
 /** Result of auditing one config honor inventory. */
-export type ConfigHonorAuditResult = {
+type ConfigHonorAuditResult = {
   schemaKeys: string[];
   missingKeys: string[];
   extraKeys: string[];
@@ -53,11 +53,13 @@ function hasSchemaPath(schemaPath: string): boolean {
       return false;
     }
     if (segment === "*") {
-      const items = (current as { items?: unknown }).items;
-      if (!items || typeof items !== "object") {
+      const wildcardTarget =
+        (current as { additionalProperties?: unknown; items?: unknown }).items ??
+        (current as { additionalProperties?: unknown }).additionalProperties;
+      if (!wildcardTarget || typeof wildcardTarget !== "object") {
         return false;
       }
-      current = items;
+      current = wildcardTarget;
       continue;
     }
     const properties = (current as { properties?: Record<string, unknown> }).properties;
@@ -81,7 +83,10 @@ export function listSchemaLeafKeysForPrefixes(prefixes: string[]): string[] {
         break;
       }
       if (segment === "*") {
-        current = (current as { items?: unknown }).items ?? null;
+        current =
+          (current as { additionalProperties?: unknown; items?: unknown }).items ??
+          (current as { additionalProperties?: unknown }).additionalProperties ??
+          null;
         continue;
       }
       current = (current as { properties?: Record<string, unknown> }).properties?.[segment] ?? null;

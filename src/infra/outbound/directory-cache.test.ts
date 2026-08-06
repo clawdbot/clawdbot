@@ -1,9 +1,8 @@
 // Covers directory cache key dimensions, TTL expiration, config invalidation,
 // recency refresh, bounded eviction, and matching clears.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DirectoryCache, buildDirectoryCacheKey } from "./directory-cache.js";
-import type { DirectoryCacheKey } from "./directory-cache.js";
 
 describe("buildDirectoryCacheKey", () => {
   it.each([
@@ -13,7 +12,7 @@ describe("buildDirectoryCacheKey", () => {
         kind: "channel",
         source: "cache",
       },
-      expected: "workspace:default:channel:cache:default",
+      expected: "workspace:default:channel:cache:default:query:",
     },
     {
       input: {
@@ -22,19 +21,24 @@ describe("buildDirectoryCacheKey", () => {
         kind: "user",
         source: "live",
         signature: "v2",
+        query: "alice",
       },
-      expected: "richchat:work:user:live:v2",
+      expected: "richchat:work:user:live:v2:query:alice",
     },
-  ] satisfies Array<{ input: DirectoryCacheKey; expected: string }>)(
-    "includes account and signature fallbacks for %j",
-    ({ input, expected }) => {
-      expect(buildDirectoryCacheKey(input)).toBe(expected);
-    },
-  );
+  ] satisfies Array<{
+    input: Parameters<typeof buildDirectoryCacheKey>[0];
+    expected: string;
+  }>)("includes account and signature fallbacks for %j", ({ input, expected }) => {
+    expect(buildDirectoryCacheKey(input)).toBe(expected);
+  });
 });
 
 describe("DirectoryCache", () => {
-  it("expires entries after ttl and resets when config ref changes", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("expires entries at ttl and partitions entries by config identity", () => {
     vi.useFakeTimers();
     const cache = new DirectoryCache<string>(1_000);
     const cfgA = {} as OpenClawConfig;
@@ -43,18 +47,18 @@ describe("DirectoryCache", () => {
     cache.set("a", "first", cfgA);
     expect(cache.get("a", cfgA)).toBe("first");
 
-    vi.advanceTimersByTime(1_001);
+    vi.advanceTimersByTime(1_000);
     expect(cache.get("a", cfgA)).toBeUndefined();
 
     cache.set("b", "second", cfgA);
     expect(cache.get("b", cfgB)).toBeUndefined();
-
-    vi.useRealTimers();
+    expect(cache.get("b", cfgA)).toBe("second");
   });
 
   it("evicts least-recent entries, refreshes insertion order, and clears matches", () => {
     const cache = new DirectoryCache<string>(60_000, 2);
     const cfg = {} as OpenClawConfig;
+    const otherCfg = {} as OpenClawConfig;
 
     cache.set("a", "A", cfg);
     cache.set("b", "B", cfg);
@@ -65,8 +69,10 @@ describe("DirectoryCache", () => {
     expect(cache.get("b", cfg)).toBeUndefined();
     expect(cache.get("c", cfg)).toBe("C");
 
-    cache.clearMatching((key) => key.startsWith("c"));
+    cache.set("c", "other-C", otherCfg);
+    cache.clearMatching((key) => key.startsWith("c"), cfg);
     expect(cache.get("c", cfg)).toBeUndefined();
+    expect(cache.get("c", otherCfg)).toBe("other-C");
 
     cache.clear(cfg);
     expect(cache.get("a", cfg)).toBeUndefined();

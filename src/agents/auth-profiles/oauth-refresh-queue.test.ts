@@ -19,7 +19,8 @@ import {
   resolveApiKeyForProfileInTest,
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
-import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -115,21 +116,10 @@ describe("OAuth refresh in-process queue", () => {
     });
   });
 
-  it("resetOAuthRefreshQueuesForTest drains pending gates", () => {
-    // We can't observe the internal map, but we can assert that calling the
-    // reset is idempotent and safe from any state.
-    expect(resetOAuthRefreshQueuesForTest()).toBeUndefined();
-    expect(resetOAuthRefreshQueuesForTest()).toBeUndefined();
-  });
-
   it("serializes a 10-caller burst so later arrivals never pass an earlier caller", async () => {
     // Burst-arrival stress: 10 same-PID callers all fire concurrently.
     // The queue must chain them so each refresh completes fully before the
     // next one begins — i.e. no overlap between running refresh calls.
-    // This pins the invariant that the map-overwrite pattern in the queue
-    // wrapper does not let later arrivals skip ahead (see review P2: the
-    // `refreshQueues.set(key, gate)` overwrites only the *map head*, while
-    // FIFO ordering is enforced via the `await prev` chain).
     const profileId = "openai:default";
     const provider = "openai";
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);

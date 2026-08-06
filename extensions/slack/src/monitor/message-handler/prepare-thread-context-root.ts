@@ -1,24 +1,26 @@
 // Slack plugin module implements prepare thread context root behavior.
-export type SlackBotAuthorIdentity = {
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+
+type SlackBotAuthorIdentity = {
   botUserId?: string;
   botId?: string;
 };
 
-export type SlackThreadAuthorTuple = {
+type SlackThreadAuthorTuple = {
   userId?: string;
   botId?: string;
 };
 
-export type SlackThreadRootCandidate = SlackThreadAuthorTuple & {
+type SlackThreadRootCandidate = SlackThreadAuthorTuple & {
   text?: string;
   ts?: string;
 };
 
-export type SlackThreadHistoryFilterPolicy = {
-  retainCurrentBotRootTs?: string;
-};
+type SlackThreadHistoryFilterPolicy =
+  | { currentBot: "omit" | "all" }
+  | { currentBot: "root-only"; rootTs: string };
 
-export type SlackThreadHistoryFilterResult<T> = {
+type SlackThreadHistoryFilterResult<T> = {
   kept: T[];
   omittedCurrentBot: number;
 };
@@ -40,12 +42,17 @@ export function isSlackThreadAuthorCurrentBot(params: {
 export function resolveSlackThreadHistoryFilterPolicy(params: {
   includeBotStarterAsRootContext: boolean;
   starterTs?: string;
+  retainCurrentBotHistory?: boolean;
 }): SlackThreadHistoryFilterPolicy {
+  if (params.retainCurrentBotHistory) {
+    return { currentBot: "all" };
+  }
   if (!params.includeBotStarterAsRootContext || !params.starterTs) {
-    return {};
+    return { currentBot: "omit" };
   }
   return {
-    retainCurrentBotRootTs: params.starterTs,
+    currentBot: "root-only",
+    rootTs: params.starterTs,
   };
 }
 
@@ -65,7 +72,10 @@ export function applySlackThreadHistoryFilterPolicy<T extends SlackThreadRootCan
       kept.push(entry);
       continue;
     }
-    if (params.policy.retainCurrentBotRootTs && entry.ts === params.policy.retainCurrentBotRootTs) {
+    if (
+      params.policy.currentBot === "all" ||
+      (params.policy.currentBot === "root-only" && entry.ts === params.policy.rootTs)
+    ) {
       kept.push(entry);
     } else {
       omittedCurrentBot += 1;
@@ -107,9 +117,13 @@ export function formatSlackBotStarterThreadLabel(params: {
   if (!params.starterText) {
     return base;
   }
-  const snippet = params.starterText.replace(/\s+/g, " ").slice(0, 80).trim();
+  const snippet = formatSlackThreadLabelSnippet(params.starterText).trim();
   if (!snippet) {
     return base;
   }
   return `${base} (assistant root): ${snippet}`;
+}
+
+export function formatSlackThreadLabelSnippet(text: string): string {
+  return truncateUtf16Safe(text.replace(/\s+/g, " "), 80);
 }

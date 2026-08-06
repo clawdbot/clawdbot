@@ -5,6 +5,16 @@ import path from "node:path";
 const TASK_ROOT = path.resolve(import.meta.dirname);
 
 const TASK_BOUNDARY_SRC_ROOT = path.resolve(TASK_ROOT, "..");
+const TEST_ONLY_SOURCE_SUFFIXES = [
+  ".test.ts",
+  ".test-harness.ts",
+  ".test-utils.ts",
+  ".e2e-harness.ts",
+];
+
+function isTestOnlySourceFile(name: string): boolean {
+  return TEST_ONLY_SOURCE_SUFFIXES.some((suffix) => name.endsWith(suffix));
+}
 
 /** Converts source paths to stable task-boundary test paths. */
 export function toTaskBoundaryRelativePath(file: string, root = TASK_BOUNDARY_SRC_ROOT): string {
@@ -22,7 +32,7 @@ export async function listTaskBoundarySourceFiles(
       files.push(...(await listTaskBoundarySourceFiles(fullPath)));
       continue;
     }
-    if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {
+    if (!entry.isFile() || !entry.name.endsWith(".ts") || isTestOnlySourceFile(entry.name)) {
       continue;
     }
     files.push(fullPath);

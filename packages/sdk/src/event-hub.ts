@@ -5,12 +5,12 @@ import type { GatewayEvent } from "./types.js";
 type Listener<T> = (event: T) => void;
 
 /** Replay settings for EventHub streams. */
-export type EventHubOptions = {
+type EventHubOptions = {
   replayLimit?: number;
 };
 
 /** Per-stream options for including replayed events. */
-export type EventStreamOptions = {
+type EventStreamOptions = {
   replay?: boolean;
 };
 
@@ -19,6 +19,8 @@ export class EventHub<T> {
   private readonly replayLimit: number;
   private readonly replayEvents: T[] = [];
   private closed = false;
+  private closeError: unknown;
+  private hasCloseError = false;
   private readonly listeners = new Set<Listener<T>>();
   private readonly waiters = new Set<() => void>();
 
@@ -42,7 +44,12 @@ export class EventHub<T> {
     }
   }
 
-  close(): void {
+  close(error?: unknown): void {
+    const hasError = arguments.length > 0;
+    if (hasError) {
+      this.closeError = error;
+      this.hasCloseError = true;
+    }
     this.closed = true;
     this.replayEvents.length = 0;
     this.listeners.clear();
@@ -113,6 +120,9 @@ export class EventHub<T> {
               });
             }
             cleanup();
+            if (this.hasCloseError) {
+              throw this.closeError;
+            }
             return { done: true, value: undefined as never };
           },
           return: async (): Promise<IteratorResult<T>> => {

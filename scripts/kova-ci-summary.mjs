@@ -3,8 +3,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+const knownArgKeys = new Set(["report", "output", "lane", "reporturl", "artifacturl"]);
 const rawArgs = process.argv.slice(2);
-if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+if (shouldPrintHelp(rawArgs)) {
   usage("", 0);
 }
 
@@ -31,7 +32,6 @@ const keyMetricIds = [
 ];
 const rssMetricIds = ["peakRssMb", "resourcePeakGatewayRssMb"];
 const cpuMetricIds = ["cpuPercentMax"];
-
 const reportPath = path.resolve(args.report);
 const report = JSON.parse(await readFile(reportPath, "utf8"));
 const invalidReport = validateKovaSummaryReport(report);
@@ -78,32 +78,39 @@ function renderSummary(reportLocal, options) {
   const groups = Array.isArray(reportLocal.performance?.groups)
     ? reportLocal.performance.groups
     : [];
-  if (groups.length > 0) {
+  const metricRows = [];
+  for (const group of groups) {
+    for (const metricId of keyMetricIds) {
+      const metric = group.metrics?.[metricId];
+      if (!hasPositiveSampleCount(metric)) {
+        continue;
+      }
+      metricRows.push(
+        [
+          value(group.scenario),
+          value(group.state),
+          value(metric.title || metricId),
+          formatMetric(metric.median, metric.unit),
+          formatMetric(metric.p95, metric.unit),
+          formatMetric(metric.max, metric.unit),
+        ]
+          .join(" | ")
+          .replace(/^/, "| ")
+          .replace(/$/, " |"),
+      );
+    }
+  }
+  if (metricRows.length > 0) {
     lines.push("## Key metrics");
     lines.push("");
     lines.push("| Scenario | State | Metric | Median | p95 | Max |");
     lines.push("| --- | --- | --- | ---: | ---: | ---: |");
-    for (const group of groups) {
-      for (const metricId of keyMetricIds) {
-        const metric = group.metrics?.[metricId];
-        if (!metric || metric.count === 0) {
-          continue;
-        }
-        lines.push(
-          [
-            value(group.scenario),
-            value(group.state),
-            value(metric.title || metricId),
-            formatMetric(metric.median, metric.unit),
-            formatMetric(metric.p95, metric.unit),
-            formatMetric(metric.max, metric.unit),
-          ]
-            .join(" | ")
-            .replace(/^/, "| ")
-            .replace(/$/, " |"),
-        );
-      }
-    }
+    lines.push(...metricRows);
+    lines.push("");
+  } else if (groups.length > 0) {
+    lines.push("## Key metrics");
+    lines.push("");
+    lines.push("- No sampled key metrics were available; inspect the blocking records below.");
     lines.push("");
   }
 
@@ -179,7 +186,11 @@ function validateKovaSummaryReport(reportLocal) {
   if (records.length === 0 && groups.length === 0) {
     return "missing records or performance groups";
   }
-  if (groups.length > 0 && !hasExplicitResourceCollectionSkip(reportLocal)) {
+  if (
+    groups.length > 0 &&
+    reportHasOnlyPassingStatuses(statuses) &&
+    !hasExplicitResourceCollectionSkip(reportLocal)
+  ) {
     if (!groups.some((group) => hasSampledMetric(group, rssMetricIds))) {
       return "missing sampled RSS metric in performance groups";
     }
@@ -190,16 +201,24 @@ function validateKovaSummaryReport(reportLocal) {
   return null;
 }
 
+function reportHasOnlyPassingStatuses(statuses) {
+  const populated = Object.entries(statuses).filter(([, count]) => Number(count) > 0);
+  return (
+    populated.length > 0 && populated.every(([status]) => status.trim().toUpperCase() === "PASS")
+  );
+}
+
 function hasExplicitResourceCollectionSkip(reportLocal) {
   const reason = reportLocal.performance?.resourceCollectionSkippedReason;
   return typeof reason === "string" && reason.trim().length > 0;
 }
 
 function hasSampledMetric(group, metricIds) {
-  return metricIds.some((metricId) => {
-    const metric = group?.metrics?.[metricId];
-    return metric && Number(metric.count) > 0;
-  });
+  return metricIds.some((metricId) => hasPositiveSampleCount(group?.metrics?.[metricId]));
+}
+
+function hasPositiveSampleCount(metric) {
+  return Number.isSafeInteger(metric?.count) && metric.count > 0;
 }
 
 function collectViolations(records) {
@@ -241,18 +260,17 @@ function value(input) {
 
 function parseArgs(argv) {
   const parsed = {};
-  const knownKeys = new Set(["report", "output", "lane", "reporturl", "artifacturl"]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg.startsWith("--")) {
       usage(`unexpected argument: ${arg}`);
     }
     const key = arg.slice(2).replaceAll("-", "");
-    if (!knownKeys.has(key)) {
+    if (!knownArgKeys.has(key)) {
       usage(`unknown argument: ${arg}`);
     }
     const valueLocal = argv[index + 1];
-    if (!valueLocal || valueLocal.startsWith("--")) {
+    if (!valueLocal || valueLocal.startsWith("-")) {
       usage(`${arg} requires a value`);
     }
     parsed[key] = valueLocal;
@@ -265,6 +283,28 @@ function parseArgs(argv) {
     reportUrl: parsed.reporturl,
     artifactUrl: parsed.artifacturl,
   };
+}
+
+function shouldPrintHelp(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+    if (!arg.startsWith("--")) {
+      return false;
+    }
+    const key = arg.slice(2).replaceAll("-", "");
+    if (!knownArgKeys.has(key)) {
+      return false;
+    }
+    const optionValue = argv[index + 1];
+    if (!optionValue || optionValue.startsWith("-")) {
+      return false;
+    }
+    index += 1;
+  }
+  return false;
 }
 
 function usage(message, status = 2) {

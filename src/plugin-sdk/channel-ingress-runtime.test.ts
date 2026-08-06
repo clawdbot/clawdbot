@@ -1,12 +1,11 @@
 // Channel ingress runtime tests cover inbound message normalization and runtime contracts.
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { AccessFacts } from "../channels/turn/types.js";
+import { describe, expect, it, vi } from "vitest";
 import {
+  fanInChannelIngressLifecycles,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
-import { projectIngressAccessFacts } from "./channel-ingress.js";
 
 const identity = {
   primary: { normalize: (value) => value.trim().toLowerCase(), sensitivity: "pii" },
@@ -27,26 +26,70 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
-  it("omits projected command facts unless command policy was requested", async () => {
-    const normalMessage = await resolve();
-
-    expect(projectIngressAccessFacts(normalMessage.ingress).commands).toBeUndefined();
-
-    const commandMessage = await resolve({
-      command: { useAccessGroups: true, allowTextCommands: true, hasControlCommand: true },
+  it("fans one logical turn lifecycle across every durable claim", async () => {
+    const createLifecycle = () => ({
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {}),
+      onAbandoned: vi.fn(async () => {}),
     });
+    const first = createLifecycle();
+    const second = createLifecycle();
+    const combined = fanInChannelIngressLifecycles([undefined, first, second]);
 
-    const commandFacts = projectIngressAccessFacts(commandMessage.ingress).commands;
-    expect(commandFacts?.authorized).toBe(true);
-    expect(commandFacts?.authorizers).toEqual([]);
-    expect(commandFacts?.useAccessGroups).toBe(true);
-    expect(commandFacts?.allowTextCommands).toBe(true);
+    combined.lifecycle?.onAdoptionFinalizing();
+    await combined.lifecycle?.onAdopted();
+    await combined.settle();
+
+    expect(first.onAdoptionFinalizing).toHaveBeenCalledOnce();
+    expect(second.onAdoptionFinalizing).toHaveBeenCalledOnce();
+    expect(first.onAdopted).toHaveBeenCalledOnce();
+    expect(second.onAdopted).toHaveBeenCalledOnce();
+    expect(first.onAbandoned).not.toHaveBeenCalled();
+    expect(second.onAbandoned).not.toHaveBeenCalled();
   });
 
-  it("keeps command authorizers required on public AccessFacts", () => {
-    expectTypeOf<NonNullable<AccessFacts["commands"]>["authorizers"]>().toEqualTypeOf<
-      Array<{ configured: boolean; allowed: boolean }>
-    >();
+  it("settles or abandons claims that no reply lane adopted", async () => {
+    const adopted = vi.fn(async () => {});
+    const abandoned = vi.fn(async () => {});
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: adopted,
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {}),
+      onAbandoned: abandoned,
+    };
+
+    await fanInChannelIngressLifecycles([lifecycle]).settle();
+    await fanInChannelIngressLifecycles([lifecycle]).abandon();
+
+    expect(adopted).toHaveBeenCalledOnce();
+    expect(abandoned).toHaveBeenCalledOnce();
+    expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
+  });
+
+  it("can abandon claims after terminal settlement adoption fails", async () => {
+    const abandoned = vi.fn(async () => {});
+    const combined = fanInChannelIngressLifecycles([
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: async () => {
+          throw new Error("adoption failed");
+        },
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onFailed: vi.fn(async () => {}),
+        onAbandoned: abandoned,
+      },
+    ]);
+
+    await expect(combined.settle()).rejects.toThrow("adoption failed");
+    await combined.abandon(new Error("dispatch failed"));
+
+    expect(abandoned).toHaveBeenCalledOnce();
   });
 
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {

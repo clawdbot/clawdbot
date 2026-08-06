@@ -5,7 +5,14 @@ import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import {
+  preserveHumanNotesBlock,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+  slugifyWikiPageStem,
+  slugifyWikiSegment,
+} from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -34,7 +41,31 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
   return buffer.toString("utf8");
 }
 
-export async function ingestMemoryWikiSource(params: {
+function isEmptyExistingSourcePage(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    ((error as NodeJS.ErrnoException).code === "ENOENT" ||
+      (error as NodeJS.ErrnoException).code === "EISDIR")
+  );
+}
+
+async function readExistingSourcePage(pagePath: string): Promise<string> {
+  let readError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await fs.readFile(pagePath, "utf8");
+    } catch (error) {
+      readError = error;
+    }
+  }
+  if (isEmptyExistingSourcePage(readError)) {
+    return "";
+  }
+  throw readError;
+}
+
+async function ingestMemoryWikiSourceUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
   title?: string;
@@ -46,8 +77,9 @@ export async function ingestMemoryWikiSource(params: {
   const content = assertUtf8Text(buffer, sourcePath);
   const title = resolveSourceTitle(sourcePath, params.title);
   const slug = slugifyWikiSegment(title);
+  const pageStem = slugifyWikiPageStem(title);
   const pageId = `source.${slug}`;
-  const pageRelativePath = path.join("sources", `${slug}.md`);
+  const pageRelativePath = path.join("sources", `${pageStem}.md`);
   const pagePath = path.join(params.config.vault.path, pageRelativePath);
   const created = !(await pathExists(pagePath));
   const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
@@ -82,7 +114,12 @@ export async function ingestMemoryWikiSource(params: {
     ].join("\n"),
   });
 
-  await fs.writeFile(pagePath, markdown, "utf8");
+  const existing = created ? "" : await readExistingSourcePage(pagePath);
+  await fs.writeFile(
+    pagePath,
+    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
+    "utf8",
+  );
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "ingest",
     timestamp,
@@ -105,4 +142,18 @@ export async function ingestMemoryWikiSource(params: {
     created,
     indexUpdatedFiles: compile.updatedFiles,
   };
+}
+
+export async function ingestMemoryWikiSource(params: {
+  config: ResolvedMemoryWikiConfig;
+  inputPath: string;
+  title?: string;
+  nowMs?: number;
+}): Promise<IngestMemoryWikiSourceResult> {
+  // Ingest read-modify-writes the source page and recompiles the vault; hold
+  // the vault mutation lock across the whole span so it cannot interleave
+  // with the other serialized vault mutators (apply/compile/source-sync).
+  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
+    ingestMemoryWikiSourceUnlocked(params),
+  );
 }

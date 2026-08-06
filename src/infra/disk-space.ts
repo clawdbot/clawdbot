@@ -65,8 +65,11 @@ export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
 /** Formats byte counts for compact operator-facing disk-space warnings. */
 export function formatDiskSpaceBytes(bytes: number): string {
   const mib = bytes / (1024 * 1024);
-  if (mib < 1024) {
-    return `${Math.max(0, Math.round(mib))} MiB`;
+  // Round before choosing the unit so a value that rounds up to 1024 MiB is
+  // promoted to "1.0 GiB" instead of printing the impossible "1024 MiB".
+  const roundedMib = Math.max(0, Math.round(mib));
+  if (roundedMib < 1024) {
+    return `${roundedMib} MiB`;
   }
   const gib = mib / 1024;
   return `${gib.toFixed(gib < 10 ? 1 : 0)} GiB`;

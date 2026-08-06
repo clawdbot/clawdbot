@@ -57,16 +57,15 @@ describe("config reload log scanner", () => {
     writeFileSync(logPath, "config change detected");
     expect(scanner.scan().reloadLines).toEqual([]);
 
-    appendFileSync(logPath, "; evaluating reload: gateway.channelHealthCheckMinutes\n");
+    appendFileSync(logPath, "; evaluating reload: ui.seamColor\n");
     expect(scanner.scan().reloadLines).toEqual([
-      "config change detected; evaluating reload: gateway.channelHealthCheckMinutes",
+      "config change detected; evaluating reload: ui.seamColor",
     ]);
   });
 
   it("starts from a bounded tail of oversized logs", () => {
     const logPath = path.join(makeTempRoot(), "gateway.log");
-    const reloadLine =
-      "config change detected; evaluating reload: gateway.channelHealthCheckMinutes\n";
+    const reloadLine = "config change detected; evaluating reload: ui.seamColor\n";
     writeFileSync(logPath, `${"x".repeat(4096)}\n${reloadLine}`);
 
     const scanner = createConfigReloadLogScanner(logPath, {
@@ -75,7 +74,7 @@ describe("config reload log scanner", () => {
     });
 
     expect(scanner.scan().reloadLines).toEqual([
-      "config change detected; evaluating reload: gateway.channelHealthCheckMinutes",
+      "config change detected; evaluating reload: ui.seamColor",
     ]);
   });
 

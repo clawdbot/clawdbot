@@ -6,9 +6,43 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestResolveWindowsTaskkillPath(t *testing.T) {
+	t.Setenv("SystemRoot", `C:\Windows`)
+	t.Setenv("WINDIR", `D:\Ignored`)
+
+	got := resolveWindowsTaskkillPath()
+	want := filepath.Join(`C:\Windows`, "System32", "taskkill.exe")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestResolveWindowsTaskkillPathFallsBackToWindir(t *testing.T) {
+	t.Setenv("SystemRoot", `relative\windows`)
+	t.Setenv("WINDIR", `D:\Windows`)
+
+	got := resolveWindowsTaskkillPath()
+	want := filepath.Join(`D:\Windows`, "System32", "taskkill.exe")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestResolveWindowsTaskkillPathRejectsUnsafeRoots(t *testing.T) {
+	t.Setenv("SystemRoot", `\\server\share`)
+	t.Setenv("WINDIR", `C:\Windows;taskkill.exe`)
+
+	got := resolveWindowsTaskkillPath()
+	want := filepath.Join(defaultWindowsSystemRoot, "System32", "taskkill.exe")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
 
 func TestConfigureCodexPromptCommandWindowsCancelsProcessTree(t *testing.T) {
 	t.Setenv(envDocsI18nCommandWaitDelay, "25ms")

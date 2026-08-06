@@ -11,7 +11,7 @@ vi.mock("node:net", async () => {
   return { ...actual, createServer: mockCreateServer };
 });
 
-import { probePortFree, waitForPortBindable } from "./ports.js";
+import { waitForPortBindable } from "./ports.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -47,55 +47,6 @@ async function expectRejectCode(promise: Promise<unknown>, code: string): Promis
   }
   throw new Error(`expected rejection with code ${code}`);
 }
-
-describe("probePortFree", () => {
-  it("resolves false (not rejects) when bind returns EADDRINUSE", async () => {
-    mockCreateServer.mockReturnValue(makeErrServer("EADDRINUSE"));
-    await expect(probePortFree(9999, "127.0.0.1")).resolves.toBe(false);
-  });
-
-  it("rejects immediately for EADDRNOTAVAIL (non-retryable: host address not on any interface)", async () => {
-    mockCreateServer.mockReturnValue(makeErrServer("EADDRNOTAVAIL"));
-    await expectRejectCode(probePortFree(9999, "192.0.2.1"), "EADDRNOTAVAIL");
-  });
-
-  it("rejects immediately for EACCES (non-retryable bind error)", async () => {
-    mockCreateServer.mockReturnValue(makeErrServer("EACCES"));
-    await expectRejectCode(probePortFree(80, "0.0.0.0"), "EACCES");
-  });
-
-  it("rejects immediately for other non-retryable errors", async () => {
-    mockCreateServer.mockReturnValue(makeErrServer("EINVAL"));
-    await expectRejectCode(probePortFree(9999, "0.0.0.0"), "EINVAL");
-  });
-
-  it("resolves true when the port is free", async () => {
-    // Mock a successful bind: the "listening" event fires immediately without
-    // acquiring a real socket, making this deterministic and avoiding TOCTOU races.
-    // (A real-socket approach would bind to :0, release, then reprobe — the OS can
-    // reassign the ephemeral port in between, causing a flaky EADDRINUSE failure.)
-    const fakeServer = new EventEmitter() as unknown as net.Server;
-    (fakeServer as unknown as { close: (cb?: () => void) => net.Server }).close = (
-      cb?: () => void,
-    ) => {
-      cb?.();
-      return fakeServer;
-    };
-    (fakeServer as unknown as { unref: () => net.Server }).unref = () => fakeServer;
-    (fakeServer as unknown as { listen: (...args: unknown[]) => net.Server }).listen = (
-      ..._args: unknown[]
-    ) => {
-      // Simulate a successful bind by firing the "listening" callback.
-      const callback = _args.find((a) => typeof a === "function") as (() => void) | undefined;
-      setImmediate(() => callback?.());
-      return fakeServer;
-    };
-    mockCreateServer.mockReturnValue(fakeServer);
-
-    const result = await probePortFree(9999, "127.0.0.1");
-    expect(result).toBe(true);
-  });
-});
 
 describe("waitForPortBindable", () => {
   it("probes the provided host when waiting for bindability", async () => {
@@ -134,6 +85,20 @@ describe("waitForPortBindable", () => {
     // Only one probe should have been attempted — no spinning through the retry loop.
     expect(mockCreateServer).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["EADDRNOTAVAIL", "EINVAL"])(
+    "propagates non-retryable %s bind errors immediately",
+    async (code) => {
+      mockCreateServer.mockClear();
+      mockCreateServer.mockReturnValue(makeErrServer(code));
+
+      await expectRejectCode(
+        waitForPortBindable(9999, { timeoutMs: 5000, intervalMs: 50, host: "192.0.2.1" }),
+        code,
+      );
+      expect(mockCreateServer).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds oversized bindability intervals by the remaining timeout", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EADDRINUSE"));

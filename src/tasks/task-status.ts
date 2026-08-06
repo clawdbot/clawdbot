@@ -10,8 +10,8 @@ import type { TaskRecord } from "./task-registry.types.js";
 const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
 /** Window for showing recently completed tasks in compact status output. */
-export const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
-export const TASK_STATUS_TITLE_MAX_CHARS = 80;
+const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
+const TASK_STATUS_TITLE_MAX_CHARS = 80;
 export const TASK_STATUS_DETAIL_MAX_CHARS = 120;
 
 function isActiveTask(task: TaskRecord): boolean {
@@ -119,6 +119,15 @@ export function sanitizeTaskStatusText(
   return sanitized;
 }
 
+/** Sanitize bounded task input for detail views without flattening its layout. */
+export function sanitizeTaskPromptText(value: unknown, maxChars: number): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value));
+  return sanitized ? truncateTaskStatusText(sanitized, maxChars) : "";
+}
+
 export function formatTaskStatusTitleText(value: unknown, fallback = "Background task"): string {
   return sanitizeTaskStatusText(value, { maxChars: TASK_STATUS_TITLE_MAX_CHARS }) || fallback;
 }
@@ -151,7 +160,7 @@ export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
   );
 }
 
-export type TaskStatusSnapshot = {
+type TaskStatusSnapshot = {
   latest?: TaskRecord;
   focus?: TaskRecord;
   visible: TaskRecord[];

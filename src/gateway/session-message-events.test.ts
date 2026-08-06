@@ -5,19 +5,43 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import type { RawData } from "ws";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagent-lifecycle-events.js";
+import { createSubagentRegistryLifecycleController } from "../agents/subagent-registry-lifecycle.js";
+import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  loadTranscriptEvents,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
+  connectReq,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
+import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
+import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -28,6 +52,10 @@ let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
 
+// No explicit hook timeout: the suite harness cold-imports the full gateway
+// server graph, which can legitimately exceed 60s on contended CI runners.
+// Sibling gateway suites rely on the shared project hookTimeout (120s, 180s on
+// Windows) for the same boot; tightening it here caused flaky hook timeouts.
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
@@ -36,7 +64,7 @@ beforeAll(async () => {
     timeoutMs: SETUP_RPC_TIMEOUT_MS,
   });
   await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
-}, 60_000);
+});
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
@@ -151,6 +179,486 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
 }
 
 describe("session.message websocket events", () => {
+  test("publishes only the explicit per-connection viewer replace-set", async () => {
+    const observerWs = await harness.openWs();
+    const watchedWs = await harness.openWs();
+    const instanceId = "presence-watched-sessions";
+    try {
+      await connectOk(observerWs, { scopes: ["operator.read"] });
+      const watchedHello = await connectOk(watchedWs, {
+        scopes: ["operator.read"],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TEST,
+          version: "1.0.0",
+          platform: "test",
+          mode: GATEWAY_CLIENT_MODES.TEST,
+          instanceId,
+        },
+      });
+      const initialPresenceVersion = (
+        watchedHello as { snapshot?: { stateVersion?: { presence?: number } } }
+      ).snapshot?.stateVersion?.presence;
+      expect(initialPresenceVersion).toEqual(expect.any(Number));
+
+      const findWatchedEntry = (message: unknown) => {
+        const record = requireRecord(message, "presence event");
+        if (record.event !== "presence") {
+          return undefined;
+        }
+        const payload = requireRecord(record.payload, "presence payload");
+        const presence = Array.isArray(payload.presence) ? payload.presence : [];
+        return presence.find(
+          (entry): entry is Record<string, unknown> =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            (entry as { instanceId?: unknown }).instanceId === instanceId,
+        );
+      };
+      const declaredKeys = ["agent:main:watch-00", "agent:main:watch-01"];
+      const declaredPresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return (
+          Array.isArray(entry?.watchedSessions) &&
+          JSON.stringify(entry.watchedSessions) === JSON.stringify(declaredKeys)
+        );
+      });
+      const declaration = await rpcReq(watchedWs, "sessions.viewers.set", {
+        sessionKeys: [declaredKeys[1], declaredKeys[0], declaredKeys[1]],
+      });
+      expect(declaration).toMatchObject({ ok: true, payload: { sessionKeys: declaredKeys } });
+      const declaredEvent = await declaredPresence;
+      const declaredEntry = findWatchedEntry(declaredEvent);
+      expect(declaredEntry?.watchedSessions).toEqual(declaredKeys);
+      expect(declaredEntry?.user).toBeUndefined();
+      expect(declaredEvent.stateVersion?.presence).toBeGreaterThan(initialPresenceVersion ?? 0);
+
+      // Sidebar narration owns message subscriptions for running rows, but those
+      // transport watches must never impersonate viewer presence.
+      const narrationKeys = Array.from(
+        { length: 6 },
+        (_, index) => `agent:main:narration-${index}`,
+      );
+      for (const key of narrationKeys) {
+        const response = await rpcReq(watchedWs, "sessions.messages.subscribe", { key });
+        expect(response.ok).toBe(true);
+      }
+      const afterNarration = await rpcReq(observerWs, "system-presence", {});
+      expect(
+        (afterNarration.payload as unknown as Array<Record<string, unknown>>).find(
+          (entry) => entry.instanceId === instanceId,
+        )?.watchedSessions,
+      ).toEqual(declaredKeys);
+
+      // A failed message release cannot change the independently declared set.
+      const failedUnsubscribe = await rpcReq(watchedWs, "sessions.messages.unsubscribe", {
+        key: "",
+      });
+      expect(failedUnsubscribe.ok).toBe(false);
+      const afterFailedUnsubscribe = await rpcReq(observerWs, "system-presence", {});
+      expect(
+        (afterFailedUnsubscribe.payload as unknown as Array<Record<string, unknown>>).find(
+          (entry) => entry.instanceId === instanceId,
+        )?.watchedSessions,
+      ).toEqual(declaredKeys);
+
+      const replacementKey = "agent:main:replacement";
+      const replacementPresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
+      });
+      const replacement = await rpcReq(watchedWs, "sessions.viewers.set", {
+        sessionKeys: [replacementKey],
+      });
+      expect(replacement).toMatchObject({ ok: true, payload: { sessionKeys: [replacementKey] } });
+      const replacementEvent = await replacementPresence;
+      expect(findWatchedEntry(replacementEvent)?.watchedSessions).toEqual([replacementKey]);
+
+      const oversized = await rpcReq(watchedWs, "sessions.viewers.set", {
+        sessionKeys: Array.from(
+          { length: SESSION_VIEWER_PRESENCE_MAX_KEYS + 1 },
+          (_, index) => `agent:main:oversized-${index}`,
+        ),
+      });
+      expect(oversized.ok).toBe(false);
+      const afterOversized = await rpcReq(observerWs, "system-presence", {});
+      expect(
+        (afterOversized.payload as unknown as Array<Record<string, unknown>>).find(
+          (entry) => entry.instanceId === instanceId,
+        )?.watchedSessions,
+      ).toEqual([replacementKey]);
+
+      const hiddenPresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return entry !== undefined && entry.watchedSessions === undefined;
+      });
+      expect(
+        await rpcReq(watchedWs, "sessions.viewers.set", {
+          sessionKeys: [],
+        }),
+      ).toMatchObject({ ok: true, payload: { sessionKeys: [] } });
+      const hiddenEvent = await hiddenPresence;
+      expect(findWatchedEntry(hiddenEvent)?.watchedSessions).toBeUndefined();
+
+      const redeclaredPresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
+      });
+      await rpcReq(watchedWs, "sessions.viewers.set", { sessionKeys: [replacementKey] });
+      await redeclaredPresence;
+
+      const disconnectPresence = onceMessage(observerWs, (message) => {
+        const entry = findWatchedEntry(message);
+        return entry?.reason === "disconnect" && entry.watchedSessions === undefined;
+      });
+      watchedWs.close();
+      const disconnectedEvent = await disconnectPresence;
+      const hiddenPresenceVersion = hiddenEvent.stateVersion?.presence;
+      expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
+        typeof hiddenPresenceVersion === "number" ? hiddenPresenceVersion : 0,
+      );
+    } finally {
+      observerWs.close();
+      watchedWs.close();
+    }
+  });
+
+  test("enforces session-scoped chat delivery on real gateway connections", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        other: { sessionId: "sess-other", updatedAt: Date.now() },
+      },
+      storePath,
+    });
+    const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const copilotClient = {
+      id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+      version: "test",
+      platform: "chrome",
+      deviceFamily: "extension",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const copilotIdentityPath = path.join(path.dirname(storePath), "copilot-device.json");
+    const unpairedWs = await harness.openWs({ origin: copilotOrigin });
+    const pairingWs = await harness.openWs({ origin: copilotOrigin });
+    const wrongOriginWs = await harness.openWs({
+      origin: "chrome-extension://bcdefghijklmnopabcdefghijklmnopa",
+    });
+    const mainWs = await harness.openWs({ origin: copilotOrigin });
+    const otherWs = await harness.openWs();
+    const legacyWs = await harness.openWs();
+    try {
+      const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+      const unpaired = await connectReq(unpairedWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: path.join(path.dirname(storePath), "unpaired-copilot-device.json"),
+        prePairDevice: false,
+      });
+      expect(unpaired.ok).toBe(false);
+      expect(unpaired.error?.code).toBe("NOT_PAIRED");
+      unpairedWs.close();
+
+      const pairedHello = await connectOk(pairingWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: true,
+        browserOrigin: copilotOrigin,
+      });
+      const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
+      expect(deviceToken).toBeTruthy();
+      pairingWs.close();
+      const wrongOrigin = await connectReq(wrongOriginWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        deviceToken,
+        skipDefaultAuth: true,
+      });
+      expect(wrongOrigin.ok).toBe(false);
+      expect(wrongOrigin.error?.code).toBe("NOT_PAIRED");
+      expect(wrongOrigin.error?.message).toContain("dedicated paired device identity");
+      wrongOriginWs.close();
+
+      await connectOk(mainWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        deviceToken,
+        skipDefaultAuth: true,
+      });
+      await connectOk(otherWs, { scopes: ["operator.read"], caps: scopedCaps });
+      await connectOk(legacyWs, { scopes: ["operator.read"] });
+      await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
+      await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+
+      const mainEvent = onceMessage(
+        mainWs,
+        (message) =>
+          message.type === "event" &&
+          message.event === "chat" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+      const legacyEvent = onceMessage(
+        legacyWs,
+        (message) =>
+          message.type === "event" &&
+          message.event === "chat" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+      const otherReceived = onceMessage(
+        otherWs,
+        (message) => message.type === "event" && message.event === "chat",
+        300,
+      ).then(
+        () => true,
+        () => false,
+      );
+
+      const send = await rpcReq(mainWs, "chat.send", {
+        sessionKey: "main",
+        message: "/status",
+        toolBindings: {
+          browser: {
+            kind: "tab",
+            tabId: 7,
+            target: "host",
+            profile: "chrome",
+            targetId: "target-7",
+          },
+        },
+        idempotencyKey: "scoped-delivery-proof",
+      });
+      expect(send.ok, JSON.stringify(send)).toBe(true);
+      await expect(Promise.all([mainEvent, legacyEvent])).resolves.toHaveLength(2);
+      await expect(otherReceived).resolves.toBe(false);
+    } finally {
+      unpairedWs.close();
+      pairingWs.close();
+      wrongOriginWs.close();
+      mainWs.close();
+      otherWs.close();
+      legacyWs.close();
+    }
+  });
+
+  test("rejects client identity changes across a dedicated copilot pairing", async () => {
+    const storePath = await createSessionStoreFile();
+    const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const identityPath = path.join(path.dirname(storePath), "other-client-device.json");
+    const copilotIdentityPath = path.join(path.dirname(storePath), "copilot-paired-device.json");
+    const controlWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const copilotWs = await harness.openWs({
+      origin: copilotOrigin,
+    });
+    const pairingWs = await harness.openWs({
+      origin: copilotOrigin,
+    });
+    const downgradeWs = await harness.openWs();
+    const wrongModeWs = await harness.openWs({
+      origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    });
+    const webOriginWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const missingCapsWs = await harness.openWs({
+      origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    });
+    try {
+      const clientBase = {
+        version: "test",
+        platform: "chrome",
+        deviceFamily: "extension",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      };
+      const wrongMode = await connectReq(wrongModeWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          ...clientBase,
+          id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "wrong-mode-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(wrongMode.ok).toBe(false);
+      expect(wrongMode.error?.message).toContain("requires ui mode");
+      wrongModeWs.close();
+
+      const missingCaps = await connectReq(missingCapsWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: path.join(path.dirname(storePath), "missing-caps-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(missingCaps.ok).toBe(false);
+      expect(missingCaps.error?.message).toContain("session-scoped-events");
+      missingCapsWs.close();
+
+      const webOrigin = await connectReq(webOriginWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: path.join(path.dirname(storePath), "web-origin-device.json"),
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(webOrigin.ok).toBe(false);
+      expect(webOrigin.error?.message).toContain("canonical Chrome extension origin");
+      webOriginWs.close();
+
+      await connectOk(controlWs, {
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.CONTROL_UI },
+        deviceIdentityPath: identityPath,
+        prePairDevice: true,
+        scopes: ["operator.read", "operator.write"],
+      });
+      controlWs.close();
+
+      const response = await connectReq(copilotWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: identityPath,
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("NOT_PAIRED");
+      expect(response.error?.message).toContain("dedicated paired device identity");
+
+      await connectOk(pairingWs, {
+        caps: [GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: { ...clientBase, id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT },
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: true,
+        browserOrigin: copilotOrigin,
+        scopes: ["operator.read", "operator.write"],
+      });
+      pairingWs.close();
+
+      const downgrade = await connectReq(downgradeWs, {
+        client: {
+          ...clientBase,
+          id: GATEWAY_CLIENT_IDS.TEST,
+          mode: GATEWAY_CLIENT_MODES.TEST,
+        },
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: false,
+        scopes: ["operator.read", "operator.write"],
+      });
+      expect(downgrade.ok).toBe(false);
+      expect(downgrade.error?.code).toBe("NOT_PAIRED");
+      expect(downgrade.error?.message).toContain("dedicated paired device identity");
+    } finally {
+      controlWs.close();
+      copilotWs.close();
+      pairingWs.close();
+      downgradeWs.close();
+      wrongModeWs.close();
+      webOriginWs.close();
+      missingCapsWs.close();
+    }
+  });
+
+  test("broadcasts a recovered subagent terminal session to a subscribed gateway exactly once", async () => {
+    const storePath = await createSessionStoreFile();
+    const entry: SubagentRunRecord = {
+      runId: "run-recovered-subscriber",
+      childSessionKey: "agent:main:subagent:recovered-subscriber",
+      requesterSessionKey: "agent:main:parent",
+      requesterDisplayKey: "parent",
+      task: "finish recovered child work",
+      cleanup: "keep",
+      createdAt: 1_000,
+      execution: { status: "running", startedAt: 2_000 },
+    };
+    await writeSessionStore({
+      entries: {
+        [entry.childSessionKey]: {
+          sessionId: "sess-recovered-subscriber",
+          spawnedBy: entry.requesterSessionKey,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    const controller = createSubagentRegistryLifecycleController({
+      runs: new Map([[entry.runId, entry]]),
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      getRuntimeConfig: () => ({}),
+      persist: vi.fn(),
+      persistOrThrow: vi.fn(),
+      clearPendingLifecycleError: vi.fn(),
+      countPendingDescendantRuns: () => 0,
+      suppressAnnounceForSteerRestart: () => false,
+      resolveSubagentTask: () => ({ lookup: "available" }),
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun: vi.fn(async () => {}),
+      emitSubagentProgressEndedForRun,
+      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+      retireSupersededRun: vi.fn(async () => {}),
+      resumeSubagentRun: vi.fn(),
+      callGateway: async <T = Record<string, unknown>>() => ({}) as T,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+      runSubagentAnnounceFlow: vi.fn(async () => false),
+      maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
+      warn: vi.fn(),
+    });
+    const completion = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error" as const, error: "restart interrupted run" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+      recoverInterrupted: true,
+    } satisfies Parameters<typeof controller.completeSubagentRun>[0];
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const waitForRecoveredTerminal = (timeoutMs?: number) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "sessions.changed" &&
+            (message.payload as { sessionKey?: string; reason?: string } | undefined)
+              ?.sessionKey === entry.childSessionKey &&
+            (message.payload as { reason?: string } | undefined)?.reason === "subagent-status",
+          timeoutMs,
+        );
+      const changedEvent = waitForRecoveredTerminal();
+
+      await controller.completeSubagentRun(completion);
+
+      const event = await changedEvent;
+      expectRecordFields(event.payload, {
+        sessionKey: entry.childSessionKey,
+        reason: "subagent-status",
+        status: "failed",
+        endedAt: completion.endedAt,
+        spawnedBy: entry.requesterSessionKey,
+      });
+      expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
+
+      // A resumed callback must not publish a second terminal event to an
+      // already-subscribed Control UI client for the same child generation.
+      await expectNoMessageWithin({
+        action: () => controller.completeSubagentRun(completion),
+        watch: waitForRecoveredTerminal,
+      });
+      expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(entry);
+    });
+  });
+
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
@@ -288,6 +796,465 @@ describe("session.message websocket events", () => {
     }
   });
 
+  test("keeps web and TUI subscribers on the same authoritative session transcript", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-web-tui-shared";
+    const sessionKey = "agent:main:web-tui-shared";
+    await writeSessionStore({
+      entries: { "web-tui-shared": { sessionId, updatedAt: Date.now() } },
+      storePath,
+    });
+
+    const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const tuiWs = await harness.openWs();
+    let reconnectedTuiWs: Awaited<ReturnType<typeof harness.openWs>> | undefined;
+    try {
+      await connectOk(webWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.UI,
+          platform: "web",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "shared-web-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(tuiWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TUI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          platform: "test",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "shared-tui-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      for (const ws of [webWs, tuiWs]) {
+        const subscription = await rpcReq(ws, "sessions.messages.subscribe", {
+          key: sessionKey,
+        });
+        expect(subscription.ok).toBe(true);
+      }
+
+      const sharedMessages = [
+        "Sent from the web.",
+        "Sent from the TUI.",
+        ...Array.from({ length: 30 }, (_, index) => `Shared burst message ${index + 1}.`),
+      ];
+      for (const [index, text] of sharedMessages.entries()) {
+        const messageId = `shared-turn-${index + 1}`;
+        const deliveries = [webWs, tuiWs].map((ws) =>
+          onceMessage(
+            ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "session.message" &&
+              (frame.payload as { messageId?: string } | undefined)?.messageId === messageId,
+          ),
+        );
+        const persisted = await persistSessionTranscriptTurn(
+          { agentId: "main", sessionId, sessionKey, storePath },
+          {
+            messages: [
+              {
+                eventId: messageId,
+                message: {
+                  content: [{ type: "text", text }],
+                  idempotencyKey: `${messageId}:user`,
+                  role: "user",
+                  timestamp: Date.now(),
+                },
+              },
+            ],
+          },
+        );
+        expect(persisted.appendedCount).toBe(1);
+        for (const delivery of await Promise.all(deliveries)) {
+          expectRecordFields(delivery.payload, {
+            messageId,
+            messageSeq: index + 1,
+            sessionKey,
+          });
+          expect(requireRecord(delivery.payload, "shared session event").message).toMatchObject({
+            __openclaw: {
+              id: messageId,
+              idempotencyKey: `${messageId}:user`,
+              seq: index + 1,
+            },
+            content: [{ type: "text", text }],
+            role: "user",
+          });
+        }
+      }
+
+      tuiWs.close();
+      reconnectedTuiWs = await harness.openWs();
+      await connectOk(reconnectedTuiWs, { scopes: ["operator.read"] });
+      const history = await rpcReq(reconnectedTuiWs, "chat.history", { sessionKey });
+      expect(history.ok).toBe(true);
+      expect((history.payload as { messages?: unknown[] }).messages).toMatchObject(
+        sharedMessages.map((text) => ({
+          content: [{ type: "text", text }],
+          role: "user",
+        })),
+      );
+    } finally {
+      webWs.close();
+      tuiWs.close();
+      reconnectedTuiWs?.close();
+    }
+  });
+
+  test("delivers every message from one committed turn to web and TUI in transcript order", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-web-tui-committed-turn";
+    const sessionKey = "agent:main:web-tui-committed-turn";
+    await writeSessionStore({
+      entries: { "web-tui-committed-turn": { sessionId, updatedAt: Date.now() } },
+      storePath,
+    });
+
+    const earlierMessage = {
+      id: "committed-existing-turn",
+      text: "An existing message establishes the active-branch sequence.",
+    };
+    const seeded = await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [
+          {
+            eventId: earlierMessage.id,
+            message: {
+              content: [{ type: "text", text: earlierMessage.text }],
+              idempotencyKey: `${earlierMessage.id}:user`,
+              role: "user",
+              timestamp: 1_699_999_999_999,
+            },
+          },
+        ],
+      },
+    );
+    expect(seeded.appendedCount).toBe(1);
+
+    const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const tuiWs = await harness.openWs();
+    const committedMessages = [
+      { id: "committed-web-turn", text: "The same prompt from either client." },
+      { id: "committed-tui-turn", text: "The same prompt from either client." },
+      { id: "committed-final-turn", text: "The third message in the same transaction." },
+    ];
+
+    try {
+      await connectOk(webWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.UI,
+          platform: "web",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "committed-web-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(tuiWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TUI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          platform: "test",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "committed-tui-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      for (const ws of [webWs, tuiWs]) {
+        const subscription = await rpcReq(ws, "sessions.messages.subscribe", {
+          key: sessionKey,
+        });
+        expect(subscription.ok).toBe(true);
+      }
+
+      const observedByClient: Array<
+        Array<{ messageId: unknown; messageSeq: unknown; sessionKey: unknown }>
+      > = [[], []];
+      for (const [clientIndex, ws] of [webWs, tuiWs].entries()) {
+        const observed = observedByClient[clientIndex];
+        if (!observed) {
+          throw new Error(`missing committed-turn observer for client ${clientIndex}`);
+        }
+        ws.on("message", (data: RawData) => {
+          const frame = JSON.parse(rawDataToString(data)) as {
+            event?: string;
+            payload?: { messageId?: unknown; messageSeq?: unknown; sessionKey?: unknown };
+            type?: string;
+          };
+          if (
+            frame.type === "event" &&
+            frame.event === "session.message" &&
+            frame.payload?.sessionKey === sessionKey
+          ) {
+            observed.push({
+              messageId: frame.payload.messageId,
+              messageSeq: frame.payload.messageSeq,
+              sessionKey: frame.payload.sessionKey,
+            });
+          }
+        });
+      }
+
+      // Install every real socket listener before the one SQLite commit can broadcast.
+      const deliveriesByClient = [webWs, tuiWs].map((ws) =>
+        committedMessages.map(({ id }) =>
+          onceMessage(
+            ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "session.message" &&
+              (frame.payload as { messageId?: string } | undefined)?.messageId === id,
+          ),
+        ),
+      );
+      const committedTurn = {
+        messages: committedMessages.map(({ id, text }, index) => ({
+          eventId: id,
+          message: {
+            content: [{ type: "text", text }],
+            idempotencyKey: `${id}:user`,
+            role: "user",
+            timestamp: 1_700_000_000_000 + index,
+          },
+        })),
+      };
+      const persisted = await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        committedTurn,
+      );
+      expect(persisted.appendedCount).toBe(committedMessages.length);
+
+      for (const [clientIndex, clientDeliveries] of deliveriesByClient.entries()) {
+        const frames = await Promise.all(clientDeliveries);
+        expect(observedByClient[clientIndex]).toEqual(
+          committedMessages.map(({ id }, index) => ({
+            messageId: id,
+            messageSeq: index + 2,
+            sessionKey,
+          })),
+        );
+        expect(
+          frames.map((frame) => {
+            const payload = requireRecord(frame.payload, "committed session event");
+            return {
+              messageId: payload.messageId,
+              messageSeq: payload.messageSeq,
+              sessionKey: payload.sessionKey,
+            };
+          }),
+        ).toEqual(
+          committedMessages.map(({ id }, index) => ({
+            messageId: id,
+            messageSeq: index + 2,
+            sessionKey,
+          })),
+        );
+        for (const [index, frame] of frames.entries()) {
+          const expected = committedMessages[index];
+          if (!expected) {
+            throw new Error(`unexpected committed-turn delivery at index ${index}`);
+          }
+          expect(requireRecord(frame.payload, "committed session event").message).toMatchObject({
+            __openclaw: {
+              id: expected.id,
+              idempotencyKey: `${expected.id}:user`,
+              seq: index + 2,
+            },
+            content: [{ type: "text", text: expected.text }],
+            role: "user",
+          });
+        }
+      }
+
+      const history = await rpcReq(tuiWs, "chat.history", { sessionKey });
+      expect(history.ok).toBe(true);
+      expect((history.payload as { messages?: unknown[] }).messages).toMatchObject(
+        [earlierMessage, ...committedMessages].map(({ id, text }, index) => ({
+          __openclaw: { id, idempotencyKey: `${id}:user`, seq: index + 1 },
+          content: [{ type: "text", text }],
+          role: "user",
+        })),
+      );
+
+      const duplicateDeliveries = [webWs, tuiWs].map((ws) =>
+        onceMessage(
+          ws,
+          (frame) =>
+            frame.type === "event" &&
+            frame.event === "session.message" &&
+            (frame.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+          300,
+        ).then(
+          () => true,
+          () => false,
+        ),
+      );
+      const replayed = await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        committedTurn,
+      );
+      expect(replayed.appendedCount).toBe(0);
+      await expect(Promise.all(duplicateDeliveries)).resolves.toEqual([false, false]);
+    } finally {
+      webWs.close();
+      tuiWs.close();
+    }
+  });
+
+  test("invalidates the selected web and TUI transcript once for an identity-only committed turn", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-web-tui-identity-only";
+    const sessionKey = "agent:main:web-tui-identity-only";
+    const lifecycleRevision = "identity-only-committed-revision";
+    await writeSessionStore({
+      entries: {
+        "web-tui-identity-only": { sessionId, lifecycleRevision, updatedAt: Date.now() },
+        "web-tui-wrong-session": {
+          sessionId: "sess-web-tui-wrong-session",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
+    const tuiWs = await harness.openWs();
+    const wrongSessionWs = await harness.openWs();
+    try {
+      await connectOk(webWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.UI,
+          platform: "web",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "identity-only-web-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(tuiWs, {
+        caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
+        client: {
+          id: GATEWAY_CLIENT_IDS.TUI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          platform: "test",
+          version: "test",
+        },
+        deviceIdentityPath: path.join(path.dirname(storePath), "identity-only-tui-device.json"),
+        prePairDevice: true,
+        scopes: ["operator.read"],
+      });
+      await connectOk(wrongSessionWs, { scopes: ["operator.read"] });
+      for (const ws of [webWs, tuiWs]) {
+        const subscription = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+        expect(subscription.ok).toBe(true);
+      }
+      const wrongSubscription = await rpcReq(wrongSessionWs, "sessions.messages.subscribe", {
+        key: "agent:main:web-tui-wrong-session",
+      });
+      expect(wrongSubscription.ok).toBe(true);
+
+      await withOperatorSessionSubscriber(async (broadWs) => {
+        const observers = [webWs, tuiWs, broadWs];
+        const observedInvalidations: Array<Array<Record<string, unknown>>> = observers.map(
+          () => [],
+        );
+        for (const [index, ws] of observers.entries()) {
+          const observed = observedInvalidations[index];
+          if (!observed) {
+            throw new Error(`missing identity-only transcript observer ${index}`);
+          }
+          ws.on("message", (data: RawData) => {
+            const frame = JSON.parse(rawDataToString(data)) as {
+              event?: string;
+              payload?: Record<string, unknown>;
+              type?: string;
+            };
+            if (
+              frame.type === "event" &&
+              frame.event === "sessions.changed" &&
+              frame.payload?.phase === "message" &&
+              frame.payload.sessionKey === sessionKey
+            ) {
+              observed.push(frame.payload);
+            }
+          });
+        }
+
+        const invalidations = observers.map((ws) =>
+          waitForSessionsChangedMessagePhase(ws, sessionKey),
+        );
+        const unexpectedFrames = [webWs, tuiWs, wrongSessionWs].map((ws) =>
+          onceMessage(
+            ws,
+            (frame) =>
+              frame.type === "event" &&
+              (frame.event === "session.message" ||
+                (ws === wrongSessionWs && frame.event === "sessions.changed")) &&
+              (frame.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+            300,
+          ).then(
+            () => true,
+            () => false,
+          ),
+        );
+
+        const committed = await persistSessionTranscriptTurn(
+          { agentId: "main", sessionId, sessionKey, storePath },
+          {
+            messages: ["first", "second"].map((name, index) => ({
+              eventId: `identity-only-${name}`,
+              message: {
+                content: [{ type: "text", text: `Identity-only committed message ${index + 1}.` }],
+                idempotencyKey: `identity-only-${name}:user`,
+                role: "user",
+                timestamp: 1_700_000_000_000 + index,
+              },
+            })),
+            updateMode: "file-only",
+          },
+        );
+        expect(committed.appendedCount).toBe(2);
+
+        for (const frame of await Promise.all(invalidations)) {
+          const payload = requireRecord(frame.payload, "identity-only transcript invalidation");
+          expect(payload).toMatchObject({ phase: "message", sessionKey });
+          for (const privateField of [
+            "lifecycleRevision",
+            "message",
+            "messageId",
+            "messageSeq",
+            "storePath",
+          ]) {
+            expect(payload).not.toHaveProperty(privateField);
+          }
+          expect(JSON.stringify(payload)).not.toContain(storePath);
+          expect(JSON.stringify(payload)).not.toContain(lifecycleRevision);
+        }
+        await expect(Promise.all(unexpectedFrames)).resolves.toEqual([false, false, false]);
+        expect(observedInvalidations.map((frames) => frames.length)).toEqual([1, 1, 1]);
+      });
+    } finally {
+      webWs.close();
+      tuiWs.close();
+      wrongSessionWs.close();
+    }
+  });
+
   test("broadcasts appended transcript messages with the session key", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
@@ -312,15 +1279,32 @@ describe("session.message websocket events", () => {
         throw new Error(`append failed: ${appended.reason}`);
       }
       const emitParams = requireRecord(emitSpy.mock.calls.at(0)?.[0], "transcript update params");
-      expect(emitParams.sessionFile).toBe(appended.sessionFile);
       expect(emitParams.sessionKey).toBe("agent:main:main");
+      expect(emitParams.target).toMatchObject({
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+      });
       expect(emitParams.messageId).toBe(appended.messageId);
       expectRecordFields(emitParams.message, {
         role: "assistant",
         content: [{ type: "text", text: "live websocket message" }],
       });
-      const transcript = await fs.readFile(appended.sessionFile, "utf-8");
-      expect(transcript).toContain('"live websocket message"');
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        }),
+      ).resolves.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "live websocket message" }],
+          }),
+          type: "message",
+        }),
+      );
     } finally {
       emitSpy.mockRestore();
     }
@@ -520,6 +1504,44 @@ describe("session.message websocket events", () => {
     });
   });
 
+  test("broadcasts identity-only transcript updates to live session listeners", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitSessionTranscriptUpdate({
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+        },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "identity frame" }],
+          timestamp: Date.now(),
+        },
+        messageId: "msg-identity-frame",
+        messageSeq: 1,
+      });
+
+      const messageEvent = await messageEventPromise;
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-identity-frame",
+        messageSeq: 1,
+      });
+    });
+  });
+
   test("includes live usage metadata on session.message transcript events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
@@ -536,7 +1558,6 @@ describe("session.message websocket events", () => {
       },
       storePath,
     });
-    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "usage snapshot" }],
@@ -551,20 +1572,24 @@ describe("session.message websocket events", () => {
       },
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-usage", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+    await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: transcriptPath,
+        sessionFile: "agent:main:main",
         message: transcriptMessage,
         messageId: "msg-usage",
       });
@@ -620,12 +1645,10 @@ describe("session.message websocket events", () => {
 
   test("derives message sequence for selected-session transcript subscribers", async () => {
     const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "selected-session.jsonl");
     await writeSessionStore({
       entries: {
         main: {
           sessionId: "sess-main",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
       },
@@ -636,13 +1659,17 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-selected", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+    await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
     );
 
     const ws = await harness.openWs();
@@ -656,8 +1683,12 @@ describe("session.message websocket events", () => {
 
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        sessionKey: "agent:main:main",
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
         message: transcriptMessage,
         messageId: "msg-selected",
       });
@@ -1147,50 +2178,219 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript path", async () => {
+  test("streams worker commits and local-equivalent live events to the selected session", async () => {
     const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "shared.jsonl");
+    const sessionId = "sess-worker-commit-fanout";
+    const sessionKey = "agent:main:worker";
+    await writeSessionStore({
+      entries: {
+        worker: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { mainKey: "main", store: storePath },
+    };
+    const ledger: WorkerTranscriptCommitStore = {
+      begin: () => ({ kind: "claimed" }),
+      complete: ({ outcome }) => outcome,
+    };
+    const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
+    const identity: WorkerConnectionIdentity = {
+      environmentId: "environment-fanout",
+      credentialHash: ["fanout", "credential", "hash"].join("-"),
+      bundleHash: "f".repeat(64),
+      sessionId,
+      runId: "run-fanout",
+      ownerEpoch: 4,
+      rpcSetVersion: 1,
+      protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
+      credentialExpiresAtMs: Date.now() + 10_000,
+    };
+    const receiver = createWorkerLiveEventReceiver({
+      getConfig: () => config,
+      startupBindings: [{ environmentId: identity.environmentId, runEpoch: 4, sessionId }],
+      startupOwners: new Map([[identity.environmentId, 4]]),
+    });
+    const ws = await harness.openWs();
+    const workerChats: Record<string, unknown>[] = [];
+    const collectWorkerChats = (data: RawData) => {
+      const message = JSON.parse(rawDataToString(data)) as {
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown>;
+      };
+      if (
+        message.type === "event" &&
+        message.event === "chat" &&
+        message.payload?.runId === "worker"
+      ) {
+        workerChats.push(message.payload);
+      }
+    };
+    ws.on("message", collectWorkerChats);
+    try {
+      await connectOk(ws, { scopes: ["operator.read"] });
+      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+      expect(subscribeRes.ok).toBe(true);
+      expect(subscribeRes.payload?.subscribed).toBe(true);
+      expect(subscribeRes.payload?.key).toBe(sessionKey);
+
+      const eventPromises = [1, 2, 3].map((messageSeq) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: unknown } | undefined)?.sessionKey === sessionKey &&
+            (message.payload as { messageSeq?: unknown } | undefined)?.messageSeq === messageSeq,
+        ),
+      );
+      const outcome = await committer.commit({
+        identity,
+        request: {
+          runEpoch: identity.ownerEpoch,
+          seq: 1,
+          baseLeafId: null,
+          messages: ["first", "second", "third"].map((text, index) => ({
+            role: "user" as const,
+            content: [{ type: "text" as const, text }],
+            timestamp: 100 + index,
+          })),
+        },
+      });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        throw new Error(`expected worker transcript commit, received ${outcome.reason}`);
+      }
+      const events = await Promise.all(eventPromises);
+      const payloads = events.map((event) =>
+        requireRecord(event.payload, "session.message payload"),
+      );
+      expect(payloads.map((payload) => payload.messageId)).toEqual(outcome.result.entryIds);
+      expect(payloads.map((payload) => payload.messageSeq)).toEqual([1, 2, 3]);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").id;
+        }),
+      ).toEqual(outcome.result.entryIds);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").seq;
+        }),
+      ).toEqual([1, 2, 3]);
+
+      const waitForChat = (runId: string, timeoutMs?: number) =>
+        onceMessage(
+          ws,
+          ({ type, event, payload }) =>
+            type === "event" &&
+            event === "chat" &&
+            (payload as Record<string, unknown>).runId === runId,
+          timeoutMs,
+        );
+      const liveEvent = {
+        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
+        lastAckedSeq: 0,
+        seq: 1,
+      } as const;
+      const push = (runEpoch = 4, runId = "worker") =>
+        receiver.apply({ identity, request: { ...liveEvent, runEpoch, runId } });
+      const [workerEvent] = await Promise.all([
+        waitForChat("worker"),
+        expectNoMessageWithin({
+          watch: (timeoutMs) => waitForSessionMessageEvent(ws, sessionKey, timeoutMs),
+          action: () => expect(push().ok).toBe(true),
+        }),
+      ]);
+      const workerChat = requireRecord(workerEvent.payload, "worker chat");
+      await expectNoMessageWithin({
+        watch: (timeoutMs) => waitForChat("worker", timeoutMs),
+        action: () => {
+          expect(push()).toEqual({ ok: true, result: { ackedSeq: 1 } });
+        },
+      });
+      expect(workerChats).toHaveLength(1);
+
+      claimAgentRunContext("local", {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        isControlUiVisible: false,
+      });
+      const localEvent = waitForChat("local");
+      emitAgentEvent({
+        runId: "local",
+        stream: "assistant",
+        data: { text: "hello", delta: "hello" },
+      });
+      const localChat = requireRecord((await localEvent).payload, "local chat");
+      for (const payload of [workerChat, localChat]) {
+        payload.runId = "normalized";
+        requireRecord(payload.message, "chat message").timestamp = 0;
+      }
+      expect(workerChat).toEqual(localChat);
+      await expectNoMessageWithin({
+        watch: (timeoutMs) => waitForChat("stale", timeoutMs),
+        action: () => expect(push(3, "stale").ok).toBe(false),
+      });
+    } finally {
+      receiver.clear();
+      clearAgentRunContext("local");
+      ws.off("message", collectWorkerChats);
+      ws.close();
+    }
+  });
+
+  test("routes transcript-only SQLite marker updates to the matching session owner", async () => {
+    const storePath = await createSessionStoreFile();
     await writeSessionStore({
       entries: {
         older: {
           sessionId: "sess-old",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
         newer: {
           sessionId: "sess-new",
-          sessionFile: transcriptPath,
           updatedAt: Date.now() + 10,
         },
       },
       storePath,
     });
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-new" }),
-        JSON.stringify({
-          id: "msg-shared",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "shared transcript update" }],
-            timestamp: Date.now(),
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "shared transcript update" }],
+      timestamp: Date.now(),
+    };
+    await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-new",
+        sessionKey: "agent:main:newer",
+        storePath,
+      },
+      {
+        messages: [{ message }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "shared transcript update" }],
-          timestamp: Date.now(),
-        },
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "sess-new",
+          storePath,
+        }),
+        message,
         messageId: "msg-shared",
       });
 
@@ -1203,3 +2403,4 @@ describe("session.message websocket events", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

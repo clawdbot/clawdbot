@@ -5,7 +5,7 @@
 
 import { Text } from "@earendil-works/pi-tui";
 
-export interface VisualTruncateResult {
+interface VisualTruncateResult {
   /** The visual lines to display */
   visualLines: string[];
   /** Number of visual lines that were skipped (hidden) */

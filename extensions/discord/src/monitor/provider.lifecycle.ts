@@ -1,12 +1,12 @@
 // Discord provider module implements model/runtime integration.
-import {
-  createConnectedChannelStatusPatch,
-  createTransportActivityStatusPatch,
-} from "openclaw/plugin-sdk/gateway-runtime";
+import { createTransportActivityStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
+import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
+import { GatewayCloseCodes } from "../internal/gateway.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
 import {
@@ -19,7 +19,7 @@ import {
   type DiscordGatewayEvent,
   type DiscordGatewaySupervisor,
 } from "./gateway-supervisor.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
+import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
 
 const DEFAULT_DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS = 30_000;
@@ -42,23 +42,15 @@ function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
   return Math.min(numeric, MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
 }
 
-export function resolveDiscordGatewayReadyTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
+function resolveDiscordGatewayReadyTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
   return (
-    normalizeGatewayReadyTimeoutMs(params?.configuredTimeoutMs) ??
     normalizeGatewayReadyTimeoutMs(params?.env?.[DISCORD_GATEWAY_READY_TIMEOUT_ENV]) ??
     DEFAULT_DISCORD_GATEWAY_READY_TIMEOUT_MS
   );
 }
 
-export function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: {
-  configuredTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): number {
+function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
   return (
-    normalizeGatewayReadyTimeoutMs(params?.configuredTimeoutMs) ??
     normalizeGatewayReadyTimeoutMs(params?.env?.[DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_ENV]) ??
     DEFAULT_DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS
   );
@@ -221,11 +213,7 @@ function createGatewayStatusObserver(params: {
     queuedForceStopError = err;
   };
   const pushConnectedStatus = (at: number) => {
-    params.pushStatus({
-      ...createConnectedChannelStatusPatch(at),
-      lastDisconnect: null,
-      lastError: null,
-    });
+    params.pushStatus(createDiscordReadyStatusPatch(at));
   };
   const startReadyWatch = () => {
     clearReadyWatch();
@@ -256,6 +244,7 @@ function createGatewayStatusObserver(params: {
         );
         params.pushStatus({
           connected: false,
+          lifecycle: "recovering",
           lastEventAt: at,
           lastDisconnect: {
             at,
@@ -284,8 +273,14 @@ function createGatewayStatusObserver(params: {
     if (message.includes("Gateway websocket closed")) {
       clearReadyWatch();
       const code = parseGatewayCloseCode(message);
+      // Fatal gateway closes require operator repair. Keep the outer channel supervisor from
+      // turning an invalid credential or configuration into an automatic restart loop.
+      const terminalDisconnect =
+        code !== undefined && isFatalGatewayCloseCode(code as GatewayCloseCodes);
       params.pushStatus({
         connected: false,
+        lifecycle: terminalDisconnect ? "blocked" : "recovering",
+        ...(terminalDisconnect ? { terminalDisconnect: true, lastError: message } : {}),
         lastEventAt: at,
         lastDisconnect: {
           at,
@@ -298,6 +293,7 @@ function createGatewayStatusObserver(params: {
       clearReadyWatch();
       params.pushStatus({
         connected: false,
+        lifecycle: "recovering",
         lastEventAt: at,
         lastError: message,
       });
@@ -340,11 +336,7 @@ async function waitForGatewayReady(params: {
       }
       if (params.gateway?.isConnected === true) {
         const at = Date.now();
-        params.pushStatus?.({
-          ...createConnectedChannelStatusPatch(at),
-          lastDisconnect: null,
-          lastError: null,
-        });
+        params.pushStatus?.(createDiscordReadyStatusPatch(at));
         return "ready";
       }
       if (Date.now() >= deadlineAt) {
@@ -382,6 +374,7 @@ async function waitForGatewayReady(params: {
     );
     params.pushStatus?.({
       connected: false,
+      lifecycle: "recovering",
       lastEventAt: restartAt,
       lastDisconnect: {
         at: restartAt,
@@ -398,10 +391,14 @@ async function waitForGatewayReady(params: {
     if (params.abortSignal?.aborted) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS);
-      timeout.unref?.();
-    });
+    try {
+      await sleepWithAbort(DISCORD_GATEWAY_READY_RETRY_BACKOFF_MS, params.abortSignal, {
+        ref: false,
+      });
+    } catch {
+      // Abort is normal lifecycle shutdown; do not enter another reconnect attempt.
+      return;
+    }
   }
 }
 
@@ -416,10 +413,9 @@ export async function runDiscordGatewayLifecycle(params: {
   threadBindings: { stop: () => void };
   gatewaySupervisor: DiscordGatewaySupervisor;
   statusSink?: DiscordMonitorStatusSink;
-  gatewayReadyTimeoutMs?: number;
-  gatewayRuntimeReadyTimeoutMs?: number;
 }) {
   const gateway = params.gateway;
+  const gatewayReadyAtLifecycleStart = gateway?.isConnected === true;
   if (gateway) {
     registerGateway(params.accountId, gateway);
   }
@@ -434,11 +430,9 @@ export async function runDiscordGatewayLifecycle(params: {
     params.statusSink?.(patch);
   };
   const gatewayReadyTimeoutMs = resolveDiscordGatewayReadyTimeoutMs({
-    configuredTimeoutMs: params.gatewayReadyTimeoutMs,
     env: process.env,
   });
   const gatewayRuntimeReadyTimeoutMs = resolveDiscordGatewayRuntimeReadyTimeoutMs({
-    configuredTimeoutMs: params.gatewayRuntimeReadyTimeoutMs,
     env: process.env,
   });
   const statusObserver = createGatewayStatusObserver({
@@ -515,6 +509,18 @@ export async function runDiscordGatewayLifecycle(params: {
       return;
     }
 
+    if (gatewayReadyAtLifecycleStart && params.voiceManager) {
+      // READY may precede lazy voice-listener registration. Reconcile only after lifecycle
+      // ownership begins so every startup failure still destroys the manager in `finally`.
+      void params.voiceManager
+        .autoJoin()
+        .catch((err: unknown) =>
+          params.runtime.error?.(
+            danger(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
+          ),
+        );
+    }
+
     await waitForGatewayReady({
       gateway,
       abortSignal: params.abortSignal,
@@ -567,3 +573,7 @@ export async function runDiscordGatewayLifecycle(params: {
     params.threadBindings.stop();
   }
 }
+
+// Test-only surface. Re-exported from the plugin root `test-api.ts` entry so Knip's
+// production scan sees the consumer; tests import `testing` from `test-api.js`.
+export const testing = { waitForGatewayReady };

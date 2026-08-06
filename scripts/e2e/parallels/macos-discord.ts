@@ -1,12 +1,13 @@
 // Macos Discord script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MacosGuest } from "./guest-transports.ts";
 import { run, say, shellQuote, warn } from "./host-command.ts";
 
-export type DiscordSmokePhase = "fresh" | "upgrade";
+type DiscordSmokePhase = "fresh" | "upgrade";
 
-export interface MacosDiscordConfig {
+interface MacosDiscordConfig {
   channelId: string;
   guildId: string;
   token: string;
@@ -58,7 +59,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
   }
 
   async runRoundtrip(phase: DiscordSmokePhase): Promise<void> {
-    const nonce = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const nonce = randomUUID();
     const outboundNonce = `${phase}-out-${nonce}`;
     const inboundNonce = `${phase}-in-${nonce}`;
     const outboundLog = path.join(this.input.runDir, `${phase}.discord-send.json`);
@@ -135,6 +136,10 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
   private async discordApi(method: string, apiPath: string, payload?: unknown): Promise<string> {
     const args = [
       "-fsS",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "30",
       "-X",
       method,
       "-H",
@@ -144,7 +149,8 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
         : ["-H", "Content-Type: application/json", "--data", JSON.stringify(payload)]),
       `https://discord.com/api/v10${apiPath}`,
     ];
-    return run("curl", args, { quiet: true }).stdout;
+    // Keep smoke phase deadlines enforceable even if curl itself fails to terminate promptly.
+    return run("curl", args, { quiet: true, timeoutMs: 45_000 }).stdout;
   }
 
   private async waitForHostVisibility(nonce: string, messageId: string): Promise<void> {

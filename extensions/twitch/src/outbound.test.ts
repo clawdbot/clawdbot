@@ -228,6 +228,40 @@ describe("outbound", () => {
         { capability: "afterCommit", status: "not_declared" },
       ]);
     });
+
+    it("adapts outbound progress into message receipts", async () => {
+      const progress = {
+        channel: "twitch",
+        messageId: "twitch-progress-1",
+        receipt: twitchTestReceipt("twitch-progress-1"),
+      };
+      const sendText = twitchOutbound.sendText;
+      if (!sendText) {
+        throw new Error("Twitch text sending is not available.");
+      }
+      const sendSpy = vi.spyOn(twitchOutbound, "sendText").mockImplementationOnce(async (ctx) => {
+        await ctx.onDeliveryResult?.(progress);
+        return progress;
+      });
+      const onDeliveryResult = vi.fn();
+
+      try {
+        await twitchMessageAdapter.send?.text?.({
+          cfg: mockConfig,
+          to: "#testchannel",
+          text: "Hello Twitch!",
+          accountId: "default",
+          onDeliveryResult,
+        });
+      } finally {
+        sendSpy.mockRestore();
+      }
+
+      expect(onDeliveryResult).toHaveBeenCalledOnce();
+      expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.platformMessageIds).toEqual([
+        "twitch-progress-1",
+      ]);
+    });
   });
 
   describe("resolveTarget", () => {

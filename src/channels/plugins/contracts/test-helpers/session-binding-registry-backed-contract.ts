@@ -7,9 +7,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../../config/config.js";
 import {
   testing as sessionBindingTesting,
-  type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../../infra/outbound/session-binding-service.js";
+import type { SessionBindingCapabilities } from "../../../../infra/outbound/session-binding.types.js";
 import { resetPluginRuntimeStateForTest } from "../../../../plugins/runtime.js";
 import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
 

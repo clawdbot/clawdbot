@@ -11,10 +11,13 @@ export type PluginCapabilityKind =
   | "realtime-voice"
   | "media-understanding"
   | "transcript-source"
+  | "document-extractors"
   | "image-generation"
   | "video-generation"
   | "music-generation"
   | "web-search"
+  | "worker-provider"
+  | "session-catalog"
   | "agent-harness"
   | "context-engine"
   | "channel";
@@ -30,16 +33,16 @@ export type PluginCapabilityEntry = {
   ids: string[];
 };
 
-export type PluginShapeSummary = {
+type PluginShapeSummary = {
   shape: PluginInspectShape;
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;
   capabilities: PluginCapabilityEntry[];
-  usesLegacyBeforeAgentStart: boolean;
 };
 
 function buildPluginCapabilityEntries(
   plugin: PluginRegistry["plugins"][number],
+  report: Pick<PluginRegistry, "sessionCatalogs">,
 ): PluginCapabilityEntry[] {
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
@@ -50,10 +53,18 @@ function buildPluginCapabilityEntries(
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "transcript-source" as const, ids: plugin.transcriptSourceProviderIds },
+    { kind: "document-extractors" as const, ids: plugin.contracts?.documentExtractors ?? [] },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
     { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
+    { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
+    {
+      kind: "session-catalog" as const,
+      ids: report.sessionCatalogs
+        .filter((entry) => entry.pluginId === plugin.id)
+        .map((entry) => entry.provider.id),
+    },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {
       kind: "context-engine" as const,
@@ -101,9 +112,12 @@ function derivePluginInspectShape(params: {
 
 export function buildPluginShapeSummary(params: {
   plugin: PluginRegistry["plugins"][number];
-  report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors">;
+  report: Pick<
+    PluginRegistry,
+    "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors" | "sessionCatalogs"
+  >;
 }): PluginShapeSummary {
-  const capabilities = buildPluginCapabilityEntries(params.plugin);
+  const capabilities = buildPluginCapabilityEntries(params.plugin, params.report);
   const typedHookCount = params.report.typedHooks.filter(
     (entry) => entry.pluginId === params.plugin.id,
   ).length;
@@ -136,8 +150,5 @@ export function buildPluginShapeSummary(params: {
     capabilityMode: capabilityCount === 0 ? "none" : capabilityCount === 1 ? "plain" : "hybrid",
     capabilityCount,
     capabilities,
-    usesLegacyBeforeAgentStart: params.report.typedHooks.some(
-      (entry) => entry.pluginId === params.plugin.id && entry.hookName === "before_agent_start",
-    ),
   };
 }

@@ -34,6 +34,19 @@ describe("acp session manager", () => {
     expect(store.getSessionByRunId("run-1")).toBeUndefined();
   });
 
+  it("removes stale run lookup entries when rebinding an active run", () => {
+    const session = store.createSession({
+      sessionKey: "acp:rebind",
+      cwd: "/tmp",
+    });
+
+    store.setActiveRun(session.sessionId, "run-old", new AbortController());
+    store.setActiveRun(session.sessionId, "run-new", new AbortController());
+
+    expect(store.getSessionByRunId("run-old")).toBeUndefined();
+    expect(store.getSessionByRunId("run-new")?.sessionId).toBe(session.sessionId);
+  });
+
   it("deletes sessions and aborts active runs on close", () => {
     const session = store.createSession({
       sessionId: "close-me",

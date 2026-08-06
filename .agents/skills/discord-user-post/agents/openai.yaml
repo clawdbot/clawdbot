@@ -1,0 +1,4 @@
+interface:
+  display_name: "Discord User Post"
+  short_description: "Post approved messages through the logged-in Discord app"
+  default_prompt: "Post this approved message as me through the logged-in Discord desktop app."

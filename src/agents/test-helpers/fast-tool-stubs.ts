@@ -5,7 +5,7 @@
  */
 import { vi } from "vitest";
 
-export type StubTool = {
+type StubTool = {
   name: string;
   description: string;
   parameters: { type: "object"; properties: Record<string, unknown> };

@@ -6,7 +6,7 @@ import { assertNoImportTimeSideEffects } from "../../plugin-sdk/test-helpers/imp
 const listChannelPlugins = vi.hoisted(() =>
   vi.fn(() => [
     {
-      id: "signal",
+      id: "telegram",
       messaging: {
         defaultMarkdownTableMode: "bullets",
       },
@@ -30,12 +30,25 @@ const HOT_RUNTIME_IMPORT_CASES = [
     "src/plugin-sdk/approval-gateway-runtime.ts",
     () => import("../../plugin-sdk/approval-gateway-runtime.js"),
   ],
+  [
+    "src/plugin-sdk/approval-reference-runtime.ts",
+    () => import("../../plugin-sdk/approval-reference-runtime.js"),
+  ],
   ["src/plugins/runtime/runtime-system.ts", () => import("../runtime/runtime-system.js")],
   ["src/web-search/runtime.ts", () => import("../../web-search/runtime.js")],
   ["src/web-fetch/runtime.ts", () => import("../../web-fetch/runtime.js")],
 ] as const;
 
 function mockChannelRegistry() {
+  vi.doMock("../../channels/plugins/index.js", async () => {
+    const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
+      "../../channels/plugins/index.js",
+    );
+    return {
+      ...actual,
+      normalizeChannelId: (raw?: string | null) => raw ?? null,
+    };
+  });
   vi.doMock("../../channels/plugins/registry.js", async () => {
     const actual = await vi.importActual<typeof import("../../channels/plugins/registry.js")>(
       "../../channels/plugins/registry.js",
@@ -70,6 +83,7 @@ function expectNoChannelRegistryDuringImport(moduleId: string) {
 afterEach(() => {
   vi.resetModules();
   vi.restoreAllMocks();
+  vi.doUnmock("../../channels/plugins/index.js");
   vi.doUnmock("../../channels/plugins/registry.js");
   vi.doUnmock("../../plugins/runtime.js");
 });
@@ -86,10 +100,20 @@ describe("runtime import side-effect contracts", () => {
 
     expectNoChannelRegistryDuringImport("src/config/markdown-tables.ts");
 
-    expect(markdownTables.DEFAULT_TABLE_MODES.get("signal")).toBe("bullets");
+    expect(
+      markdownTables.resolveMarkdownTableMode({
+        channel: "telegram",
+        supportsBlockTables: true,
+      }),
+    ).toBe("bullets");
     expect(getActivePluginChannelRegistryVersion).toHaveBeenCalled();
     expect(listChannelPlugins).toHaveBeenCalledTimes(1);
-    expect(markdownTables.DEFAULT_TABLE_MODES.has("signal")).toBe(true);
+    expect(
+      markdownTables.resolveMarkdownTableMode({
+        channel: "telegram",
+        supportsBlockTables: true,
+      }),
+    ).toBe("bullets");
     expect(getActivePluginChannelRegistryVersion).toHaveBeenCalled();
     expect(listChannelPlugins).toHaveBeenCalledTimes(1);
   });

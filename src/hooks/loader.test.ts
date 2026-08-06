@@ -52,17 +52,19 @@ describe("loader", () => {
     sourceDir?: string;
     hookName: string;
     handlerCode?: string;
+    events?: string[];
   }): Promise<string> {
     const sourceDir = params.sourceDir ?? path.join(tmpDir, "hooks");
     const hookDir = path.join(sourceDir, params.hookName);
     await fs.mkdir(hookDir, { recursive: true });
+    const events = params.events ?? ["command:new"];
     await fs.writeFile(
       path.join(hookDir, "HOOK.md"),
       [
         "---",
         `name: ${params.hookName}`,
         `description: ${params.hookName} test hook`,
-        'metadata: {"openclaw":{"events":["command:new"]}}',
+        `metadata: {"openclaw":{"events":${JSON.stringify(events)}}}`,
         "---",
         "",
         `# ${params.hookName}`,
@@ -162,11 +164,6 @@ describe("loader", () => {
           hooks: { internal: { enabled: true } },
         } satisfies OpenClawConfig),
       ).toBeNull();
-      expect(
-        resolveConfiguredInternalHookNames({
-          hooks: { internal: { installs: { pack: { source: "path" } } } },
-        } satisfies OpenClawConfig),
-      ).toBeNull();
     });
 
     const createLegacyHandlerConfig = () =>
@@ -242,6 +239,51 @@ describe("loader", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
       expect(event.messages).toEqual(["keep-hook"]);
+    });
+
+    it("registers unknown event keys anyway (advisory warning, not a load failure)", async () => {
+      const hooksDir = path.join(tmpDir, "managed-hooks");
+      await writeDiscoveredHook({
+        sourceDir: hooksDir,
+        hookName: "typo-hook",
+        events: ["command:nwe", "command:new"],
+      });
+
+      const count = await loadInternalHooks(
+        {
+          hooks: {
+            internal: {
+              entries: {
+                "typo-hook": { enabled: true },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        tmpDir,
+        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
+      );
+
+      // The typo'd key never fires, but validation is advisory: the hook still
+      // loads and its valid subscriptions keep working.
+      expect(count).toBe(1);
+      const keys = getRegisteredEventKeys();
+      expect(keys).toContain("command:nwe");
+      expect(keys).toContain("command:new");
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["typo-hook"]);
+    });
+
+    it("registers legacy handler events with unknown keys anyway (advisory)", async () => {
+      const handlerPath = await writeHandlerModule("legacy-typo-handler.js");
+
+      const cfg = createEnabledHooksConfig([
+        { event: "command:nwe", module: path.basename(handlerPath) },
+      ]);
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(1);
+      expect(getRegisteredEventKeys()).toContain("command:nwe");
     });
 
     it("should load multiple handlers", async () => {

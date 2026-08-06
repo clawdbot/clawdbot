@@ -6,12 +6,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
-  normalizeBundledPluginDirName,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
 } from "./public-surface-runtime.js";
 
 const tempDirs: string[] = [];
+const noBundledPluginOverrideEnv = {
+  ...process.env,
+  OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+} satisfies NodeJS.ProcessEnv;
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
@@ -36,6 +40,28 @@ describe("bundled plugin public surface runtime", () => {
       ".cjs",
     ]);
   });
+
+  it.each(["my-ngc:nvidia", "../outside", "..\\outside", ".", ".."])(
+    "continues rejecting %s as an actual bundled plugin directory",
+    (dirName) => {
+      const rootDir = createTempDir();
+
+      expect(() =>
+        resolveBundledPluginSourcePublicSurfacePath({
+          sourceRoot: rootDir,
+          dirName,
+          artifactBasename: "provider-policy-api.js",
+        }),
+      ).toThrow(/must be a single directory/);
+      expect(() =>
+        resolveBundledPluginPublicSurfacePath({
+          rootDir,
+          dirName,
+          artifactBasename: "provider-policy-api.js",
+        }),
+      ).toThrow(/must be a single directory/);
+    },
+  );
 
   it("resolves source public surfaces from the shared extension list", () => {
     const sourceRoot = createTempDir();
@@ -112,6 +138,7 @@ describe("bundled plugin public surface runtime", () => {
         bundledPluginsDirMode: "auto",
         dirName: "demo",
         artifactBasename: "api.js",
+        env: noBundledPluginOverrideEnv,
       }),
     ).toBe(sourceModulePath);
   });
@@ -180,13 +207,5 @@ describe("bundled plugin public surface runtime", () => {
     expect(() => normalizeBundledPluginArtifactSubpath("src/C:outside.js")).toThrow(
       /must stay plugin-local/,
     );
-  });
-
-  it("rejects bundled plugin directory traversal", () => {
-    expect(normalizeBundledPluginDirName("document-extract")).toBe("document-extract");
-    expect(() => normalizeBundledPluginDirName("../outside")).toThrow(/single directory/);
-    expect(() => normalizeBundledPluginDirName("nested/plugin")).toThrow(/single directory/);
-    expect(() => normalizeBundledPluginDirName("nested\\plugin")).toThrow(/single directory/);
-    expect(() => normalizeBundledPluginDirName("C:plugin")).toThrow(/single directory/);
   });
 });

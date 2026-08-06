@@ -3,7 +3,7 @@
  *
  * Keep labels stable: external status surfaces and diagnostics consume the formatted values.
  */
-export const EMBEDDED_AGENT_EXECUTION_PHASES = [
+const EMBEDDED_AGENT_EXECUTION_PHASES = [
   "runner_entered",
   "workspace",
   "runtime_plugins",
@@ -22,7 +22,7 @@ export const EMBEDDED_AGENT_EXECUTION_PHASES = [
 
 export type EmbeddedAgentExecutionPhase = (typeof EMBEDDED_AGENT_EXECUTION_PHASES)[number];
 
-export const EMBEDDED_AGENT_EXECUTION_PHASE_LABELS = {
+const EMBEDDED_AGENT_EXECUTION_PHASE_LABELS = {
   runner_entered: "runner-entered",
   workspace: "workspace",
   runtime_plugins: "runtime-plugins",

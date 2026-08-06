@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "icon": "https://cdn.simpleicons.org/google",
   "activation": {
     "onStartup": false
   },
@@ -45,6 +46,9 @@
     }
   },
   "modelCatalog": {
+    "discovery": {
+      "google": "runtime"
+    },
     "suppressions": [
       {
         "provider": "google",
@@ -63,6 +67,16 @@
       },
       {
         "provider": "google",
+        "model": "gemini-2.0-flash",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-2.5-flash."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.0-flash-001",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google/gemini-2.5-flash."
+      },
+      {
+        "provider": "google",
         "model": "gemini-2.0-flash-exp",
         "reason": "Google shut down this Gemini 2.0 experimental model. Use google/gemini-2.5-flash."
       },
@@ -75,6 +89,16 @@
         "provider": "google",
         "model": "gemini-2.0-flash-live-001",
         "reason": "Google shut down this Gemini Live model on 2025-12-09. Use google/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.0-flash-lite",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google/gemini-2.5-flash-lite."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.0-flash-lite-001",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google/gemini-2.5-flash-lite."
       },
       {
         "provider": "google",
@@ -228,6 +252,16 @@
       },
       {
         "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash-001",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-gemini-cli",
         "model": "gemini-2.0-flash-exp",
         "reason": "Google shut down this Gemini 2.0 experimental model. Use google-gemini-cli/gemini-2.5-flash."
       },
@@ -240,6 +274,16 @@
         "provider": "google-gemini-cli",
         "model": "gemini-2.0-flash-live-001",
         "reason": "Google shut down this Gemini Live model on 2025-12-09. Use google-gemini-cli/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash-lite",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash-lite."
+      },
+      {
+        "provider": "google-gemini-cli",
+        "model": "gemini-2.0-flash-lite-001",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-gemini-cli/gemini-2.5-flash-lite."
       },
       {
         "provider": "google-gemini-cli",
@@ -393,6 +437,16 @@
       },
       {
         "provider": "google-vertex",
+        "model": "gemini-2.0-flash",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-vertex/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-vertex",
+        "model": "gemini-2.0-flash-001",
+        "reason": "Google shut down Gemini 2.0 Flash on 2026-06-01. Use google-vertex/gemini-2.5-flash."
+      },
+      {
+        "provider": "google-vertex",
         "model": "gemini-2.0-flash-exp",
         "reason": "Google shut down this Gemini 2.0 experimental model. Use google-vertex/gemini-2.5-flash."
       },
@@ -405,6 +459,16 @@
         "provider": "google-vertex",
         "model": "gemini-2.0-flash-live-001",
         "reason": "Google shut down this Gemini Live model on 2025-12-09. Use google-vertex/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google-vertex",
+        "model": "gemini-2.0-flash-lite",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-vertex/gemini-2.5-flash-lite."
+      },
+      {
+        "provider": "google-vertex",
+        "model": "gemini-2.0-flash-lite-001",
+        "reason": "Google shut down Gemini 2.0 Flash-Lite on 2026-06-01. Use google-vertex/gemini-2.5-flash-lite."
       },
       {
         "provider": "google-vertex",
@@ -605,6 +669,7 @@
             "type": "local-file-with-env",
             "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
             "fallbackPaths": [
+              "${CLOUDSDK_CONFIG}/application_default_credentials.json",
               "${HOME}/.config/gcloud/application_default_credentials.json",
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
@@ -627,26 +692,17 @@
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
-      "choiceLabel": "Google Gemini API key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Google AI Studio API key",
+      "choiceHint": "Supported API-key access from aistudio.google.com/apikey",
       "groupId": "google",
       "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
+      "groupHint": "Supported API-key setup",
       "onboardingFeatured": true,
       "optionKey": "geminiApiKey",
       "cliFlag": "--gemini-api-key",
       "cliOption": "--gemini-api-key <key>",
       "cliDescription": "Gemini API key"
-    },
-    {
-      "provider": "google-gemini-cli",
-      "method": "oauth",
-      "choiceId": "google-gemini-cli",
-      "choiceLabel": "Gemini CLI OAuth",
-      "choiceHint": "Google OAuth with project-aware token payload",
-      "groupId": "google",
-      "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
-      "onboardingFeatured": true
     }
   ],
   "uiHints": {
@@ -663,6 +719,16 @@
     "webSearch.baseUrl": {
       "label": "Gemini Search Base URL",
       "help": "Optional Gemini API base URL for web search grounding proxies."
+    },
+    "webSearch.headers": {
+      "label": "Gemini Search Headers",
+      "help": "Optional headers merged into Gemini web search requests. Use a SecretRef value when a header contains a secret.",
+      "advanced": true
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "webSearch.headers.*", "expected": "string" }]
     }
   },
   "contracts": {
@@ -691,9 +757,6 @@
       "nativeDocumentInputs": ["pdf"]
     }
   },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -710,6 +773,12 @@
           },
           "baseUrl": {
             "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "object"]
+            }
           }
         }
       }

@@ -40,7 +40,7 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
 }));
 
-import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.js";
+import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.test-support.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 
 describe("buildAgentRuntimeAuthPlan", () => {
@@ -100,5 +100,63 @@ describe("buildAgentRuntimeAuthPlan", () => {
     expect(plan.providerForAuth).toBe("fixture");
     expect(plan.authProfileProviderForAuth).toBe("fixture");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("preserves the selected model route and locked profile source", () => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "openai",
+      authProfileProvider: "openai",
+      authProfileMode: "token",
+      sessionAuthProfileId: "openai:work",
+      sessionAuthProfileSource: "user",
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authRequirement: "subscription",
+        requestTransportOverrides: "none",
+      },
+      config: {},
+    });
+
+    expect(plan).toMatchObject({
+      forwardedAuthProfileId: "openai:work",
+      forwardedAuthProfileSource: "user",
+      selectedAuthMode: "token",
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-chatgpt-responses",
+        authRequirement: "subscription",
+      },
+    });
+  });
+
+  it("does not forward profiles when the harness rejects host auth", () => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "openai",
+      authProfileProvider: "openai",
+      authProfileMode: "api_key",
+      sessionAuthProfileId: "openai:work",
+      sessionAuthProfileSource: "auto",
+      sessionAuthProfileCandidateIds: ["openai:work"],
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+      config: {},
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      allowHarnessAuthProfileForwarding: false,
+    });
+
+    expect(plan.forwardedAuthProfileId).toBeUndefined();
+    expect(plan.forwardedAuthProfileCandidateIds).toBeUndefined();
+    expect(plan.selectedAuthMode).toBeUndefined();
   });
 });

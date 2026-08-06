@@ -4,10 +4,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFiles,
   getPropertyNameText,
-  resolveRepoRoot,
   runAsScript,
   toLine,
 } from "./lib/ts-guard-utils.mjs";
@@ -134,51 +135,33 @@ export function findChannelAgnosticBoundaryViolations(
 
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
+  const moduleViolations = new Map();
+  if (checkModuleSpecifiers) {
+    visitModuleSpecifiers(
+      ts,
+      sourceFile,
+      ({ kind, node, specifier, specifierNode }) => {
+        if (moduleSpecifierMatcher(specifier)) {
+          const verb =
+            kind === "export"
+              ? "re-exports"
+              : kind === "dynamic-import"
+                ? "dynamically imports"
+                : "imports";
+          moduleViolations.set(node, {
+            line: toLine(sourceFile, specifierNode),
+            reason: verb + ' channel module "' + specifier + '"',
+          });
+        }
+      },
+      { includeCommonJs: true, includeImportMetaUrl: true, includeImportTypes: true },
+    );
+  }
 
   const visit = (node) => {
-    if (
-      checkModuleSpecifiers &&
-      ts.isImportDeclaration(node) &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      const specifier = node.moduleSpecifier.text;
-      if (moduleSpecifierMatcher(specifier)) {
-        violations.push({
-          line: toLine(sourceFile, node.moduleSpecifier),
-          reason: `imports channel module "${specifier}"`,
-        });
-      }
-    }
-
-    if (
-      checkModuleSpecifiers &&
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      const specifier = node.moduleSpecifier.text;
-      if (moduleSpecifierMatcher(specifier)) {
-        violations.push({
-          line: toLine(sourceFile, node.moduleSpecifier),
-          reason: `re-exports channel module "${specifier}"`,
-        });
-      }
-    }
-
-    if (
-      checkModuleSpecifiers &&
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length > 0 &&
-      ts.isStringLiteral(node.arguments[0])
-    ) {
-      const specifier = node.arguments[0].text;
-      if (moduleSpecifierMatcher(specifier)) {
-        violations.push({
-          line: toLine(sourceFile, node.arguments[0]),
-          reason: `dynamically imports channel module "${specifier}"`,
-        });
-      }
+    const moduleViolation = moduleViolations.get(node);
+    if (moduleViolation) {
+      violations.push(moduleViolation);
     }
 
     if (

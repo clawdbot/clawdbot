@@ -5,21 +5,24 @@ import {
   loadShellParserParityFixtureCases,
   loadWrapperResolutionParityFixtureCases,
 } from "./exec-approvals-test-helpers.js";
-import { analyzeShellCommand, resolveCommandResolutionFromArgv } from "./exec-approvals.js";
+import { resolveCommandResolutionFromArgv } from "./exec-approvals.js";
+import { planShellAuthorization } from "./exec-authorization-plan.js";
 
 describe("exec approvals shell parser parity fixture", () => {
   const fixtures = loadShellParserParityFixtureCases();
 
-  it.each(fixtures)("matches fixture: $id", (fixture) => {
-    const res = analyzeShellCommand({ command: fixture.command });
+  it.each(fixtures)("matches fixture: $id", async (fixture) => {
+    const res = await planShellAuthorization({ command: fixture.command });
     expect(res.ok).toBe(fixture.ok);
     if (fixture.ok) {
-      const executables = res.segments.map((segment) =>
-        path.basename(segment.argv[0] ?? "").toLowerCase(),
+      const executables = res.groups.flatMap((group) =>
+        group.candidates.map((candidate) =>
+          path.basename(candidate.sourceSegment.argv[0] ?? "").toLowerCase(),
+        ),
       );
       expect(executables).toEqual(fixture.executables.map((entry) => entry.toLowerCase()));
     } else {
-      expect(res.segments).toHaveLength(0);
+      expect(res.groups).toHaveLength(0);
     }
   });
 });

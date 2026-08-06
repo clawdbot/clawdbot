@@ -20,7 +20,7 @@ spawn multiple sub-agents with explicit control flow.
   <Card title="Run a program" icon="play" href="#slash-command">
     Use `/prose run` to execute a `.prose` file or remote program.
   </Card>
-  <Card title="Write programs" icon="pencil" href="#example">
+  <Card title="Write programs" icon="pencil" href="#example-parallel-research-and-synthesis">
     Author multi-agent workflows with parallel and sequential steps.
   </Card>
 </CardGroup>
@@ -29,7 +29,7 @@ spawn multiple sub-agents with explicit control flow.
 
 <Steps>
   <Step title="Enable the plugin">
-    Bundled plugins are disabled by default. Enable OpenProse:
+    OpenProse is bundled but disabled by default. Enable it:
 
     ```bash
     openclaw plugins enable open-prose
@@ -52,7 +52,8 @@ spawn multiple sub-agents with explicit control flow.
   </Step>
 </Steps>
 
-For a local checkout: `openclaw plugins install ./path/to/local/open-prose-plugin`
+From a repo checkout you can install the plugin directly:
+`openclaw plugins install ./extensions/open-prose`
 
 ## Slash command
 
@@ -70,6 +71,11 @@ OpenProse registers `/prose` as a user-invocable skill command:
 
 `/prose run <handle/slug>` resolves to `https://p.prose.md/<handle>/<slug>`.
 Direct URLs are fetched as-is using the `web_fetch` tool.
+
+Top-level remote runs are explicit. Remote imports inside a `.prose` program are
+transitive code dependencies: before OpenProse fetches any remote `use` target,
+it shows the resolved import list and requires the operator to reply exactly
+`approve remote prose imports` for that run.
 
 ## What it can do
 
@@ -99,18 +105,18 @@ parallel:
     prompt: "Summarize {topic}."
 
 session "Merge the findings + draft into a final answer."
-context: { findings, draft }
+  context: { findings, draft }
 ```
 
 ## OpenClaw runtime mapping
 
 OpenProse programs map to OpenClaw primitives:
 
-| OpenProse concept         | OpenClaw tool    |
-| ------------------------- | ---------------- |
-| Spawn session / Task tool | `sessions_spawn` |
-| File read / write         | `read` / `write` |
-| Web fetch                 | `web_fetch`      |
+| OpenProse concept         | OpenClaw tool                                   |
+| ------------------------- | ----------------------------------------------- |
+| Spawn session / Task tool | `sessions_spawn`                                |
+| File read / write         | `read` / `write`                                |
+| Web fetch                 | `web_fetch` (`exec` + curl when POST is needed) |
 
 <Warning>
   If your tool allowlist blocks `sessions_spawn`, `read`, `write`, or
@@ -124,17 +130,18 @@ OpenProse keeps state under `.prose/` in your workspace:
 
 ```text
 .prose/
-├── .env
+├── .env                      # config (key=value), e.g. OPENPROSE_POSTGRES_URL
 ├── runs/
 │   └── {YYYYMMDD}-{HHMMSS}-{random}/
-│       ├── program.prose
-│       ├── state.md
+│       ├── program.prose     # copy of the running program
+│       ├── state.md          # execution state
 │       ├── bindings/
+│       ├── imports/          # nested remote program runs
 │       └── agents/
-└── agents/
+└── agents/                   # project-scoped persistent agents
 ```
 
-User-level persistent agents live at:
+User-level persistent agents (shared across projects) live at:
 
 ```text
 ~/.prose/agents/
@@ -148,14 +155,17 @@ User-level persistent agents live at:
     dependencies required.
   </Accordion>
   <Accordion title="in-context">
-    Transient state kept in the context window. Suitable for small, short-lived
-    programs.
+    Transient state kept in the context window; select with `--in-context`.
+    Suitable for small, short-lived programs.
   </Accordion>
   <Accordion title="sqlite (experimental)">
-    Requires the `sqlite3` binary on `PATH`.
+    Select with `--state=sqlite`. Requires the `sqlite3` binary on `PATH`
+    (falls back to filesystem when missing); state lands in
+    `.prose/runs/{id}/state.db`.
   </Accordion>
   <Accordion title="postgres (experimental)">
-    Requires `psql` and a connection string.
+    Select with `--state=postgres`. Requires `psql` and a connection string in
+    `OPENPROSE_POSTGRES_URL` (set it in `.prose/.env`).
 
     <Warning>
       Postgres credentials flow into sub-agent logs. Use a dedicated,
@@ -167,9 +177,12 @@ User-level persistent agents live at:
 
 ## Security
 
-Treat `.prose` files like code. Review them before running. Use OpenClaw tool
-allowlists and approval gates to control side effects. For deterministic,
-approval-gated workflows, compare with [Lobster](/tools/lobster).
+Treat `.prose` files like code. Review them before running, including remote
+`use` imports. Top-level `/prose run https://...` requests are explicit, but
+transitive remote imports require per-run approval before they are fetched or
+executed. Use OpenClaw tool allowlists and approval gates to control side
+effects. For deterministic, approval-gated workflows, compare with
+[Lobster](/tools/lobster).
 
 ## Related
 

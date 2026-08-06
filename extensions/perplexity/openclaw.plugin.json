@@ -1,5 +1,6 @@
 {
   "id": "perplexity",
+  "icon": "https://cdn.simpleicons.org/perplexity",
   "activation": {
     "onStartup": false
   },
@@ -29,9 +30,6 @@
   },
   "contracts": {
     "webSearchProviders": ["perplexity"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

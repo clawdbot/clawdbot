@@ -66,7 +66,7 @@ function normalizeEntry(value: string): string | undefined {
 }
 
 /** Parse an agent direct-session key into channel/account/peer routing parts. */
-export function parseDirectAgentSessionTarget(
+function parseDirectAgentSessionTarget(
   sessionKey: string | undefined | null,
 ): DirectSessionTarget | null {
   const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
@@ -93,7 +93,7 @@ export function parseDirectAgentSessionTarget(
 }
 
 /** Resolve the configured DM allowlist that applies to an event session. */
-export function resolveEventSessionAllowFrom(params: {
+function resolveEventSessionAllowFrom(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string | null;
   channel?: string | null;

@@ -15,10 +15,24 @@ const PROVIDER_ID = "opencode-go";
 
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
-const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6"]);
+const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2.7-code",
+]);
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
+// OpenCode Go exposes only high/max provider effort for DeepSeek V4. Lower
+// OpenClaw levels retain their existing high-effort behavior.
+const OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP = {
+  minimal: "high",
+  low: "high",
+  medium: "high",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+} as const;
 
 type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
@@ -36,6 +50,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP,
       input: ["text"],
       cost: {
         input: 1.74,
@@ -58,6 +73,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP,
       input: ["text"],
       cost: {
         input: 0.14,
@@ -106,6 +122,23 @@ const OPENCODE_GO_MODELS = (
       },
       contextWindow: 202_752,
       maxTokens: 32_768,
+    },
+    {
+      id: "glm-5.2",
+      name: "GLM-5.2",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 1.4,
+        output: 4.4,
+        cacheRead: 0.26,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
     },
     {
       id: "hy3-preview",
@@ -159,21 +192,21 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 65_536,
     },
     {
-      id: "mimo-v2-omni",
-      name: "MiMo V2 Omni",
+      id: "kimi-k2.7-code",
+      name: "Kimi K2.7 Code",
       api: "openai-completions",
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
       input: ["text", "image"],
       cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
+        input: 0.95,
+        output: 4,
+        cacheRead: 0.19,
         cacheWrite: 0,
       },
       contextWindow: 262_144,
-      maxTokens: 32_000,
+      maxTokens: 262_144,
     },
     {
       id: "mimo-v2.5",
@@ -191,23 +224,6 @@ const OPENCODE_GO_MODELS = (
       },
       contextWindow: 1_000_000,
       maxTokens: 128_000,
-    },
-    {
-      id: "mimo-v2-pro",
-      name: "MiMo V2 Pro",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_048_576,
-      maxTokens: 32_000,
     },
     {
       id: "mimo-v2.5-pro",
@@ -352,7 +368,7 @@ const OPENCODE_GO_MODELS = (
   ] satisfies OpencodeGoModelDefinition[]
 ).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
 
-export type FetchOpencodeGoLiveModelIdsParams = {
+type FetchOpencodeGoLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;

@@ -20,8 +20,8 @@ to the public internet.
 
 ## Create a Box
 
-Create a keep-alive Box in the Upstash Console. Note the Box ID, such as
-`right-flamingo-14486`, and your Box API key.
+Create a keep-alive Box in the Upstash Console. Note the Box ID (for example
+`right-flamingo-14486`) and your Box API key.
 
 Upstash maintains its current OpenClaw Box walkthrough at
 [OpenClaw Setup](https://upstash.com/docs/box/guides/openclaw-setup).

@@ -8,29 +8,58 @@ import {
 } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
+type PublishOutputFileAtomically =
+  typeof import("./output-file.runtime.js").publishOutputFileAtomically;
+
 const fetchGuardMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string }) => {
-    return {
-      response: await globalThis.fetch(params.url),
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  }),
+  fetchWithSsrFGuard: vi.fn(
+    async (params: { url: string; timeoutMs?: number; requireHttps?: boolean }) => {
+      return {
+        response: await globalThis.fetch(params.url),
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
+}));
+
+const outputFileMocks = vi.hoisted(() => ({
+  publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
 }));
 
+vi.mock("./output-file.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
+    "./output-file.runtime.js",
+  );
+  outputFileMocks.publishOutputFileAtomically.mockImplementation(
+    actual.publishOutputFileAtomically,
+  );
+  return {
+    ...actual,
+    publishOutputFileAtomically: outputFileMocks.publishOutputFileAtomically,
+  };
+});
+
 let cameraTempPath: typeof import("./nodes-camera.js").cameraTempPath;
 let parseCameraClipPayload: typeof import("./nodes-camera.js").parseCameraClipPayload;
 let parseCameraSnapPayload: typeof import("./nodes-camera.js").parseCameraSnapPayload;
+let resolveCameraClipTarget: typeof import("./nodes-camera.js").resolveCameraClipTarget;
+let resolveCameraSnapTargets: typeof import("./nodes-camera.js").resolveCameraSnapTargets;
 let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCameraClipPayloadToFile;
+let writeCameraPayloadToFile: typeof import("./nodes-camera.js").writeCameraPayloadToFile;
 let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
-let writeUrlToFile: typeof import("./nodes-camera.js").writeUrlToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
+let parseScreenSnapshotPayload: typeof import("./nodes-screen.js").parseScreenSnapshotPayload;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
+let screenSnapshotFormatForPath: typeof import("./nodes-screen.js").screenSnapshotFormatForPath;
+let screenSnapshotTempPath: typeof import("./nodes-screen.js").screenSnapshotTempPath;
 let writeScreenRecordToFile: typeof import("./nodes-screen.js").writeScreenRecordToFile;
+let writeScreenSnapshotToFile: typeof import("./nodes-screen.js").writeScreenSnapshotToFile;
+let publishOutputFileAtomically: PublishOutputFileAtomically;
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempDir("openclaw-test-", run);
@@ -46,18 +75,47 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected missing path: ${targetPath}`);
 }
 
+function cancelTrackedResponse(init?: ResponseInit): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("ignored"));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("nodes camera helpers", () => {
   beforeAll(async () => {
     ({
       cameraTempPath,
       parseCameraClipPayload,
       parseCameraSnapPayload,
+      resolveCameraClipTarget,
+      resolveCameraSnapTargets,
       writeCameraClipPayloadToFile,
+      writeCameraPayloadToFile,
       writeBase64ToFile,
-      writeUrlToFile,
     } = await import("./nodes-camera.js"));
-    ({ parseScreenRecordPayload, screenRecordTempPath, writeScreenRecordToFile } =
-      await import("./nodes-screen.js"));
+    ({
+      parseScreenRecordPayload,
+      parseScreenSnapshotPayload,
+      screenRecordTempPath,
+      screenSnapshotFormatForPath,
+      screenSnapshotTempPath,
+      writeScreenRecordToFile,
+      writeScreenSnapshotToFile,
+    } = await import("./nodes-screen.js"));
+    ({ publishOutputFileAtomically } = await vi.importActual("./output-file.runtime.js"));
   });
 
   beforeEach(() => {
@@ -79,6 +137,35 @@ describe("nodes camera helpers", () => {
     expect(() => parseCameraSnapPayload({ format: "jpg" })).toThrow(
       /invalid camera\.snap payload/i,
     );
+  });
+
+  it("collapses Linux facing requests into one unknown-position capture", () => {
+    expect(resolveCameraSnapTargets({ facing: "both", platform: "linux" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(resolveCameraSnapTargets({ facing: "back", platform: "linux" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(
+      resolveCameraSnapTargets({ facing: "front", platform: "linux", deviceId: "/dev/video2" }),
+    ).toEqual([{ artifactFacing: "unknown" }]);
+  });
+
+  it("keeps front and back requests for positioned camera platforms", () => {
+    expect(resolveCameraSnapTargets({ facing: "both", platform: "macos" })).toEqual([
+      { requestFacing: "front", artifactFacing: "front" },
+      { requestFacing: "back", artifactFacing: "back" },
+    ]);
+  });
+
+  it("labels Linux clips as unknown without sending unsupported facing", () => {
+    expect(resolveCameraClipTarget({ facing: "back", platform: "linux" })).toEqual({
+      artifactFacing: "unknown",
+    });
+    expect(resolveCameraClipTarget({ facing: "back", platform: "macos" })).toEqual({
+      requestFacing: "back",
+      artifactFacing: "back",
+    });
   });
 
   it("parses camera.clip payload", () => {
@@ -126,6 +213,13 @@ describe("nodes camera helpers", () => {
     expect(() =>
       screenRecordTempPath({
         ext: "mp4/../../escaped",
+        tmpDir: "/tmp",
+        id: "id1",
+      }),
+    ).toThrow(/invalid media format/i);
+    expect(() =>
+      screenSnapshotTempPath({
+        ext: "png/../../escaped",
         tmpDir: "/tmp",
         id: "id1",
       }),
@@ -186,11 +280,47 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/node remoteip/i);
   });
 
-  it("writes base64 to file", async () => {
+  it("normalizes valid base64 and preserves the destination mode", async () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeBase64ToFile(out, "aGk=");
-      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
+      await fs.writeFile(out, "existing-screen");
+      await fs.chmod(out, 0o640);
+
+      await writeBase64ToFile(out, " aGk\n");
+
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["x.bin"]);
+    });
+  });
+
+  it("preserves an existing output when the decoded media write fails", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      await fs.writeFile(out, "existing-screen");
+      await fs.chmod(out, 0o640);
+      outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
+        return await publishOutputFileAtomically({
+          ...params,
+          writeTemp: async (tempPath) => {
+            await params.writeTemp(tempPath);
+            await fs.truncate(tempPath, 1);
+            throw new Error("injected node media write failure");
+          },
+        });
+      });
+
+      await expect(writeScreenRecordToFile(out, "aGk=")).rejects.toThrow(
+        "injected node media write failure",
+      );
+
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("existing-screen");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["x.bin"]);
     });
   });
 
@@ -201,6 +331,26 @@ describe("nodes camera helpers", () => {
       await expectPathMissing(out);
       await expect(writeScreenRecordToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
         /exceeds max/i,
+      );
+      await expectPathMissing(out);
+      await expect(writeScreenSnapshotToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
+        /exceeds max/i,
+      );
+      await expectPathMissing(out);
+    });
+  });
+
+  it("rejects empty and malformed base64 payloads before writing", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      for (const base64 of ["", " \n", "a", "a===", "not-base64!"]) {
+        await expect(writeBase64ToFile(out, base64)).rejects.toThrow(/invalid base64/i);
+        await expectPathMissing(out);
+      }
+      await expect(writeScreenRecordToFile(out, "not-base64!")).rejects.toThrow(/invalid base64/i);
+      await expectPathMissing(out);
+      await expect(writeScreenSnapshotToFile(out, "not-base64!")).rejects.toThrow(
+        /invalid base64/i,
       );
       await expectPathMissing(out);
     });
@@ -214,17 +364,24 @@ describe("nodes camera helpers", () => {
     stubFetchResponse(new Response("url-content", { status: 200 }));
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeUrlToFile(out, "https://198.51.100.42/clip.mp4", {
+      await writeCameraPayloadToFile({
+        filePath: out,
+        payload: { url: "https://198.51.100.42/clip.mp4" },
         expectedHost: "198.51.100.42",
       });
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
+      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ requireHttps: true, timeoutMs: 15 * 60_000 }),
+      );
     });
   });
 
   it("rejects url host mismatches", async () => {
     stubFetchResponse(new Response("url-content", { status: 200 }));
     await expect(
-      writeUrlToFile("/tmp/ignored", "https://198.51.100.42/clip.mp4", {
+      writeCameraPayloadToFile({
+        filePath: "/tmp/ignored",
+        payload: { url: "https://198.51.100.42/clip.mp4" },
         expectedHost: "198.51.100.43",
       }),
     ).rejects.toThrow(/must match node host/i);
@@ -246,6 +403,15 @@ describe("nodes camera helpers", () => {
       expectedMessage: /exceeds max/i,
     },
     {
+      name: "malformed content-length",
+      url: "https://198.51.100.42/weird.bin",
+      response: new Response("tiny", {
+        status: 200,
+        headers: { "content-length": "0x3" },
+      }),
+      expectedMessage: /invalid content-length header: 0x3/i,
+    },
+    {
       name: "non-ok status",
       url: "https://198.51.100.42/down.bin",
       response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
@@ -264,10 +430,73 @@ describe("nodes camera helpers", () => {
         stubFetchResponse(response);
       }
       await expect(
-        writeUrlToFile("/tmp/ignored", url, { expectedHost: "198.51.100.42" }),
+        writeCameraPayloadToFile({
+          filePath: "/tmp/ignored",
+          payload: { url },
+          expectedHost: "198.51.100.42",
+        }),
       ).rejects.toThrow(expectedMessage);
     },
   );
+
+  it.each([
+    {
+      name: "non-ok status",
+      response: () => cancelTrackedResponse({ status: 503, statusText: "Service Unavailable" }),
+      expectedMessage: /503/i,
+    },
+    {
+      name: "oversized content-length",
+      response: () =>
+        cancelTrackedResponse({
+          status: 200,
+          headers: { "content-length": String(999_999_999) },
+        }),
+      expectedMessage: /exceeds max/i,
+    },
+    {
+      name: "malformed content-length",
+      response: () =>
+        cancelTrackedResponse({
+          status: 200,
+          headers: { "content-length": "0x3" },
+        }),
+      expectedMessage: /invalid content-length/i,
+    },
+  ] as const)(
+    "cancels rejected url response bodies: $name",
+    async ({ response, expectedMessage }) => {
+      const tracked = response();
+      stubFetchResponse(tracked.response);
+
+      await expect(
+        writeCameraPayloadToFile({
+          filePath: "/tmp/ignored",
+          payload: { url: "https://198.51.100.42/down.bin" },
+          expectedHost: "198.51.100.42",
+        }),
+      ).rejects.toThrow(expectedMessage);
+      expect(tracked.wasCanceled()).toBe(true);
+    },
+  );
+
+  it("cancels response bodies when a redirect changes host", async () => {
+    const tracked = cancelTrackedResponse({ status: 200 });
+    fetchGuardMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: tracked.response,
+      finalUrl: "https://198.51.100.43/clip.mp4",
+      release: async () => {},
+    });
+
+    await expect(
+      writeCameraPayloadToFile({
+        filePath: "/tmp/ignored",
+        payload: { url: "https://198.51.100.42/clip.mp4" },
+        expectedHost: "198.51.100.42",
+      }),
+    ).rejects.toThrow(/redirect host/i);
+    expect(tracked.wasCanceled()).toBe(true);
+  });
 
   it("removes partially written file when url stream fails", async () => {
     const stream = new ReadableStream<Uint8Array>({
@@ -281,7 +510,11 @@ describe("nodes camera helpers", () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
       await expect(
-        writeUrlToFile(out, "https://198.51.100.42/broken.bin", { expectedHost: "198.51.100.42" }),
+        writeCameraPayloadToFile({
+          filePath: out,
+          payload: { url: "https://198.51.100.42/broken.bin" },
+          expectedHost: "198.51.100.42",
+        }),
       ).rejects.toThrow(/stream exploded/i);
       await expectPathMissing(out);
     });
@@ -334,5 +567,50 @@ describe("nodes screen helpers", () => {
       id: "id1",
     });
     expect(p).toBe(path.join("/tmp", "openclaw-screen-record-id1.mp4"));
+  });
+
+  it("parses screen.snapshot payload", () => {
+    expect(
+      parseScreenSnapshotPayload({
+        format: "png",
+        base64: "Zm9v",
+        displayFrameId: "display-42-frame",
+        screenIndex: 1,
+        width: 1200,
+        height: 800,
+      }),
+    ).toEqual({
+      format: "png",
+      base64: "Zm9v",
+      displayFrameId: "display-42-frame",
+      screenIndex: 1,
+      width: 1200,
+      height: 800,
+    });
+  });
+
+  it("rejects invalid screen.snapshot payload", () => {
+    expect(() => parseScreenSnapshotPayload({ format: "png" })).toThrow(
+      /invalid screen\.snapshot payload/i,
+    );
+  });
+
+  it("maps a snapshot output path to the encoding the node should produce", () => {
+    expect(screenSnapshotFormatForPath("/workspace/shot.png")).toBe("png");
+    expect(screenSnapshotFormatForPath("/workspace/shot.PNG")).toBe("png");
+    expect(screenSnapshotFormatForPath("/workspace/shot.jpg")).toBe("jpeg");
+    expect(screenSnapshotFormatForPath("/workspace/shot.jpeg")).toBe("jpeg");
+    // Nothing recognizable is claimed, so the node's own default should stand.
+    expect(screenSnapshotFormatForPath("/workspace/shot")).toBeUndefined();
+    expect(screenSnapshotFormatForPath("/workspace/shot.webp")).toBeUndefined();
+  });
+
+  it("builds screen snapshot temp path from the reported format", () => {
+    expect(screenSnapshotTempPath({ ext: "jpg", tmpDir: "/tmp", id: "id1" })).toBe(
+      path.join("/tmp", "openclaw-screen-snapshot-id1.jpg"),
+    );
+    expect(screenSnapshotTempPath({ ext: "png", tmpDir: "/tmp", id: "id1" })).toBe(
+      path.join("/tmp", "openclaw-screen-snapshot-id1.png"),
+    );
   });
 });

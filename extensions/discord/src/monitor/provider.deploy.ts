@@ -1,7 +1,7 @@
 // Discord provider module implements model/runtime integration.
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { Client, overwriteApplicationCommands, type RequestClient } from "../internal/discord.js";
+import { Client, type RequestClient } from "../internal/discord.js";
 import {
   attachDiscordDeployRestContext,
   attachDiscordDeployRequestBody,
@@ -23,6 +23,14 @@ function readDeployRequestBody(data?: unknown): unknown {
     : undefined;
 }
 
+// deployCommands only touches application-command routes. The wrapper patches
+// the shared client.rest, so unrelated concurrent startup traffic (voice-state
+// probes, channel lookups) must pass through untouched or it gets mislabeled
+// as slash-command deploy and double-logged next to its owner's handling.
+function isDeployCommandsPath(path: string): boolean {
+  return path.startsWith("/applications/") && path.includes("/commands");
+}
+
 function wrapDeployRestMethod(params: {
   method: RestMethodName;
   original: RestMethodMap;
@@ -33,6 +41,9 @@ function wrapDeployRestMethod(params: {
   shouldLogVerbose: () => boolean;
 }) {
   return async (path: string, data?: never, query?: never) => {
+    if (!isDeployCommandsPath(path)) {
+      return params.original[params.method](path, data, query);
+    }
     const startedAt = Date.now();
     const body = readDeployRequestBody(data);
     const commandCount = Array.isArray(body) ? body.length : undefined;
@@ -71,7 +82,9 @@ function wrapDeployRestMethod(params: {
             ),
           );
         }
-      } else {
+      } else if (params.shouldLogVerbose()) {
+        // Deploy failures surface once through deployDiscordCommands' warning;
+        // this per-request line is verbose timing diagnostics only.
         const details = formatDiscordDeployErrorDetails(err);
         params.runtime.error?.(
           `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs} error=${formatDiscordDeployErrorMessage(err)}${details}`,
@@ -144,7 +157,7 @@ async function deployDiscordCommands(params: {
       if (isDiscordDeployDailyCreateLimit(err)) {
         params.runtime.log?.(
           warn(
-            `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
+            `[${accountId}] slash command deploy skipped: daily application command create limit reached. Existing slash commands stay active until Discord resets the quota; message send/receive is unaffected.`,
           ),
         );
         return;
@@ -159,7 +172,7 @@ async function deployDiscordCommands(params: {
   } catch (err) {
     params.runtime.log?.(
       warn(
-        `discord: native slash command deploy warning (not message send): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
+        `[${accountId}] slash command deploy failed (message send/receive unaffected): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
       ),
     );
   } finally {
@@ -201,21 +214,8 @@ export function runDiscordCommandDeployInBackground(params: {
     .catch((err: unknown) => {
       params.runtime.log?.(
         warn(
-          `discord: native slash command deploy background warning (not message send): ${formatErrorMessage(err)}`,
+          `[${params.accountId}] slash command deploy failed in background (message send/receive unaffected): ${formatErrorMessage(err)}`,
         ),
       );
     });
-}
-
-export async function clearDiscordNativeCommands(params: {
-  client: Client;
-  applicationId: string;
-  runtime: RuntimeEnv;
-}) {
-  try {
-    await overwriteApplicationCommands(params.client.rest, params.applicationId, []);
-    params.runtime.log?.("discord: cleared native commands (commands.native=false)");
-  } catch (err) {
-    params.runtime.error?.(`discord: failed to clear native commands: ${String(err)}`);
-  }
 }

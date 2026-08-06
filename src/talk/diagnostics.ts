@@ -4,18 +4,19 @@
  * The diagnostic stream needs timing and size counters for reliability work,
  * but must not export raw provider payloads, transcripts, or audio content.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
 } from "../infra/diagnostic-events.js";
-import { firstFiniteTalkEventNumber, talkEventPayloadRecord } from "./event-metrics.js";
+import { firstFiniteTalkEventNumber } from "./event-metrics.js";
 import type { TalkEvent } from "./talk-events.js";
 
 type TalkDiagnosticEventInput = Extract<DiagnosticEventInput, { type: "talk.event" }>;
 
 /** Convert a Talk event into the bounded diagnostic payload shape. */
 export function createTalkDiagnosticEvent(event: TalkEvent): TalkDiagnosticEventInput {
-  const payload = talkEventPayloadRecord(event.payload);
+  const payload = asOptionalRecord(event.payload);
   return {
     type: "talk.event",
     sessionId: event.sessionId,

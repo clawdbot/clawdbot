@@ -1,4 +1,5 @@
 // Verifies MCP transport config normalization and startup-safety filtering.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -31,11 +32,11 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
-  it("resolves operator timeout aliases and parallel capability", () => {
+  it("resolves canonical timeouts and parallel capability", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
-      timeout: 7,
-      connectTimeout: 2,
+      requestTimeoutMs: 7_000,
+      connectionTimeoutMs: 2_000,
       supportsParallelToolCalls: true,
     });
 
@@ -48,9 +49,25 @@ describe("resolveMcpTransportConfig", () => {
     );
   });
 
+  it("clamps oversized canonical MCP timeouts to the Node timer maximum", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      connectionTimeoutMs: 1e306,
+      requestTimeoutMs: 1e306,
+    });
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        connectionTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+        requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    );
+  });
+
   it("drops dangerous env overrides from stdio config", () => {
-    // Stdio env is executable process input. Block loader/shell hook variables
-    // while preserving ordinary provider tokens and scalar env values.
+    // Stdio env is inherited executable process input. Block loader/shell hook
+    // variables and child-process config pivots while preserving explicit MCP
+    // credentials and ordinary scalar env values.
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       env: {
@@ -62,6 +79,8 @@ describe("resolveMcpTransportConfig", () => {
         NODE_OPTIONS: "--require=./evil.js",
         LD_PRELOAD: "/tmp/pwn.so",
         BASH_ENV: "/tmp/pwn.sh",
+        ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+        TF_CLI_CONFIG_FILE: "/tmp/evil-terraform.rc",
       },
     });
 
@@ -91,6 +110,12 @@ describe("resolveMcpTransportConfig", () => {
     );
     expect(logWarn).toHaveBeenCalledWith(
       'bundle-mcp: server "probe": env "BASH_ENV" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "probe": env "ANSIBLE_CONFIG" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "probe": env "TF_CLI_CONFIG_FILE" is blocked for stdio startup safety and was ignored.',
     );
   });
 

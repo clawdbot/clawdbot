@@ -33,7 +33,7 @@ function getCalleeName(expression) {
 /**
  * Finds request body reads that occur before webhook auth validation.
  */
-export function findBlockedWebhookBodyReadLines(content, fileName = "source.ts") {
+function findBlockedWebhookBodyReadLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const lines = [];
   const visit = (node) => {
@@ -52,7 +52,7 @@ export function findBlockedWebhookBodyReadLines(content, fileName = "source.ts")
 /**
  * Runs the webhook auth/body-order guard.
  */
-export async function main() {
+async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
     sourceRoots,

@@ -30,6 +30,9 @@ export function resolveNextcloudTalkOutboundSessionRoute(
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    // Room tokens do not reveal whether inbound keys by room or sender id.
+    // Keep delivery behavior, but reject this route for explicit session selection.
+    recipientSessionExact: false,
     peer: {
       kind: "group" as const,
       id: roomId,

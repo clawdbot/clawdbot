@@ -12,6 +12,7 @@ export {
   projectConfigOntoRuntimeSourceSnapshot,
   loadConfig,
   readBestEffortConfig,
+  readBestEffortConfigSnapshot,
   readSourceConfigBestEffort,
   parseConfigJson5,
   promoteConfigSnapshotToLastKnownGood,
@@ -31,9 +32,12 @@ export {
   writeConfigFile,
 } from "./io.js";
 export {
+  getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
   resolveConfigWriteAfterWrite,
   resolveConfigWriteFollowUp,
+  setAppliedRuntimeConfigSnapshot,
+  setRuntimeConfigAppliedHash,
 } from "./runtime-snapshot.js";
 export type {
   ConfigWriteAfterWrite,
@@ -41,6 +45,7 @@ export type {
   RuntimeConfigSnapshotMetadata,
 } from "./runtime-snapshot.js";
 export type {
+  BestEffortConfigSnapshot,
   ConfigSnapshotReadOptions,
   ConfigWriteNotification,
   ConfigWriteResult,
@@ -53,6 +58,7 @@ export {
   replaceConfigFile,
   transformConfigFile,
   transformConfigFileWithRetry,
+  withConfigMutationExclusive,
 } from "./mutate.js";
 export type {
   ConfigMutationCommit,

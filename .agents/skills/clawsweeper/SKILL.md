@@ -140,7 +140,7 @@ pnpm run repair:dispatch -- jobs/openclaw/inbox/clawsweeper-openclaw-openclaw-12
   --mode autonomous \
   --runner blacksmith-4vcpu-ubuntu-2404 \
   --execution-runner blacksmith-16vcpu-ubuntu-2404 \
-  --model gpt-5.5
+  --model gpt-5.6-sol
 ```
 
 Do not dispatch a just-created job before the job file is committed and pushed;
@@ -257,7 +257,7 @@ loop. The router:
   checks are green, GitHub says mergeable, no human-review label is present,
   the PR is not draft, and both merge gates are open.
 
-Missing changelog is not a review finding or merge blocker. If repairing a user-facing change, add/update changelog automatically when practical; never ask or block solely on it.
+Missing changelog is never a review finding or merge blocker. `CHANGELOG.md` is release-only; record user-facing release-note context in the PR body or squash message, never edit the changelog for normal repairs.
 
 If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`

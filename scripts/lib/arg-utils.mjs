@@ -1,17 +1,13 @@
 // Shared argument parsing helpers for repository scripts.
-/** Read a finite number from an environment variable, returning null when unset or invalid. */
-export function readEnvNumber(name, env = process.env) {
-  const raw = env[name]?.trim();
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+function failFlagParse(message) {
+  throw new Error(message);
 }
-
-/** Read a flag value from `--flag value` or `--flag=value` arguments. */
+/**
+ * Read a flag value from `--flag value` or `--flag=value` arguments.
+ * @internal Shared repository-script contract.
+ */
 export function readFlagValue(args, name) {
-  for (let index = 0; index < args.length; index += 1) {
+  for (let index = args.length - 1; index >= 0; index -= 1) {
     const arg = args[index];
     if (arg === name) {
       return args[index + 1];
@@ -23,13 +19,16 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
-/** Remove the leading `--` separator inserted by package-manager script invocations. */
+/**
+ * Remove the leading `--` separator inserted by package-manager script invocations.
+ * @internal Shared repository-script contract.
+ */
 export function stripLeadingPackageManagerSeparator(argv) {
   return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 function isMissingStringFlagValue(value, options = {}) {
-  if (!value) {
+  if (value === undefined || (!value && options.allowEmpty !== true)) {
     return true;
   }
   if (value.startsWith("--")) {
@@ -39,10 +38,10 @@ function isMissingStringFlagValue(value, options = {}) {
 }
 
 function consumeStringFlag(argv, index, flag, options = {}) {
-  const inlineValue = readInlineFlagValue(argv[index], flag);
+  const inlineValue = options.allowInline === false ? null : readInlineFlagValue(argv[index], flag);
   if (inlineValue !== null) {
     if (isMissingStringFlagValue(inlineValue, options)) {
-      throw new Error(`${flag} requires a value`);
+      failFlagParse(options.missingValueMessage ?? `${flag} requires a value`);
     }
     return {
       nextIndex: index,
@@ -54,7 +53,7 @@ function consumeStringFlag(argv, index, flag, options = {}) {
   }
   const value = argv[index + 1];
   if (isMissingStringFlagValue(value, options)) {
-    throw new Error(`${flag} requires a value`);
+    failFlagParse(options.missingValueMessage ?? `${flag} requires a value`);
   }
   return {
     nextIndex: index + 1,
@@ -70,26 +69,7 @@ function consumeIntFlag(argv, index, flag, options = {}) {
   const parsed = parseIntegerFlagValue(raw.value, flag);
   const min = options.min ?? Number.NEGATIVE_INFINITY;
   if (parsed < min) {
-    throw new Error(`${flag} must be at least ${min}`);
-  }
-  return {
-    nextIndex: raw.nextIndex,
-    value: parsed,
-  };
-}
-
-function consumeFloatFlag(argv, index, flag, options = {}) {
-  const raw = readFlagOptionValue(argv, index, flag);
-  if (!raw) {
-    return null;
-  }
-  const parsed = parseFloatFlagValue(raw.value, flag);
-  const min = options.min ?? Number.NEGATIVE_INFINITY;
-  const includeMin = options.includeMin ?? true;
-  const isValid = Number.isFinite(parsed) && (includeMin ? parsed >= min : parsed > min);
-  if (!isValid) {
-    const comparator = includeMin ? "at least" : "greater than";
-    throw new Error(`${flag} must be ${comparator} ${min}`);
+    failFlagParse(`${flag} must be at least ${min}`);
   }
   return {
     nextIndex: raw.nextIndex,
@@ -106,7 +86,7 @@ function readFlagOptionValue(argv, index, flag) {
   const inlineValue = readInlineFlagValue(argv[index], flag);
   if (inlineValue !== null) {
     if (!inlineValue) {
-      throw new Error(`${flag} requires a value`);
+      failFlagParse(`${flag} requires a value`);
     }
     return { nextIndex: index, value: inlineValue };
   }
@@ -115,7 +95,7 @@ function readFlagOptionValue(argv, index, flag) {
   }
   const value = argv[index + 1];
   if (!value || value.startsWith("--")) {
-    throw new Error(`${flag} requires a value`);
+    failFlagParse(`${flag} requires a value`);
   }
   return { nextIndex: index + 1, value };
 }
@@ -123,23 +103,11 @@ function readFlagOptionValue(argv, index, flag) {
 function parseIntegerFlagValue(raw, flag) {
   const text = String(raw).trim();
   if (!/^-?\d+$/u.test(text)) {
-    throw new Error(`${flag} must be an integer`);
+    failFlagParse(`${flag} must be an integer`);
   }
   const parsed = Number(text);
   if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`${flag} must be a safe integer`);
-  }
-  return parsed;
-}
-
-function parseFloatFlagValue(raw, flag) {
-  const text = String(raw).trim();
-  if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    throw new Error(`${flag} must be a number`);
-  }
-  const parsed = Number(text);
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`${flag} must be a finite number`);
+    failFlagParse(`${flag} must be a safe integer`);
   }
   return parsed;
 }
@@ -153,16 +121,21 @@ export function stringFlag(flag, key, options = {}) {
         return null;
       }
       return {
+        flag,
         nextIndex: option.nextIndex,
+        repeatable: options.repeatable === true,
         apply(target) {
-          target[key] = option.value;
+          target[key] = options.transform ? options.transform(option.value) : option.value;
         },
       };
     },
   };
 }
 
-/** Create a flag spec that appends repeated string values to an array field. */
+/**
+ * Create a flag spec that appends repeated string values to an array field.
+ * @internal Shared repository-script contract.
+ */
 export function stringListFlag(flag, key, options = {}) {
   return {
     consume(argv, index) {
@@ -171,7 +144,9 @@ export function stringListFlag(flag, key, options = {}) {
         return null;
       }
       return {
+        flag,
         nextIndex: option.nextIndex,
+        repeatable: true,
         apply(target) {
           target[key] ??= [];
           target[key].push(option.value);
@@ -181,7 +156,7 @@ export function stringListFlag(flag, key, options = {}) {
   };
 }
 
-function createAssignedValueFlag(consumeOption) {
+function createAssignedValueFlag(flag, consumeOption) {
   return {
     consume(argv, index, args) {
       const option = consumeOption(argv, index, args);
@@ -189,7 +164,9 @@ function createAssignedValueFlag(consumeOption) {
         return null;
       }
       return {
+        flag,
         nextIndex: option.nextIndex,
+        repeatable: false,
         apply(target) {
           target[option.key] = option.value;
         },
@@ -198,31 +175,28 @@ function createAssignedValueFlag(consumeOption) {
   };
 }
 
-/** Create a flag spec that parses and assigns a safe integer value. */
+/**
+ * Create a flag spec that parses and assigns a safe integer value.
+ * @internal Shared repository-script contract.
+ */
 export function intFlag(flag, key, options) {
-  return createAssignedValueFlag((argv, index) => {
+  return createAssignedValueFlag(flag, (argv, index) => {
     const option = consumeIntFlag(argv, index, flag, options);
     return option ? { ...option, key } : null;
   });
 }
 
-/** Create a flag spec that parses and assigns a finite floating-point value. */
-export function floatFlag(flag, key, options) {
-  return createAssignedValueFlag((argv, index) => {
-    const option = consumeFloatFlag(argv, index, flag, options);
-    return option ? { ...option, key } : null;
-  });
-}
-
 /** Create a flag spec that assigns a fixed boolean-like value when present. */
-export function booleanFlag(flag, key, value = true) {
+export function booleanFlag(flag, key, value = true, options = {}) {
   return {
     consume(argv, index) {
       if (argv[index] !== flag) {
         return null;
       }
       return {
+        flag,
         nextIndex: index,
+        repeatable: options.repeatable === true,
         apply(target) {
           target[key] = value;
         },
@@ -234,6 +208,7 @@ export function booleanFlag(flag, key, value = true) {
 /** Apply flag specs to argv and return the mutated parsed args object. */
 export function parseFlagArgs(argv, args, specs, options = {}) {
   const ignoreDoubleDash = options.ignoreDoubleDash ?? true;
+  const seenFlags = new Set();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--" && ignoreDoubleDash) {
@@ -244,6 +219,18 @@ export function parseFlagArgs(argv, args, specs, options = {}) {
       const option = spec.consume(argv, i, args);
       if (!option) {
         continue;
+      }
+      if (typeof option.flag !== "string" || !option.flag) {
+        failFlagParse("parseFlagArgs specs must declare a flag for consumed options");
+      }
+      if (option.repeatable !== true) {
+        if (seenFlags.has(option.flag)) {
+          failFlagParse(
+            options.duplicateOptionMessage?.(option.flag) ??
+              `${option.flag} was provided more than once`,
+          );
+        }
+        seenFlags.add(option.flag);
       }
       option.apply(args);
       i = option.nextIndex;
@@ -258,7 +245,7 @@ export function parseFlagArgs(argv, args, specs, options = {}) {
       continue;
     }
     if (!options.allowUnknownOptions && arg.startsWith("-")) {
-      throw new Error(`Unknown option: ${arg}`);
+      failFlagParse(`Unknown option: ${arg}`);
     }
   }
   return args;

@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/linux-node",
+  "version": "2026.7.2",
+  "description": "OpenClaw Linux node device capabilities",
+  "type": "module",
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

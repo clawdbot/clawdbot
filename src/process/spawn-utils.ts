@@ -1,13 +1,15 @@
 // Spawn utilities configure child processes and normalize spawned process handles.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject } from "../infra/errors.js";
 
-export type SpawnFallback = {
+type SpawnFallback = {
   label: string;
   options: SpawnOptions;
 };
 
-export type SpawnWithFallbackResult = {
+type SpawnWithFallbackResult = {
   child: ChildProcess;
   usedFallback: boolean;
   fallbackLabel?: string;
@@ -43,7 +45,7 @@ async function spawnAndWaitForSpawn(
   argv: string[],
   options: SpawnOptions,
 ): Promise<ChildProcess> {
-  const child = spawnImpl(argv[0], argv.slice(1), options);
+  const child = spawnImpl(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), options);
 
   return await new Promise((resolve, reject) => {
     let settled = false;
@@ -65,7 +67,7 @@ async function spawnAndWaitForSpawn(
       }
       settled = true;
       cleanup();
-      reject(toLintErrorObject(err, "Non-Error rejection"));
+      reject(toErrorObject(err, "Non-Error rejection"));
     };
     const onSpawn = () => {
       finishResolve();
@@ -97,8 +99,7 @@ export async function spawnWithFallback(
   ];
 
   let lastError: unknown;
-  for (let index = 0; index < attempts.length; index += 1) {
-    const attempt = attempts[index];
+  for (const [index, attempt] of attempts.entries()) {
     try {
       const child = await spawnAndWaitForSpawn(spawnImpl, params.argv, attempt.options);
       return {
@@ -117,18 +118,4 @@ export async function spawnWithFallback(
   }
 
   throw lastError;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

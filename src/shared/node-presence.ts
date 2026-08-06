@@ -4,6 +4,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 /** Gateway event name used by node hosts to refresh their last-seen presence. */
 export const NODE_PRESENCE_ALIVE_EVENT = "node.presence.alive";
 
+/** Gateway event name used by interactive nodes to report recent local input. */
+export const NODE_PRESENCE_ACTIVITY_EVENT = "node.presence.activity";
+
 /** Reasons accepted from native/background node presence events. */
 const NODE_PRESENCE_ALIVE_REASONS = [
   "background",
@@ -15,7 +18,7 @@ const NODE_PRESENCE_ALIVE_REASONS = [
 ] as const;
 
 /** Canonical trigger reason stored with node presence updates. */
-export type NodePresenceAliveReason = (typeof NODE_PRESENCE_ALIVE_REASONS)[number];
+type NodePresenceAliveReason = (typeof NODE_PRESENCE_ALIVE_REASONS)[number];
 
 const NODE_PRESENCE_ALIVE_REASON_SET = new Set<string>(NODE_PRESENCE_ALIVE_REASONS);
 

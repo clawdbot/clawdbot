@@ -3,14 +3,19 @@ import Foundation
 import OpenClawKit
 
 final class RemindersService: RemindersServicing {
+    private let reminderAuthorizationStatus: @Sendable () -> EKAuthorizationStatus
+
+    init(
+        reminderAuthorizationStatus: @escaping @Sendable () -> EKAuthorizationStatus = {
+            EKEventStore.authorizationStatus(for: .reminder)
+        })
+    {
+        self.reminderAuthorizationStatus = reminderAuthorizationStatus
+    }
+
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
-        let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized: Bool = if status == .notDetermined || status == .writeOnly {
-            await Self.requestFullReminderAccess()
-        } else {
-            EventKitAuthorization.allowsRead(status: status)
-        }
-        guard authorized else {
+        let status = self.reminderAuthorizationStatus()
+        guard EventKitAuthorization.allowsRead(status: status) else {
             throw NSError(domain: "Reminders", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
@@ -36,7 +41,7 @@ final class RemindersService: RemindersServicing {
                 }
                 let selected = Array(filtered.prefix(limit))
                 let payload = selected.map { reminder in
-                    let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
+                    let due = Self.date(fromDueComponents: reminder.dueDateComponents)
                     return OpenClawReminderPayload(
                         identifier: reminder.calendarItemIdentifier,
                         title: reminder.title,
@@ -52,13 +57,8 @@ final class RemindersService: RemindersServicing {
     }
 
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
-        let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized: Bool = if status == .notDetermined {
-            await Self.requestFullReminderAccess()
-        } else {
-            EventKitAuthorization.allowsWrite(status: status)
-        }
-        guard authorized else {
+        let status = self.reminderAuthorizationStatus()
+        guard EventKitAuthorization.allowsWrite(status: status) else {
             throw NSError(domain: "Reminders", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
@@ -82,22 +82,12 @@ final class RemindersService: RemindersServicing {
             listId: params.listId,
             listName: params.listName)
 
-        if let dueISO = params.dueISO?.trimmingCharacters(in: .whitespacesAndNewlines), !dueISO.isEmpty {
-            let formatter = ISO8601DateFormatter()
-            guard let dueDate = formatter.date(from: dueISO) else {
-                throw NSError(domain: "Reminders", code: 4, userInfo: [
-                    NSLocalizedDescriptionKey: "REMINDERS_INVALID: dueISO must be ISO-8601",
-                ])
-            }
-            reminder.dueDateComponents = Calendar.current.dateComponents(
-                [.year, .month, .day, .hour, .minute, .second],
-                from: dueDate)
-        }
+        try Self.applyDueISO(params.dueISO, to: reminder)
 
         try store.save(reminder, commit: true)
 
         let formatter = ISO8601DateFormatter()
-        let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
+        let due = Self.date(fromDueComponents: reminder.dueDateComponents)
         let payload = OpenClawReminderPayload(
             identifier: reminder.calendarItemIdentifier,
             title: reminder.title,
@@ -108,13 +98,36 @@ final class RemindersService: RemindersServicing {
         return OpenClawRemindersAddPayload(reminder: payload)
     }
 
-    private static func requestFullReminderAccess() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToReminders { granted, _ in
-                completion(granted)
-            }
+    static func applyDueISO(
+        _ rawDueISO: String?,
+        to reminder: EKReminder,
+        timeZone: TimeZone = .current) throws
+    {
+        guard let dueISO = rawDueISO?.trimmingCharacters(in: .whitespacesAndNewlines), !dueISO.isEmpty else {
+            return
         }
+        let formatter = ISO8601DateFormatter()
+        guard let dueDate = formatter.date(from: dueISO) else {
+            throw NSError(domain: "Reminders", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "REMINDERS_INVALID: dueISO must be ISO-8601",
+            ])
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var components = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: dueDate)
+        components.calendar = calendar
+        components.timeZone = timeZone
+        // EventKit requires a Gregorian due calendar and a matching start date on iOS.
+        reminder.startDateComponents = components
+        reminder.dueDateComponents = components
+        reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
+    }
+
+    static func date(fromDueComponents components: DateComponents?) -> Date? {
+        components?.date
     }
 
     private static func resolveList(

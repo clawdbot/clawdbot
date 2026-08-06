@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import {
   normalizeOptionalLowercaseString,
@@ -62,7 +63,7 @@ function normalizePluginIdWithLookup(
   if (builtInAlias) {
     return builtInAlias;
   }
-  return getAliasLookup().get(normalized) ?? trimmed;
+  return getAliasLookup().get(normalized) ?? normalized;
 }
 
 function createScopedPluginIdNormalizer(): NormalizePluginId {
@@ -84,6 +85,38 @@ export const normalizePluginsConfig = (
 ): NormalizedPluginsConfig => {
   return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
+
+/** Canonicalizes one plugin entry and its policy-list ids before a targeted mutation. */
+export function normalizePluginTargetConfig(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  const normalizedId = normalizePluginId(pluginId);
+  const normalized = normalizePluginsConfig(config.plugins);
+  const rawEntries = config.plugins?.entries ?? {};
+  const hasTargetEntry = Object.keys(rawEntries).some(
+    (entryId) => normalizePluginId(entryId) === normalizedId,
+  );
+  const entries = Object.fromEntries(
+    Object.entries(rawEntries).filter(([entryId]) => normalizePluginId(entryId) !== normalizedId),
+  );
+  if (hasTargetEntry) {
+    const { config: pluginConfig, ...entry } = normalized.entries[normalizedId] ?? {};
+    entries[normalizedId] = {
+      ...entry,
+      ...(isRecord(pluginConfig) ? { config: pluginConfig } : {}),
+    };
+  }
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      ...(Array.isArray(config.plugins?.allow) ? { allow: normalized.allow } : {}),
+      ...(Array.isArray(config.plugins?.deny) ? { deny: normalized.deny } : {}),
+      entries,
+    },
+  };
+}
 
 export function createPluginActivationSource(params: {
   config?: OpenClawConfig;

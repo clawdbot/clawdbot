@@ -22,8 +22,23 @@ export type EmbeddingProviderCallOptions = {
 export type EmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
+  /** Prior persisted model/cache identities that are equivalent to the current identity. */
+  indexIdentityAliases?: Array<{
+    model: string;
+    cacheKeyData: Record<string, unknown>;
+  }>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
+};
+
+/** Provider-owned canonical identity and exact aliases for persisted indexes. */
+export type EmbeddingProviderIndexIdentity = {
+  model: string;
+  cacheKeyData: Record<string, unknown>;
+  aliases?: Array<{
+    model: string;
+    cacheKeyData: Record<string, unknown>;
+  }>;
 };
 
 /** Created embedding provider instance used by memory/search callers. */
@@ -74,6 +89,9 @@ export type EmbeddingProviderAdapter = {
   defaultModel?: string;
   transport?: "local" | "remote";
   authProviderId?: string;
+  resolveIndexIdentity?: (
+    options: EmbeddingProviderCreateOptions,
+  ) => EmbeddingProviderIndexIdentity;
   create: (options: EmbeddingProviderCreateOptions) => Promise<EmbeddingProviderCreateResult>;
   formatSetupError?: (err: unknown) => string;
 };

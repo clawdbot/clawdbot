@@ -1,6 +1,6 @@
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 // Deepinfra tests cover surface model catalogs plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetDeepInfraModelCacheForTest } from "./provider-models.js";
 import {
   listDeepInfraImageGenCatalog,
   listDeepInfraVideoGenCatalog,
@@ -8,7 +8,7 @@ import {
 } from "./surface-model-catalogs.js";
 
 beforeEach(() => {
-  resetDeepInfraModelCacheForTest();
+  clearLiveCatalogCacheForTests();
 });
 
 function makeCtx(overrides: Partial<Parameters<typeof listDeepInfraImageGenCatalog>[0]> = {}) {
@@ -49,6 +49,14 @@ const surfaceEntry = (id: string, surfaceTag: string, extra: Record<string, unkn
   },
 });
 
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
+
 async function withLiveFetch(mockFetch: ReturnType<typeof vi.fn>, run: () => Promise<void>) {
   const env = { ...process.env };
   delete process.env.NODE_ENV;
@@ -86,19 +94,17 @@ describe("DeepInfra generation catalogs", () => {
 
 describe("listDeepInfraImageGenCatalog", () => {
   it("returns null when live discovery succeeds but the response has zero image-gen entries", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            surfaceEntry("anthropic/claude-sonnet-4-6", "chat", {
-              context_length: 200000,
-              max_tokens: 8192,
-              pricing: { input_tokens: 3, output_tokens: 15 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          surfaceEntry("anthropic/claude-sonnet-4-6", "chat", {
+            context_length: 200000,
+            max_tokens: 8192,
+            pricing: { input_tokens: 3, output_tokens: 15 },
+          }),
+        ],
+      }),
+    );
 
     await withLiveFetch(mockFetch, async () => {
       const result = await listDeepInfraImageGenCatalog(withKeyCtx());
@@ -115,28 +121,26 @@ describe("listDeepInfraImageGenCatalog", () => {
   });
 
   it("projects discovered image-gen entries when a key is configured and discovery is live", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            surfaceEntry("black-forest-labs/FLUX-2-pro", "image-gen", {
-              pricing: { per_image_unit: 0.08 },
-              default_width: 1024,
-              default_height: 1024,
-              default_iterations: 28,
-            }),
-            surfaceEntry("ByteDance/Seedream-4", "image-gen", {
-              pricing: { per_image_unit: 0.03 },
-            }),
-            surfaceEntry("anthropic/claude-sonnet-4-6", "chat", {
-              context_length: 200000,
-              max_tokens: 8192,
-              pricing: { input_tokens: 3, output_tokens: 15 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          surfaceEntry("black-forest-labs/FLUX-2-pro", "image-gen", {
+            pricing: { per_image_unit: 0.08 },
+            default_width: 1024,
+            default_height: 1024,
+            default_iterations: 28,
+          }),
+          surfaceEntry("ByteDance/Seedream-4", "image-gen", {
+            pricing: { per_image_unit: 0.03 },
+          }),
+          surfaceEntry("anthropic/claude-sonnet-4-6", "chat", {
+            context_length: 200000,
+            max_tokens: 8192,
+            pricing: { input_tokens: 3, output_tokens: 15 },
+          }),
+        ],
+      }),
+    );
 
     await withLiveFetch(mockFetch, async () => {
       const result = await listDeepInfraImageGenCatalog(withKeyCtx());
@@ -161,22 +165,20 @@ describe("listDeepInfraVideoGenCatalog", () => {
     // produces zero video-gen entries. We must return null so the registered
     // provider's static fallback list is consulted instead of an empty
     // "live" answer.
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            surfaceEntry("anthropic/claude-sonnet-4-6", "chat", {
-              context_length: 200000,
-              max_tokens: 8192,
-              pricing: { input_tokens: 3, output_tokens: 15 },
-            }),
-            surfaceEntry("black-forest-labs/FLUX-2-pro", "image-gen", {
-              pricing: { per_image_unit: 0.08 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          surfaceEntry("anthropic/claude-sonnet-4-6", "chat", {
+            context_length: 200000,
+            max_tokens: 8192,
+            pricing: { input_tokens: 3, output_tokens: 15 },
+          }),
+          surfaceEntry("black-forest-labs/FLUX-2-pro", "image-gen", {
+            pricing: { per_image_unit: 0.08 },
+          }),
+        ],
+      }),
+    );
 
     await withLiveFetch(mockFetch, async () => {
       const result = await listDeepInfraVideoGenCatalog(withKeyCtx());
@@ -185,20 +187,18 @@ describe("listDeepInfraVideoGenCatalog", () => {
   });
 
   it("projects discovered video-gen entries with capability shape", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
-              pricing: { output_seconds: 0.05 },
-            }),
-            surfaceEntry("ByteDance/Seedance-2.0", "video-gen", {
-              pricing: { output_seconds: 0.08 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
+            pricing: { output_seconds: 0.05 },
+          }),
+          surfaceEntry("ByteDance/Seedance-2.0", "video-gen", {
+            pricing: { output_seconds: 0.08 },
+          }),
+        ],
+      }),
+    );
 
     await withLiveFetch(mockFetch, async () => {
       const result = await listDeepInfraVideoGenCatalog(withKeyCtx());
@@ -208,23 +208,25 @@ describe("listDeepInfraVideoGenCatalog", () => {
       expect(first?.kind).toBe("video_generation");
       expect(first?.capabilities?.generate?.supportsAspectRatio).toBe(true);
       expect(first?.capabilities?.generate?.supportedDurationSeconds).toEqual([5, 8]);
+      // Catalog must not advertise options the runtime drops: guidance is not
+      // part of the /v1/openai/videos contract, so catalog == runtime providerOptions.
+      expect(first?.capabilities?.providerOptions).not.toHaveProperty("guidance_scale");
+      expect(first?.capabilities?.providerOptions).not.toHaveProperty("guidanceScale");
     });
   });
 });
 
 describe("resolveDeepInfraVideoModelCapabilities", () => {
   it("returns capabilities for a discovered video-gen model", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
-              pricing: { output_seconds: 0.05 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
+            pricing: { output_seconds: 0.05 },
+          }),
+        ],
+      }),
+    );
 
     await withLiveFetch(mockFetch, async () => {
       const caps = await resolveDeepInfraVideoModelCapabilities({
@@ -236,17 +238,15 @@ describe("resolveDeepInfraVideoModelCapabilities", () => {
   });
 
   it("strips the deepinfra/ prefix when matching", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
-              pricing: { output_seconds: 0.05 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
+            pricing: { output_seconds: 0.05 },
+          }),
+        ],
+      }),
+    );
 
     await withLiveFetch(mockFetch, async () => {
       const caps = await resolveDeepInfraVideoModelCapabilities({
@@ -257,17 +257,15 @@ describe("resolveDeepInfraVideoModelCapabilities", () => {
   });
 
   it("returns undefined for an unknown model", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          data: [
-            surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
-              pricing: { output_seconds: 0.05 },
-            }),
-          ],
-        }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          surfaceEntry("Wan-AI/Wan2.6-T2V", "video-gen", {
+            pricing: { output_seconds: 0.05 },
+          }),
+        ],
+      }),
+    );
 
     await withLiveFetch(mockFetch, async () => {
       const caps = await resolveDeepInfraVideoModelCapabilities({

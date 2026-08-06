@@ -1,5 +1,5 @@
 ---
-summary: "Adds memory embedding provider support. Adds agent-callable tools."
+summary: "Adds agent-callable tools."
 read_when:
   - You are installing, configuring, or auditing the memory-core plugin
 title: "Memory Core plugin"
@@ -7,7 +7,7 @@ title: "Memory Core plugin"
 
 # Memory Core plugin
 
-Adds memory embedding provider support. Adds agent-callable tools.
+Adds agent-callable tools.
 
 ## Distribution
 
@@ -16,4 +16,4 @@ Adds memory embedding provider support. Adds agent-callable tools.
 
 ## Surface
 
-contracts: memoryEmbeddingProviders, tools
+contracts: `tools`

@@ -3,9 +3,10 @@ summary: "Redirect to /automation"
 title: "Cron vs heartbeat"
 ---
 
-The decision guide for cron vs heartbeat lives under [Automation](/automation).
+This page moved. See [Automations vs Heartbeat](/automation#automations-vs-heartbeat) for the decision table.
 
 ## Related
 
-- [Scheduled tasks](/automation/cron-jobs)
+- [Automations](/automation/cron-jobs)
+- [Heartbeat](/gateway/heartbeat)
 - [Background tasks](/automation/tasks)

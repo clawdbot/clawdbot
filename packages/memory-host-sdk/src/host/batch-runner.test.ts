@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../../gateway-client/src/timeouts.js";
 import { buildEmbeddingBatchGroupOptions, runEmbeddingBatchGroups } from "./batch-runner.js";
 
+const jsonlEncoder = new TextEncoder();
+
+function jsonlLineBytes(value: unknown): number {
+  return jsonlEncoder.encode(JSON.stringify(value)).byteLength;
+}
+
 describe("buildEmbeddingBatchGroupOptions", () => {
   it("clamps oversized embedding batch poll intervals to the timeout budget", () => {
     const options = buildEmbeddingBatchGroupOptions(
@@ -60,5 +66,92 @@ describe("buildEmbeddingBatchGroupOptions", () => {
     );
 
     expect(options.pollIntervalMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
+  it("splits embedding batch groups by serialized JSONL bytes", async () => {
+    const requests = [
+      { id: "one", body: { input: "alpha" } },
+      { id: "two", body: { input: "βeta" } },
+      { id: "three", body: { input: "gamma" } },
+    ];
+    const maxJsonlBytes = jsonlLineBytes(requests[0]) + 1 + jsonlLineBytes(requests[1]);
+    const groups: string[][] = [];
+
+    await runEmbeddingBatchGroups({
+      requests,
+      maxRequests: 100,
+      maxJsonlBytes,
+      wait: true,
+      pollIntervalMs: 1000,
+      timeoutMs: 60_000,
+      concurrency: 1,
+      debugLabel: "embedding batch submit",
+      runGroup: async ({ group }) => {
+        groups.push(group.map((request) => request.id));
+      },
+    });
+
+    expect(groups).toEqual([["one", "two"], ["three"]]);
+  });
+
+  it("splits provider-rejected batch groups when the error is splittable", async () => {
+    const uploadTooLarge = new Error("batch upload failed: 413 payload too large");
+    const calls: string[][] = [];
+    const onSplitGroup = vi.fn();
+
+    await runEmbeddingBatchGroups({
+      requests: ["one", "two", "three", "four"],
+      maxRequests: 100,
+      wait: true,
+      pollIntervalMs: 1000,
+      timeoutMs: 60_000,
+      concurrency: 1,
+      debugLabel: "embedding batch submit",
+      shouldSplitGroupOnError: (error) => error === uploadTooLarge,
+      onSplitGroup,
+      runGroup: async ({ group }) => {
+        calls.push([...group]);
+        if (group.length === 4) {
+          throw uploadTooLarge;
+        }
+      },
+    });
+
+    expect(calls).toEqual([
+      ["one", "two", "three", "four"],
+      ["one", "two"],
+      ["three", "four"],
+    ]);
+    expect(onSplitGroup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: uploadTooLarge,
+        group: ["one", "two", "three", "four"],
+        parts: [
+          ["one", "two"],
+          ["three", "four"],
+        ],
+        depth: 0,
+      }),
+    );
+  });
+
+  it("does not split a single rejected batch request", async () => {
+    const uploadTooLarge = new Error("batch upload failed: 413 payload too large");
+
+    await expect(
+      runEmbeddingBatchGroups({
+        requests: ["one"],
+        maxRequests: 100,
+        wait: true,
+        pollIntervalMs: 1000,
+        timeoutMs: 60_000,
+        concurrency: 1,
+        debugLabel: "embedding batch submit",
+        shouldSplitGroupOnError: () => true,
+        runGroup: async () => {
+          throw uploadTooLarge;
+        },
+      }),
+    ).rejects.toThrow(uploadTooLarge);
   });
 });

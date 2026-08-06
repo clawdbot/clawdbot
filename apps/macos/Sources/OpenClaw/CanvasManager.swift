@@ -29,39 +29,46 @@ final class CanvasManager {
         return base.appendingPathComponent("OpenClaw/canvas", isDirectory: true)
     }()
 
-    func show(sessionKey: String, path: String? = nil, placement: CanvasPlacement? = nil) throws -> String {
-        try self.showDetailed(sessionKey: sessionKey, target: path, placement: placement).directory
+    func show(
+        sessionKey: String,
+        path: String? = nil,
+        placement: CanvasPlacement? = nil,
+        trustedA2UIActions: Bool = false) throws -> String
+    {
+        try self.showDetailed(
+            sessionKey: sessionKey,
+            target: path,
+            placement: placement,
+            trustedA2UIActions: trustedA2UIActions).directory
     }
 
     func showDetailed(
         sessionKey: String,
         target: String? = nil,
-        placement: CanvasPlacement? = nil) throws -> CanvasShowResult
+        placement: CanvasPlacement? = nil,
+        trustedA2UIActions: Bool = false) throws -> CanvasShowResult
     {
         Self.logger.debug(
             """
             showDetailed start session=\(sessionKey, privacy: .public) \
-            target=\(target ?? "", privacy: .public) \
+            hasTarget=\(target != nil) \
             placement=\(placement != nil)
             """)
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
-        let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedTarget = target?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty
+        let ensured = try self.ensureController(sessionKey: sessionKey)
+        let controller = ensured.controller
 
-        if let controller = self.panelController, self.panelSessionKey == session {
-            Self.logger.debug("showDetailed reuse existing session=\(session, privacy: .public)")
-            controller.onVisibilityChanged = { [weak self] visible in
-                self?.onPanelVisibilityChanged?(visible)
-            }
+        if !ensured.created {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
             controller.applyPreferredPlacement(placement)
-            self.refreshDebugStatus()
 
             // Existing session: only navigate when an explicit target was provided.
             if let normalizedTarget {
-                controller.load(target: normalizedTarget)
+                controller.load(target: normalizedTarget, trustedA2UIActions: trustedA2UIActions)
+                self.refreshDebugStatus()
                 return self.makeShowResult(
                     directory: controller.directoryPath,
                     target: target,
@@ -69,6 +76,7 @@ final class CanvasManager {
             }
 
             self.maybeAutoNavigateToA2UIAsync(controller: controller)
+            self.refreshDebugStatus()
             return CanvasShowResult(
                 directory: controller.directoryPath,
                 target: target,
@@ -77,30 +85,13 @@ final class CanvasManager {
                 url: nil)
         }
 
-        Self.logger.debug("showDetailed creating new session=\(session, privacy: .public)")
-        self.panelController?.close()
-        self.panelController = nil
-        self.panelSessionKey = nil
-
-        Self.logger.debug("showDetailed ensure canvas root dir")
-        try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
-        Self.logger.debug("showDetailed init CanvasWindowController")
-        let controller = try CanvasWindowController(
-            sessionKey: session,
-            root: Self.canvasRoot,
-            presentation: .panel(anchorProvider: anchorProvider))
-        Self.logger.debug("showDetailed CanvasWindowController init done")
-        controller.onVisibilityChanged = { [weak self] visible in
-            self?.onPanelVisibilityChanged?(visible)
-        }
-        self.panelController = controller
-        self.panelSessionKey = session
         controller.applyPreferredPlacement(placement)
 
         // New session: default to "/" so the user sees either the welcome page or `index.html`.
         let effectiveTarget = normalizedTarget ?? "/"
-        Self.logger.debug("showDetailed showCanvas effectiveTarget=\(effectiveTarget, privacy: .public)")
-        controller.showCanvas(path: effectiveTarget)
+        Self.logger.debug("showDetailed showCanvas hasExplicitTarget=\(normalizedTarget != nil)")
+        // showCanvas presents the panel (presentAnchoredPanel) and loads the target.
+        controller.showCanvas(path: effectiveTarget, trustedA2UIActions: trustedA2UIActions)
         Self.logger.debug("showDetailed showCanvas done")
         if normalizedTarget == nil {
             self.maybeAutoNavigateToA2UIAsync(controller: controller)
@@ -124,17 +115,34 @@ final class CanvasManager {
     }
 
     func eval(sessionKey: String, javaScript: String) async throws -> String {
-        _ = try self.show(sessionKey: sessionKey, path: nil)
-        guard let controller = self.panelController else { return "" }
+        let ensured = try self.ensureController(sessionKey: sessionKey)
+        if ensured.created {
+            ensured.controller.load(target: "/")
+        }
+        let controller = ensured.controller
         return try await controller.eval(javaScript: javaScript)
     }
 
     func snapshot(sessionKey: String, outPath: String?) async throws -> String {
-        _ = try self.show(sessionKey: sessionKey, path: nil)
-        guard let controller = self.panelController else {
-            throw NSError(domain: "Canvas", code: 21, userInfo: [NSLocalizedDescriptionKey: "canvas not available"])
+        let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Snapshot is read-only: it must not create, switch, or reveal panel state.
+        // WebKit suspends rendering for ordered-out windows, so a hidden capture
+        // has no usable image; refuse with a clear contract instead.
+        guard let controller = self.panelController,
+              self.panelSessionKey == session,
+              controller.window?.isVisible == true
+        else {
+            throw NSError(domain: "Canvas", code: 21, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "CANVAS_HIDDEN: canvas snapshot needs a visible panel; run canvas.present first",
+            ])
         }
         return try await controller.snapshot(to: outPath)
+    }
+
+    func prepare(sessionKey: String, target: String, trustedA2UIActions: Bool = false) throws {
+        let controller = try self.ensureController(sessionKey: sessionKey).controller
+        controller.load(target: target, trustedA2UIActions: trustedA2UIActions)
     }
 
     // MARK: - Gateway A2UI auto-nav
@@ -158,9 +166,9 @@ final class CanvasManager {
         if raw.isEmpty {
             Self.logger.debug("canvas plugin surface URL missing in gateway snapshot")
         } else {
-            Self.logger.debug("canvas plugin surface URL snapshot=\(raw, privacy: .public)")
+            Self.logger.debug("canvas plugin surface URL present in gateway snapshot")
         }
-        let a2uiUrl = Self.resolveA2UIHostUrl(from: raw)
+        let a2uiUrl = CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: raw)
         if a2uiUrl == nil, !raw.isEmpty {
             Self.logger.debug("canvas plugin surface URL invalid; cannot resolve A2UI")
         }
@@ -193,14 +201,14 @@ final class CanvasManager {
             Self.logger.debug("canvas auto-nav skipped; target unchanged")
             return
         }
-        Self.logger.debug("canvas auto-nav -> \(a2uiUrl, privacy: .public)")
-        controller.load(target: a2uiUrl)
+        Self.logger.debug("canvas auto-nav to capability-scoped A2UI")
+        controller.load(target: a2uiUrl, trustedA2UIActions: true)
         self.lastAutoA2UIUrl = a2uiUrl
     }
 
     private func resolveA2UIHostUrl() async -> String? {
         let raw = await GatewayConnection.shared.canvasPluginSurfaceUrl()
-        return Self.resolveA2UIHostUrl(from: raw)
+        return CanvasHostedURLResolver.resolveA2UIURL(surfaceURL: raw)
     }
 
     func refreshDebugStatus() {
@@ -232,12 +240,6 @@ final class CanvasManager {
         controller.updateDebugStatus(enabled: enabled, title: title, subtitle: subtitle)
     }
 
-    private static func resolveA2UIHostUrl(from raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
-        return base.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=macos"
-    }
-
     // MARK: - Anchoring
 
     private static func mouseAnchorProvider() -> NSRect? {
@@ -248,6 +250,42 @@ final class CanvasManager {
     // placement interpretation is handled by the window controller.
 
     // MARK: - Helpers
+
+    /// Content operations must not reveal Canvas or activate the app. Only explicit presentation or user intent may
+    /// re-present it, or reconnect-time agent content would reopen a panel the user closed.
+    /// A session switch keeps the single-panel model: the previous panel closes and the new one stays hidden.
+    private func ensureController(sessionKey: String) throws -> (controller: CanvasWindowController, created: Bool) {
+        let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
+        let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let controller = self.panelController, self.panelSessionKey == session {
+            Self.logger.debug("ensureController reuse existing session=\(session, privacy: .public)")
+            controller.onVisibilityChanged = { [weak self] visible in
+                self?.onPanelVisibilityChanged?(visible)
+            }
+            return (controller, false)
+        }
+
+        Self.logger.debug("ensureController creating new session=\(session, privacy: .public)")
+        self.panelController?.close()
+        self.panelController = nil
+        self.panelSessionKey = nil
+
+        Self.logger.debug("ensureController ensure canvas root dir")
+        try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
+        Self.logger.debug("ensureController init CanvasWindowController")
+        let controller = try CanvasWindowController(
+            sessionKey: session,
+            root: Self.canvasRoot,
+            presentation: .panel(anchorProvider: anchorProvider))
+        Self.logger.debug("ensureController CanvasWindowController init done")
+        controller.onVisibilityChanged = { [weak self] visible in
+            self?.onPanelVisibilityChanged?(visible)
+        }
+        self.panelController = controller
+        self.panelSessionKey = session
+        return (controller, true)
+    }
 
     private static func directURL(for target: String?) -> URL? {
         guard let target else { return nil }
@@ -344,3 +382,22 @@ final class CanvasManager {
 
     // no bundled A2UI shell; scaffold fallback is purely visual
 }
+
+#if DEBUG
+extension CanvasManager {
+    var _testPanelWindowIsVisible: Bool? {
+        self.panelController?.window?.isVisible
+    }
+
+    var _testHasPanelController: Bool {
+        self.panelController != nil
+    }
+
+    func _testResetPanel() {
+        self.panelController?.close()
+        self.panelController = nil
+        self.panelSessionKey = nil
+        self.lastAutoA2UIUrl = nil
+    }
+}
+#endif

@@ -7,6 +7,7 @@ export {
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
+  createNativeApprovalMessagingTargetResolvers,
   nativeApprovalTargetsMatch,
   resolveApprovalKind,
   shouldSuppressLocalNativeExecApprovalPrompt,

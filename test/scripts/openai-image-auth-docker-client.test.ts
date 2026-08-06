@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   startMockServer,
   type RequestRecord,
-} from "../../scripts/e2e/openai-image-auth-docker-client.ts";
+} from "../e2e/qa-lab/runtime/openai-image-auth-docker-client.ts";
 
 describe("OpenAI image auth Docker client mock server", () => {
   it("rejects oversized request bodies before recording them", async () => {

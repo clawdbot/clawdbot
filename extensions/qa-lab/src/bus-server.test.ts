@@ -60,6 +60,20 @@ async function pollQaBus(params: {
   return (await response.json()) as QaBusPollResult;
 }
 
+async function postQaBusJson(baseUrl: string, path: string, body: unknown) {
+  return await postQaBusRawJson(baseUrl, path, JSON.stringify(body));
+}
+
+async function postQaBusRawJson(baseUrl: string, path: string, body: string) {
+  return await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body,
+  });
+}
+
 describe("closeQaHttpServer", () => {
   it("closes idle keep-alive sockets so suite processes can exit", async () => {
     const server = createServer((_req, res) => {
@@ -122,9 +136,275 @@ describe("qa-bus server", () => {
       kind: "inbound-message",
     });
   });
+
+  it("resumes an account after its last acknowledged cursor when the client restarts", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const consumed = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "first", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "consumed before restart",
+    });
+    const firstPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(firstPoll.events.map((event) => event.cursor)).toEqual([1]);
+
+    await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPoll.cursor,
+      timeoutMs: 0,
+    });
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
+    const queuedDuringRestart = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "second", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "queued during restart",
+    });
+
+    const restartedPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    const restartedMessageIds = restartedPoll.events.flatMap((event) =>
+      "message" in event ? [event.message.id] : [],
+    );
+    expect(restartedMessageIds).toEqual([queuedDuringRestart.id]);
+    expect(restartedMessageIds).not.toContain(consumed.id);
+
+    state.reset();
+    const queuedAfterReset = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "third", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "queued after bus reset",
+    });
+    const resetPoll = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(
+      resetPoll.events.flatMap((event) => ("message" in event ? [event.message.id] : [])),
+    ).toEqual([queuedAfterReset.id]);
+  });
+
+  it("paginates a burst without advancing past events omitted by the poll limit", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    for (let index = 1; index <= 101; index += 1) {
+      state.addInboundMessage({
+        accountId: "acct-a",
+        conversation: { id: "burst", kind: "direct" },
+        senderId: "acct-a-user",
+        text: `burst event ${index}`,
+      });
+    }
+
+    const firstPage = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(firstPage.events).toHaveLength(100);
+    expect(firstPage.cursor).toBe(100);
+
+    const secondPage = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPage.cursor,
+      timeoutMs: 0,
+    });
+    expect(secondPage.events).toHaveLength(1);
+    expect(secondPage.events[0]?.cursor).toBe(101);
+    expect(secondPage.cursor).toBe(101);
+  });
+
+  it("rejects malformed poll numeric fields before long-polling", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const startedAt = Date.now();
+    const response = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "acct-a",
+      cursor: "999",
+      timeoutMs: 500,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(300);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "poll cursor must be an integer at least 0.",
+    });
+  });
+
+  it("rejects malformed search limits before querying state", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusJson(bus.baseUrl, "/v1/actions/search", {
+      limit: "all",
+      query: "anything",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "search limit must be an integer at least 1.",
+    });
+  });
+
+  it.each(["inbound", "outbound"] as const)(
+    "accepts a generated-media payload larger than 1 MiB on the %s message route",
+    async (direction) => {
+      const state = createQaBusState();
+      const bus = await startQaBusServer({ state });
+      stops.push(bus["stop"]);
+
+      const generatedImage = Buffer.alloc(1_600_000, 0x71);
+      const attachment = {
+        id: "qa-lighthouse-image",
+        kind: "image",
+        mimeType: "image/png",
+        fileName: "qa-lighthouse.png",
+        contentBase64: generatedImage.toString("base64"),
+      };
+      const response = await postQaBusJson(bus.baseUrl, `/v1/${direction}/message`, {
+        accountId: "acct-a",
+        text: "QA lighthouse",
+        attachments: [attachment],
+        ...(direction === "inbound"
+          ? {
+              conversation: { id: "qa-operator", kind: "direct" },
+              senderId: "qa-operator",
+            }
+          : { to: "dm:qa-operator" }),
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        message: { direction, attachments: [attachment] },
+      });
+
+      const snapshot = state.getSnapshot();
+      expect(snapshot.messages).toHaveLength(1);
+      expect(snapshot.events).toHaveLength(1);
+      const storedAttachment = snapshot.messages[0]?.attachments?.[0];
+      expect(storedAttachment).toEqual(attachment);
+      expect(Buffer.from(storedAttachment?.contentBase64 ?? "", "base64")).toEqual(generatedImage);
+    },
+  );
+
+  it("returns a controlled error when a v1 POST body contains malformed JSON", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusRawJson(bus.baseUrl, "/v1/reset", "{");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Malformed JSON body",
+    });
+  });
+
+  it("keeps oversized numeric poll and search fields bounded", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const message = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "bounded numeric fields",
+    });
+
+    const pollResponse = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "acct-a",
+      cursor: 0,
+      limit: 10_000,
+      timeoutMs: 60_000,
+    });
+    expect(pollResponse.status).toBe(200);
+    await expect(pollResponse.json()).resolves.toMatchObject({
+      events: [{ message: { id: message.id } }],
+    });
+
+    const searchResponse = await postQaBusJson(bus.baseUrl, "/v1/actions/search", {
+      accountId: "acct-a",
+      limit: 10_000,
+      query: "bounded",
+    });
+    expect(searchResponse.status).toBe(200);
+    await expect(searchResponse.json()).resolves.toMatchObject({
+      messages: [{ id: message.id }],
+    });
+
+    const extremeSearchResponse = await postQaBusRawJson(
+      bus.baseUrl,
+      "/v1/actions/search",
+      `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
+    );
+    expect(extremeSearchResponse.status).toBe(200);
+    await expect(extremeSearchResponse.json()).resolves.toMatchObject({
+      messages: [{ id: message.id }],
+    });
+  });
 });
 
 describe("handleQaBusRequest", () => {
+  it.each(["/v1/inbound/message", "/v1/outbound/message"] as const)(
+    "returns a controlled error when the %s body exceeds the media limit",
+    async (pathname) => {
+      const req = {
+        method: "POST",
+        url: pathname,
+        headers: { "content-length": String(16 * 1024 * 1024 + 1) },
+        destroyed: false,
+        destroy() {
+          this.destroyed = true;
+        },
+      };
+      const res = {
+        statusCode: 0,
+        body: "",
+        writeHead(statusCode: number) {
+          this.statusCode = statusCode;
+        },
+        end(payload: string) {
+          this.body = payload;
+        },
+      };
+
+      const handled = await handleQaBusRequest({
+        req: req as never,
+        res: res as never,
+        state: createQaBusState(),
+      });
+
+      expect(handled).toBe(true);
+      expect(req.destroyed).toBe(true);
+      expect(res.statusCode).toBe(413);
+      expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
+    },
+  );
+
   it("returns a controlled error when a v1 POST body exceeds the limit", async () => {
     const req = {
       method: "POST",

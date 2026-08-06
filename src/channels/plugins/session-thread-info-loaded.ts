@@ -9,7 +9,7 @@ import {
   parseThreadSessionSuffix,
   type ParsedThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import { getLoadedChannelPluginForRead } from "./registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 
 type SessionConversationHookResult = {
   id: string;

@@ -1,7 +1,7 @@
 // Resolves reset command modes from user text into typed reset behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export type SoftResetParseResult = { matched: false } | { matched: true; tail: string };
+type SoftResetParseResult = { matched: false } | { matched: true; tail: string };
 
 export function parseSoftResetCommand(commandBodyNormalized: string): SoftResetParseResult {
   const normalized = normalizeLowercaseStringOrEmpty(commandBodyNormalized);

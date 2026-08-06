@@ -1,73 +1,120 @@
 ---
-summary: "ClawHub CLI entry points for discovering, installing, publishing, and verifying OpenClaw skills and plugins."
+summary: "ClawHub CLI entry points for discovering, installing, removing, publishing, and verifying OpenClaw skills and plugins."
 read_when:
   - You want to use ClawHub from the command line
   - You want to install ClawHub skills or plugins through OpenClaw
+  - You need to remove an installed ClawHub skill
   - You want to publish ClawHub packages
 title: "ClawHub CLI"
 ---
 
 # ClawHub CLI
 
-OpenClaw has two command-line entry points for ClawHub:
+Two command-line surfaces talk to ClawHub:
 
-- `openclaw skills` and `openclaw plugins` install and manage ClawHub packages
-  inside OpenClaw.
-- The standalone `clawhub` CLI handles publisher workflows such as login,
-  publish, transfer, and sync.
+- `openclaw skills` / `openclaw plugins` - discover, install, and update
+  packages for a local OpenClaw agent or Gateway.
+- The standalone `clawhub` CLI - remove installed skills and handle publisher
+  workflows including login, publish, sync, and transfer.
 
 ## Discover and install
 
-Use OpenClaw commands when you want to install or update packages for a local
-OpenClaw agent or Gateway.
-
 ```bash
 openclaw skills search "calendar"
-openclaw skills install <slug>
-openclaw skills update <slug>
-openclaw skills verify <slug>
+openclaw skills install @owner/<slug>
+openclaw skills install @owner/<slug> --version <version> --global
+openclaw skills install skills-sh:<owner>/<repo>/<slug>
+openclaw skills update @owner/<slug>
+openclaw skills update --all --acknowledge-clawhub-risk
+openclaw skills verify @owner/<slug> --card
 
 openclaw plugins search "calendar"
 openclaw plugins install clawhub:<package>
+openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins update <id-or-npm-spec>
+openclaw plugins update --all
 ```
 
-Skill installs target the active workspace `skills/` directory by default. Add
-`--global` to install into the shared managed skills directory.
+Skill installs target the active workspace `skills/` directory by default; add
+`--global` for the shared managed skills directory. Plugin installs need the
+explicit `clawhub:` prefix to force ClawHub resolution over npm, git, or a
+local path. Full flag reference: [`openclaw skills`](/cli/skills) and
+[`openclaw plugins`](/cli/plugins).
 
-Plugin installs use the `clawhub:` prefix when you want ClawHub resolution
-instead of npm or another install source.
+`skills-sh:` is an explicitly external catalog reference. OpenClaw sends it to
+ClawHub and installs the exact commit-pinned GitHub source returned by the
+resolver; it never downloads skill content from skills.sh directly. Unclaimed
+entries are labeled **Not scanned by ClawHub**. Claimed and ClawHub-scanned
+skills use the native `@owner/<slug>` form instead.
+
+### Release trust
+
+OpenClaw checks a release's ClawHub trust state before downloading it, for
+both skills and plugins. Versioned releases use exact-release trust metadata;
+resolver-backed GitHub skills go through ClawHub's install resolver, which
+enforces scan and force-install policy before returning a pinned commit.
+
+- **Malicious or blocked** releases are refused outright.
+- **Risky** releases (non-clean scan, non-blocking moderation state) print a
+  warning and require `--acknowledge-clawhub-risk` to continue
+  non-interactively.
+- **Official ClawHub publishers/packages and bundled OpenClaw sources** skip
+  the trust prompt and security-verdict fetch entirely.
+
+## Remove an installed skill
+
+If the standalone ClawHub CLI is not already installed, install it explicitly:
+
+```bash
+npm i -g clawhub
+clawhub uninstall @owner/my-skill
+```
+
+The command asks for confirmation, then removes the installed skill directory
+and its ClawHub lockfile entry. Select the original agent workspace or shared
+OpenClaw state directory when the installation is outside the current workdir:
+
+```bash
+clawhub --workdir /path/to/agent-workspace uninstall @owner/my-skill
+clawhub --workdir ~/.openclaw uninstall @owner/my-skill
+```
+
+For a custom `OPENCLAW_STATE_DIR`, replace `~/.openclaw` with that configured
+directory. See [Remove a ClawHub skill](/cli/skills#remove-a-clawhub-skill) for
+workspace targeting and skill refresh behavior.
 
 ## Publish and maintain
 
-Install the standalone ClawHub CLI for publisher workflows:
+Install the standalone CLI once, then log in:
 
 ```bash
 npm i -g clawhub
 clawhub login
 ```
 
-Publish plugin packages with `clawhub package publish`:
+Publish a plugin package (folder path, GitHub repo `owner/repo[@ref]`, or
+tarball URL) with `clawhub package publish`:
 
 ```bash
-clawhub package publish your-org/your-plugin --dry-run
-clawhub package publish your-org/your-plugin
+clawhub package publish ./my-plugin --dry-run
+clawhub package publish ./my-plugin
 clawhub package publish your-org/your-plugin@v1.0.0
 ```
 
-Publish skill folders with `clawhub skill publish`:
+Publish a skill folder with `clawhub skill publish`:
 
 ```bash
 clawhub skill publish ./skills/review-helper
-clawhub skill publish ./skills/review-helper --version 1.0.0
+clawhub skill publish ./skills/review-helper --version 1.0.0 --owner your-org
 ```
 
-When local skill scan state or package ownership needs maintenance, use the
-relevant standalone command:
+Other maintenance commands:
 
 ```bash
-clawhub sync --all
-clawhub package transfer @old-owner/package --to new-owner
+clawhub sync --all                                          # scan local skills, publish new/updated ones
+clawhub package transfer @old-owner/package --to new-owner   # move a plugin package to another publisher
+clawhub skill rename old-slug new-slug                       # rename a published skill, redirect the old slug
+clawhub explore --sort trending                              # browse the registry, sorted by trending
 ```
 
 ## Related

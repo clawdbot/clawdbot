@@ -35,6 +35,7 @@ PLUGIN_A_UNINSTALL_LOG="$LOG_DIR/plugin-a-uninstall.log"
 PLUGIN_B_INSTALL_LOG="$LOG_DIR/plugin-b-install.log"
 PLUGIN_B_CLI_LOG="$LOG_DIR/plugin-b-cli.log"
 PLUGIN_B_AFTER_RESTART_JSON="$LOG_DIR/plugin-b-after-restart.json"
+CLICKCLACK_PLUGIN_INSTALL_LOG="$LOG_DIR/clickclack-plugin-install.log"
 CLICKCLACK_SERVER_LOG="$LOG_DIR/clickclack-server.log"
 CLICKCLACK_OUTBOUND_JSON="$LOG_DIR/clickclack-outbound.json"
 CLICKCLACK_OUTBOUND_ERR="$LOG_DIR/clickclack-outbound.err"
@@ -77,6 +78,7 @@ dump_debug_logs() {
     "$PLUGIN_A_UNINSTALL_LOG" \
     "$PLUGIN_B_INSTALL_LOG" \
     "$PLUGIN_B_CLI_LOG" \
+    "$CLICKCLACK_PLUGIN_INSTALL_LOG" \
     "$CLICKCLACK_SERVER_LOG" \
     "$CLICKCLACK_OUTBOUND_JSON" \
     "$GATEWAY_1_LOG" \
@@ -190,7 +192,7 @@ plugin_a_dir="$(mktemp -d "$scenario_tmp/plugin-a.XXXXXX")"
 plugin_a_install_path_file="$PLUGIN_A_INSTALL_PATH_FILE"
 plugin_a_source_path_file="$PLUGIN_A_SOURCE_PATH_FILE"
 write_journey_plugin "$plugin_a_dir" journey-plugin-a 0.0.1 journey.a "Journey Plugin A" journey-a "journey-plugin-a:pong"
-openclaw plugins install "$plugin_a_dir" >"$PLUGIN_A_INSTALL_LOG" 2>&1
+openclaw plugins install "$plugin_a_dir" --force >"$PLUGIN_A_INSTALL_LOG" 2>&1
 node scripts/e2e/lib/release-user-journey/assertions.mjs \
   remember-plugin-install-path \
   journey-plugin-a \
@@ -211,9 +213,14 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs \
 echo "Installing replacement external plugin..."
 plugin_b_dir="$(mktemp -d "$scenario_tmp/plugin-b.XXXXXX")"
 write_journey_plugin "$plugin_b_dir" journey-plugin-b 0.0.1 journey.b "Journey Plugin B" journey-b "journey-plugin-b:pong"
-openclaw plugins install "$plugin_b_dir" >"$PLUGIN_B_INSTALL_LOG" 2>&1
+openclaw plugins install "$plugin_b_dir" --force >"$PLUGIN_B_INSTALL_LOG" 2>&1
 openclaw journey-b ping >"$PLUGIN_B_CLI_LOG" 2>&1
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains "$PLUGIN_B_CLI_LOG" "journey-plugin-b:pong"
+
+echo "Installing ClickClack fixture plugin..."
+clickclack_plugin_dir="$(mktemp -d "$scenario_tmp/clickclack-plugin.XXXXXX")"
+node scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs "$clickclack_plugin_dir"
+openclaw plugins install "$clickclack_plugin_dir" --force >"$CLICKCLACK_PLUGIN_INSTALL_LOG" 2>&1
 
 echo "Configuring ClickClack..."
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "http://127.0.0.1:$CLICKCLACK_PORT"

@@ -14,17 +14,16 @@ function ensureRecord(target: Record<string, unknown>, key: string): Record<stri
 export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   id: "firecrawl",
   label: "Firecrawl",
-  hint: "Fetch pages with Firecrawl for JS-heavy or bot-protected sites.",
+  hint: "Fetch pages with keyless starter access; add a key for higher limits.",
+  requiresCredential: false,
+  credentialLabel: "Firecrawl API key (optional)",
   envVars: ["FIRECRAWL_API_KEY"],
   placeholder: "fc-...",
   signupUrl: "https://www.firecrawl.dev/",
   docsUrl: "https://docs.firecrawl.dev",
   autoDetectOrder: 50,
   credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
-  inactiveSecretPaths: [
-    "plugins.entries.firecrawl.config.webFetch.apiKey",
-    "tools.web.fetch.firecrawl.apiKey",
-  ],
+  inactiveSecretPaths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
   getCredentialValue: (fetchConfig) => {
     if (!fetchConfig || typeof fetchConfig !== "object") {
       return undefined;

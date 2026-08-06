@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -12,6 +13,10 @@ import type {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+
+function requireStateMigration(index: number) {
+  return expectDefined(stateMigrations[index], `Nostr state migration ${index}`);
+}
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -62,14 +67,14 @@ describe("nostr doctor state migration", () => {
     );
 
     const context = createDoctorContext(env);
-    const busResult = await stateMigrations[0].migrateLegacyState({
+    const busResult = await requireStateMigration(0).migrateLegacyState({
       config: {},
       env,
       stateDir,
       oauthDir: path.join(stateDir, "oauth"),
       context,
     });
-    const profileResult = await stateMigrations[1].migrateLegacyState({
+    const profileResult = await requireStateMigration(1).migrateLegacyState({
       config: {},
       env,
       stateDir,
@@ -101,5 +106,34 @@ describe("nostr doctor state migration", () => {
       lastPublishedEventId: "event-1",
       lastPublishResults: { "wss://relay.example": "ok" },
     });
+  });
+
+  it("preserves legacy account key bytes when importing state files", async () => {
+    const nostrDir = path.join(stateDir, "nostr");
+    const busPath = path.join(nostrDir, "bus-state-Team.A.json");
+    await fs.mkdir(nostrDir, { recursive: true });
+    await fs.writeFile(
+      busPath,
+      JSON.stringify({
+        version: 1,
+        lastProcessedAt: 1700,
+        gatewayStartedAt: 1600,
+      }),
+    );
+
+    const context = createDoctorContext(env);
+    await requireStateMigration(0).migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    });
+
+    const store = context.openPluginStateKeyedStore({ namespace: "bus-state", maxEntries: 256 });
+    await expect(store.lookup("Team.A")).resolves.toMatchObject({
+      lastProcessedAt: 1700,
+    });
+    await expect(store.lookup("team-a")).resolves.toBeUndefined();
   });
 });

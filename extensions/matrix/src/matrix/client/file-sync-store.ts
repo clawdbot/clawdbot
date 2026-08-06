@@ -31,7 +31,7 @@ const SYNC_CACHE_STATE_KEY = "current";
 // PluginState serializes this string inside a row object; 24KB leaves room for JSON escaping.
 const SYNC_CACHE_CHUNK_BYTES = 24_000;
 
-export type PersistedMatrixSyncStore = {
+type PersistedMatrixSyncStore = {
   version: number;
   savedSync: ISyncData | null;
   clientOptions?: IStoredClientOpts;
@@ -166,12 +166,13 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private readonly hadCleanShutdownOnLoad: boolean;
   private cleanShutdown = false;
   private dirty = false;
+  private frozen = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
 
   constructor(private readonly storageRootDir: string) {
     super();
-    this.stateKey = resolveSyncCacheStateKey(storageRootDir);
+    this.stateKey = SYNC_CACHE_STATE_KEY;
 
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
@@ -225,6 +226,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   override setSyncData(syncData: ISyncResponse): Promise<void> {
+    if (this.frozen) {
+      return Promise.resolve();
+    }
     this.accumulator.accumulate(syncData);
     this.savedSync = this.accumulator.getJSON();
     this.markDirtyAndSchedulePersist();
@@ -238,6 +242,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   override storeClientOptions(options: IStoredClientOpts) {
+    if (this.frozen) {
+      return Promise.resolve();
+    }
     this.savedClientOptions = cloneJson(options);
     void super.storeClientOptions(options);
     this.markDirtyAndSchedulePersist();
@@ -285,6 +292,25 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.dirty = true;
   }
 
+  async freezeSyncCursorPersistence(): Promise<void> {
+    this.frozen = true;
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    await this.persistPromise;
+  }
+
+  discardPendingSyncCursorPersistence(): void {
+    this.frozen = true;
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    this.cleanShutdown = false;
+    this.dirty = false;
+  }
+
   async flush(): Promise<void> {
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
@@ -301,6 +327,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   private markDirtyAndSchedulePersist(): void {
+    if (this.frozen) {
+      return;
+    }
     this.cleanShutdown = false;
     this.dirty = true;
     if (this.persistTimer) {
@@ -424,10 +453,6 @@ function openMatrixSyncCacheStore(
   return getMatrixRuntime().state.openSyncKeyedStore<MatrixSyncCacheRecord>(
     openMatrixSyncCacheStoreOptions(storageRootDir),
   );
-}
-
-function resolveSyncCacheStateKey(_storageRootDir: string): string {
-  return SYNC_CACHE_STATE_KEY;
 }
 
 function metaKey(stateKey: string): string {
@@ -557,7 +582,7 @@ export async function hasMatrixSyncCacheStateInStore(params: {
   storageRootDir: string;
   store: Pick<PluginStateKeyedStore<MatrixSyncCacheRecord>, "lookup">;
 }): Promise<boolean> {
-  const stateKey = resolveSyncCacheStateKey(params.storageRootDir);
+  const stateKey = SYNC_CACHE_STATE_KEY;
   const meta = await params.store.lookup(metaKey(stateKey));
   if (!isSyncCacheMeta(meta) || meta.chunkCount <= 0) {
     return false;
@@ -586,7 +611,7 @@ export async function writeMatrixSyncCacheStateToStore(params: {
   payload: PersistedMatrixSyncStore;
   store: MatrixSyncCacheAsyncStore;
 }): Promise<void> {
-  const stateKey = resolveSyncCacheStateKey(params.storageRootDir);
+  const stateKey = SYNC_CACHE_STATE_KEY;
   const rows = buildSyncCacheRows(stateKey, params.payload);
   for (const row of rows.chunks) {
     await params.store.register(row.key, row.value);

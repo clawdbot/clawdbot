@@ -1,6 +1,7 @@
 // Gateway WebSocket log formatting.
 // Redacts and compacts request/response/event metadata for console diagnostics.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
@@ -100,15 +101,15 @@ export function shouldLogWs(): boolean {
 }
 
 /** Compacts long ids while keeping enough entropy for log correlation. */
-export function shortId(value: string): string {
+function shortId(value: string): string {
   const s = value.trim();
   if (UUID_RE.test(s)) {
-    return `${s.slice(0, 8)}…${s.slice(-4)}`;
+    return `${sliceUtf16Safe(s, 0, 8)}…${sliceUtf16Safe(s, -4)}`;
   }
   if (s.length <= 24) {
     return s;
   }
-  return `${s.slice(0, 12)}…${s.slice(-4)}`;
+  return `${sliceUtf16Safe(s, 0, 12)}…${sliceUtf16Safe(s, -4)}`;
 }
 
 /** Formats and redacts arbitrary values before they are written to gateway logs. */
@@ -119,7 +120,7 @@ export function formatForLog(value: unknown): string {
       if (combined) {
         const redacted = redactSensitiveText(combined, WS_LOG_REDACT_OPTIONS);
         return redacted.length > LOG_VALUE_LIMIT
-          ? `${redacted.slice(0, LOG_VALUE_LIMIT)}...`
+          ? `${truncateUtf16Safe(redacted, LOG_VALUE_LIMIT)}...`
           : redacted;
       }
     }
@@ -135,7 +136,7 @@ export function formatForLog(value: unknown): string {
         }
         const combined = redactSensitiveText(parts.join(": ").trim(), WS_LOG_REDACT_OPTIONS);
         return combined.length > LOG_VALUE_LIMIT
-          ? `${combined.slice(0, LOG_VALUE_LIMIT)}...`
+          ? `${truncateUtf16Safe(combined, LOG_VALUE_LIMIT)}...`
           : combined;
       }
     }
@@ -148,7 +149,7 @@ export function formatForLog(value: unknown): string {
     }
     const redacted = redactSensitiveText(str, WS_LOG_REDACT_OPTIONS);
     return redacted.length > LOG_VALUE_LIMIT
-      ? `${redacted.slice(0, LOG_VALUE_LIMIT)}...`
+      ? `${truncateUtf16Safe(redacted, LOG_VALUE_LIMIT)}...`
       : redacted;
   } catch {
     return String(value);
@@ -194,7 +195,7 @@ function compactPreview(input: string, maxLen = 160): string {
   if (oneLine.length <= maxLen) {
     return oneLine;
   }
-  return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
+  return `${truncateUtf16Safe(oneLine, Math.max(0, maxLen - 1))}…`;
 }
 
 /** Extracts small, non-sensitive fields from agent event payloads for WS logs. */

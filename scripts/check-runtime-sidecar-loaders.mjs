@@ -4,9 +4,9 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFilesFromRoots,
-  resolveRepoRoot,
   runAsScript,
   toLine,
   unwrapExpression,
@@ -230,7 +230,7 @@ export function findRuntimeSidecarLoaderViolations(content, importerPath, explic
 /**
  * Collects runtime sidecar loader violations across configured roots.
  */
-export async function collectRuntimeSidecarLoaderViolations(params) {
+async function collectRuntimeSidecarLoaderViolations(params) {
   const files = await collectTypeScriptFilesFromRoots(params.sourceRoots, {
     extraTestSuffixes: [".test-support.ts", ".test-helpers.ts"],
   });

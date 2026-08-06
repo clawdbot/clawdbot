@@ -6,7 +6,11 @@
  */
 import type { ResolvedBrowserProfile } from "./config.js";
 
-type BrowserProfileMode = "local-managed" | "local-existing-session" | "remote-cdp";
+type BrowserProfileMode =
+  | "local-managed"
+  | "local-existing-session"
+  | "local-extension"
+  | "remote-cdp";
 
 type BrowserProfileCapabilities = {
   mode: BrowserProfileMode;
@@ -30,6 +34,22 @@ export function getBrowserProfileCapabilities(
       isRemote: false,
       usesChromeMcp: true,
       usesPersistentPlaywright: false,
+      supportsPerTabWs: false,
+      supportsJsonTabEndpoints: false,
+      supportsReset: false,
+      supportsManagedTabLimit: false,
+    };
+  }
+
+  // Extension relay profiles drive the user's signed-in browser through the
+  // paired Chrome extension. Ops run over persistent Playwright exactly like
+  // remote CDP, but the endpoint is the loopback relay server.
+  if (profile.driver === "extension") {
+    return {
+      mode: "local-extension",
+      isRemote: false,
+      usesChromeMcp: false,
+      usesPersistentPlaywright: true,
       supportsPerTabWs: false,
       supportsJsonTabEndpoints: false,
       supportsReset: false,

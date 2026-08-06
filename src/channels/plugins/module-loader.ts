@@ -6,28 +6,16 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { openRootFileSync } from "../../infra/boundary-file-read.js";
+import { describeRootFileOpenFailure, openRootFileSync } from "../../infra/boundary-file-read.js";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
-  type PluginModuleLoaderFactory,
 } from "../../plugins/plugin-module-loader-cache.js";
 
 const nodeRequire = createRequire(import.meta.url);
 const SOURCE_MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const jitiLoaders: PluginModuleLoaderCache = new Map();
-let channelPluginModuleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
-
-/**
- * Installs a test-only module loader factory for source channel plugin modules.
- */
-export function setChannelPluginModuleLoaderFactoryForTest(
-  factory?: PluginModuleLoaderFactory,
-): void {
-  channelPluginModuleLoaderFactoryForTest = factory;
-  jitiLoaders.clear();
-}
 
 function hasNativeSourceRequireHook(modulePath: string): boolean {
   const extension = path.extname(modulePath).toLowerCase();
@@ -49,9 +37,6 @@ function loadModuleWithJiti(modulePath: string): unknown {
     loaderFilename: import.meta.url,
     tryNative: false,
     cacheScopeKey: "channel-plugin-module-loader",
-    ...(channelPluginModuleLoaderFactoryForTest
-      ? { createLoader: channelPluginModuleLoaderFactoryForTest }
-      : {}),
   });
   return loadWithJiti(modulePath);
 }
@@ -111,23 +96,28 @@ export function resolveExistingPluginModulePath(rootDir: string, specifier: stri
 
 /**
  * Loads a channel plugin module after enforcing plugin-root file boundaries.
+ *
+ * `rootDir` is always the plugin's own directory, so the containment failure is
+ * reported against that one root; no caller boundary override exists.
  */
-export function loadChannelPluginModule(params: {
-  modulePath: string;
-  rootDir: string;
-  boundaryRootDir?: string;
-  boundaryLabel?: string;
-}): unknown {
+export function loadChannelPluginModule(params: { modulePath: string; rootDir: string }): unknown {
+  const boundaryLabel = "plugin root";
   const opened = openRootFileSync({
     absolutePath: params.modulePath,
-    rootPath: params.boundaryRootDir ?? params.rootDir,
-    boundaryLabel: params.boundaryLabel ?? "plugin root",
+    rootPath: params.rootDir,
+    boundaryLabel,
     rejectHardlinks: false,
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
     throw new Error(
-      `${params.boundaryLabel ?? "plugin"} module path escapes plugin root or fails alias checks`,
+      describeRootFileOpenFailure({
+        failure: opened,
+        subject: "plugin module path",
+        boundaryLabel,
+        filePath: params.modulePath,
+      }),
+      { cause: opened.error },
     );
   }
   const safePath = opened.path;

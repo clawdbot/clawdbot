@@ -4,9 +4,10 @@ import type { CompactResult, ContextEngine } from "../context-engine/types.js";
 import {
   compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
-  EMBEDDED_COMPACTION_TIMEOUT_MS,
   resolveCompactionTimeoutMs,
 } from "./embedded-agent-runner/compaction-safety-timeout.js";
+
+const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
 describe("compactWithSafetyTimeout", () => {
   beforeEach(() => {
@@ -127,6 +128,14 @@ describe("resolveCompactionTimeoutMs", () => {
   it("converts timeoutSeconds to milliseconds", () => {
     expect(
       resolveCompactionTimeoutMs({
+        agents: { defaults: { compaction: { timeoutSeconds: 120 } } },
+      }),
+    ).toBe(120_000);
+  });
+
+  it("preserves explicit timeoutSeconds above 600", () => {
+    expect(
+      resolveCompactionTimeoutMs({
         agents: { defaults: { compaction: { timeoutSeconds: 1800 } } },
       }),
     ).toBe(1_800_000);
@@ -173,7 +182,7 @@ describe("compactContextEngineWithSafetyTimeout", () => {
   type CompactFn = ContextEngine["compact"];
   const baseParams: Parameters<CompactFn>[0] = {
     sessionId: "session-1",
-    sessionFile: "/tmp/session-1.jsonl",
+    sessionKey: "agent:main:session-1",
     tokenBudget: 100_000,
     force: true,
   };

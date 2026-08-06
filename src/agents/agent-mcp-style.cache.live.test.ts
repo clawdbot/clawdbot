@@ -2,12 +2,12 @@
 import type { AssistantMessage, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { extractAssistantText } from "./embedded-agent-utils.js";
 import {
   buildAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
-  extractAssistantText,
   LIVE_CACHE_TEST_ENABLED,
   logLiveCache,
   resolveLiveDirectModel,
@@ -163,7 +163,7 @@ describeCacheLive("MCP-style prompt caching (live)", () => {
         provider: "openai",
         api: "openai-responses",
         envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-        preferredModelIds: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
+        preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
       });
       logLiveCache(`openai mcp-style model=${fixture.model.provider}/${fixture.model.id}`);
 

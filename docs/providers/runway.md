@@ -7,7 +7,7 @@ read_when:
   - You want to make Runway the default video provider
 ---
 
-OpenClaw ships a bundled `runway` provider for hosted video generation. The plugin is enabled by default and registers the `runway` provider against the `videoGenerationProviders` contract.
+OpenClaw ships a bundled `runway` provider for hosted video generation, enabled by default, registered against the `videoGenerationProviders` contract.
 
 | Property        | Value                                                             |
 | --------------- | ----------------------------------------------------------------- |
@@ -29,7 +29,7 @@ OpenClaw ships a bundled `runway` provider for hosted video generation. The plug
   </Step>
   <Step title="Set Runway as the default video provider">
     ```bash
-    openclaw config set agents.defaults.videoGenerationModel.primary "runway/gen4.5"
+    openclaw config set agents.defaults.mediaModels.video.primary "runway/gen4.5"
     ```
   </Step>
   <Step title="Generate a video">
@@ -81,7 +81,7 @@ Local image and video references are supported via data URIs.
 <AccordionGroup>
   <Accordion title="Environment variable aliases">
     OpenClaw recognizes both `RUNWAYML_API_SECRET` (canonical) and `RUNWAY_API_KEY`.
-    Either variable will authenticate the Runway provider.
+    Either variable authenticates the Runway provider.
   </Accordion>
 
   <Accordion title="Task polling">

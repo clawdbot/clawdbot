@@ -12,7 +12,6 @@ import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
   getCoreCliCommandNames as getCoreDescriptorNames,
-  getCoreCliCommandsWithSubcommands,
 } from "./core-command-descriptors.js";
 import {
   registerCommandGroupByName,
@@ -20,17 +19,10 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
-
 type CommandRegisterParams = {
   program: Command;
   ctx: ProgramContext;
   argv: string[];
-};
-
-export type CommandRegistration = {
-  id: string;
-  register: (params: CommandRegisterParams) => void;
 };
 
 function withProgramOnlySpecs(
@@ -53,12 +45,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["crestodian"],
-        loadModule: () => import("./register.crestodian.js"),
-        exportName: "registerCrestodianCommand",
-      },
-      {
-        commandNames: ["setup"],
+        commandNames: ["setup", "crestodian"], // hidden alias
         loadModule: () => import("./register.setup.js"),
         exportName: "registerSetupCommand",
       },
@@ -78,6 +65,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         exportName: "registerConfigCli",
       },
       {
+        commandNames: ["claws"],
+        loadModule: () => import("../claws-cli.js"),
+        exportName: "registerClawsCli",
+      },
+      {
         commandNames: ["backup"],
         loadModule: () => import("./register.backup.js"),
         exportName: "registerBackupCommand",
@@ -86,6 +78,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         commandNames: ["migrate"],
         loadModule: () => import("./register.migrate.js"),
         exportName: "registerMigrateCommand",
+      },
+      {
+        commandNames: ["audit"],
+        loadModule: () => import("./register.audit.js"),
+        exportName: "registerAuditCommand",
       },
       {
         commandNames: ["doctor", "dashboard", "reset", "uninstall"],
@@ -143,14 +140,15 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
 ];
 
 function resolveCoreCommandGroups(ctx: ProgramContext, argv: string[]): CommandGroupEntry[] {
-  // Descriptor metadata and import specs stay separate so help can stay cheap.
-  return buildCommandGroupEntries(
-    getCoreCliCommandDescriptors(),
-    coreEntrySpecs,
-    (register) => async (program) => {
-      await register({ program, ctx, argv });
-    },
+  const descriptors = getCoreCliCommandDescriptors();
+  const visibleCommandNames = new Set(descriptors.map((descriptor) => descriptor.name));
+  const visibleEntrySpecs = coreEntrySpecs.filter((spec) =>
+    spec.commandNames.every((name) => visibleCommandNames.has(name)),
   );
+  // Descriptor metadata and import specs stay separate so help can stay cheap.
+  return buildCommandGroupEntries(descriptors, visibleEntrySpecs, (register) => async (program) => {
+    await register({ program, ctx, argv });
+  });
 }
 
 export function getCoreCliCommandNames(): string[] {

@@ -1,7 +1,8 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { getRuntimeConfig } from "../config/config.js";
-import type { PluginLogger } from "../plugins/types.js";
+import type { PluginRecord } from "../plugins/registry.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
 /** Options accepted by the plugin list command. */
 export type PluginsListOptions = {
@@ -10,12 +11,12 @@ export type PluginsListOptions = {
   verbose?: boolean;
 };
 
-const quietPluginJsonLogger: PluginLogger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-};
+function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agentHarnessIds"> {
+  // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
+  // Omit the field instead of serializing the registry-compatible empty placeholder.
+  const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
+  return record;
+}
 
 async function loadHumanListModules() {
   const [sourceDisplay, table, themeModule, commandFormat, listFormat] = await Promise.all([
@@ -43,7 +44,8 @@ export async function runPluginsListCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
-  const cfg = getRuntimeConfig();
+  // The inventory projector owns plugin metadata validation from the installed index.
+  const cfg = getRuntimeConfig({ skipPluginValidation: true });
   const report = buildPluginRegistrySnapshotReport({
     config: cfg,
     ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
@@ -57,7 +59,7 @@ export async function runPluginsListCommand(
         source: report.registrySource,
         diagnostics: report.registryDiagnostics,
       },
-      plugins: list,
+      plugins: list.map(toPluginListJsonRecord),
       diagnostics: report.diagnostics,
     };
     writeRuntimeJson(runtime, payload);
@@ -75,11 +77,15 @@ export async function runPluginsListCommand(
   } = await loadHumanListModules();
 
   if (list.length === 0) {
-    runtime.log(
-      theme.muted(
-        `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`,
-      ),
-    );
+    const message =
+      opts.enabled && report.plugins.length > 0
+        ? `${
+            cfg.plugins?.enabled === false
+              ? "No enabled plugins found. Plugins are globally disabled."
+              : "No enabled plugins found."
+          } Run ${formatCliCommand("openclaw plugins list")} to inspect installed plugins.`
+        : `No plugins found. Run ${formatCliCommand("openclaw plugins install <plugin>")} to add one, or ${formatCliCommand("openclaw plugins list --json")} to inspect raw discovery state.`;
+    runtime.log(theme.muted(message));
     return;
   }
 

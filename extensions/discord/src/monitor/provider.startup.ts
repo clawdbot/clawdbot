@@ -1,11 +1,10 @@
 // Discord provider module implements model/runtime integration.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import {
   Client,
   ReadyListener,
@@ -29,10 +28,14 @@ import {
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
+  DiscordPresenceGuildCreateListener,
+  DiscordPresenceGuildDeleteListener,
   DiscordInteractionListener,
   DiscordPresenceListener,
+  DiscordPresenceReadyListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
+  DiscordThreadDeleteListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
@@ -94,13 +97,9 @@ export async function createDiscordMonitorClient(params: {
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
   voiceEnabled: boolean;
-  discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0] & {
-    eventQueue?: Pick<
-      DiscordEventQueueOptions,
-      "listenerTimeout" | "maxQueueSize" | "maxConcurrency"
-    >;
-  };
+  discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0];
   runtime: RuntimeEnv;
+  commandDeployHashStore?: DiscordCommandDeployHashStore;
   createClient: CreateClientFn;
   createGatewayPlugin: typeof createDiscordGatewayPlugin;
   createGatewaySupervisor: typeof createDiscordGatewaySupervisor;
@@ -125,7 +124,6 @@ export async function createDiscordMonitorClient(params: {
   const eventQueueOpts = {
     listenerTimeout: 120_000,
     slowListenerThreshold: 30_000,
-    ...params.discordConfig.eventQueue,
   } satisfies DiscordEventQueueOptions;
   const readyListener = createDiscordStatusReadyListener({
     discordConfig: params.discordConfig,
@@ -139,11 +137,7 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
-      commandDeployHashStorePath: path.join(
-        resolveStateDir(process.env),
-        "discord",
-        "command-deploy-cache.json",
-      ),
+      commandDeployHashStore: params.commandDeployHashStore,
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",
@@ -294,11 +288,31 @@ export function registerDiscordMonitorListeners(params: {
     params.client.listeners,
     new DiscordThreadUpdateListener(params.cfg, params.accountId, params.logger),
   );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
+  );
 
   if (params.discordConfig.intents?.presence) {
+    const presenceListener = new DiscordPresenceListener({
+      cfg: params.cfg,
+      logger: params.logger,
+      accountId: params.accountId,
+      botUserId: params.botUserId,
+      guildEntries: params.guildEntries,
+    });
+    registerDiscordListener(params.client.listeners, presenceListener);
     registerDiscordListener(
       params.client.listeners,
-      new DiscordPresenceListener({ logger: params.logger, accountId: params.accountId }),
+      new DiscordPresenceGuildCreateListener(presenceListener),
+    );
+    registerDiscordListener(
+      params.client.listeners,
+      new DiscordPresenceGuildDeleteListener(presenceListener),
+    );
+    registerDiscordListener(
+      params.client.listeners,
+      new DiscordPresenceReadyListener(presenceListener),
     );
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }

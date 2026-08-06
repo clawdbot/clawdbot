@@ -1,6 +1,7 @@
 // Resolves OpenClaw home and platform-specific config directories.
 import os from "node:os";
 import path from "node:path";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -75,7 +76,13 @@ export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  const resolved = resolveEffectiveHomeDir(env, homedir) ?? tryProcessCwd();
+  if (resolved) {
+    return path.resolve(resolved);
+  }
+  throw new Error(
+    "Unable to resolve an OpenClaw home: set OPENCLAW_HOME, HOME, or USERPROFILE, or run from an existing directory.",
+  );
 }
 
 /** Resolves the OS home or falls back to cwd when no OS home source exists. */
@@ -83,7 +90,13 @@ export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  const resolved = resolveOsHomeDir(env, homedir) ?? tryProcessCwd();
+  if (resolved) {
+    return path.resolve(resolved);
+  }
+  throw new Error(
+    "Unable to resolve an OS home: set HOME or USERPROFILE, or run from an existing directory.",
+  );
 }
 
 /** Expands leading `~`, `~/`, or `~\` with the effective home when one is known. */
@@ -130,16 +143,15 @@ export function resolveHomeRelativePath(
   return path.resolve(trimmed);
 }
 
-/**
- * Backward-compatible alias for resolving user paths against the effective home.
- *
- * @deprecated Use resolveHomeRelativePath.
- */
+/** Resolves a user path against the effective home, preserving an empty input. */
 export function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
+  if (!input) {
+    return "";
+  }
   return resolveHomeRelativePath(input, { env, homedir });
 }
 

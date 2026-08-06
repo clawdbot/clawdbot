@@ -3,17 +3,13 @@ import {
   defineBundledChannelEntry,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/channel-entry-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
 import { registerMatrixSubagentHooks } from "./subagent-hooks-api.js";
 
-type MatrixHandlersRuntimeModule = typeof import("./plugin-entry.handlers.runtime.js");
-
-let matrixHandlersRuntimePromise: Promise<MatrixHandlersRuntimeModule> | null = null;
-
-function loadMatrixHandlersRuntimeModule() {
-  matrixHandlersRuntimePromise ??= import("./plugin-entry.handlers.runtime.js");
-  return matrixHandlersRuntimePromise;
-}
+const loadMatrixHandlersRuntimeModule = createLazyRuntimeModule(
+  () => import("./plugin-entry.handlers.runtime.js"),
+);
 
 export function registerMatrixFullRuntime(api: OpenClawPluginApi): void {
   api.registerGatewayMethod("matrix.verify.recoveryKey", async (ctx) => {

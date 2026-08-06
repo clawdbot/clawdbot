@@ -1,5 +1,6 @@
 {
   "id": "alibaba",
+  "icon": "https://cdn.simpleicons.org/alibabacloud",
   "activation": {
     "onStartup": false
   },

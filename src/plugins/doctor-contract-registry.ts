@@ -1,7 +1,5 @@
 // Loads plugin doctor contracts from manifest-owned metadata.
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
@@ -10,25 +8,17 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderFactory,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-
-const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
-const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
-const RUNNING_FROM_BUILT_ARTIFACT =
-  CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
-  CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
 type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
+  resolveSessionStoreAgentIds?: unknown;
   sessionRouteStateOwners?: unknown;
   stateMigrations?: unknown;
 };
@@ -42,10 +32,15 @@ type PluginDoctorCompatibilityNormalizer = (params: {
   cfg: OpenClawConfig;
 }) => PluginDoctorCompatibilityMutation;
 
+type PluginDoctorSessionStoreAgentIdsResolver = (params: {
+  cfg: OpenClawConfig;
+}) => readonly string[];
+
 type PluginDoctorContractEntry = {
   pluginId: string;
   rules: LegacyConfigRule[];
   normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
+  resolveSessionStoreAgentIds?: PluginDoctorSessionStoreAgentIdsResolver;
   sessionRouteStateOwners: DoctorSessionRouteStateOwner[];
   stateMigrations: PluginDoctorStateMigration[];
 };
@@ -56,11 +51,20 @@ export type PluginDoctorStateMigrationDetection = {
 
 export type PluginDoctorStateMigrationContext = {
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+  /** Doctor-only batch import preserving source age and remaining retention. */
+  importPluginStateEntries?: (
+    options: OpenKeyedStoreOptions,
+    entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
+  ) => void;
+  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
 };
 
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
+  /** Import retired file state only during explicit `doctor --fix` repair. */
+  doctorOnly?: boolean;
   detectLegacyState: (params: {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -78,44 +82,26 @@ export type PluginDoctorStateMigration = {
     oauthDir: string;
     context: PluginDoctorStateMigrationContext;
   }) =>
-    | Promise<{ changes: string[]; warnings: string[] }>
-    | { changes: string[]; warnings: string[] };
+    | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
+    | { changes: string[]; warnings: string[]; notices?: string[] };
 };
 
-export type PluginDoctorStateMigrationEntry = {
+type PluginDoctorStateMigrationEntry = {
   pluginId: string;
   migration: PluginDoctorStateMigration;
 };
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-let moduleLoaderFactoryForTest: PluginModuleLoaderFactory | undefined;
-
 function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
+    cache: pluginDoctorContractRegistryLoaderState.moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    ...(moduleLoaderFactoryForTest ? { createLoader: moduleLoaderFactoryForTest } : {}),
+    ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
+      ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
+      : {}),
   })(modulePath) as PluginDoctorContractModule;
-}
-
-function resolveContractApiPath(rootDir: string): string | null {
-  const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
-    ? CONTRACT_API_EXTENSIONS
-    : ([...CONTRACT_API_EXTENSIONS.slice(3), ...CONTRACT_API_EXTENSIONS.slice(0, 3)] as const);
-  for (const basename of ["doctor-contract-api", "contract-api"]) {
-    for (const extension of orderedExtensions) {
-      for (const baseDir of [rootDir, path.join(rootDir, "dist")]) {
-        const candidate = path.join(baseDir, `${basename}${extension}`);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-  }
-  return null;
 }
 
 function coerceLegacyConfigRules(value: unknown): LegacyConfigRule[] {
@@ -135,6 +121,14 @@ function coerceNormalizeCompatibilityConfig(
   value: unknown,
 ): PluginDoctorCompatibilityNormalizer | undefined {
   return typeof value === "function" ? (value as PluginDoctorCompatibilityNormalizer) : undefined;
+}
+
+function coerceSessionStoreAgentIdsResolver(
+  value: unknown,
+): PluginDoctorSessionStoreAgentIdsResolver | undefined {
+  return typeof value === "function"
+    ? (value as PluginDoctorSessionStoreAgentIdsResolver)
+    : undefined;
 }
 
 function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {
@@ -206,6 +200,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
   return value.filter(isPluginDoctorStateMigration).map((migration) => ({
     id: migration.id.trim(),
     label: migration.label.trim(),
+    doctorOnly: migration.doctorOnly === true ? true : undefined,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));
@@ -219,6 +214,32 @@ function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
   return ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
     Object.hasOwn(talk, key),
   );
+}
+
+function collectMediaProviderIds(root: Record<string, unknown>, ids: Set<string>): void {
+  const media = asNullableRecord(asNullableRecord(root.tools)?.media);
+  if (!media) {
+    return;
+  }
+  // Keep legacy lists visible until the doctor migration window closes so
+  // provider-owned repairs can run in the same pass as core consolidation.
+  const modelLists = [
+    media.models,
+    asNullableRecord(media.audio)?.models,
+    asNullableRecord(media.image)?.models,
+    asNullableRecord(media.video)?.models,
+  ];
+  for (const models of modelLists) {
+    if (!Array.isArray(models)) {
+      continue;
+    }
+    for (const model of models) {
+      const provider = asNullableRecord(model)?.provider;
+      if (typeof provider === "string" && provider.trim()) {
+        ids.add(normalizeProviderId(provider));
+      }
+    }
+  }
 }
 
 export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
@@ -243,6 +264,15 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
       ids.add(pluginId);
     }
   }
+
+  const modelProviders = asNullableRecord(asNullableRecord(root.models)?.providers);
+  if (modelProviders) {
+    for (const providerId of Object.keys(modelProviders)) {
+      ids.add(providerId);
+    }
+  }
+
+  collectMediaProviderIds(root, ids);
 
   if (hasLegacyElevenLabsTalkFields(root)) {
     ids.add("elevenlabs");
@@ -279,6 +309,17 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
       ids.add(third);
       continue;
     }
+    if (first === "models") {
+      if (second !== "providers" || !third) {
+        return collectRelevantDoctorPluginIds(params.raw);
+      }
+      ids.add(third);
+      continue;
+    }
+    if (first === "tools" && second === "media") {
+      collectMediaProviderIds(root, ids);
+      continue;
+    }
     if (first === "talk" && hasLegacyElevenLabsTalkFields(root)) {
       ids.add("elevenlabs");
     }
@@ -290,7 +331,7 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
 function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
 ): PluginDoctorContractEntry | null {
-  const contractSource = resolveContractApiPath(record.rootDir);
+  const contractSource = resolvePluginDoctorContractArtifactPath(record.rootDir);
   if (!contractSource) {
     return null;
   }
@@ -308,6 +349,10 @@ function loadPluginDoctorContractEntry(
     mod.normalizeCompatibilityConfig ??
       (mod as { default?: PluginDoctorContractModule }).default?.normalizeCompatibilityConfig,
   );
+  const resolveSessionStoreAgentIds = coerceSessionStoreAgentIdsResolver(
+    mod.resolveSessionStoreAgentIds ??
+      (mod as { default?: PluginDoctorContractModule }).default?.resolveSessionStoreAgentIds,
+  );
   const sessionRouteStateOwners = coerceDoctorSessionRouteStateOwners(
     mod.sessionRouteStateOwners ??
       (mod as { default?: PluginDoctorContractModule }).default?.sessionRouteStateOwners,
@@ -319,6 +364,7 @@ function loadPluginDoctorContractEntry(
   if (
     rules.length === 0 &&
     !normalizeCompatibilityConfig &&
+    !resolveSessionStoreAgentIds &&
     sessionRouteStateOwners.length === 0 &&
     stateMigrations.length === 0
   ) {
@@ -328,6 +374,7 @@ function loadPluginDoctorContractEntry(
     pluginId: record.id,
     rules,
     normalizeCompatibilityConfig,
+    resolveSessionStoreAgentIds,
     sessionRouteStateOwners,
     stateMigrations,
   };
@@ -357,6 +404,8 @@ function resolvePluginDoctorContracts(params?: {
     if (
       scopedPluginIds &&
       !scopedPluginIds.has(record.id) &&
+      !(record.packageName && scopedPluginIds.has(record.packageName)) &&
+      !record.legacyPluginIds?.some((pluginId) => scopedPluginIds.has(pluginId)) &&
       !record.channels.some((channelId) => scopedPluginIds.has(channelId)) &&
       !record.providers.some((providerId) => scopedPluginIds.has(providerId))
     ) {
@@ -370,18 +419,6 @@ function resolvePluginDoctorContracts(params?: {
 
   return entries;
 }
-
-export function clearPluginDoctorContractRegistryCache(): void {
-  moduleLoaders.clear();
-}
-
-export function setPluginDoctorContractRegistryModuleLoaderFactoryForTest(
-  factory: PluginModuleLoaderFactory | undefined,
-): void {
-  moduleLoaderFactoryForTest = factory;
-  moduleLoaders.clear();
-}
-
 export function listPluginDoctorLegacyConfigRules(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -408,13 +445,28 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
   return [...owners.values()].toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-export function listPluginDoctorStateMigrations(params?: {
+/** Resolve plugin-owned agent IDs whose core session stores need migration. */
+export function listPluginDoctorSessionStoreAgentIds(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
-}): PluginDoctorStateMigration[] {
-  return listPluginDoctorStateMigrationEntries(params).map((entry) => entry.migration);
+}): string[] {
+  const cfg = params?.config ?? {};
+  const agentIds = new Set<string>();
+  for (const entry of resolvePluginDoctorContracts(params)) {
+    let resolved: readonly string[] | undefined;
+    try {
+      resolved = entry.resolveSessionStoreAgentIds?.({ cfg });
+    } catch {
+      // A plugin-owned hint must never block core startup migration.
+      continue;
+    }
+    for (const agentId of normalizeTrimmedStringList(resolved)) {
+      agentIds.add(agentId);
+    }
+  }
+  return [...agentIds].toSorted();
 }
 
 export function listPluginDoctorStateMigrationEntries(params?: {

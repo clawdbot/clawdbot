@@ -2,13 +2,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveWebListener, resolveWebAccountId } from "./active-listener.js";
 
-const registryMocks = vi.hoisted(() => ({
-  getRegisteredWhatsAppConnectionController: vi.fn(),
+const runtimeContextMocks = vi.hoisted(() => ({
+  channelRuntime: { runtimeContexts: {} },
+  getChannelRuntimeContext: vi.fn(),
 }));
 
-vi.mock("./connection-controller-registry.js", () => ({
-  getRegisteredWhatsAppConnectionController:
-    registryMocks.getRegisteredWhatsAppConnectionController,
+vi.mock("openclaw/plugin-sdk/channel-runtime-context", () => ({
+  getChannelRuntimeContext: runtimeContextMocks.getChannelRuntimeContext,
+}));
+
+vi.mock("./runtime.js", () => ({
+  getOptionalWhatsAppChannelRuntime: () => runtimeContextMocks.channelRuntime,
 }));
 
 const WHATSAPP_ACTIVE_LISTENER_TEST_CFG = {
@@ -25,14 +29,14 @@ function makeListener() {
 }
 
 beforeEach(() => {
-  registryMocks.getRegisteredWhatsAppConnectionController.mockReset();
+  runtimeContextMocks.getChannelRuntimeContext.mockReset();
 });
 
 describe("active WhatsApp listener view", () => {
   it("reads controller-backed state", () => {
     const listener = makeListener();
-    registryMocks.getRegisteredWhatsAppConnectionController.mockImplementation(
-      (accountId: string) =>
+    runtimeContextMocks.getChannelRuntimeContext.mockImplementation(
+      ({ accountId }: { accountId?: string }) =>
         accountId === "work"
           ? {
               getActiveListener: () => listener,
@@ -45,8 +49,8 @@ describe("active WhatsApp listener view", () => {
 
   it("resolves the configured default account when accountId is omitted", () => {
     const listener = makeListener();
-    registryMocks.getRegisteredWhatsAppConnectionController.mockImplementation(
-      (accountId: string) =>
+    runtimeContextMocks.getChannelRuntimeContext.mockImplementation(
+      ({ accountId }: { accountId?: string }) =>
         accountId === "work"
           ? {
               getActiveListener: () => listener,
@@ -59,7 +63,7 @@ describe("active WhatsApp listener view", () => {
   });
 
   it("returns null when the controller has no active listener for the account", () => {
-    registryMocks.getRegisteredWhatsAppConnectionController.mockReturnValue(null);
+    runtimeContextMocks.getChannelRuntimeContext.mockReturnValue(undefined);
 
     expect(getActiveWebListener("work")).toBeNull();
   });

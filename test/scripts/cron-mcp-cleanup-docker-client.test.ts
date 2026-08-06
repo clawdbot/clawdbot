@@ -10,6 +10,11 @@ import {
 } from "../../scripts/e2e/cron-mcp-cleanup-docker-client.ts";
 
 describe("cron MCP cleanup docker client", () => {
+  it("binds a device identity for the UI-mode gateway client", () => {
+    const source = fs.readFileSync("scripts/e2e/cron-mcp-cleanup-docker-client.ts", "utf8");
+    expect(source).toContain("bindFreshDevice: true");
+  });
+
   it("rejects malformed probe pid wait limits", () => {
     expect(readCronMcpCleanupProbePidWaitMs({})).toBe(120_000);
     expect(readCronMcpCleanupProbePidWaitMs({ OPENCLAW_CRON_MCP_CLEANUP_PID_WAIT_MS: "250" })).toBe(
@@ -31,6 +36,20 @@ describe("cron MCP cleanup docker client", () => {
       await expect(
         waitForProbePid(path.join(root, "missing.pid"), { pollMs: 1, timeoutMs: 20 }),
       ).resolves.toBeUndefined();
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not parse malformed probe pid prefixes", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cron-mcp-client-"));
+    try {
+      const pidPath = path.join(root, "probe.pid");
+      fs.writeFileSync(pidPath, "123abc\n", "utf8");
+
+      const startedAt = Date.now();
+      await expect(waitForProbePid(pidPath, { pollMs: 1, timeoutMs: 20 })).resolves.toBeUndefined();
       expect(Date.now() - startedAt).toBeLessThan(1000);
     } finally {
       fs.rmSync(root, { force: true, recursive: true });

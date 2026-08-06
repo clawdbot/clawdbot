@@ -1,10 +1,67 @@
 // Inworld plugin module implements tts behavior.
+import { canonicalizeBase64, MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 export const DEFAULT_INWORLD_VOICE_ID = "Sarah";
 export const DEFAULT_INWORLD_MODEL_ID = "inworld-tts-1.5-max";
+
+// The streaming TTS endpoint returns newline-delimited JSON whose audio is
+// base64-encoded, so the wire body is ~4/3 larger than the decoded audio plus a
+// JSON envelope. Cap the read at double the shared 16 MiB audio limit so a
+// full-size legitimate clip still fits, while bounding memory against an
+// unbounded or hijacked SSE stream that would otherwise be buffered whole by the
+// previous `await response.text()`.
+const INWORLD_TTS_BODY_MAX_BYTES = MAX_AUDIO_BYTES * 2;
+// The voices listing is a small JSON catalog, so the shared 16 MiB audio limit
+// is already generous headroom while still closing the unbounded
+// `await response.json()` read.
+const INWORLD_VOICES_BODY_MAX_BYTES = MAX_AUDIO_BYTES;
+// Abort the read if the upstream stalls mid-body so a hung stream cannot pin the
+// socket and buffers open indefinitely.
+const INWORLD_UPSTREAM_IDLE_TIMEOUT_MS = 30_000;
+// Error responses only need a short diagnostic snippet, never the whole body.
+const INWORLD_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const INWORLD_ERROR_BODY_MAX_CHARS = 400;
+const INWORLD_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+
+// Sentinel so the error-snippet reader can tell a cap overflow apart from an
+// unrelated read failure without leaking the (possibly hostile) body.
+class InworldErrorBodyOverflow extends Error {}
+
+/**
+ * Reads a bounded, whitespace-collapsed diagnostic snippet from a non-OK
+ * response body. A misbehaving or hostile endpoint can stream an arbitrarily
+ * large error body, so this never buffers it whole: it reuses the shared
+ * `readResponseWithLimit` reader (which cancels the underlying stream on
+ * overflow and enforces an idle timeout) with a small cap. On overflow it
+ * returns a fixed marker instead of echoing attacker-controlled bytes into the
+ * thrown error. Kept local to this extension so it depends only on the
+ * already-exported `response-limit-runtime` entry and adds no shared plugin-SDK
+ * surface.
+ */
+async function readInworldErrorBodySnippet(response: Response): Promise<string> {
+  let buffer: Buffer;
+  try {
+    buffer = await readResponseWithLimit(response, INWORLD_ERROR_BODY_MAX_BYTES, {
+      chunkTimeoutMs: INWORLD_ERROR_BODY_READ_IDLE_TIMEOUT_MS,
+      onOverflow: () => new InworldErrorBodyOverflow(),
+    });
+  } catch (error) {
+    return error instanceof InworldErrorBodyOverflow
+      ? "(error body exceeded diagnostic limit; truncated)"
+      : "";
+  }
+
+  const collapsed = buffer.toString("utf8").replace(/\s+/g, " ").trim();
+  if (collapsed.length > INWORLD_ERROR_BODY_MAX_CHARS) {
+    return `${truncateUtf16Safe(collapsed, INWORLD_ERROR_BODY_MAX_CHARS)}…`;
+  }
+  return collapsed;
+}
 
 export const INWORLD_TTS_MODELS = [
   "inworld-tts-1.5-max",
@@ -90,12 +147,21 @@ export async function inworldTTS(params: {
 
   try {
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
+      const errorBody = await readInworldErrorBodySnippet(response);
       throw new Error(`Inworld TTS API error (${response.status}): ${errorBody}`);
     }
 
-    const body = await response.text();
+    const body = (
+      await readResponseWithLimit(response, INWORLD_TTS_BODY_MAX_BYTES, {
+        chunkTimeoutMs: INWORLD_UPSTREAM_IDLE_TIMEOUT_MS,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`Inworld TTS audio stream too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Inworld TTS audio stream stalled: no data received for ${chunkTimeoutMs}ms`),
+      })
+    ).toString("utf8");
     const chunks: Buffer[] = [];
+    let decodedAudioBytes = 0;
 
     for (const line of body.split("\n")) {
       const trimmed = line.trim();
@@ -111,7 +177,7 @@ export async function inworldTTS(params: {
         parsed = JSON.parse(trimmed) as typeof parsed;
       } catch {
         throw new Error(
-          `Inworld TTS stream parse error: unexpected non-JSON line: ${trimmed.slice(0, 80)}`,
+          `Inworld TTS stream parse error: unexpected non-JSON line: ${truncateUtf16Safe(trimmed, 80)}`,
         );
       }
 
@@ -120,7 +186,19 @@ export async function inworldTTS(params: {
       }
 
       if (parsed.result?.audioContent) {
-        chunks.push(Buffer.from(parsed.result.audioContent, "base64"));
+        const canonicalAudio = canonicalizeBase64(parsed.result.audioContent);
+        if (!canonicalAudio) {
+          throw new Error("Inworld TTS returned malformed base64 audio data");
+        }
+        const chunk = Buffer.from(canonicalAudio, "base64");
+        const nextDecodedAudioBytes = decodedAudioBytes + chunk.length;
+        if (nextDecodedAudioBytes > MAX_AUDIO_BYTES) {
+          throw new Error(
+            `Inworld TTS decoded audio too large: ${nextDecodedAudioBytes} bytes (limit: ${MAX_AUDIO_BYTES} bytes)`,
+          );
+        }
+        decodedAudioBytes = nextDecodedAudioBytes;
+        chunks.push(chunk);
       }
     }
 
@@ -152,18 +230,29 @@ export async function listInworldVoices(params: {
         Authorization: `Basic ${params.apiKey}`,
       },
     },
-    timeoutMs: params.timeoutMs,
+    // Cover the phase before response headers; the bounded body reader below
+    // only starts after fetch resolves.
+    timeoutMs: params.timeoutMs ?? INWORLD_UPSTREAM_IDLE_TIMEOUT_MS,
     policy: ssrfPolicyFromInworldBaseUrl(baseUrl),
     auditContext: "inworld-voices",
   });
 
   try {
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
+      const errorBody = await readInworldErrorBodySnippet(response);
       throw new Error(`Inworld voices API error (${response.status}): ${errorBody}`);
     }
 
-    const json = (await response.json()) as {
+    const voicesBody = (
+      await readResponseWithLimit(response, INWORLD_VOICES_BODY_MAX_BYTES, {
+        chunkTimeoutMs: INWORLD_UPSTREAM_IDLE_TIMEOUT_MS,
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(`Inworld voices response too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Inworld voices response stalled: no data received for ${chunkTimeoutMs}ms`),
+      })
+    ).toString("utf8");
+    let json: {
       voices?: Array<{
         voiceId?: string;
         displayName?: string;
@@ -173,6 +262,11 @@ export async function listInworldVoices(params: {
         source?: string;
       }>;
     };
+    try {
+      json = JSON.parse(voicesBody) as typeof json;
+    } catch {
+      throw new Error("Inworld voices API returned malformed JSON");
+    }
 
     return Array.isArray(json.voices)
       ? json.voices

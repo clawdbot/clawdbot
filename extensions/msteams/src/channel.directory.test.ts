@@ -130,13 +130,43 @@ describe("msteams session route", () => {
       cfg: {},
       agentId: "main",
       accountId: "default",
-      target: "msteams:user:alice-id",
+      target: "msteams:user:01234567-89ab-cdef-0123-456789abcdef",
     });
 
-    expect(route?.peer).toEqual({ kind: "direct", id: "alice-id" });
-    expect(route?.from).toBe("msteams:alice-id");
-    expect(route?.to).toBe("user:alice-id");
+    expect(route?.peer).toEqual({
+      kind: "direct",
+      id: "01234567-89ab-cdef-0123-456789abcdef",
+    });
+    expect(route?.from).toBe("msteams:01234567-89ab-cdef-0123-456789abcdef");
+    expect(route?.to).toBe("user:01234567-89ab-cdef-0123-456789abcdef");
+    expect(route?.recipientSessionExact).toBe(true);
   });
+
+  it("does not claim display-name user targets as canonical sessions", () => {
+    const route = resolveMSTeamsOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "msteams:user:Alice Example",
+      resolvedTarget: { to: "user:Alice Example", kind: "user", source: "directory" },
+    });
+
+    expect(route?.recipientSessionExact).toBe(false);
+  });
+
+  it.each(["29:1a2b3c4d5e6f", "8:orgid:2d8c2d2c-1111-2222-3333-444444444444"])(
+    "does not claim Bot Framework user id %s as the canonical AAD session",
+    (userId) => {
+      const route = resolveMSTeamsOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        accountId: "default",
+        target: `msteams:user:${userId}`,
+      });
+
+      expect(route?.recipientSessionExact).toBe(false);
+    },
+  );
 
   it("builds channel routes for thread conversations and strips suffix metadata", () => {
     const route = resolveMSTeamsOutboundSessionRoute({
@@ -149,6 +179,21 @@ describe("msteams session route", () => {
     expect(route?.peer).toEqual({ kind: "channel", id: "19:abc123@thread.tacv2" });
     expect(route?.from).toBe("msteams:channel:19:abc123@thread.tacv2");
     expect(route?.to).toBe("conversation:19:abc123@thread.tacv2");
+    expect(route?.sessionKey).toBe("agent:main:msteams:channel:19:abc123@thread.tacv2:thread:42");
+    expect(route?.threadId).toBe("42");
+    expect(route?.recipientSessionExact).toBe(true);
+  });
+
+  it("does not claim an exact channel session without its thread root", () => {
+    const route = resolveMSTeamsOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "teams:19:abc123@thread.tacv2",
+    });
+
+    expect(route?.sessionKey).toBe("agent:main:msteams:channel:19:abc123@thread.tacv2");
+    expect(route?.recipientSessionExact).toBe(false);
   });
 
   it("returns group routes for non-user, non-channel conversations", () => {
@@ -162,6 +207,7 @@ describe("msteams session route", () => {
     expect(route?.peer).toEqual({ kind: "group", id: "19:groupchat" });
     expect(route?.from).toBe("msteams:group:19:groupchat");
     expect(route?.to).toBe("conversation:19:groupchat");
+    expect(route?.recipientSessionExact).toBe(false);
   });
 
   it("returns null when the target cannot be normalized", () => {

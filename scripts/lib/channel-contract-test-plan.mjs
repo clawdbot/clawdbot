@@ -9,6 +9,8 @@ function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
 const CONTRACT_FILE_WEIGHTS = new Map([
   ["channel-import-guardrails.test.ts", 18],
   ["outbound-payload.contract.test.ts", 18],
+  // Loads every bundled channel plugin surface in one file.
+  ["plugin-shape.contract.test.ts", 48],
   ["plugins-core.catalog.paths.contract.test.ts", 28],
   ["plugins-core.catalog.entries.contract.test.ts", 16],
   ["session-binding.registry-backed.contract.test.ts", 40],

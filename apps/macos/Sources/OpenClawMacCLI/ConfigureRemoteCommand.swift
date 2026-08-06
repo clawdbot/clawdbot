@@ -11,6 +11,7 @@ struct ConfigureRemoteOptions {
     var directUrl: String?
     var localPort: Int = 18789
     var remotePort: Int = 18789
+    var sshHostKeyPolicy: String?
     var token: String?
     var password: String?
     var identity: String?
@@ -37,6 +38,8 @@ struct ConfigureRemoteOptions {
                 opts.localPort = try parsePortFlag(args, index: &i, flag: arg)
             case "--remote-port":
                 opts.remotePort = try parsePortFlag(args, index: &i, flag: arg)
+            case "--ssh-host-key-policy":
+                opts.sshHostKeyPolicy = try parseSSHHostKeyPolicyFlag(args, index: &i)
             case "--token":
                 opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--password":
@@ -65,6 +68,7 @@ struct ConfigureRemoteOutput: Encodable {
     var localUrl: String?
     var remoteUrl: String
     var remotePort: Int
+    var sshHostKeyPolicy: String?
     var onboardingSkipped: Bool
 }
 
@@ -78,7 +82,8 @@ func runConfigureRemote(_ args: [String]) {
             Usage:
               openclaw-mac configure-remote --ssh-target <user@host[:port]> [--local-port <port>]
                                           [--remote-port <port>] [--token <token>] [--password <password>]
-                                          [--identity <path>] [--project-root <path>] [--cli-path <path>] [--json]
+                                          [--identity <path>] [--ssh-host-key-policy <strict|openssh>]
+                                          [--project-root <path>] [--cli-path <path>] [--json]
               openclaw-mac configure-remote --direct-url <ws://host:port|wss://host> [--token <token>]
                                           [--password <password>] [--project-root <path>] [--cli-path <path>] [--json]
 
@@ -87,6 +92,8 @@ func runConfigureRemote(_ args: [String]) {
               --direct-url <url>  Direct remote gateway URL; skips SSH tunneling.
               --local-port <p>    Local tunnel port for the mac app/UI. Default: 18789.
               --remote-port <p>   Gateway port on the remote host. Default: 18789.
+              --ssh-host-key-policy <strict|openssh>
+                                  Require a trusted host key (default), or explicitly use SSH config policy.
               --token <token>     Remote gateway token.
               --password <pw>     Remote gateway password.
               --identity <path>   SSH identity file.
@@ -110,16 +117,22 @@ func runConfigureRemote(_ args: [String]) {
 }
 
 @discardableResult
-func configureRemote(_ opts: ConfigureRemoteOptions) throws -> ConfigureRemoteOutput {
+func configureRemote(
+    _ opts: ConfigureRemoteOptions,
+    defaultsSuites: [String] = appDefaultsSuites) throws -> ConfigureRemoteOutput
+{
     if let directUrlRaw = opts.directUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
        !directUrlRaw.isEmpty
     {
-        return try configureDirectRemote(opts, directUrlRaw: directUrlRaw)
+        return try configureDirectRemote(opts, directUrlRaw: directUrlRaw, defaultsSuites: defaultsSuites)
     }
-    return try configureSSHRemote(opts)
+    return try configureSSHRemote(opts, defaultsSuites: defaultsSuites)
 }
 
-private func configureSSHRemote(_ opts: ConfigureRemoteOptions) throws -> ConfigureRemoteOutput {
+private func configureSSHRemote(
+    _ opts: ConfigureRemoteOptions,
+    defaultsSuites: [String]) throws -> ConfigureRemoteOutput
+{
     let target = opts.sshTarget?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard isValidSSHTarget(target) else {
         throw NSError(
@@ -128,11 +141,13 @@ private func configureSSHRemote(_ opts: ConfigureRemoteOptions) throws -> Config
             userInfo: [NSLocalizedDescriptionKey: "SSH target must look like user@host[:port]"])
     }
 
-    let configURL = openClawConfigURL()
+    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
     let localURL = "ws://127.0.0.1:\(opts.localPort)"
+    let existingTarget = (remote["sshTarget"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 
     gateway["mode"] = "remote"
     gateway["port"] = opts.localPort
@@ -140,6 +155,14 @@ private func configureSSHRemote(_ opts: ConfigureRemoteOptions) throws -> Config
     remote["url"] = localURL
     remote["remotePort"] = opts.remotePort
     remote["sshTarget"] = target
+    let requestedHostKeyPolicy = opts.sshHostKeyPolicy.map { normalizedSSHHostKeyPolicy($0) ?? "strict" }
+    let existingHostKeyPolicy = existingTarget == target
+        ? normalizedSSHHostKeyPolicy(remote["sshHostKeyPolicy"] as? String)
+        : nil
+    let sshHostKeyPolicy = requestedHostKeyPolicy
+        ?? existingHostKeyPolicy
+        ?? "strict"
+    remote["sshHostKeyPolicy"] = sshHostKeyPolicy
     updateStringIfProvided(&remote, key: "sshIdentity", value: opts.identity)
     updateStringIfProvided(&remote, key: "token", value: opts.token)
     updateStringIfProvided(&remote, key: "password", value: opts.password)
@@ -147,7 +170,7 @@ private func configureSSHRemote(_ opts: ConfigureRemoteOptions) throws -> Config
     root["gateway"] = gateway
 
     try saveConfigRoot(root, to: configURL)
-    writeAppDefaults(opts: opts, target: target)
+    writeAppDefaults(opts: opts, target: target, suites: defaultsSuites)
 
     return ConfigureRemoteOutput(
         status: "ok",
@@ -158,23 +181,27 @@ private func configureSSHRemote(_ opts: ConfigureRemoteOptions) throws -> Config
         localUrl: localURL,
         remoteUrl: localURL,
         remotePort: opts.remotePort,
+        sshHostKeyPolicy: sshHostKeyPolicy,
         onboardingSkipped: true)
 }
 
 private func configureDirectRemote(
     _ opts: ConfigureRemoteOptions,
-    directUrlRaw: String) throws -> ConfigureRemoteOutput
+    directUrlRaw: String,
+    defaultsSuites: [String]) throws -> ConfigureRemoteOutput
 {
     guard let directURL = normalizeDirectURL(directUrlRaw) else {
         throw NSError(
             domain: "ConfigureRemote",
             code: 2,
             userInfo: [
-                NSLocalizedDescriptionKey: "Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts",
+                NSLocalizedDescriptionKey: """
+                Direct URL must be ws:// for private/Tailscale hosts or wss:// for remote hosts
+                """,
             ])
     }
 
-    let configURL = openClawConfigURL()
+    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
@@ -185,13 +212,14 @@ private func configureDirectRemote(
     remote.removeValue(forKey: "remotePort")
     remote.removeValue(forKey: "sshTarget")
     remote.removeValue(forKey: "sshIdentity")
+    remote.removeValue(forKey: "sshHostKeyPolicy")
     updateStringIfProvided(&remote, key: "token", value: opts.token)
     updateStringIfProvided(&remote, key: "password", value: opts.password)
     gateway["remote"] = remote
     root["gateway"] = gateway
 
     try saveConfigRoot(root, to: configURL)
-    writeAppDefaults(opts: opts, target: "")
+    writeAppDefaults(opts: opts, target: "", suites: defaultsSuites)
 
     return ConfigureRemoteOutput(
         status: "ok",
@@ -202,16 +230,8 @@ private func configureDirectRemote(
         localUrl: nil,
         remoteUrl: directURL.absoluteString,
         remotePort: defaultPort(for: directURL) ?? opts.remotePort,
+        sshHostKeyPolicy: nil,
         onboardingSkipped: true)
-}
-
-private func openClawConfigURL() -> URL {
-    if let raw = ProcessInfo.processInfo.environment["OPENCLAW_CONFIG_PATH"],
-       !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    {
-        return URL(fileURLWithPath: NSString(string: raw).expandingTildeInPath)
-    }
-    return FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw/openclaw.json")
 }
 
 private func loadConfigRoot(from url: URL) throws -> [String: Any] {
@@ -226,8 +246,8 @@ private func saveConfigRoot(_ root: [String: Any], to url: URL) throws {
     try data.write(to: url, options: [.atomic])
 }
 
-private func writeAppDefaults(opts: ConfigureRemoteOptions, target: String) {
-    for suite in appDefaultsSuites {
+private func writeAppDefaults(opts: ConfigureRemoteOptions, target: String, suites: [String]) {
+    for suite in suites {
         guard let defaults = UserDefaults(suiteName: suite) else { continue }
         defaults.set("remote", forKey: "openclaw.connectionMode")
         setDefaultString(defaults, key: "openclaw.remoteTarget", value: target)
@@ -378,6 +398,23 @@ private func parsePortFlag(_ args: [String], index: inout Int, flag: String) thr
     return port
 }
 
+private func parseSSHHostKeyPolicyFlag(_ args: [String], index: inout Int) throws -> String {
+    let value = CLIArgParsingSupport.nextValue(args, index: &index)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    guard let value, value == "strict" || value == "openssh" else {
+        throw NSError(
+            domain: "ConfigureRemote",
+            code: 5,
+            userInfo: [NSLocalizedDescriptionKey: "--ssh-host-key-policy must be strict or openssh"])
+    }
+    return value
+}
+
+private func normalizedSSHHostKeyPolicy(_ raw: String?) -> String? {
+    raw == "strict" || raw == "openssh" ? raw : nil
+}
+
 private func isValidSSHTarget(_ raw: String) -> Bool {
     if raw.isEmpty || raw.hasPrefix("-") { return false }
     if raw.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
@@ -421,6 +458,9 @@ private func printConfigureRemoteOutput(_ output: ConfigureRemoteOutput, json: B
     }
     if let localUrl = output.localUrl {
         print("Local URL: \(localUrl)")
+    }
+    if let sshHostKeyPolicy = output.sshHostKeyPolicy {
+        print("SSH host-key policy: \(sshHostKeyPolicy)")
     }
     print("Remote URL: \(output.remoteUrl)")
     print("Remote port: \(output.remotePort)")

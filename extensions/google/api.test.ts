@@ -40,6 +40,8 @@ describe("google generative ai helpers", () => {
     expect(normalizeGoogleGenerativeAiBaseUrl("https://xgenerativelanguage.googleapis.com")).toBe(
       "https://xgenerativelanguage.googleapis.com",
     );
+    expect(normalizeGoogleGenerativeAiBaseUrl("")).toBeUndefined();
+    expect(normalizeGoogleGenerativeAiBaseUrl("   ")).toBeUndefined();
     expect(normalizeGoogleGenerativeAiBaseUrl()).toBeUndefined();
   });
 
@@ -233,10 +235,12 @@ describe("google generative ai helpers", () => {
     });
     expect(oauthConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(oauthConfig.allowPrivateNetwork).toBe(false);
-    expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toEqual({
+    const oauthHeaders = Object.fromEntries(new Headers(oauthConfig.headers).entries());
+    expect(oauthHeaders).toMatchObject({
       authorization: "Bearer oauth-token",
       "content-type": "application/json",
     });
+    expect(oauthHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
 
     const apiKeyConfig = resolveGoogleGenerativeAiHttpRequestConfig({
       apiKey: "api-key-123",
@@ -245,10 +249,27 @@ describe("google generative ai helpers", () => {
     });
     expect(apiKeyConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(apiKeyConfig.allowPrivateNetwork).toBe(false);
-    expect(Object.fromEntries(new Headers(apiKeyConfig.headers).entries())).toEqual({
+    const apiKeyHeaders = Object.fromEntries(new Headers(apiKeyConfig.headers).entries());
+    expect(apiKeyHeaders).toMatchObject({
       "content-type": "application/json",
       "x-goog-api-key": "api-key-123",
     });
+    expect(apiKeyHeaders["x-goog-api-client"]).toMatch(/^openclaw\//u);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("defaults a %s shared request base URL", (_label, baseUrl) => {
+    const config = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: "api-key-123",
+      baseUrl,
+      capability: "video",
+      transport: "media-understanding",
+    });
+
+    expect(config.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(new Headers(config.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
   });
 
   it("preserves explicit OpenAI-compatible Google endpoints during provider normalization", () => {

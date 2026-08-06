@@ -1,22 +1,27 @@
 // Imessage plugin module implements persisted echo cache behavior.
 import { createHash } from "node:crypto";
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageRuntime } from "../runtime.js";
+import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
 
 type PersistedEchoEntry = {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
   timestamp: number;
+  expiresAt?: number;
+  pending?: true;
 };
 
-// 12h covers the maximum `channels.imessage.catchup.maxAgeMinutes` clamp (720
-// minutes). Without this, the live path's previous 2-minute window was
-// shorter than any realistic catchup window — own outbound rows from before
-// a gateway gap would fall out of the dedupe set before catchup could replay
-// the inbound rows around them, and the agent's own messages would land back
-// in the inbound pipeline as if they were external sends.
+// 12h comfortably outlives the inbound replay guard window
+// (IMESSAGE_INBOUND_DEDUPE_TTL_MS) so an own-outbound row that imsg re-emits
+// after a bridge reconnect is still recognized as the agent's own echo rather
+// than re-ingested as an external send. A shorter window would let own rows
+// fall out of the dedupe set before a reconnect burst replays the messages
+// around them.
 export const IMESSAGE_SENT_ECHOES_TTL_MS = 12 * 60 * 60 * 1000;
 export const IMESSAGE_SENT_ECHOES_NAMESPACE = "imessage.sent-echoes";
 export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;
@@ -24,7 +29,14 @@ export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;
 type PersistedEchoStore = PluginStateSyncKeyedStore<PersistedEchoEntry>;
 
 function normalizeText(text: string | undefined): string | undefined {
-  const normalized = text?.replace(/\r\n?/g, "\n").trim();
+  if (!text) {
+    return undefined;
+  }
+  // Match the in-memory echo-cache key so a reflected echo with a leading attributedBody
+  // corruption marker still matches the clean stored send (the persisted sibling of #93511).
+  const normalized = stripLeadingEchoTextCorruptionMarkers(
+    text.replace(/\r\n?/g, "\n").trim(),
+  ).trim();
   return normalized || undefined;
 }
 
@@ -48,9 +60,41 @@ function reportFailure(scope: string, err: unknown): void {
 
 export function resolveIMessageSentEchoEntryKey(entry: PersistedEchoEntry): string {
   return createHash("sha256")
-    .update(JSON.stringify([entry.scope, entry.text ?? "", entry.messageId ?? "", entry.timestamp]))
+    .update(
+      JSON.stringify([
+        entry.scope,
+        entry.text ?? "",
+        resolveIMessageEchoMediaKey(entry.media) ?? "",
+        entry.messageId ?? "",
+        entry.timestamp,
+      ]),
+    )
     .digest("hex")
     .slice(0, 32);
+}
+
+export function resolveIMessageEchoMediaKey(
+  media: MediaPlaceholderTextFact | null | undefined,
+): string | undefined {
+  const contentType = media?.contentType?.trim().toLowerCase() || undefined;
+  const kind = media?.kind && media.kind !== "unknown" ? media.kind : undefined;
+  if (kind) {
+    return `kind:${kind}`;
+  }
+  const normalizedContentType = contentType?.split(";", 1)[0]?.trim();
+  return normalizedContentType ? `mime:${normalizedContentType}` : undefined;
+}
+
+function normalizeMedia(
+  media: MediaPlaceholderTextFact | null | undefined,
+): MediaPlaceholderTextFact | undefined {
+  const key = resolveIMessageEchoMediaKey(media);
+  if (!key) {
+    return undefined;
+  }
+  const contentType = media?.contentType?.trim().toLowerCase() || undefined;
+  const kind = media?.kind ?? undefined;
+  return { ...(kind ? { kind } : {}), ...(contentType ? { contentType } : {}) };
 }
 
 function openPersistedEchoStore(): PersistedEchoStore {
@@ -65,13 +109,24 @@ function remainingTtlMs(timestamp: number): number | undefined {
   return remaining > 0 ? remaining : undefined;
 }
 
+function resolveEntryTtlMs(entry: PersistedEchoEntry, ttlMs?: number): number | undefined {
+  if (typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0) {
+    return ttlMs;
+  }
+  return remainingTtlMs(entry.timestamp);
+}
+
+function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
+  const cutoff = now - IMESSAGE_SENT_ECHOES_TTL_MS;
+  return entry.timestamp >= cutoff && (entry.expiresAt == null || entry.expiresAt > now);
+}
+
 function loadMirrorFromStore(): void {
   try {
-    const cutoff = Date.now() - IMESSAGE_SENT_ECHOES_TTL_MS;
     mirror = openPersistedEchoStore()
       .entries()
       .map(({ value }) => value)
-      .filter((entry) => entry.timestamp >= cutoff)
+      .filter((entry) => isLiveEntry(entry))
       .toSorted((a, b) => a.timestamp - b.timestamp)
       .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
   } catch (err) {
@@ -85,50 +140,79 @@ function readRecentEntries(): PersistedEchoEntry[] {
   return mirror ?? [];
 }
 
-function persistEntry(entry: PersistedEchoEntry): void {
-  const ttlMs = remainingTtlMs(entry.timestamp);
-  if (!ttlMs) {
-    return;
+function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undefined {
+  const effectiveTtlMs = resolveEntryTtlMs(entry, ttlMs);
+  if (!effectiveTtlMs) {
+    return undefined;
   }
+  const key = resolveIMessageSentEchoEntryKey(entry);
   try {
-    openPersistedEchoStore().register(resolveIMessageSentEchoEntryKey(entry), entry, { ttlMs });
+    openPersistedEchoStore().register(key, entry, {
+      ttlMs: effectiveTtlMs,
+    });
   } catch (err) {
     reportFailure("write", err);
+    return undefined;
   }
+  return key;
 }
 
 export function rememberPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
-}): void {
+  ttlMs?: number;
+  pending?: boolean;
+}): string | undefined {
   const text = normalizeText(params.text);
+  const media = normalizeMedia(params.media);
   const messageId = normalizeMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
     scope: params.scope,
     timestamp: Date.now(),
     ...(text ? { text } : {}),
+    ...(media ? { media } : {}),
     ...(messageId ? { messageId } : {}),
+    ...(params.pending ? { pending: true } : {}),
   };
-  if (!entry.text && !entry.messageId) {
-    return;
+  if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
+    entry.expiresAt = entry.timestamp + params.ttlMs;
+  }
+  if (!entry.text && !entry.media && !entry.messageId) {
+    return undefined;
   }
   loadMirrorFromStore();
-  persistEntry(entry);
-  const cutoff = Date.now() - IMESSAGE_SENT_ECHOES_TTL_MS;
+  const key = persistEntry(entry, params.ttlMs);
   mirror = [...(mirror ?? []), entry]
-    .filter((candidate) => candidate.timestamp >= cutoff)
+    .filter((candidate) => isLiveEntry(candidate))
     .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
+  return key;
+}
+
+export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
+  if (!key) {
+    return;
+  }
+  try {
+    openPersistedEchoStore().delete(key);
+  } catch (err) {
+    reportFailure("delete", err);
+  }
+  mirror = (mirror ?? []).filter((entry) => resolveIMessageSentEchoEntryKey(entry) !== key);
 }
 
 export function hasPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
+  includePendingText?: boolean;
 }): boolean {
   const text = normalizeText(params.text);
+  const mediaKey = resolveIMessageEchoMediaKey(params.media);
   const messageId = normalizeMessageId(params.messageId);
-  if (!text && !messageId) {
+  if (!text && !mediaKey && !messageId) {
     return false;
   }
   for (const entry of readRecentEntries()) {
@@ -138,24 +222,20 @@ export function hasPersistedIMessageEcho(params: {
     if (messageId && entry.messageId === messageId) {
       return true;
     }
-    if (text && entry.text === text) {
+    const hasConflictingMessageIds = Boolean(
+      messageId && entry.messageId && messageId !== entry.messageId,
+    );
+    if (text && entry.text === text && (!entry.pending || params.includePendingText)) {
+      return true;
+    }
+    if (
+      mediaKey &&
+      !hasConflictingMessageIds &&
+      resolveIMessageEchoMediaKey(entry.media) === mediaKey &&
+      (!entry.pending || params.includePendingText)
+    ) {
       return true;
     }
   }
   return false;
-}
-
-export function resetPersistedIMessageEchoCacheForTest(
-  options: { clearPersistent?: boolean } = {},
-): void {
-  mirror = null;
-  persistenceFailureLogged = false;
-  if (options.clearPersistent === false) {
-    return;
-  }
-  try {
-    openPersistedEchoStore().clear();
-  } catch {
-    // best-effort
-  }
 }

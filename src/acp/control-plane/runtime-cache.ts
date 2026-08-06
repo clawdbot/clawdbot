@@ -23,7 +23,7 @@ type RuntimeCacheEntry = {
 };
 
 /** Snapshot entry used for idle eviction and cache diagnostics. */
-export type CachedRuntimeSnapshot = {
+type CachedRuntimeSnapshot = {
   actorKey: string;
   state: CachedRuntimeState;
   lastTouchedAt: number;

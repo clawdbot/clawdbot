@@ -5,9 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-rpc-e2e" OPENCLAW_KITCHEN_SINK_RPC_E2E_IMAGE)"
-MAX_MEMORY_MIB="${OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB:-2048}"
-MAX_CPU_PERCENT="${OPENCLAW_KITCHEN_SINK_MAX_CPU_PERCENT:-1200}"
-DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_RPC_DOCKER_RUN_TIMEOUT:-900s}"
+MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB 2048)"
+MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_MAX_CPU_PERCENT 1200)"
+# Keep the outer Docker watchdog above the walker's install, enable, inspect,
+# readiness, and first-RPC retry budgets so inner failures stay diagnostic.
+DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_RPC_DOCKER_RUN_TIMEOUT:-1500s}"
 CONTAINER_NAME="openclaw-kitchen-sink-rpc-e2e-$$"
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-rpc.XXXXXX")"
 STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-rpc-stats.XXXXXX")"

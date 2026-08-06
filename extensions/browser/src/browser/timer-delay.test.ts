@@ -1,6 +1,8 @@
 // Browser tests cover timer delay plugin behavior.
 import { describe, expect, it } from "vitest";
-import { MAX_SAFE_TIMEOUT_DELAY_MS, normalizeBrowserTimerDelayMs } from "./timer-delay.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
+
+const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 
 describe("normalizeBrowserTimerDelayMs", () => {
   it("caps timers to Node's safe delay range", () => {

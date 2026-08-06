@@ -1,15 +1,14 @@
-// Pinned mutation helper tests cover the Python helper that performs sandbox
+// Pinned mutation helper tests cover the native helper that performs sandbox
 // filesystem mutations through directory file descriptors.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   buildPinnedWritePlan,
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
   SANDBOX_PINNED_MUTATION_PYTHON,
-  SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES,
 } from "./fs-bridge-mutation-helper.js";
 
 function runMutation(args: string[], input?: string) {
@@ -28,7 +27,7 @@ function runMutationWithSource(source: string, args: string[], input?: string) {
   });
 }
 
-function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
+function runWritePlan(args: string[], input?: string) {
   const plan = buildPinnedWritePlan({
     check: {
       target: {
@@ -54,7 +53,6 @@ function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
-    env,
   });
 }
 
@@ -69,13 +67,71 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
-const hasAbsolutePythonCandidate = SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.some((candidate) =>
-  existsSync(candidate),
-);
-
 const FORCED_EXDEV_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
   "        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
   "        raise OSError(errno.EXDEV, 'forced EXDEV for test')\n        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
+);
+
+const FORCED_COPY_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "        copy_completed = True",
+  "        raise OSError(errno.ENOSPC, 'forced copy failure')\n        copy_completed = True",
+);
+
+const FORCED_CREATE_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "        # exclusive create payload is durable before publication",
+  "        raise OSError(errno.ENOSPC, 'forced create failure')\n        # exclusive create payload is durable before publication",
+);
+
+const FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON =
+  SANDBOX_PINNED_MUTATION_PYTHON.replace(
+    "        # Publish with a native atomic no-replace rename.",
+    [
+      "        replacement_fd = os.open(basename, WRITE_FLAGS, 0o600, dir_fd=parent_fd)",
+      "        try:",
+      "            os.write(replacement_fd, b'replacement')",
+      "        finally:",
+      "            os.close(replacement_fd)",
+      "        # Publish with a native atomic no-replace rename.",
+    ].join("\n"),
+  );
+
+const FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "        # Publish with a native atomic no-replace rename.",
+  [
+    "        os.unlink(temp_name, dir_fd=staging_fd)",
+    "        replacement_fd = os.open(temp_name, WRITE_FLAGS, 0o600, dir_fd=staging_fd)",
+    "        try:",
+    "            os.write(replacement_fd, b'replacement')",
+    "        finally:",
+    "            os.close(replacement_fd)",
+    "        # Publish with a native atomic no-replace rename.",
+  ].join("\n"),
+);
+
+const FORCED_MISSING_RENAMEAT2_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "    is_linux = sys.platform.startswith('linux')",
+  "    is_linux = True",
+).replace("        rename_fn = getattr(libc, 'renameat2', None)", "        rename_fn = None");
+
+const FORCED_UNSUPPORTED_RENAMEAT2_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "    is_linux = sys.platform.startswith('linux')",
+  "    is_linux = True",
+).replace(
+  "        rename_fn = getattr(libc, 'renameat2', None)",
+  [
+    "        class UnsupportedRename:",
+    "            argtypes = None",
+    "            restype = None",
+    "            def __call__(self, *_args):",
+    "                ctypes.set_errno(errno.ENOSYS)",
+    "                return -1",
+    "        rename_fn = UnsupportedRename()",
+  ].join("\n"),
+);
+
+const FORCED_STAGING_OPEN_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "            staging_fd = open_dir(candidate, dir_fd=parent_fd)",
+  "            raise OSError(errno.EMFILE, 'forced staging open failure')\n            staging_fd = open_dir(candidate, dir_fd=parent_fd)",
 );
 
 const FORCED_EXDEV_WITH_LATE_SOURCE_WRITE_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
@@ -127,6 +183,156 @@ describe("sandbox pinned mutation helper", () => {
       await expect(
         fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
       ).resolves.toBe("hello");
+    });
+  });
+
+  it("creates a new file through a pinned directory fd", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutation(["create", workspace, "nested", "note.txt", "1"], "hello");
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(path.join(workspace, "nested", "note.txt"), "utf8")).resolves.toBe(
+        "hello",
+      );
+    });
+  });
+
+  it("creates a file whose basename approaches the filesystem component limit", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const basename = "n".repeat(240);
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutation(["create", workspace, "", basename, "0"], "hello");
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(path.join(workspace, basename), "utf8")).resolves.toBe("hello");
+    });
+  });
+
+  it("falls back when Linux libc does not export renameat2", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_MISSING_RENAMEAT2_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "hello",
+      );
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("hello");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
+    });
+  });
+
+  it("falls back when Linux renameat2 is unsupported at runtime", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_UNSUPPORTED_RENAMEAT2_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "hello",
+      );
+
+      expect(result.status).toBe(0);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("hello");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
+    });
+  });
+
+  it("removes a staging directory when opening it fails", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_STAGING_OPEN_FAILURE_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "hello",
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("forced staging open failure");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual([]);
+    });
+  });
+
+  it("refuses to create over an existing file and leaves it untouched", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.writeFile(filePath, "keep me", "utf8");
+
+      const result = runMutation(["create", workspace, "", "note.txt", "0"], "replacement");
+
+      expect(result.status).toBe(SANDBOX_CREATE_EXISTS_EXIT_CODE);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("keep me");
+    });
+  });
+
+  it("removes private staging when writing fails before publication", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_CREATE_FAILURE_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "partial",
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("forced create failure");
+      await expectPathMissing(filePath);
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual([]);
+    });
+  });
+
+  it("preserves a destination raced into a staged exclusive create", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_CREATE_FAILURE_WITH_REPLACEMENT_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "partial",
+      );
+
+      expect(result.status).toBe(SANDBOX_CREATE_EXISTS_EXIT_CODE);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
+    });
+  });
+
+  it("fails when the staged exclusive-create pathname is substituted", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      const filePath = path.join(workspace, "note.txt");
+      await fs.mkdir(workspace, { recursive: true });
+
+      const result = runMutationWithSource(
+        FORCED_CREATE_TEMP_SUBSTITUTION_MUTATION_PYTHON,
+        ["create", workspace, "", "note.txt", "0"],
+        "expected",
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("exclusive publication source changed");
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+      await expect(fs.readdir(workspace)).resolves.toStrictEqual(["note.txt"]);
     });
   });
 
@@ -193,6 +399,132 @@ describe("sandbox pinned mutation helper", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "bounds pinned file reads and rejects growth on the opened descriptor",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-bounded-read-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        await fs.mkdir(workspace, { recursive: true });
+        await fs.writeFile(path.join(workspace, "exact.txt"), "hello", "utf8");
+        await fs.writeFile(path.join(workspace, "empty.txt"), "", "utf8");
+        await fs.writeFile(path.join(workspace, "growing.txt"), "hello", "utf8");
+
+        const exact = runMutation(["read", workspace, "", "exact.txt", "5"]);
+        expect(exact.status).toBe(0);
+        expect(exact.stdout).toBe("hello");
+
+        const oversized = runMutation(["read", workspace, "", "exact.txt", "4"]);
+        expect(oversized.status).not.toBe(0);
+        expect(oversized.stdout).toBe("");
+        expect(oversized.stderr).toMatch(/bounded read limit/i);
+
+        const empty = runMutation(["read", workspace, "", "empty.txt", "0"]);
+        expect(empty.status).toBe(0);
+        expect(empty.stdout).toBe("");
+
+        const growingSource = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+          "        if max_bytes is not None and file_stat.st_size > max_bytes:",
+          [
+            "        if basename == 'growing.txt':",
+            "            growth_fd = os.open(basename, os.O_WRONLY | os.O_APPEND, dir_fd=parent_fd)",
+            "            try:",
+            "                write_all(growth_fd, b'!')",
+            "            finally:",
+            "                os.close(growth_fd)",
+            "        if max_bytes is not None and file_stat.st_size > max_bytes:",
+          ].join("\n"),
+        );
+        const grown = runMutationWithSource(growingSource, [
+          "read",
+          workspace,
+          "",
+          "growing.txt",
+          "5",
+        ]);
+        expect(grown.status).not.toBe(0);
+        expect(grown.stdout).toBe("");
+        expect(grown.stderr).toMatch(/bounded read limit/i);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "copies regular files atomically and rejects hardlinked sources",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-copy-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destinationRoot = path.join(root, "destination");
+        const sourcePath = path.join(sourceRoot, "payload.bin");
+        const destinationName = `${"d".repeat(235)}.bin`;
+        const destinationPath = path.join(destinationRoot, "nested", destinationName);
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+        await fs.writeFile(sourcePath, "streamed", "utf8");
+        await fs.chmod(sourcePath, 0o640);
+        await fs.writeFile(destinationPath, "old", "utf8");
+
+        const copyResult = runMutation([
+          "copy",
+          sourceRoot,
+          "",
+          "payload.bin",
+          destinationRoot,
+          "nested",
+          destinationName,
+          "1",
+        ]);
+
+        expect(copyResult.status).toBe(0);
+        await expect(fs.readFile(destinationPath, "utf8")).resolves.toBe("streamed");
+        expect((await fs.stat(destinationPath)).mode & 0o777).toBe(0o640);
+
+        await fs.link(sourcePath, path.join(sourceRoot, "hardlinked.bin"));
+        const hardlinkResult = runMutation([
+          "copy",
+          sourceRoot,
+          "",
+          "hardlinked.bin",
+          destinationRoot,
+          "",
+          "blocked.bin",
+          "1",
+        ]);
+        expect(hardlinkResult.status).not.toBe(0);
+        expect(hardlinkResult.stderr).toMatch(/hardlinked file/i);
+        await expectPathMissing(path.join(destinationRoot, "blocked.bin"));
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "removes a partial temporary file when streaming copy fails",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-copy-failure-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destinationRoot = path.join(root, "destination");
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(destinationRoot, { recursive: true });
+        await fs.writeFile(path.join(sourceRoot, "payload.bin"), "streamed", "utf8");
+
+        const result = runMutationWithSource(FORCED_COPY_FAILURE_MUTATION_PYTHON, [
+          "copy",
+          sourceRoot,
+          "",
+          "payload.bin",
+          destinationRoot,
+          "",
+          "payload.bin",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("forced copy failure");
+        await expectPathMissing(path.join(destinationRoot, "payload.bin"));
+        await expect(fs.readdir(destinationRoot)).resolves.toEqual([]);
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")("rejects non-regular files while reading", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
       const workspace = path.join(root, "workspace");
@@ -216,7 +548,6 @@ describe("sandbox pinned mutation helper", () => {
         const result = runWritePlan(
           ["write", workspace, "nested/deeper", "note.txt", "1"],
           "hello",
-          hasAbsolutePythonCandidate ? { PATH: "" } : undefined,
         );
 
         expect(result.status).toBe(0);

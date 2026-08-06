@@ -3,6 +3,7 @@ import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { describe, expect, it } from "vitest";
 import type { ModelAliasIndex } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { installDirectiveBehaviorE2EHooks } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
@@ -42,10 +43,11 @@ async function runDirectiveStatus(
     sessionKey: _ignoredSessionKey,
     sessionEntry: _ignoredSessionEntry,
     sessionStore: _ignoredSessionStore,
+    cfg: overrideCfg,
     ...restOverrides
   } = overrides;
   const result = await handleDirectiveOnly({
-    cfg,
+    cfg: migratePersistedImplicitMainRoster(overrideCfg ?? cfg).config as OpenClawConfig,
     directives: parseInlineDirectives(body),
     sessionEntry: effectiveSessionEntry,
     sessionStore: effectiveSessionStore,
@@ -81,15 +83,15 @@ describe("directive behavior", () => {
             workspace: "/tmp/openclaw",
             models: {
               "anthropic/claude-opus-4-6": {
-                params: { fastMode: true },
+                params: { fastMode: "auto", fastAutoOnSeconds: 30 },
               },
             },
           },
         },
       } as OpenClawConfig,
     });
-    expect(fastText).toContain("Current fast mode: on (config)");
-    expect(fastText).toContain("Options: status, on, off, default.");
+    expect(fastText).toContain("Current fast mode: auto (30 sec) (default: model)");
+    expect(fastText).toContain("Options: on, off, auto (30 sec), default, status.");
 
     const { text: verboseText } = await runDirectiveStatus("/verbose", {
       currentVerboseLevel: "on",
@@ -136,7 +138,7 @@ describe("directive behavior", () => {
     );
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
-  it("treats /fast status like the no-argument status query", async () => {
+  it("reports concise fast status for explicit status queries", async () => {
     const { text: statusText } = await runDirectiveStatus("/fast status", {
       cfg: {
         commands: { text: true },
@@ -146,7 +148,7 @@ describe("directive behavior", () => {
             workspace: "/tmp/openclaw",
             models: {
               "anthropic/claude-opus-4-6": {
-                params: { fastMode: true },
+                params: { fastMode: "auto", fastAutoOnSeconds: 30 },
               },
             },
           },
@@ -154,8 +156,8 @@ describe("directive behavior", () => {
       } as OpenClawConfig,
     });
 
-    expect(statusText).toContain("Current fast mode: on (config)");
-    expect(statusText).toContain("Options: status, on, off, default.");
+    expect(statusText).toContain("Current fast mode: auto (30 sec) (default: model)");
+    expect(statusText).not.toContain("Options:");
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("enforces per-agent elevated restrictions and status visibility", async () => {
@@ -165,12 +167,12 @@ describe("directive behavior", () => {
       elevatedAllowed: false,
       elevatedFailures: [
         {
-          gate: "agents.list[].tools.elevated.enabled",
-          key: "agents.list.restricted.tools.elevated.enabled",
+          gate: "agents.entries.*.tools.elevated.enabled",
+          key: "agents.entries.restricted.tools.elevated.enabled",
         },
       ],
     });
-    expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
+    expect(deniedText).toContain("agents.entries.*.tools.elevated.enabled");
 
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
@@ -181,12 +183,12 @@ describe("directive behavior", () => {
       elevatedAllowed: false,
       elevatedFailures: [
         {
-          gate: "agents.list[].tools.elevated.allowFrom.whatsapp",
-          key: "agents.list.work.tools.elevated.allowFrom.whatsapp",
+          gate: "agents.entries.*.tools.elevated.allowFrom.whatsapp",
+          key: "agents.entries.work.tools.elevated.allowFrom.whatsapp",
         },
       ],
     });
-    expect(deniedText).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
+    expect(deniedText).toContain("agents.entries.*.tools.elevated.allowFrom.whatsapp");
 
     const { text: allowedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:work:main",

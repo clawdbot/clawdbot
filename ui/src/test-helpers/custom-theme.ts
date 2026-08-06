@@ -1,5 +1,60 @@
 // Control UI test helper supports custom theme setup.
-import { normalizeImportedCustomTheme } from "../ui/custom-theme.ts";
+import { parseImportedCustomTheme } from "../app/custom-theme.ts";
+
+const CUSTOM_THEME_MODE_TOKENS = [
+  "bg",
+  "bg-accent",
+  "bg-elevated",
+  "bg-hover",
+  "bg-muted",
+  "bg-content",
+  "card",
+  "card-foreground",
+  "card-highlight",
+  "popover",
+  "popover-foreground",
+  "panel",
+  "panel-strong",
+  "panel-hover",
+  "chrome",
+  "chrome-strong",
+  "text",
+  "text-strong",
+  "chat-text",
+  "muted",
+  "muted-strong",
+  "muted-foreground",
+  "border",
+  "border-strong",
+  "border-hover",
+  "input",
+  "ring",
+  "accent",
+  "accent-hover",
+  "accent-muted",
+  "accent-subtle",
+  "accent-foreground",
+  "accent-glow",
+  "primary",
+  "primary-foreground",
+  "secondary",
+  "secondary-foreground",
+  "accent-2",
+  "accent-2-muted",
+  "accent-2-subtle",
+  "destructive",
+  "destructive-foreground",
+  "danger",
+  "danger-muted",
+  "danger-subtle",
+  "focus",
+  "focus-ring",
+  "focus-glow",
+  "font-body",
+  "font-display",
+  "mono",
+  "grid-line",
+] as const;
 
 export function createTweakcnThemePayload() {
   return {
@@ -56,8 +111,24 @@ export function createTweakcnThemePayload() {
 }
 
 export function createImportedCustomThemeFixture() {
-  return normalizeImportedCustomTheme(createTweakcnThemePayload(), {
+  const mode = Object.fromEntries(
+    CUSTOM_THEME_MODE_TOKENS.map((key) => [
+      key,
+      key === "font-body" || key === "font-display" || key === "mono"
+        ? "Inter, system-ui, sans-serif"
+        : "#000000",
+    ]),
+  );
+  const theme = parseImportedCustomTheme({
     sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
     themeId: "cmlhfpjhw000004l4f4ax3m7z",
+    label: "Light Green",
+    importedAt: new Date().toISOString(),
+    light: mode,
+    dark: mode,
   });
+  if (!theme) {
+    throw new Error("Expected custom theme fixture to parse");
+  }
+  return theme;
 }

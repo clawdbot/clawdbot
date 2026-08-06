@@ -16,8 +16,44 @@ describe("amazon-bedrock provider-policy-api", () => {
       "medium",
       "high",
       "adaptive",
+      "max",
     ]);
     expect(profile?.defaultLevel).toBe("adaptive");
+  });
+
+  it("caps Bedrock Claude Sonnet 4.6 at high effort", () => {
+    const profile = resolveThinkingProfile({
+      provider: "amazon-bedrock",
+      modelId: "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "adaptive",
+    ]);
+  });
+
+  it("defaults Bedrock Claude Opus 5 to high adaptive thinking", () => {
+    const profile = resolveThinkingProfile({
+      provider: "amazon-bedrock",
+      modelId: "global.anthropic.claude-opus-5",
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+    expect(profile?.defaultLevel).toBe("high");
   });
 
   it("leaves Bedrock Claude Opus 4.8 thinking off by default with max effort available", () => {
@@ -49,6 +85,42 @@ describe("amazon-bedrock provider-policy-api", () => {
       })?.levels.map((level) => level.id),
     ).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]);
   });
+
+  it.each([
+    {
+      canonicalModelId: "claude-fable-5",
+      defaultLevel: "high",
+      preservesCatalogOptOut: true,
+    },
+    {
+      canonicalModelId: "claude-mythos-5",
+      defaultLevel: "high",
+      preservesCatalogOptOut: true,
+    },
+    {
+      canonicalModelId: "claude-opus-5",
+      defaultLevel: "high",
+      preservesCatalogOptOut: false,
+    },
+    {
+      canonicalModelId: "claude-opus-4-8",
+      defaultLevel: "off",
+      preservesCatalogOptOut: false,
+    },
+  ])(
+    "resolves $canonicalModelId deployment aliases from canonical metadata",
+    ({ canonicalModelId, defaultLevel, preservesCatalogOptOut }) => {
+      const profile = resolveThinkingProfile({
+        provider: "amazon-bedrock",
+        modelId: "production-claude",
+        params: { canonicalModelId },
+      });
+
+      expect(profile?.defaultLevel).toBe(defaultLevel);
+      expect(profile?.levels.map((level) => level.id)).toContain("max");
+      expect(profile?.preserveWhenCatalogReasoningFalse === true).toBe(preservesCatalogOptOut);
+    },
+  );
 
   it("ignores unrelated providers", () => {
     expect(

@@ -41,6 +41,81 @@ export function forwardSignalToVitestProcessGroup(params) {
   }
 }
 
+/**
+ * Force-cleans any remaining processes in a Vitest child process group.
+ */
+export function forceKillVitestProcessGroup(child, kill = process.kill.bind(process)) {
+  return forwardSignalToVitestProcessGroup({
+    child,
+    kill,
+    signal: "SIGKILL",
+  });
+}
+
+const PROCESS_GROUP_JOIN_TIMEOUT_MS = 1_000;
+
+function isVitestProcessGroupAlive(target, kill) {
+  try {
+    kill(target, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") {
+      return false;
+    }
+    if (error?.code === "EPERM") {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function joinVitestProcessGroup(child, platform, kill) {
+  const target = resolveVitestProcessGroupSignalTarget({ childPid: child.pid, platform });
+  if (target === null) {
+    return;
+  }
+  forwardSignalToVitestProcessGroup({ child, kill, platform, signal: "SIGKILL" });
+  const deadlineAt = Date.now() + PROCESS_GROUP_JOIN_TIMEOUT_MS;
+  while (isVitestProcessGroupAlive(target, kill)) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `[vitest] process group ${child.pid ?? "unknown"} remained alive ${PROCESS_GROUP_JOIN_TIMEOUT_MS}ms after SIGKILL; inspect its descendants before starting another shard.`,
+      );
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(25, remainingMs));
+    });
+  }
+}
+
+function waitForChildCompletionEvent(child, event) {
+  return new Promise((resolve, reject) => {
+    child.once(event, (code, signal) => resolve({ code, signal }));
+    child.once("error", reject);
+  });
+}
+
+/**
+ * Resolves only after the child completion contract and any owned POSIX group are joined.
+ */
+export function createVitestProcessCompletion(params) {
+  const exitCompletion = waitForChildCompletionEvent(params.child, "exit");
+  const platform = params.platform ?? process.platform;
+  if (params.detached !== true || !shouldUseDetachedVitestProcessGroup(platform)) {
+    return exitCompletion;
+  }
+
+  const closeCompletion = waitForChildCompletionEvent(params.child, "close");
+  // `close` drains inherited pipes, while the group join proves pipe-independent
+  // descendants are gone before a sequential caller advances.
+  const groupCompletion = exitCompletion.then(async (result) => {
+    await joinVitestProcessGroup(params.child, platform, params.kill ?? process.kill.bind(process));
+    return result;
+  });
+  return Promise.all([groupCompletion, closeCompletion]).then(([result]) => result);
+}
+
 function ensureProcessListenerCapacity(processObject, eventName, additionalListeners = 1) {
   if (
     typeof processObject.getMaxListeners !== "function" ||
@@ -69,6 +144,8 @@ export function installVitestProcessGroupCleanup(params) {
   const platform = params.platform ?? process.platform;
   const kill = params.kill ?? process.kill.bind(process);
   const cleanupSignal = params.cleanupSignal ?? "SIGTERM";
+  const forceSignal = params.forceSignal ?? null;
+  const forceSignalDelayMs = params.forceSignalDelayMs ?? 0;
   const forwardedSignals = params.forwardedSignals ?? ["SIGINT", "SIGTERM"];
   const child = params.child;
   const onSignal = params.onSignal;
@@ -92,6 +169,13 @@ export function installVitestProcessGroupCleanup(params) {
     const handler = () => {
       onSignal?.(signal);
       forward(signal);
+      if (forceSignal) {
+        if (forceSignalDelayMs > 0) {
+          setTimeout(() => forward(forceSignal), forceSignalDelayMs).unref?.();
+        } else {
+          queueMicrotask(() => forward(forceSignal));
+        }
+      }
     };
     signalHandlers.set(signal, handler);
     ensureProcessListenerCapacity(processObject, signal);

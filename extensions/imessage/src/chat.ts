@@ -49,17 +49,7 @@ function buildChatTargetParams(
 }
 
 async function runChatAction<T>(
-  method:
-    | "typing"
-    | "read"
-    | "chats.create"
-    | "chats.delete"
-    | "chats.markUnread"
-    | "group.rename"
-    | "group.setIcon"
-    | "group.addParticipant"
-    | "group.removeParticipant"
-    | "group.leave",
+  method: "typing" | "read",
   params: Record<string, unknown>,
   opts: ChatActionOpts,
 ): Promise<T> {
@@ -94,91 +84,4 @@ export async function sendIMessageTyping(
 export async function markIMessageChatRead(to: string, opts: ChatActionOpts): Promise<void> {
   const { params } = buildChatTargetParams(to, opts);
   await runChatAction<{ ok?: boolean }>("read", params, opts);
-}
-
-export async function markIMessageChatUnread(to: string, opts: ChatActionOpts): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  await runChatAction<{ ok?: boolean }>("chats.markUnread", params, opts);
-}
-
-export async function createIMessageChat(
-  params: {
-    addresses: string[];
-    name?: string;
-    text?: string;
-    service?: "iMessage" | "SMS";
-  },
-  opts: Omit<ChatActionOpts, "chatId">,
-): Promise<{ chatGuid?: string }> {
-  if (!params.addresses.length) {
-    throw new Error("createIMessageChat requires at least one address");
-  }
-  const rpcParams: Record<string, unknown> = {
-    addresses: params.addresses,
-    service: params.service ?? "iMessage",
-  };
-  if (params.name) {
-    rpcParams.name = params.name;
-  }
-  if (params.text) {
-    rpcParams.text = params.text;
-  }
-  const result = await runChatAction<{ ok?: boolean; chat_guid?: string }>(
-    "chats.create",
-    rpcParams,
-    opts,
-  );
-  return { chatGuid: result.chat_guid };
-}
-
-export async function deleteIMessageChat(to: string, opts: ChatActionOpts): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  await runChatAction<{ ok?: boolean }>("chats.delete", params, opts);
-}
-
-export async function renameIMessageGroup(
-  to: string,
-  name: string,
-  opts: ChatActionOpts,
-): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  params.name = name;
-  await runChatAction<{ ok?: boolean }>("group.rename", params, opts);
-}
-
-export async function setIMessageGroupIcon(
-  to: string,
-  filePath: string | undefined,
-  opts: ChatActionOpts,
-): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  if (filePath) {
-    params.file = filePath;
-  }
-  await runChatAction<{ ok?: boolean }>("group.setIcon", params, opts);
-}
-
-export async function addIMessageGroupParticipant(
-  to: string,
-  address: string,
-  opts: ChatActionOpts,
-): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  params.address = address;
-  await runChatAction<{ ok?: boolean }>("group.addParticipant", params, opts);
-}
-
-export async function removeIMessageGroupParticipant(
-  to: string,
-  address: string,
-  opts: ChatActionOpts,
-): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  params.address = address;
-  await runChatAction<{ ok?: boolean }>("group.removeParticipant", params, opts);
-}
-
-export async function leaveIMessageGroup(to: string, opts: ChatActionOpts): Promise<void> {
-  const { params } = buildChatTargetParams(to, opts);
-  await runChatAction<{ ok?: boolean }>("group.leave", params, opts);
 }

@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import Testing
 
 private func setupCode(from payload: String) -> String {
@@ -10,10 +11,51 @@ private func setupCode(from payload: String) -> String {
         .replacingOccurrences(of: "=", with: "")
 }
 
+private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
+    guard let url = URL(string: raw),
+          case let .gateway(link)? = DeepLinkParser.parse(url)
+    else { return nil }
+    return link
+}
+
 @Suite struct DeepLinksSecurityTests {
+    @Test func setupResultInitializerKeepsLegacySignature() {
+        let result = DevicePairSetupCodeResult(
+            setupcode: "code",
+            qrdataurl: nil,
+            gatewayurl: "wss://gateway.example.com",
+            auth: AnyCodable("token"),
+            urlsource: "config")
+
+        #expect(result.gatewayurls == nil)
+    }
+
     @Test func dashboardDeepLinkParses() {
         let url = URL(string: "openclaw://dashboard")!
         #expect(DeepLinkParser.parse(url) == .dashboard)
+    }
+
+    @Test func debugDashboardDeepLinkParses() {
+        let url = URL(string: "openclaw-debug://dashboard")!
+        #expect(DeepLinkParser.parse(url) == .dashboard)
+    }
+
+    @Test func gatewayDeepLinkUsesTlsDefaultPortWhenPortMissing() {
+        let link = gatewayLink(from: "openclaw://gateway?host=gateway.example.com&tls=1")
+        #expect(link?.port == 443)
+        #expect(link?.tls == true)
+    }
+
+    @Test func gatewayDeepLinkUsesPlaintextDefaultPortWhenPortMissing() {
+        let link = gatewayLink(from: "openclaw://gateway?host=127.0.0.1&tls=0")
+        #expect(link?.port == 18789)
+        #expect(link?.tls == false)
+    }
+
+    @Test func gatewayDeepLinkPreservesExplicitTlsPort() {
+        let link = gatewayLink(from: "openclaw://gateway?host=gateway.example.com&port=18789&tls=1")
+        #expect(link?.port == 18789)
+        #expect(link?.tls == true)
     }
 
     @Test func gatewayDeepLinkRejectsInsecureNonLoopbackWs() {
@@ -86,6 +128,56 @@ private func setupCode(from payload: String) -> String {
                 bootstrapToken: "tok",
                 token: nil,
                 password: nil))
+    }
+
+    @Test func setupCodeParsesOrderedGatewayFallbacks() throws {
+        let payload = #"{"url":"ws://192.168.1.20:18789","urls":["ws://192.168.1.20:18789","wss://gateway.tailnet.ts.net:8443"],"bootstrapToken":"tok"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.connectionEndpoints == [
+            .init(host: "192.168.1.20", port: 18789, tls: false),
+            .init(host: "gateway.tailnet.ts.net", port: 8443, tls: true),
+        ])
+        #expect(try link?.selectingEndpoint(#require(link?.connectionEndpoints[1])) == .init(
+            host: "gateway.tailnet.ts.net",
+            port: 8443,
+            tls: true,
+            bootstrapToken: "tok",
+            token: nil,
+            password: nil))
+    }
+
+    @Test func legacyEncodedGatewayLinkDecodesWithoutFallbacks() throws {
+        let payload = #"{"host":"gateway.tailnet.ts.net","port":443,"tls":true}"#
+
+        let link = try JSONDecoder().decode(
+            GatewayConnectDeepLink.self,
+            from: Data(payload.utf8))
+
+        #expect(link.fallbackEndpoints.isEmpty)
+    }
+
+    @Test func setupCodeDropsInsecureGatewayFallbacks() {
+        let payload = #"{"url":"ws://attacker.example:18789","urls":["ws://attacker.example:18789","wss://gateway.tailnet.ts.net"],"bootstrapToken":"tok"}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+            host: "gateway.tailnet.ts.net",
+            port: 443,
+            tls: true,
+            bootstrapToken: "tok",
+            token: nil,
+            password: nil))
+    }
+
+    @Test func setupCodeCapsGatewayEndpoints() throws {
+        let urls = (0..<10).map { "wss://gateway-\($0).example.com" }
+        let data = try JSONSerialization.data(withJSONObject: ["url": urls[0], "urls": urls])
+        let payload = try #require(String(data: data, encoding: .utf8))
+
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.connectionEndpoints.count == 8)
+        #expect(link?.connectionEndpoints.last?.host == "gateway-7.example.com")
     }
 
     @Test func setupCodeRejectsTailnetPlaintextWs() {

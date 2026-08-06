@@ -13,6 +13,7 @@ import {
 } from "./dreaming-phases.js";
 import { previewGroundedRemMarkdown, type GroundedRemPreviewResult } from "./rem-evidence.js";
 import {
+  filterLiveShortTermRecallEntries,
   rankShortTermPromotionCandidates,
   readShortTermRecallEntries,
   type PromotionCandidate,
@@ -131,10 +132,13 @@ export async function previewRemHarness(
     workspaceDir: params.workspaceDir,
     nowMs,
   });
-  const recallEntries = filterRecallEntriesWithinLookback({
-    entries: allRecallEntries,
-    nowMs,
-    lookbackDays: remConfig.lookbackDays,
+  const recallEntries = await filterLiveShortTermRecallEntries({
+    workspaceDir: params.workspaceDir,
+    entries: filterRecallEntriesWithinLookback({
+      entries: allRecallEntries,
+      nowMs,
+      lookbackDays: remConfig.lookbackDays,
+    }),
   });
   const remPreviewLimit = resolveRemPreviewLimit(remConfig.limit, params.remPreviewLimit);
   const remSkipped = remConfig.limit <= 0 || remPreviewLimit <= 0;

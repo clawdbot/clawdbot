@@ -1,19 +1,21 @@
 // CLI session history tests protect imported Claude CLI transcript lookup,
-// fallback seeding, marker metadata, and merge ordering with local chat history.
+// fallback seeding, reseed receipts, and merge ordering with local chat history.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
   augmentChatHistoryWithCliSessionImports,
-  mergeImportedChatHistoryMessages,
   readClaudeCliFallbackSeed,
-  readClaudeCliSessionMessages,
-  resolveClaudeCliSessionFilePath,
+  resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
+import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
 import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
-
-const ORIGINAL_HOME = process.env.HOME;
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
 type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
@@ -62,6 +64,21 @@ function augmentBoundClaudeHistory(params: {
   });
 }
 
+function buildLegacyReseedPrompt(current = "current"): string {
+  return [
+    "Continue this conversation using the OpenClaw transcript below as prior session history.",
+    "Treat it as authoritative context for this fresh CLI session.",
+    "",
+    "<conversation_history>",
+    "User: previous",
+    "</conversation_history>",
+    "",
+    "<next_user_message>",
+    current,
+    "</next_user_message>",
+  ].join("\n");
+}
+
 function createClaudeHistoryLines(sessionId: string) {
   return [
     JSON.stringify({
@@ -78,7 +95,7 @@ function createClaudeHistoryLines(sessionId: string) {
       message: {
         role: "user",
         content:
-          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
       },
     }),
     JSON.stringify({
@@ -140,6 +157,24 @@ function createClaudeHistoryLines(sessionId: string) {
   ].join("\n");
 }
 
+function createClaudeTextHistoryLines(
+  entries: Array<{ content: string; role: "assistant" | "user"; uuid: string }>,
+): string {
+  return entries
+    .map((entry, index) =>
+      JSON.stringify({
+        type: entry.role,
+        uuid: entry.uuid,
+        timestamp: new Date(Date.parse("2026-03-26T16:29:54.800Z") + index).toISOString(),
+        message: {
+          role: entry.role,
+          content: entry.content,
+        },
+      }),
+    )
+    .join("\n");
+}
+
 async function withClaudeProjectsDir<T>(
   run: (params: { homeDir: string; sessionId: string; filePath: string }) => Promise<T>,
 ): Promise<T> {
@@ -150,31 +185,16 @@ async function withClaudeProjectsDir<T>(
   const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
   await fs.mkdir(projectsDir, { recursive: true });
   await fs.writeFile(filePath, createClaudeHistoryLines(sessionId), "utf-8");
-  process.env.HOME = homeDir;
   try {
-    return await run({ homeDir, sessionId, filePath });
+    return await withEnvAsync({ HOME: homeDir }, () => run({ homeDir, sessionId, filePath }));
   } finally {
-    if (ORIGINAL_HOME === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = ORIGINAL_HOME;
-    }
     await fs.rm(root, { recursive: true, force: true });
   }
 }
 
 describe("cli session history", () => {
-  afterEach(() => {
-    if (ORIGINAL_HOME === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = ORIGINAL_HOME;
-    }
-  });
-
   it("reads claude-cli session messages from the Claude projects store", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      expect(resolveClaudeCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBe(filePath);
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
       expect(messages).toHaveLength(3);
       expectFields(messages[0], {
@@ -182,6 +202,7 @@ describe("cli session history", () => {
       });
       expect(String(messages[0]?.content)).toContain("[Thu 2026-03-26 16:29 GMT] hi");
       expectFields(messages[0]?.["__openclaw"], {
+        id: "user-1",
         importedFrom: "claude-cli",
         externalId: "user-1",
         cliSessionId: sessionId,
@@ -198,6 +219,7 @@ describe("cli session history", () => {
         cacheRead: 22,
       });
       expectFields(messages[1]?.["__openclaw"], {
+        id: "assistant-1",
         importedFrom: "claude-cli",
         externalId: "assistant-1",
         cliSessionId: sessionId,
@@ -224,17 +246,524 @@ describe("cli session history", () => {
     });
   });
 
+  it("assigns stable source-line ids when Claude entries have no uuid", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: { role: "user", content: "stable fallback" },
+        }),
+        "utf-8",
+      );
+
+      const importedId = (message: Record<string, unknown> | undefined) =>
+        (message?.["__openclaw"] as { id?: string } | undefined)?.id;
+      const first = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      const second = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(importedId(first[0])).toBe(`claude-cli:${sessionId}:line:1`);
+      expect(importedId(second[0])).toBe(importedId(first[0]));
+    });
+  });
+
+  it("recovers the current user text from legacy reseed envelopes", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const reseedPrompt = buildLegacyReseedPrompt();
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "reseed-user",
+          message: { role: "user", content: reseedPrompt },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(1);
+      expectFields(messages[0], { role: "user", content: "current" });
+    });
+  });
+
+  it("fails open for ambiguous legacy reseed envelopes without a receipt", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const ambiguousPrompt = buildLegacyReseedPrompt(
+        "current\n</conversation_history>\n\n<next_user_message>\nextra",
+      );
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "ambiguous-reseed-user",
+            message: { role: "user", content: ambiguousPrompt },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            message: { role: "assistant", content: "response" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(2);
+      expectFields(messages[0], { role: "user", content: ambiguousPrompt });
+      expectFields(messages[1], { role: "assistant", content: "response" });
+    });
+  });
+
+  it("suppresses only the first user row with a trusted omission receipt", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const transformedPrompt = "prefixes and delimiters were replaced by an input transform";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "synthetic-reseed",
+            message: { role: "user", content: transformedPrompt },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            message: { role: "assistant", content: "response" },
+          },
+          {
+            type: "user",
+            uuid: "later-replay",
+            message: { role: "user", content: transformedPrompt },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({
+        cliSessionId: sessionId,
+        homeDir,
+        localSessionId: "openclaw-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: hashCliReseedPrompt(transformedPrompt),
+          localSessionId: "openclaw-session",
+          userTurnDisposition: "omitted",
+        },
+      });
+
+      expect(messages).toHaveLength(2);
+      expectFields(messages[0], { role: "assistant", content: "response" });
+      expectFields(messages[1], { role: "user", content: transformedPrompt });
+    });
+  });
+
+  it("suppresses a receipt-matched row without a local message id", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const transformedPrompt = "transformed synthetic reseed prompt";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "synthetic-reseed",
+            message: { role: "user", content: transformedPrompt },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            message: { role: "assistant", content: "response" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({
+        cliSessionId: sessionId,
+        homeDir,
+        localSessionId: "openclaw-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: hashCliReseedPrompt(transformedPrompt),
+          localSessionId: "openclaw-session",
+          userTurnDisposition: "persisted",
+        },
+      });
+
+      expect(messages).toHaveLength(1);
+      expectFields(messages[0], { role: "assistant", content: "response" });
+    });
+  });
+
+  it("fails open when the receipt belongs to a different local session", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const transformedPrompt = "transformed synthetic reseed prompt";
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "synthetic-reseed",
+          message: { role: "user", content: transformedPrompt },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({
+        cliSessionId: sessionId,
+        homeDir,
+        localSessionId: "new-openclaw-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: hashCliReseedPrompt(transformedPrompt),
+          localSessionId: "old-openclaw-session",
+          userTurnDisposition: "persisted",
+        },
+      });
+
+      expect(messages).toHaveLength(1);
+      expectFields(messages[0], { role: "user", content: transformedPrompt });
+    });
+  });
+
+  it.each([
+    [
+      "metadata",
+      {
+        type: "user",
+        uuid: "metadata-user",
+        isMeta: true,
+        message: { role: "user", content: "metadata" },
+      },
+    ],
+    [
+      "compact summary",
+      {
+        type: "user",
+        uuid: "compact-summary-user",
+        isCompactSummary: true,
+        message: { role: "user", content: "summary" },
+      },
+    ],
+    [
+      "tool result",
+      {
+        type: "user",
+        uuid: "tool-result-user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }],
+        },
+      },
+    ],
+  ])("skips %s rows before checking the reseed receipt", async (_label, precursor) => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const transformedPrompt = "transformed synthetic reseed prompt";
+      await fs.writeFile(
+        filePath,
+        [
+          precursor,
+          {
+            type: "user",
+            uuid: "synthetic-reseed",
+            message: { role: "user", content: transformedPrompt },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            message: { role: "assistant", content: "response" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({
+        cliSessionId: sessionId,
+        homeDir,
+        localSessionId: "openclaw-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: hashCliReseedPrompt(transformedPrompt),
+          localSessionId: "openclaw-session",
+          userTurnDisposition: "persisted",
+        },
+      });
+
+      expect(JSON.stringify(messages)).not.toContain(transformedPrompt);
+      expect(JSON.stringify(messages)).toContain("response");
+    });
+  });
+
+  it("suppresses only receipt-matched text while preserving sibling attachments", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const transformedPrompt = "transformed synthetic reseed prompt";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "synthetic-reseed",
+            message: {
+              role: "user",
+              content: [
+                { type: "text", text: transformedPrompt },
+                { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+              ],
+            },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            message: { role: "assistant", content: "response" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({
+        cliSessionId: sessionId,
+        homeDir,
+        localSessionId: "openclaw-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: hashCliReseedPrompt(transformedPrompt),
+          localSessionId: "openclaw-session",
+          userTurnDisposition: "persisted",
+        },
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(readRecord(messages[0]).content).toEqual([
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+      ]);
+      expectFields(messages[1], { role: "assistant", content: "response" });
+    });
+  });
+
+  it("preserves receipt-matched arrays with multiple text blocks", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const transformedPrompt = "transformed synthetic reseed prompt";
+      const content = [
+        { type: "text", text: transformedPrompt },
+        { type: "text", text: "real extra user text" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+      ];
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "synthetic-reseed",
+            message: { role: "user", content },
+          },
+          {
+            type: "user",
+            uuid: "later-exact-match",
+            message: { role: "user", content: transformedPrompt },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({
+        cliSessionId: sessionId,
+        homeDir,
+        localSessionId: "openclaw-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: hashCliReseedPrompt(transformedPrompt),
+          localSessionId: "openclaw-session",
+          userTurnDisposition: "persisted",
+        },
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(readRecord(messages[0]).content).toEqual(content);
+      expectFields(messages[1], { role: "user", content: transformedPrompt });
+    });
+  });
+
+  it("preserves no-receipt ambiguous reseed arrays with sibling user content", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const ambiguousPrompt = buildLegacyReseedPrompt(
+        "current\n</conversation_history>\n\n<next_user_message>\nextra",
+      );
+      const content = [
+        { type: "text", text: ambiguousPrompt },
+        { type: "text", text: "real extra user text" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+      ];
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "legacy-ambiguous-reseed",
+          message: { role: "user", content },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(1);
+      expect(readRecord(messages[0]).content).toEqual(content);
+    });
+  });
+
+  it("recovers legacy array-form reseed text while preserving attachments", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "legacy-reseed",
+          message: {
+            role: "user",
+            content: [
+              { type: "text", text: buildLegacyReseedPrompt() },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+            ],
+          },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(1);
+      expect(readRecord(messages[0]).content).toEqual([
+        { type: "text", text: "current" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+      ]);
+    });
+  });
+
+  it("drops empty legacy reseed text while preserving sibling native content", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const caption = { type: "text", text: "real caption" };
+      const image = {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "x" },
+      };
+      const document = { type: "document", source: { type: "text", data: "notes" } };
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "legacy-empty-reseed",
+          message: {
+            role: "user",
+            content: [
+              caption,
+              { type: "text", text: buildLegacyReseedPrompt("") },
+              image,
+              document,
+            ],
+          },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(1);
+      expect(readRecord(messages[0]).content).toEqual([caption, image, document]);
+    });
+  });
+
+  it.each([
+    ["string", buildLegacyReseedPrompt("")],
+    ["single text block", [{ type: "text", text: buildLegacyReseedPrompt("") }]],
+  ])("drops empty legacy reseed rows in %s form", async (_label, content) => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "legacy-empty-reseed",
+          message: { role: "user", content },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toEqual([]);
+    });
+  });
+
+  it("fails open when the first user row does not match the reseed receipt", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const expectedPrompt = "expected synthetic prompt";
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "unexpected-first-user",
+            message: { role: "user", content: "different prompt" },
+          },
+          {
+            type: "user",
+            uuid: "later-matching-user",
+            message: { role: "user", content: expectedPrompt },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({
+        cliSessionId: sessionId,
+        homeDir,
+        localSessionId: "openclaw-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: hashCliReseedPrompt(expectedPrompt),
+          localSessionId: "openclaw-session",
+          userTurnDisposition: "persisted",
+        },
+      });
+
+      expect(messages).toHaveLength(2);
+      expectFields(messages[0], { role: "user", content: "different prompt" });
+      expectFields(messages[1], { role: "user", content: expectedPrompt });
+    });
+  });
+
   it("rejects path-like Claude CLI session ids", async () => {
-    await withClaudeProjectsDir(async ({ homeDir }) => {
-      expect(
-        resolveClaudeCliSessionFilePath({ cliSessionId: "../outside", homeDir }),
-      ).toBeUndefined();
-      expect(
-        resolveClaudeCliSessionFilePath({ cliSessionId: "nested/session", homeDir }),
-      ).toBeUndefined();
-      expect(
-        resolveClaudeCliSessionFilePath({ cliSessionId: "nested\\session", homeDir }),
-      ).toBeUndefined();
+    await withClaudeProjectsDir(async ({ homeDir, filePath }) => {
+      const projectDir = path.dirname(filePath);
+      const projectsDir = path.dirname(projectDir);
+      const sentinel = `${JSON.stringify({
+        type: "user",
+        uuid: "path-traversal-sentinel",
+        message: { role: "user", content: "must not import" },
+      })}\n`;
+      await fs.writeFile(path.join(projectsDir, "outside.jsonl"), sentinel, "utf-8");
+      await fs.mkdir(path.join(projectDir, "nested"), { recursive: true });
+      await fs.writeFile(path.join(projectDir, "nested", "session.jsonl"), sentinel, "utf-8");
+      if (path.sep !== "\\") {
+        await fs.writeFile(path.join(projectDir, "nested\\session.jsonl"), sentinel, "utf-8");
+      }
+
+      for (const cliSessionId of ["../outside", "nested/session", "nested\\session"]) {
+        expect(readClaudeCliSessionMessages({ cliSessionId, homeDir })).toEqual([]);
+      }
     });
   });
 
@@ -255,7 +784,7 @@ describe("cli session history", () => {
       {
         role: "user",
         content:
-          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
         __openclaw: {
           importedFrom: "claude-cli",
@@ -293,6 +822,132 @@ describe("cli session history", () => {
     expectFields(readRecord(merged[2])["__openclaw"], {
       importedFrom: "claude-cli",
       externalId: "user-2",
+    });
+  });
+
+  it.each([
+    ["deduplicates a local redacted copy against an imported full copy", false],
+    ["deduplicates when both local and imported copies are already redacted", true],
+  ])("%s", async (_label, importRedacted) => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const secretText = "key is sk-abcdef1234567890xyz";
+      const localMessage = redactTranscriptMessage({
+        role: "user",
+        content: secretText,
+      } as AgentMessage);
+      const localMessages = [localMessage];
+      const redactedContent = readRecord(localMessage).content;
+      if (typeof redactedContent !== "string") {
+        throw new Error("expected redacted local text content");
+      }
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          {
+            role: "user",
+            uuid: "user-secret-copy",
+            content: importRedacted ? redactedContent : secretText,
+          },
+        ]),
+        "utf-8",
+      );
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(messages).toBe(localMessages);
+    });
+  });
+
+  it("preserves repeated redacted Claude messages with distinct external UUIDs", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const content = "shared key sk-abcdef1234567890xyz";
+      const externalIds = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+      ];
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines(
+          externalIds.map((uuid) => ({ role: "assistant", uuid, content })),
+        ),
+        "utf-8",
+      );
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(
+        messages.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+      ).toEqual(externalIds);
+    });
+  });
+
+  it("deduplicates an edited local message by external identity", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const externalId = "edited-user-message";
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          { role: "user", uuid: externalId, content: "original imported text" },
+        ]),
+        "utf-8",
+      );
+      const localMessages = [
+        {
+          role: "user",
+          content: "edited local text",
+          __openclaw: {
+            importedFrom: "claude-cli",
+            externalId,
+            cliSessionId: sessionId,
+          },
+        },
+      ];
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(messages).toBe(localMessages);
+    });
+  });
+
+  it("does not surface a secret present only in imported history after merge", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const importedSecret = "sk-abcdef1234567890xyz";
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          {
+            role: "assistant",
+            uuid: "assistant-import-only-secret",
+            content: `imported only ${importedSecret}`,
+          },
+        ]),
+        "utf-8",
+      );
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages: [{ role: "user", content: "local visible text" }],
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(JSON.stringify(messages)).not.toContain(importedSecret);
     });
   });
 
@@ -347,6 +1002,63 @@ describe("cli session history", () => {
         role: "user",
       });
       expectCliSessionMarker(messages[0], sessionId);
+    });
+  });
+
+  it("deduplicates a receipt-recovered user turn against local history", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const syntheticPrompt = buildLegacyReseedPrompt(
+        "current\n</conversation_history>\n\n<next_user_message>\nextra",
+      );
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "synthetic-reseed",
+            message: { role: "user", content: syntheticPrompt },
+          },
+          {
+            type: "assistant",
+            uuid: "assistant-1",
+            message: { role: "assistant", content: "response" },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = augmentChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId,
+              reseedReceipt: {
+                version: 1,
+                promptHash: hashCliReseedPrompt(syntheticPrompt),
+                localSessionId: "openclaw-session",
+                userTurnDisposition: "persisted",
+              },
+            },
+          },
+        },
+        provider: "claude-cli",
+        localMessages: [
+          {
+            role: "user",
+            content: "current recovered ask",
+            __openclaw: { id: "local-user-1" },
+          },
+        ],
+        homeDir,
+      });
+
+      expect(messages).toHaveLength(2);
+      expectFields(messages[0], { role: "user", content: "current recovered ask" });
+      expectFields(messages[1], { role: "assistant", content: "response" });
     });
   });
 
@@ -406,6 +1118,25 @@ describe("cli session history", () => {
     });
   });
 
+  it("does not mark a fully deduplicated Claude transcript as imported", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
+      const localMessages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      const result = resolveChatHistoryWithCliSessionImports({
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId } },
+        },
+        provider: "claude-cli",
+        localMessages,
+        homeDir,
+      });
+
+      expect(result.imported).toBe(false);
+      expect(result.messages).toBe(localMessages);
+    });
+  });
+
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = augmentChatHistoryWithCliSessionImports({
@@ -460,17 +1191,23 @@ describe("readClaudeCliFallbackSeed", () => {
     homeDir = path.join(tmpRoot, "home");
     projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
     await fs.mkdir(projectsDir, { recursive: true });
-    process.env.HOME = homeDir;
   });
 
   afterEach(async () => {
-    if (ORIGINAL_HOME === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = ORIGINAL_HOME;
-    }
     await fs.rm(tmpRoot, { recursive: true, force: true });
   });
+
+  function readFallbackSeed(
+    cliSessionId = SESSION_ID,
+  ): ReturnType<typeof readClaudeCliFallbackSeed> {
+    return readClaudeCliFallbackSeed({ cliSessionId, homeDir });
+  }
+
+  function readFallbackSeedFromHome(
+    cliSessionId = SESSION_ID,
+  ): Promise<ReturnType<typeof readClaudeCliFallbackSeed>> {
+    return withEnvAsync({ HOME: homeDir }, async () => readClaudeCliFallbackSeed({ cliSessionId }));
+  }
 
   async function writeJsonl(lines: ReadonlyArray<Record<string, unknown>>): Promise<void> {
     const file = path.join(projectsDir, `${SESSION_ID}.jsonl`);
@@ -478,11 +1215,11 @@ describe("readClaudeCliFallbackSeed", () => {
   }
 
   it("returns undefined when the Claude session file does not exist", () => {
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = readFallbackSeed();
     expect(seed).toBeUndefined();
   });
 
-  it("collects user/assistant turns when the session has never been compacted", async () => {
+  it("collects user/assistant turns through the HOME-resolved session store", async () => {
     await writeJsonl([
       {
         type: "user",
@@ -505,12 +1242,27 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = await readFallbackSeedFromHome();
     const fallbackSeed = requireFallbackSeed(seed, "uncompacted session");
     expect(fallbackSeed.summaryText).toBeUndefined();
     expect(fallbackSeed.recentTurns).toHaveLength(3);
     expectFields(fallbackSeed.recentTurns[0], { role: "user" });
     expectFields(fallbackSeed.recentTurns[2], { role: "user" });
+  });
+
+  it("preserves reseed envelopes in fallback model context", async () => {
+    const reseedPrompt = buildLegacyReseedPrompt();
+    await writeJsonl([
+      {
+        type: "user",
+        uuid: "u-1",
+        message: { role: "user", content: reseedPrompt },
+      },
+    ]);
+
+    const seed = requireFallbackSeed(readFallbackSeed(), "reseed session");
+
+    expectFields(seed.recentTurns[0], { role: "user", content: reseedPrompt });
   });
 
   it("uses the explicit /compact summary and drops pre-boundary turns", async () => {
@@ -555,7 +1307,7 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = readFallbackSeed();
     const fallbackSeed = requireFallbackSeed(seed, "compacted session");
     expect(fallbackSeed.summaryText).toBe(
       "User asked about deployment; agent recommended a blue-green strategy.",
@@ -587,7 +1339,7 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = readFallbackSeed();
     const fallbackSeed = requireFallbackSeed(seed, "compact boundary session");
     // Falls back to the boundary's content so the seed at least labels
     // that compaction happened, instead of replaying nothing.
@@ -632,7 +1384,7 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = readFallbackSeed();
     expect(seed?.summaryText).toBe("LATER summary that must win.");
     expect(seed?.recentTurns).toHaveLength(1);
     expect(JSON.stringify(seed?.recentTurns)).toContain("tail turn");
@@ -649,12 +1401,12 @@ describe("readClaudeCliFallbackSeed", () => {
         message: { role: "user", content: "sidechain user turn" },
       },
     ]);
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = readFallbackSeed();
     expect(seed).toBeUndefined();
   });
 
   it("rejects path-like session ids instead of escaping the Claude projects tree", () => {
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: "../escape" });
+    const seed = readFallbackSeed("../escape");
     expect(seed).toBeUndefined();
   });
 
@@ -685,7 +1437,7 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = readFallbackSeed();
     const fallbackSeed = requireFallbackSeed(seed, "latest boundary session");
     expect(fallbackSeed.summaryText).toBe("Conversation compacted (2)");
     expect(fallbackSeed.summaryText).not.toBe("FIRST compact summary");
@@ -708,7 +1460,8 @@ describe("readClaudeCliFallbackSeed", () => {
       },
     ]);
 
-    const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
+    const seed = readFallbackSeed();
     expect(seed?.summaryText).toBe("trailing summary without boundary");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

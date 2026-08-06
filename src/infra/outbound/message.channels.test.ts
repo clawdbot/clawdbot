@@ -1,7 +1,7 @@
 // Covers channel-specific outbound adapter behavior for message sends,
 // structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -234,21 +234,25 @@ describe("sendMessage replyToId threading", () => {
   });
 });
 
+function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {}) {
+  setRegistry(
+    createTestRegistry([
+      {
+        pluginId: "demo-alias-channel",
+        source: "test",
+        plugin: createDemoAliasPlugin({
+          aliases: ["workspace-chat"],
+          outbound: createDemoAliasOutbound({ includePoll: true, ...outboundOptions }),
+        }),
+      },
+    ]),
+  );
+}
+
 describe("sendPoll channel normalization", () => {
-  it("normalizes plugin aliases for polls", async () => {
+  it("normalizes plugin aliases for gateway polls", async () => {
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
-    setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "demo-alias-channel",
-          source: "test",
-          plugin: createDemoAliasPlugin({
-            aliases: ["workspace-chat"],
-            outbound: createDemoAliasOutbound({ includePoll: true }),
-          }),
-        },
-      ]),
-    );
+    setDemoPollRegistry({ deliveryMode: "gateway" });
 
     const result = await sendPoll({
       cfg: {},
@@ -260,6 +264,76 @@ describe("sendPoll channel normalization", () => {
 
     expect(gatewayCall()?.params?.channel).toBe("demo-alias-channel");
     expect(result.channel).toBe("demo-alias-channel");
+    expect(result.via).toBe("gateway");
+  });
+
+  it("uses direct poll fallback for direct channel plugins", async () => {
+    const cfg = { channels: {} };
+    const sendPollMock = vi.fn(async () => ({ messageId: "p1" }));
+    setDemoPollRegistry({ supportsAnonymousPolls: true, sendPoll: sendPollMock });
+
+    const result = await sendPoll({
+      cfg,
+      to: "conversation:demo-target",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      channel: "Workspace-Chat",
+      accountId: "acct-1",
+      threadId: "thread-1",
+      silent: true,
+      isAnonymous: false,
+    });
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      channel: "demo-alias-channel",
+      to: "conversation:demo-target",
+      via: "direct",
+      result: { messageId: "p1" },
+    });
+    expect(sendPollMock).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:demo-target",
+      poll: {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+      },
+      accountId: "acct-1",
+      threadId: "thread-1",
+      silent: true,
+      isAnonymous: false,
+    });
+  });
+
+  it.each([
+    {
+      name: "durationSeconds",
+      params: { durationSeconds: 300 },
+      message: "durationSeconds is not supported for demo-alias-channel polls",
+    },
+    {
+      name: "isAnonymous",
+      params: { isAnonymous: false },
+      message: "isAnonymous is not supported for demo-alias-channel polls",
+    },
+  ])("rejects unsupported direct poll option $name", async ({ params, message }) => {
+    const sendPollMock = vi.fn(async () => ({ messageId: "p1" }));
+    setDemoPollRegistry({ sendPoll: sendPollMock });
+
+    await expect(
+      sendPoll({
+        cfg: {},
+        to: "conversation:demo-target",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        channel: "Workspace-Chat",
+        ...params,
+      }),
+    ).rejects.toThrow(message);
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(sendPollMock).not.toHaveBeenCalled();
   });
 });
 
@@ -457,8 +531,14 @@ const createLocalChatAliasPlugin = (): ChannelPlugin => ({
   },
 });
 
-const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
+const createDemoAliasOutbound = (opts?: {
+  deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
+  includePoll?: boolean;
+  supportsAnonymousPolls?: boolean;
+  supportsPollDurationSeconds?: boolean;
+  sendPoll?: NonNullable<ChannelOutboundAdapter["sendPoll"]>;
+}): ChannelOutboundAdapter => ({
+  deliveryMode: opts?.deliveryMode ?? "direct",
   sendText: async ({ deps, to, text }) => {
     const send = deps?.["demo-alias-channel"] as
       | ((to: string, text: string, opts?: unknown) => Promise<{ messageId: string }>)
@@ -482,7 +562,9 @@ const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutbo
   ...(opts?.includePoll
     ? {
         pollMaxOptions: 12,
-        sendPoll: async () => ({ channel: "demo-alias-channel", messageId: "p1" }),
+        ...(opts.supportsAnonymousPolls ? { supportsAnonymousPolls: true } : {}),
+        ...(opts.supportsPollDurationSeconds ? { supportsPollDurationSeconds: true } : {}),
+        sendPoll: opts.sendPoll ?? (async () => ({ messageId: "p1" })),
       }
     : {}),
 });

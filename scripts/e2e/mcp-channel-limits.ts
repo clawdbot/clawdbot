@@ -1,7 +1,7 @@
 // Mcp Channel Limits script supports OpenClaw repository automation.
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 
-export type McpChannelLimits = {
+type McpChannelLimits = {
   connectTimeoutMs: number;
   gatewayEventRetainLimit: number;
   rawMessageRetainLimit: number;

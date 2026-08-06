@@ -284,7 +284,6 @@ describe("copilotToolMetasHavePotentialSideEffects", () => {
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "status" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "file_read" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "memory_get" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "memory_search" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "sessions_history" }])).toBe(
       false,
     );
@@ -292,6 +291,10 @@ describe("copilotToolMetasHavePotentialSideEffects", () => {
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "tool_search" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_fetch" }])).toBe(false);
     expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_search" }])).toBe(false);
+  });
+
+  it("treats memory_search recall tracking as a potential side effect", () => {
+    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "memory_search" }])).toBe(true);
   });
 
   it("detects async-started tools even without a mutating name", () => {

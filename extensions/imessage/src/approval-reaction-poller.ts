@@ -12,12 +12,15 @@ import {
   type PendingIMessageApprovalReactionPollTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
 
 const RECENT_CHAT_LIMIT = 50;
 const PER_CHAT_HISTORY_LIMIT = 30;
 const OBSERVED_APPROVAL_PROMPT_TARGET_TTL_MS = 5 * 60 * 1000;
+
+const accountIdsWithCompletedNoTargetDiscovery = new Set<string>();
 
 type ChatListEntry = {
   id?: number | null;
@@ -180,6 +183,7 @@ function bindObservedConversation(params: {
       conversation,
       messageId,
       approvalId: params.target.approvalId,
+      approvalKind: params.target.approvalKind,
       allowedDecisions: params.target.allowedDecisions,
       ttlMs,
     });
@@ -211,6 +215,7 @@ function bindObservedApprovalPrompt(params: {
     conversation,
     messageId,
     approvalId: binding.approvalId,
+    approvalKind: binding.approvalKind,
     allowedDecisions: binding.allowedDecisions,
     expiresAtMs,
   };
@@ -223,15 +228,19 @@ export async function pollPendingIMessageApprovalReactions(params: {
   cfg: OpenClawConfig;
   accountId: string;
   allowRecentChatDiscovery?: boolean;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
   const targets = listPendingIMessageApprovalReactionPollTargets({
     accountId: params.accountId,
   });
-  if (targets.length === 0 && params.allowRecentChatDiscovery !== true) {
+  const shouldAttemptNoTargetDiscovery =
+    targets.length === 0 &&
+    params.allowRecentChatDiscovery === true &&
+    !accountIdsWithCompletedNoTargetDiscovery.has(params.accountId);
+  if (targets.length === 0 && !shouldAttemptNoTargetDiscovery) {
     return;
   }
-
   const pendingByMessageId = buildPendingTargetsByMessageId(targets);
   const explicitChatIds = listTargetChatIds(targets);
   const shouldDiscoverRecentChats =
@@ -241,13 +250,18 @@ export async function pollPendingIMessageApprovalReactions(params: {
     ? uniqueChatIds([...explicitChatIds, ...(await listRecentChatIds(params.client))])
     : explicitChatIds;
   if (chatIds.length === 0) {
+    if (shouldAttemptNoTargetDiscovery) {
+      accountIdsWithCompletedNoTargetDiscovery.add(params.accountId);
+    }
     return;
   }
+  let hadHistoryFetchError = false;
   for (const chatId of chatIds) {
     let messages: HistoryMessage[];
     try {
       messages = await fetchRecentHistory({ client: params.client, chatId });
     } catch (err) {
+      hadHistoryFetchError = true;
       params.logVerboseMessage?.(
         `imessage: approval reaction poll skipped chat_id=${chatId}: ${String(err)}`,
       );
@@ -279,12 +293,19 @@ export async function pollPendingIMessageApprovalReactions(params: {
           accountId: params.accountId,
           message: reactionPayload,
           bodyText: reactionPayload.text ?? "",
+          gatewayRuntime: params.gatewayRuntime,
           logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {
+          if (shouldAttemptNoTargetDiscovery && handled.stopPollingReason !== "resolver-error") {
+            break;
+          }
           return;
         }
       }
     }
+  }
+  if (shouldAttemptNoTargetDiscovery && !hadHistoryFetchError) {
+    accountIdsWithCompletedNoTargetDiscovery.add(params.accountId);
   }
 }

@@ -12,6 +12,7 @@ export type FeishuMessageEvent = {
   message: {
     message_id: string;
     reply_target_message_id?: string;
+    typing_target_message_id?: string;
     suppress_reply_target?: boolean;
     root_id?: string;
     parent_id?: string;

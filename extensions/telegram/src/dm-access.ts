@@ -57,6 +57,26 @@ async function decideTelegramDmAccess(params: {
   return result.ingress;
 }
 
+export async function isTelegramDmAccessAllowed(params: {
+  dmPolicy: DmPolicy;
+  msg: Message;
+  chatId: number;
+  effectiveDmAllow: NormalizedAllowFrom;
+  accountId: string;
+}): Promise<boolean> {
+  if (params.dmPolicy === "disabled") {
+    return false;
+  }
+  const sender = resolveTelegramSenderIdentity(params.msg, params.chatId);
+  const access = await decideTelegramDmAccess({
+    accountId: params.accountId,
+    dmPolicy: params.dmPolicy,
+    sender,
+    effectiveDmAllow: params.effectiveDmAllow,
+  });
+  return access.decision === "allow";
+}
+
 export async function enforceTelegramDmAccess(params: {
   isGroup: boolean;
   dmPolicy: DmPolicy;
@@ -107,6 +127,7 @@ export async function enforceTelegramDmAccess(params: {
       const telegramUserId = sender.userId ?? sender.candidateId;
       await createChannelPairingChallengeIssuer({
         channel: "telegram",
+        accountId,
         upsertPairingRequest: async ({ id, meta }) =>
           await (upsertPairingRequest ?? upsertChannelPairingRequest)({
             channel: "telegram",

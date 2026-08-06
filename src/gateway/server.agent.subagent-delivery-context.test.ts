@@ -1,12 +1,14 @@
 // Subagent delivery-context tests protect route metadata inheritance for child
 // agent sessions and outbound delivery through channel plugins.
-import fs from "node:fs/promises";
 import { describe, expect, test } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
+import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -44,19 +46,7 @@ const defaultRegistry = createRegistry([
   },
 ]);
 
-type StoredEntry = {
-  route?: {
-    channel?: string;
-    accountId?: string;
-    target?: { to?: string; rawTo?: string; chatType?: string };
-    thread?: { id?: string | number; kind?: string; source?: string };
-  };
-  deliveryContext?: { channel?: string; to?: string; threadId?: string; accountId?: string };
-  lastChannel?: string;
-  lastTo?: string;
-  lastThreadId?: string | number;
-  lastAccountId?: string;
-};
+type StoredEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 
 type StoreEntries = Parameters<typeof writeSessionStore>[0]["entries"];
 
@@ -64,14 +54,6 @@ async function prepareSessionStore(entries: StoreEntries = {}): Promise<void> {
   setRegistry(defaultRegistry);
   testState.sessionStorePath = gatewaySuite.sessionStorePath;
   await writeSessionStore({ entries });
-}
-
-function readStoredEntry(stored: Record<string, StoredEntry>, key: string): StoredEntry {
-  const entry = stored[key];
-  if (!entry) {
-    throw new Error(`expected stored entry ${key}`);
-  }
-  return entry;
 }
 
 function readDeliveryContext(entry: StoredEntry): NonNullable<StoredEntry["deliveryContext"]> {
@@ -82,11 +64,13 @@ function readDeliveryContext(entry: StoredEntry): NonNullable<StoredEntry["deliv
 }
 
 async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
-  const stored = JSON.parse(await fs.readFile(gatewaySuite.sessionStorePath, "utf-8")) as Record<
-    string,
-    StoredEntry
-  >;
-  return readStoredEntry(stored, key);
+  const entry = loadSessionEntry({ sessionKey: key, storePath: gatewaySuite.sessionStorePath }) as
+    | StoredEntry
+    | undefined;
+  if (!entry) {
+    throw new Error(`expected stored entry ${key}`);
+  }
+  return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };
 }
 
 async function sendAgentRequest(params: Record<string, unknown>): Promise<void> {
@@ -230,10 +214,10 @@ describe("subagent session deliveryContext from spawn request params", () => {
     });
   });
 
-  test("pre-patched subagent session (via sessions.patch) inherits deliveryContext from agent request", async () => {
-    // Simulates the real subagent spawn flow: spawnSubagentDirect calls sessions.patch
-    // first (to set spawnDepth, spawnedBy, etc.), then calls callSubagentGateway({method: "agent"}).
-    // The sessions.patch creates a partial entry without deliveryContext.
+  test("pre-created subagent session inherits deliveryContext from agent request", async () => {
+    // Simulates the real subagent spawn flow: the trusted session accessor persists lineage
+    // before callSubagentGateway({method: "agent"}) seeds the delivery context.
+    // The direct lineage write creates a partial entry without deliveryContext.
     // The agent handler must seed deliveryContext from the request params.
     await prepareSessionStore({
       "agent:main:subagent:pre-patched": {

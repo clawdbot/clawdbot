@@ -1,17 +1,8 @@
 // Covers safe base-dir and containment checks.
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isWithinDir, resolveSafeBaseDir } from "./path-safety.js";
+import { isWithinDir } from "./path-safety.js";
 
 describe("path-safety", () => {
-  it.each([
-    { rootDir: "/tmp/demo", expected: `${path.resolve("/tmp/demo")}${path.sep}` },
-    { rootDir: `/tmp/demo${path.sep}`, expected: `${path.resolve("/tmp/demo")}${path.sep}` },
-    { rootDir: "/tmp/demo/..", expected: `${path.resolve("/tmp")}${path.sep}` },
-  ])("resolves safe base dir for %j", ({ rootDir, expected }) => {
-    expect(resolveSafeBaseDir(rootDir)).toBe(expected);
-  });
-
   it.each([
     { rootDir: "/tmp/demo", targetPath: "/tmp/demo", expected: true },
     { rootDir: "/tmp/demo", targetPath: "/tmp/demo/sub/file.txt", expected: true },

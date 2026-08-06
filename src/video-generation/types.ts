@@ -4,11 +4,10 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type GeneratedVideoAsset = {
-  /** Raw video bytes. Required for local delivery; omit when url is provided instead. */
+  /** Non-empty raw video bytes for local delivery; may accompany url as a fallback. */
   buffer?: Buffer;
-  /** External URL for the video (for example a pre-signed cloud storage URL).
-   * When set and buffer is absent, delivery surfaces can forward the URL
-   * without downloading the full video into memory first. */
+  /** Provider-hosted URL returned instead of bytes or alongside them as a delivery fallback.
+   * When buffer is absent, surfaces can forward the URL without materializing the video. */
   url?: string;
   mimeType: string;
   fileName?: string;
@@ -156,6 +155,12 @@ export type VideoGenerationProviderCapabilities = VideoGenerationModeCapabilitie
   videoToVideo?: VideoGenerationTransformCapabilities;
 };
 
+/** Static catalog metadata that overrides provider defaults for one video model. */
+export type VideoGenerationCatalogModelEntry = {
+  capabilities?: VideoGenerationProviderCapabilities;
+  modes?: readonly VideoGenerationMode[];
+};
+
 export type VideoGenerationNormalization = {
   size?: MediaNormalizationEntry<string>;
   aspectRatio?: MediaNormalizationEntry<string>;
@@ -172,6 +177,7 @@ export type VideoGenerationProvider = {
   defaultTimeoutMs?: number;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
+  catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
   resolveModelCapabilities?: (
     ctx: VideoGenerationModelCapabilitiesContext,

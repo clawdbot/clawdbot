@@ -1,5 +1,6 @@
 // Coverage for repairing malformed streamed tool-call arguments.
 import { describe, expect, it } from "vitest";
+import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -213,6 +214,61 @@ describe("shouldRepairMalformedToolCallArguments", () => {
 });
 
 describe("openai-completions malformed tool-call argument repair", () => {
+  it("restores split replacement tokens after argument repair", async () => {
+    const partialToolCall = { type: "toolCall", name: "send", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "send", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "send", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn: FakeStreamFn = () =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"text":"[MAS',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: 'KED]"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      });
+    const repairedFn = wrapStreamFnRepairMalformedToolCallArguments(baseFn as never);
+    const transformedFn = wrapStreamFnTextTransforms({
+      streamFn: repairedFn,
+      output: [{ from: /\[MASKED\]/g, to: "John Smith" }],
+    }) as FakeStreamFn;
+    const stream = await Promise.resolve(transformedFn({} as never, {} as never, {} as never));
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(
+      events
+        .filter((event) => (event as { type?: string }).type === "toolcall_delta")
+        .map((event) => (event as { delta?: string }).delta),
+    ).toEqual(['{"text":"[MAS', 'KED]"}']);
+    const endEvent = events.find(
+      (event) => (event as { type?: string }).type === "toolcall_end",
+    ) as { toolCall?: { arguments?: unknown } } | undefined;
+    expect(endEvent?.toolCall?.arguments).toEqual({ text: "John Smith" });
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ arguments: { text: "John Smith" } }],
+    });
+  });
+
   it.each([
     ["openai-completions", "sglang"],
     ["openai-chatgpt-responses", "openai"],

@@ -4,10 +4,11 @@ import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { isLocalOllamaBaseUrl } from "./src/discovery-shared.js";
 import { createOllamaEmbeddingProvider } from "./src/embedding-provider.js";
-import { createOllamaStreamFn } from "./src/stream.js";
+import { createOllamaStreamFn } from "./src/stream.runtime.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_OLLAMA === "1";
@@ -176,7 +177,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
         buildCliEnv(root),
       );
 
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr || result.stdout).toBe(0);
       expect(result.stderr).not.toContain("[agents/auth-profiles]");
       expect(result.stdout.trim(), result.stderr).not.toHaveLength(0);
       const payload = parseJsonEnvelope(result.stdout) as {
@@ -292,8 +293,9 @@ describe.skipIf(!LIVE)("ollama live", () => {
       expect(embeddings).toHaveLength(2);
       expect(embeddings[0]?.length ?? 0).toBeGreaterThan(0);
       expect(embeddings[1]?.length).toBe(embeddings[0]?.length);
-      expect(Math.hypot(...embeddings[0])).toBeGreaterThan(0.99);
-      expect(Math.hypot(...embeddings[0])).toBeLessThan(1.01);
+      const firstEmbedding = expectDefined(embeddings[0], "first Ollama embedding");
+      expect(Math.hypot(...firstEmbedding)).toBeGreaterThan(0.99);
+      expect(Math.hypot(...firstEmbedding)).toBeLessThan(1.01);
     },
     45_000,
   );

@@ -8,15 +8,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
-MAX_MEMORY_MIB="${OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB:-8192}"
-MAX_CPU_PERCENT="${OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT:-1600}"
+MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB 8192)"
+MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT 1600)"
 # Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
 # compatibility smoke. Callers can still override this explicitly.
-MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.5}"
+MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.6-luna}"
 PROMPT_NONCE="OPENWEBUI_DOCKER_E2E_$(date +%s)_$$"
 PROMPT="${OPENCLAW_OPENWEBUI_PROMPT:-Reply with exactly this token and nothing else: ${PROMPT_NONCE}}"
-PORT="${OPENCLAW_OPENWEBUI_GATEWAY_PORT:-18789}"
-WEBUI_PORT="${OPENCLAW_OPENWEBUI_PORT:-8080}"
+PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENWEBUI_GATEWAY_PORT 18789)"
+WEBUI_PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENWEBUI_PORT 8080)"
 TOKEN="openwebui-e2e-$(date +%s)-$$"
 ADMIN_EMAIL="${OPENCLAW_OPENWEBUI_ADMIN_EMAIL:-openwebui-e2e@example.com}"
 ADMIN_PASSWORD="${OPENCLAW_OPENWEBUI_ADMIN_PASSWORD:-OpenWebUI-E2E-Password-$(date +%s)-$$}"
@@ -24,10 +24,23 @@ NET_NAME="openclaw-openwebui-e2e-$$"
 GW_NAME="openclaw-openwebui-gateway-$$"
 OW_NAME="openclaw-openwebui-$$"
 PROVIDER_TIMEOUT_SECONDS="${OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS:-900}"
-PROBE_FETCH_TIMEOUT_MS="${OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS:-$((PROVIDER_TIMEOUT_SECONDS * 1000 + 60000))}"
-DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-$((PROVIDER_TIMEOUT_SECONDS + 90))s}"
 DOCKER_PULL_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_PULL_TIMEOUT:-600s}"
 SMOKE_MODE="${OPENWEBUI_SMOKE_MODE:-${OPENCLAW_OPENWEBUI_SMOKE_MODE:-chat}}"
+
+validate_positive_int() {
+  local label="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $label: $value" >&2
+    exit 2
+  fi
+}
+
+validate_positive_int OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS "$PROVIDER_TIMEOUT_SECONDS"
+PROVIDER_TIMEOUT_SECONDS_DECIMAL=$((10#$PROVIDER_TIMEOUT_SECONDS))
+PROBE_FETCH_TIMEOUT_MS="${OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS:-$((PROVIDER_TIMEOUT_SECONDS_DECIMAL * 1000 + 60000))}"
+validate_positive_int OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS "$PROBE_FETCH_TIMEOUT_MS"
+DOCKER_COMMAND_TIMEOUT="${OPENCLAW_OPENWEBUI_DOCKER_COMMAND_TIMEOUT:-$((PROVIDER_TIMEOUT_SECONDS_DECIMAL + 90))s}"
 
 case "$SMOKE_MODE" in
   chat | models) ;;
@@ -146,6 +159,7 @@ docker_e2e_docker_cmd run -d \
     node "$entry" config set --batch-file "$batch_file" >/dev/null
     rm -f "$batch_file"
     node scripts/e2e/lib/fixture.mjs openwebui-workspace
+    node "$entry" doctor --fix --yes --force >/dev/null
 
     openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null

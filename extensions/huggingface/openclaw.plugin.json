@@ -1,10 +1,16 @@
 {
   "id": "huggingface",
+  "icon": "https://cdn.simpleicons.org/huggingface",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["huggingface"],
+  "modelCatalog": {
+    "discovery": {
+      "huggingface": "refreshable"
+    }
+  },
   "modelIdNormalization": {
     "providers": {
       "huggingface": {
@@ -25,6 +31,7 @@
       "provider": "huggingface",
       "method": "api-key",
       "choiceId": "huggingface-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Hugging Face API key",
       "choiceHint": "Inference API (HF token)",
       "groupId": "huggingface",

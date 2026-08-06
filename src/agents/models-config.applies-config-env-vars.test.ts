@@ -1,21 +1,71 @@
 // Verifies models.json planning applies config env vars and discovery scope.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { testing as externalAuthTesting } from "./auth-profiles/external-auth.test-support.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "./auth-profiles/store.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
   resolveProvidersForModelsJsonWithDeps,
-} from "./models-config.plan.js";
+} from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
 
+const providerRuntimeMocks = vi.hoisted(() => ({
+  normalizeProviderConfigWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").normalizeProviderConfigWithPlugin
+  >(() => undefined),
+  resolveProviderConfigApiKeyWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").resolveProviderConfigApiKeyWithPlugin
+  >(() => undefined),
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => Object.create(null) as Record<string, string>,
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+// These planner tests exercise no plugin-owned auth policy. Keep their exact
+// provider markers local instead of loading the bundled plugin/runtime catalog.
+vi.mock("../plugins/provider-runtime.js", () => ({
+  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
+  normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin: providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin,
+  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+}));
+
+vi.mock("./model-auth-env-vars.js", () => ({
+  listKnownProviderEnvApiKeyNames: () => [
+    "GOOGLE_CLOUD_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+  ],
+  resolveProviderEnvAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {
+      "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
+      openai: ["OPENAI_API_KEY"],
+      openrouter: ["OPENROUTER_API_KEY"],
+    },
+    authEvidenceMap: {},
+  }),
+}));
+
 const TEST_ENV_VAR = "OPENCLAW_MODELS_CONFIG_TEST_ENV";
+
+afterEach(() => {
+  providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReset();
+  providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReturnValue(undefined);
+  providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReset();
+  providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(undefined);
+});
 
 function createImplicitOpenRouterProvider(): ProviderConfig {
   return {
@@ -124,6 +174,60 @@ async function resolveProvidersAndCaptureDiscoveryEnv(cfg: OpenClawConfig) {
 
 let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawModelsJsonWithDeps>>;
 let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
+let googleVertexProfileCatalogPlan: Awaited<ReturnType<typeof planGoogleVertexProfileCatalog>>;
+
+async function planGoogleVertexProfileCatalog() {
+  const agentDir = "/tmp/openclaw-google-vertex-models-profile";
+  try {
+    externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        store: { version: 1, profiles: {} },
+      },
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            "google-vertex:default": {
+              type: "api_key",
+              provider: "google-vertex",
+              keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
+            },
+          },
+        },
+      },
+    ]);
+
+    return await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "google-vertex/gemini-2.5-pro": {},
+              },
+              model: { primary: "google-vertex/gemini-2.5-pro" },
+            },
+          },
+          models: { providers: {} },
+        },
+        agentDir,
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          "google-vertex": createImplicitGoogleVertexProvider(),
+        }),
+      },
+    );
+  } finally {
+    externalAuthTesting.resetResolveExternalAuthProfilesForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+  }
+}
 
 beforeAll(async () => {
   // Reused no-auth write plan proves generated providers stay serializable
@@ -153,9 +257,44 @@ beforeAll(async () => {
   unauthenticatedProviderParsed = JSON.parse(unauthenticatedProviderWritePlan.contents) as {
     providers?: Record<string, unknown>;
   };
+  // Retain this expensive plan so the assertion test does not repeat the same
+  // auth-profile and catalog planning pass.
+  googleVertexProfileCatalogPlan = await planGoogleVertexProfileCatalog();
 });
 
 describe("models-config", () => {
+  it("keeps the implicit provider catalog when explicit baseUrl is blank", async () => {
+    let observedConfig: OpenClawConfig | undefined;
+    const providers = await resolveProvidersForModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "   ",
+                apiKey: "OPENAI_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+      },
+      {
+        resolveImplicitProviders: async ({ config }) => {
+          observedConfig = config;
+          return { openai: createImplicitOpenAiProvider() };
+        },
+      },
+    );
+
+    expect(observedConfig?.models?.providers?.openai?.baseUrl).toBeUndefined();
+    expect(providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY");
+    expect(providers.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
   it("threads plugin metadata snapshots into implicit provider discovery", async () => {
     const pluginMetadataSnapshot = {
       index: { plugins: [{ pluginId: "zai", enabled: true }] },
@@ -269,6 +408,64 @@ describe("models-config", () => {
 
     expect(observedSnapshot).toBe(pluginMetadataSnapshot);
   });
+
+  it.each([
+    { label: "full", pluginIds: undefined, expectedRegistry: true },
+    { label: "scoped", pluginIds: ["owner"], expectedRegistry: false },
+  ])(
+    "threads provider policy metadata only from a $label plugin snapshot",
+    async ({ pluginIds, expectedRegistry }) => {
+      const manifestRegistry = { plugins: [], diagnostics: [] };
+      const pluginMetadataSnapshot = {
+        index: { plugins: [] },
+        manifestRegistry,
+        owners: {
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          setupProviders: new Map(),
+        },
+        ...(pluginIds ? { pluginIds } : {}),
+      } as unknown as Pick<
+        PluginMetadataSnapshot,
+        "index" | "manifestRegistry" | "owners" | "pluginIds"
+      >;
+      providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(
+        "POLICY_ALIAS_API_KEY",
+      );
+
+      await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: { models: { providers: {} } },
+          agentDir: "/tmp/openclaw-models-config-policy-registry-test",
+          env: {},
+          existingRaw: "",
+          existingParsed: null,
+          pluginMetadataSnapshot,
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            "policy-alias": createImplicitOpenAiProvider({
+              baseUrl: "https://policy.example/v1",
+              apiKey: undefined,
+            }),
+          }),
+        },
+      );
+
+      const normalizeParams =
+        providerRuntimeMocks.normalizeProviderConfigWithPlugin.mock.calls.find(
+          ([params]) => params.provider === "policy-alias",
+        )?.[0];
+      const apiKeyParams =
+        providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mock.calls.find(
+          ([params]) => params.provider === "policy-alias",
+        )?.[0];
+      expect(normalizeParams?.manifestRegistry).toBe(
+        expectedRegistry ? manifestRegistry : undefined,
+      );
+      expect(apiKeyParams?.manifestRegistry).toBe(expectedRegistry ? manifestRegistry : undefined);
+    },
+  );
 
   it("does not write unauthenticated model providers that would invalidate models.json", async () => {
     expect(unauthenticatedProviderWritePlan.action).toBe("write");
@@ -432,121 +629,72 @@ describe("models-config", () => {
     ]);
   });
 
-  it("keeps google-vertex static catalog rows when an auth profile supplies the API key", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-models-"));
-    try {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "google-vertex:default": {
-              type: "api_key",
-              provider: "google-vertex",
-              keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
-            },
-          },
-        },
-        agentDir,
-        { filterExternalAuthProfiles: false, syncExternalCli: false },
-      );
+  it("keeps google-vertex static catalog rows when an auth profile supplies the API key", () => {
+    const plan = googleVertexProfileCatalogPlan;
 
-      const plan = await planOpenClawModelsJsonWithDeps(
-        {
-          cfg: {
-            agents: {
-              defaults: {
-                models: {
-                  "google-vertex/gemini-2.5-pro": {},
-                },
-                model: { primary: "google-vertex/gemini-2.5-pro" },
-              },
-            },
-            models: { providers: {} },
-          },
-          agentDir,
-          env: {},
-          existingRaw: "",
-          existingParsed: null,
-        },
-        {
-          resolveImplicitProviders: async () => ({
-            "google-vertex": createImplicitGoogleVertexProvider(),
-          }),
-        },
-      );
-
-      expect(plan.action).toBe("write");
-      if (plan.action !== "write") {
-        throw new Error("Expected models.json write plan");
-      }
-      const parsed = JSON.parse(plan.contents) as {
-        providers?: Record<
-          string,
-          { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
-        >;
-      };
-      expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
-      expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("GOOGLE_CLOUD_API_KEY");
-      expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
-        "gemini-2.5-pro",
-      ]);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
     }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<
+        string,
+        { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
+      >;
+    };
+    expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
+    expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("GOOGLE_CLOUD_API_KEY");
+    expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
+      "gemini-2.5-pro",
+    ]);
   });
 
-  it("keeps google-vertex static catalog rows when ADC auth evidence supplies the marker", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-models-"));
-    const credentialsPath = path.join(agentDir, "application_default_credentials.json");
-    await fs.writeFile(credentialsPath, JSON.stringify({ type: "authorized_user" }), "utf8");
-    try {
-      const plan = await planOpenClawModelsJsonWithDeps(
-        {
-          cfg: {
-            agents: {
-              defaults: {
-                models: {
-                  "google-vertex/gemini-2.5-pro": {},
-                },
-                model: { primary: "google-vertex/gemini-2.5-pro" },
+  it("keeps google-vertex static catalog rows when discovery supplies the ADC marker", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "google-vertex/gemini-2.5-pro": {},
               },
+              model: { primary: "google-vertex/gemini-2.5-pro" },
             },
-            models: { providers: {} },
           },
-          agentDir,
-          env: {
-            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-            GOOGLE_CLOUD_PROJECT: "vertex-project",
-            GOOGLE_CLOUD_LOCATION: "global",
-          } as NodeJS.ProcessEnv,
-          existingRaw: "",
-          existingParsed: null,
+          models: { providers: {} },
         },
-        {
-          resolveImplicitProviders: async () => ({
-            "google-vertex": createImplicitGoogleVertexProvider(),
-          }),
-        },
-      );
+        agentDir: "/tmp/openclaw-google-vertex-adc-models",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        // Provider discovery owns ADC detection; this planner test only proves
+        // the resulting marker and static rows survive models.json planning.
+        resolveImplicitProviders: async () => ({
+          "google-vertex": {
+            ...createImplicitGoogleVertexProvider(),
+            apiKey: "gcp-vertex-credentials",
+          },
+        }),
+      },
+    );
 
-      expect(plan.action).toBe("write");
-      if (plan.action !== "write") {
-        throw new Error("Expected models.json write plan");
-      }
-      const parsed = JSON.parse(plan.contents) as {
-        providers?: Record<
-          string,
-          { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
-        >;
-      };
-      expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
-      expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
-      expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
-        "gemini-2.5-pro",
-      ]);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
     }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<
+        string,
+        { apiKey?: string; api?: string; models?: Array<{ id?: string }> }
+      >;
+    };
+    expect(parsed.providers?.["google-vertex"]?.api).toBe("google-vertex");
+    expect(parsed.providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
+    expect(parsed.providers?.["google-vertex"]?.models?.map((model) => model.id)).toEqual([
+      "gemini-2.5-pro",
+    ]);
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
@@ -566,17 +714,23 @@ describe("models-config", () => {
 
   it("does not overwrite already-set host env vars while ensuring models.json", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
-      process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
-      process.env[TEST_ENV_VAR] = "from-host";
-      const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
-        createConfigEnvVarsConfig(),
-      );
+      await withEnvAsync(
+        {
+          OPENROUTER_API_KEY: "from-host", // pragma: allowlist secret
+          [TEST_ENV_VAR]: "from-host",
+        },
+        async () => {
+          const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
+            createConfigEnvVarsConfig(),
+          );
 
-      expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
-      expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
-      expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
-      expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
-      expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+          expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
+          expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");
+          expect(providers.openrouter?.apiKey).toBe("OPENROUTER_API_KEY");
+          expect(process.env.OPENROUTER_API_KEY).toBe("from-host");
+          expect(process.env[TEST_ENV_VAR]).toBe("from-host");
+        },
+      );
     });
   });
 });

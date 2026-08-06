@@ -28,16 +28,16 @@ docker_e2e_run_with_harness \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh
     openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
-    tsx scripts/e2e/agent-bundle-mcp-tools-docker-client.ts
+    tsx test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts
   " >"$RUN_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker OpenClaw bundle MCP tool availability smoke failed"
-  cat "$RUN_LOG"
+  docker_e2e_print_log "$RUN_LOG"
   exit "$status"
 fi
 
-cat "$RUN_LOG"
+docker_e2e_print_log "$RUN_LOG"
 echo "OK"

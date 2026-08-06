@@ -1,6 +1,7 @@
 // Gateway live state factory.
 // Combines mutable runtime handles with startup-resolved services for request contexts.
 import type { PluginServicesHandle } from "../plugins/services.js";
+import type { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -8,12 +9,15 @@ import {
   type GatewayServerMutableState,
 } from "./server-runtime-handles.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
+import type { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 /** Mutable gateway server state shared across request contexts. */
 export type GatewayServerLiveState = GatewayServerMutableState & {
   hooksConfig: HooksConfigResolved | null;
   hookClientIpConfig: HookClientIpConfig;
   cronState: GatewayCronState;
+  controlUiSessionPullRequests?: ReturnType<typeof createControlUiSessionPullRequestSubscriptions>;
+  sessionViewerPresence?: ReturnType<typeof createSessionViewerPresenceDeclarations>;
   pluginServices: PluginServicesHandle | null;
   gatewayMethods: string[];
 };
@@ -30,6 +34,8 @@ export function createGatewayServerLiveState(params: {
     hooksConfig: params.hooksConfig,
     hookClientIpConfig: params.hookClientIpConfig,
     cronState: params.cronState,
+    controlUiSessionPullRequests: undefined,
+    sessionViewerPresence: undefined,
     pluginServices: null,
     gatewayMethods: params.gatewayMethods,
   };

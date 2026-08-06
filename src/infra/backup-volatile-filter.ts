@@ -1,5 +1,6 @@
 // Filters volatile files from backup manifests.
 import path from "node:path";
+import { isPathInside } from "./path-guards.js";
 
 /**
  * Paths that are known to change during a live backup and commonly trigger
@@ -13,6 +14,10 @@ import path from "node:path";
  */
 
 const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
+const SQLITE_COORDINATOR_BASENAME_PATTERN =
+  /^(?:gateway(?:\.state)?|device-identity)\.[0-9a-f]{8}\.lock\.sqlite(?:-wal|-shm|-journal)?$/iu;
+const SQLITE_REINDEX_TRANSIENT_PATH_PATTERN =
+  /(?:^|\/)(?:[^/]+\.sqlite\.reindex-lock\.sqlite|[^/]+\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-wal|-shm|-journal)?$/iu;
 
 function normalizePosix(input: string): string {
   if (!input) {
@@ -40,6 +45,20 @@ function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): 
   return extensions.has(path.posix.extname(filePosix).toLowerCase());
 }
 
+export function isTransientSqliteBackupPath(
+  filePath: string,
+  coordinatorDirs: readonly string[] = [],
+): boolean {
+  const normalizedPath = normalizePosix(filePath);
+  if (SQLITE_REINDEX_TRANSIENT_PATH_PATTERN.test(normalizedPath)) {
+    return true;
+  }
+  if (!SQLITE_COORDINATOR_BASENAME_PATTERN.test(path.posix.basename(normalizedPath))) {
+    return false;
+  }
+  return coordinatorDirs.some((coordinatorDir) => isPathInside(coordinatorDir, filePath));
+}
+
 function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
   const agentsRoot = path.posix.join(stateDirPosix, "agents");
   if (!isUnder(filePosix, agentsRoot)) {
@@ -60,7 +79,7 @@ function filePathCandidates(input: string): string[] {
   return [normalized, normalizePosix(`/${normalized}`)];
 }
 
-export type VolatileFilterPlan = {
+type VolatileFilterPlan = {
   /** Canonical state directories the filter should treat as volatile anchors. */
   stateDirs: string[];
 };

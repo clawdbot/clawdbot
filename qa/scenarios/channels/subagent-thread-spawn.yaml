@@ -1,0 +1,91 @@
+title: Matrix subagent thread spawn
+
+scenario:
+  id: subagent-thread-spawn
+  surface: channels
+  coverage:
+    primary:
+      - matrix.acp-subagent-spawn-hooks
+      - agent-runtime.subagent-turns-subagents
+  objective: Verify sessions_spawn(thread=true, mode=session) creates a persistent Matrix child thread and delivers the child result there.
+  gatewayConfigPatch:
+    tools:
+      profile: coding
+    channels:
+      matrix:
+        accounts:
+          $selectedAccount:
+            threadBindings:
+              enabled: true
+              spawnSessions: true
+            groups:
+              "*":
+                tools:
+                  allow:
+                    - sessions_spawn
+                    - sessions_yield
+  successCriteria:
+    - The parent calls sessions_spawn with thread=true and mode=session.
+    - Matrix emits the child-session introduction.
+    - The child completion carries the introduction message as its normalized thread id.
+  docsRefs:
+    - docs/channels/matrix.md
+    - docs/tools/subagents.md
+  codeRefs:
+    - src/agents/tools/sessions-spawn-tool.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    kind: flow
+    channel: matrix
+    summary: Spawn a bound Matrix child session and require native thread relation evidence on completion.
+    config:
+      conversationId: main
+      childMarker: QA-MATRIX-SUBAGENT-THREAD-OK
+      prompt: 'Use sessions_spawn for this QA check. task="Finish with exactly QA-MATRIX-SUBAGENT-THREAD-OK." label=qa-thread-subagent thread=true mode=session. After spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread. Do not write QA-MATRIX-SUBAGENT-THREAD-OK in the parent response.'
+
+flow:
+  steps:
+    - name: delivers the child result in the spawned Matrix thread
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: channel
+            senderId: "@driver:matrix.test"
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw ${config.prompt}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: channel
+            textIncludes: Messages here go directly to this session
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 120000)
+          saveAs: intro
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: channel
+            textIncludes:
+              ref: config.childMarker
+            threadId:
+              expr: intro.id
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 180000)
+          saveAs: completion
+        - assert:
+            expr: completion.threadId === intro.id
+            message:
+              expr: "`expected subagent completion in thread ${intro.id}, got ${completion.threadId ?? '<none>'}`"
+        - set: debugRequests
+          value:
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
+        - assert:
+            expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'sessions_spawn' && /thread=true mode=session/i.test(String(request.allInputText ?? '')))"
+            message: expected sessions_spawn(thread=true, mode=session) tool call
+      detailsExpr: "`${completion.threadId}: ${completion.text}`"

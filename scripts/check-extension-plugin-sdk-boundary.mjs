@@ -3,22 +3,27 @@
 // Inventories extension imports to enforce plugin SDK boundary rules.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { createExtensionImportBoundaryChecker } from "./lib/extension-import-boundary-checker.mjs";
 import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mjs";
 import {
-  collectModuleReferencesFromSource,
   diffInventoryEntries,
-  normalizeRepoPath,
+  formatGroupedInventoryHuman,
   resolveRepoSpecifier,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
+import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
+const repoRoot = resolveRepoRoot(import.meta.url);
+// Generated bundles are validated at their build owner; they are not bounded authored source.
+const generatedExtensionAssetSources = new Set(
+  listGeneratedExtensionAssetSources({ rootDir: repoRoot }),
+);
 
 const MODES = new Set([
   "src-outside-plugin-sdk",
@@ -42,8 +47,6 @@ const baselinePathByMode = {
 };
 
 let allInventoryByModePromise;
-let extensionModuleReferencesPromise;
-
 const ruleTextByMode = {
   "src-outside-plugin-sdk":
     "Rule: production bundled plugins must not import src/** outside src/plugin-sdk/**",
@@ -52,82 +55,6 @@ const ruleTextByMode = {
   "relative-outside-package":
     "Rule: production bundled plugins must not use relative imports that escape their own package root",
 };
-
-function isCodeFile(fileName) {
-  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(fileName);
-}
-
-function isBoundaryCanaryFile(fileName) {
-  return fileName.includes("__rootdir_boundary_canary__");
-}
-
-async function collectExtensionSourceFiles(rootDir) {
-  const out = [];
-  async function walk(dir) {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.name === "dist" || entry.name === "node_modules") {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !isCodeFile(entry.name) || isBoundaryCanaryFile(entry.name)) {
-        continue;
-      }
-      const relativePath = normalizeRepoPath(repoRoot, fullPath);
-      if (classifyBundledExtensionSourcePath(relativePath).isTestLike) {
-        continue;
-      }
-      out.push(fullPath);
-    }
-  }
-  await walk(rootDir);
-  return out.toSorted((left, right) =>
-    normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
-  );
-}
-
-async function collectExtensionModuleReferences() {
-  if (!extensionModuleReferencesPromise) {
-    extensionModuleReferencesPromise = (async () => {
-      const files = await collectExtensionSourceFiles(extensionsRoot);
-      const referenced = await Promise.all(
-        files.map(async (filePath) => {
-          const source = await fs.readFile(filePath, "utf8");
-          if (!mayContainModuleSpecifier(source)) {
-            return null;
-          }
-          return {
-            filePath,
-            references: collectModuleReferencesFromSource(source),
-          };
-        }),
-      );
-      return referenced.filter((entry) => entry && entry.references.length > 0);
-    })();
-  }
-  return await extensionModuleReferencesPromise;
-}
-
-function mayContainModuleSpecifier(source) {
-  return (
-    /\bfrom\s*["']/.test(source) ||
-    /\bimport\s*(?:\(|["']|type\b|[\w*{])/.test(source) ||
-    /\bexport\s*(?:type\s+)?(?:\*|{)[^;\n]*\bfrom\s*["']/.test(source)
-  );
-}
-
-function resolveExtensionRoot(filePath) {
-  const relativePath = normalizeRepoPath(repoRoot, filePath);
-  const segments = relativePath.split("/");
-  if (segments[0] !== BUNDLED_PLUGIN_ROOT_DIR || !segments[1]) {
-    return null;
-  }
-  return `${segments[0]}/${segments[1]}`;
-}
 
 function classifyReason(mode, kind, resolvedPath, specifier) {
   const verb =
@@ -168,93 +95,90 @@ function compareEntries(left, right) {
   );
 }
 
-function shouldReport(mode, resolvedPath) {
-  if (mode === "relative-outside-package") {
-    return false;
-  }
-  if (!resolvedPath?.startsWith("src/")) {
-    return false;
-  }
-  if (mode === "plugin-sdk-internal") {
-    return resolvedPath.startsWith("src/plugin-sdk-internal/");
-  }
-  return !resolvedPath.startsWith("src/plugin-sdk/");
-}
-
-function collectEntriesByModeFromModuleReferences(filePath, references) {
-  const entriesByMode = {
-    "src-outside-plugin-sdk": [],
-    "plugin-sdk-internal": [],
-    "relative-outside-package": [],
-  };
-  const extensionRoot = resolveExtensionRoot(filePath);
-  const relativeFile = normalizeRepoPath(repoRoot, filePath);
-
-  function push(kind, line, specifier) {
+function collectBoundaryEntries({ filePath, relativeFile, references }) {
+  const extensionRoot = relativeFile.split("/").slice(0, 2).join("/");
+  const entries = [];
+  for (const { kind, line, specifier } of references) {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
-    const baseEntry = {
-      file: relativeFile,
-      line,
-      kind,
-      specifier,
-      resolvedPath,
-    };
-
-    if (specifier.startsWith(".") && resolvedPath && extensionRoot) {
-      if (!(resolvedPath === extensionRoot || resolvedPath.startsWith(`${extensionRoot}/`))) {
-        entriesByMode["relative-outside-package"].push({
-          ...baseEntry,
-          reason: classifyReason("relative-outside-package", kind, resolvedPath, specifier),
-        });
-      }
+    const modes = [];
+    if (
+      specifier.startsWith(".") &&
+      resolvedPath !== extensionRoot &&
+      !resolvedPath.startsWith(extensionRoot + "/")
+    ) {
+      modes.push("relative-outside-package");
     }
-
-    for (const mode of ["src-outside-plugin-sdk", "plugin-sdk-internal"]) {
-      if (!shouldReport(mode, resolvedPath)) {
-        continue;
-      }
-      entriesByMode[mode].push({
-        ...baseEntry,
-        reason: classifyReason(mode, kind, resolvedPath, specifier),
+    if (resolvedPath.startsWith("src/") && !resolvedPath.startsWith("src/plugin-sdk/")) {
+      modes.push("src-outside-plugin-sdk");
+    }
+    if (resolvedPath.startsWith("src/plugin-sdk-internal/")) {
+      modes.push("plugin-sdk-internal");
+    }
+    for (const mode of modes) {
+      entries.push({
+        mode,
+        entry: {
+          file: relativeFile,
+          line,
+          kind,
+          specifier,
+          resolvedPath,
+          reason: classifyReason(mode, kind, resolvedPath, specifier),
+        },
       });
     }
   }
-
-  for (const { kind, line, specifier } of references) {
-    push(kind, line, specifier);
-  }
-  return entriesByMode;
+  return entries;
 }
 
-/**
- * Collects the current extension plugin SDK boundary inventory.
- */
-export async function collectExtensionPluginSdkBoundaryInventory(mode) {
+const extensionBoundaryChecker = createExtensionImportBoundaryChecker({
+  roots: [BUNDLED_PLUGIN_ROOT_DIR],
+  sourceOptions: {
+    fileExtensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
+    includeTests: true,
+    skipDirectories: ["dist"],
+  },
+  shouldSkipFile(relativeFile) {
+    return (
+      generatedExtensionAssetSources.has(relativeFile) ||
+      path.basename(relativeFile).includes("__rootdir_boundary_canary__") ||
+      classifyBundledExtensionSourcePath(relativeFile).isTestLike
+    );
+  },
+  acceptSpecifier(specifier, { relativeFile, resolvedPath }) {
+    if (!resolvedPath) {
+      return false;
+    }
+    const extensionRoot = relativeFile.split("/").slice(0, 2).join("/");
+    return (
+      resolvedPath.startsWith("src/") ||
+      (specifier.startsWith(".") &&
+        resolvedPath !== extensionRoot &&
+        !resolvedPath.startsWith(extensionRoot + "/"))
+    );
+  },
+  collectEntries: collectBoundaryEntries,
+  compareEntries: (left, right) => compareEntries(left.entry, right.entry),
+});
+
+/** Collect the current extension plugin SDK boundary inventory. */
+async function collectExtensionPluginSdkBoundaryInventory(mode) {
   if (!MODES.has(mode)) {
-    throw new Error(`Unknown mode: ${mode}`);
+    throw new Error("Unknown mode: " + mode);
   }
-  if (!allInventoryByModePromise) {
-    allInventoryByModePromise = (async () => {
-      const files = await collectExtensionModuleReferences();
-      const inventoryByMode = {
-        "src-outside-plugin-sdk": [],
-        "plugin-sdk-internal": [],
-        "relative-outside-package": [],
-      };
-      for (const { filePath, references } of files) {
-        const entriesByMode = collectEntriesByModeFromModuleReferences(filePath, references);
-        for (const inventoryMode of MODES) {
-          inventoryByMode[inventoryMode].push(...entriesByMode[inventoryMode]);
-        }
-      }
-      for (const inventoryMode of MODES) {
-        inventoryByMode[inventoryMode] = inventoryByMode[inventoryMode].toSorted(compareEntries);
-      }
-      return inventoryByMode;
-    })();
-  }
-  const inventoryByMode = await allInventoryByModePromise;
-  return inventoryByMode[mode];
+  allInventoryByModePromise ??= extensionBoundaryChecker
+    .collectInventory()
+    .then((entries) =>
+      Object.fromEntries(
+        [...MODES].map((inventoryMode) => [
+          inventoryMode,
+          entries
+            .filter(({ mode: entryMode }) => entryMode === inventoryMode)
+            .map(({ entry }) => entry),
+        ]),
+      ),
+    );
+  return (await allInventoryByModePromise)[mode];
 }
 
 /**
@@ -284,30 +208,20 @@ export function diffInventory(expected, actual) {
   return diffInventoryEntries(expected, actual, compareEntries);
 }
 
-function formatInventoryHuman(mode, inventory) {
-  const lines = [ruleTextByMode[mode]];
-  if (inventory.length === 0) {
-    lines.push("No extension plugin-sdk boundary violations found.");
-    return lines.join("\n");
-  }
-  lines.push("Extension boundary inventory:");
-  let activeFile = "";
-  for (const entry of inventory) {
-    if (entry.file !== activeFile) {
-      activeFile = entry.file;
-      lines.push(activeFile);
-    }
-    lines.push(`  - line ${entry.line} [${entry.kind}] ${entry.reason}`);
-    lines.push(`    specifier: ${entry.specifier}`);
-    lines.push(`    resolved: ${entry.resolvedPath}`);
-  }
-  return lines.join("\n");
-}
+const formatInventoryHuman = (mode, inventory) =>
+  formatGroupedInventoryHuman(
+    {
+      rule: ruleTextByMode[mode],
+      cleanMessage: "No extension plugin-sdk boundary violations found.",
+      inventoryTitle: "Extension boundary inventory:",
+    },
+    inventory,
+  );
 
 /**
  * Runs the boundary inventory check with CLI-style inputs and outputs.
  */
-export async function runExtensionPluginSdkBoundaryCheck(argv, io) {
+async function runExtensionPluginSdkBoundaryCheck(argv, io) {
   const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
   const json = args.includes("--json");
@@ -367,6 +281,4 @@ export async function main(argv, io) {
   return exitCode;
 }
 
-if (path.resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
-  await main();
-}
+runAsScript(import.meta.url, main);

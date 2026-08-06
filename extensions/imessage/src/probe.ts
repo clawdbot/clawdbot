@@ -13,14 +13,19 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
-  clearCachedIMessagePrivateApiStatus,
   getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
 } from "./private-api-status.js";
+import {
+  IMESSAGE_INSTALL_COMMAND,
+  IMESSAGE_UPDATE_COMMAND,
+  isAutoManagedIMessageCliPath,
+} from "./setup-core.js";
 
 // Re-export for backwards compatibility
 export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
@@ -37,6 +42,7 @@ export type IMessageProbe = BaseProbeResult & {
 export type IMessageProbeOptions = {
   cliPath?: string;
   dbPath?: string;
+  forceRefresh?: boolean;
   platform?: NodeJS.Platform;
   runtime?: RuntimeEnv;
 };
@@ -98,7 +104,7 @@ function isDefaultLocalIMessageCliPath(cliPath: string): boolean {
   return trimmed === "imsg" || (!trimmed.includes("/") && path.basename(trimmed) === "imsg");
 }
 
-export function resolveIMessageNonMacHostError(
+function resolveIMessageNonMacHostError(
   cliPath: string,
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
@@ -121,7 +127,7 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
       const fatal = {
         supported: false,
         fatal: true,
-        error: 'imsg CLI does not support the "rpc" subcommand (update imsg)',
+        error: `imsg CLI does not support the "rpc" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
       };
       setCachedRpcSupport(cliPath, fatal);
       return fatal;
@@ -158,7 +164,7 @@ function parseStatusPayload(stdout: string): {
   // No JSONL line parsed. Surface a small snippet of the first non-empty
   // line so the operator can grep imsg release notes if the status output
   // schema has shifted.
-  const snippet = lines[0]?.slice(0, 120);
+  const snippet = lines[0] ? truncateUtf16Safe(lines[0], 120) : undefined;
   return { payload: null, firstLineSnippet: snippet };
 }
 
@@ -206,14 +212,19 @@ async function probeSendRichSupportsAttachment(
   }
 }
 
-export function clearIMessagePrivateApiCache(cliPath?: string): void {
-  if (cliPath) {
-    const key = cliPath.trim() || "imsg";
-    clearCachedIMessagePrivateApiStatus(key);
-    rpcSupportCache.delete(key);
-  } else {
-    clearCachedIMessagePrivateApiStatus();
-    rpcSupportCache.clear();
+async function probePollSendSupportsNoComment(
+  cliPath: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const result = await runCommandWithTimeout([cliPath, "poll", "send", "--help"], { timeoutMs });
+    if (result.code !== 0) {
+      return false;
+    }
+    const combined = `${result.stdout}\n${result.stderr}`;
+    return /(?:^|\s)--no-comment\b/m.test(combined);
+  } catch {
+    return false;
   }
 }
 
@@ -232,6 +243,26 @@ export async function probeIMessagePrivateApi(
   try {
     const result = await runCommandWithTimeout([key, "status", "--json"], { timeoutMs });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
+    const normalized = normalizeLowercaseStringOrEmpty(combined);
+    if (
+      result.code !== 0 &&
+      normalized.includes("unknown subcommand") &&
+      normalized.includes("status")
+    ) {
+      const status: NonNullable<IMessageProbe["privateApi"]> = {
+        available: false,
+        v2Ready: false,
+        selectors: {},
+        rpcMethods: [],
+        cliCapabilities: {
+          sendRichSupportsAttachment: false,
+          pollSendSupportsNoComment: false,
+        },
+        error: `imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+      };
+      cacheIMessagePrivateApiStatus(key, status);
+      return status;
+    }
     const { payload, firstLineSnippet } = parseStatusPayload(result.stdout);
     const selectors = payload ? selectorsFromPayload(payload) : {};
     const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
@@ -247,12 +278,16 @@ export async function probeIMessagePrivateApi(
     // the threaded send path. Treat any failure as "not supported" so
     // callers fall back to the legacy throw rather than silently dropping.
     const sendRichSupportsAttachment = await probeSendRichSupportsAttachment(key, timeoutMs);
+    // Caption suppression is required for approval polls because OpenClaw
+    // renders the details first. Published imsg 0.13.1 lacks --no-comment, so
+    // probe the exact CLI contract instead of inferring it from poll selectors.
+    const pollSendSupportsNoComment = await probePollSendSupportsNoComment(key, timeoutMs);
     const status: NonNullable<IMessageProbe["privateApi"]> = {
       available: result.code === 0 && advancedFeatures && v2Ready,
       v2Ready,
       selectors,
       rpcMethods,
-      cliCapabilities: { sendRichSupportsAttachment },
+      cliCapabilities: { sendRichSupportsAttachment, pollSendSupportsNoComment },
       ...(statusMessage ? { statusMessage } : {}),
       ...(result.code === 0
         ? !payload && firstLineSnippet
@@ -272,7 +307,10 @@ export async function probeIMessagePrivateApi(
       v2Ready: false,
       selectors: {},
       rpcMethods: [],
-      cliCapabilities: { sendRichSupportsAttachment: false },
+      cliCapabilities: {
+        sendRichSupportsAttachment: false,
+        pollSendSupportsNoComment: false,
+      },
       error: String(err),
     };
     cacheIMessagePrivateApiStatus(key, status);
@@ -290,7 +328,8 @@ export async function probeIMessage(
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
   const cfg = opts.cliPath || opts.dbPath ? undefined : getRuntimeConfig();
-  const cliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim() || "imsg";
+  const explicitCliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim();
+  const cliPath = explicitCliPath || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
   // Use explicit timeout if provided, otherwise fall back to config, then default
   const effectiveTimeout =
@@ -303,7 +342,15 @@ export async function probeIMessage(
 
   const detected = await detectBinary(cliPath);
   if (!detected) {
-    return { ok: false, error: `imsg not found (${cliPath})` };
+    const error = isAutoManagedIMessageCliPath(cliPath, {
+      explicit: explicitCliPath !== undefined,
+    })
+      ? `imsg not found (${cliPath}). Install imsg on the Messages Mac: ${IMESSAGE_INSTALL_COMMAND}`
+      : `imsg command not found (${cliPath}). Check the configured iMessage cliPath or wrapper.`;
+    return {
+      ok: false,
+      error,
+    };
   }
 
   const rpcSupport = await probeRpcSupport(cliPath, effectiveTimeout);
@@ -315,7 +362,9 @@ export async function probeIMessage(
     };
   }
 
-  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout);
+  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout, {
+    forceRefresh: opts.forceRefresh,
+  });
 
   const client = await createIMessageRpcClient({
     cliPath,

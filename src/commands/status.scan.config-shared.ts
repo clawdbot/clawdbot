@@ -7,14 +7,12 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 
 /** Returns true when tests should avoid the missing-config cold-start fast path. */
-export function shouldSkipStatusScanMissingConfigFastPath(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function shouldSkipStatusScanMissingConfigFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.VITEST === "true" || env.VITEST_POOL_ID !== undefined || env.NODE_ENV === "test";
 }
 
 /** Returns whether status should treat this run as a no-config cold start. */
-export function resolveStatusScanColdStart(params?: {
+function resolveStatusScanColdStart(params?: {
   env?: NodeJS.ProcessEnv;
   allowMissingConfigFastPath?: boolean;
 }): boolean {
@@ -27,7 +25,10 @@ export function resolveStatusScanColdStart(params?: {
 /** Loads best-effort config, resolves read-only secrets, and appends status secret diagnostics. */
 export async function loadStatusScanCommandConfig(params: {
   commandName: string;
-  readBestEffortConfig: () => Promise<OpenClawConfig>;
+  readConfigSnapshot: () => Promise<{
+    config: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
+  }>;
   resolveConfig: (
     sourceConfig: OpenClawConfig,
   ) => Promise<{ resolvedConfig: OpenClawConfig; diagnostics: string[] }>;
@@ -44,14 +45,16 @@ export async function loadStatusScanCommandConfig(params: {
     env,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
   });
-  const sourceConfig =
+  const configSnapshot =
     coldStart && params.allowMissingConfigFastPath === true
-      ? {}
-      : await params.readBestEffortConfig();
+      ? { config: {}, sourceConfig: {} }
+      : await params.readConfigSnapshot();
+  const loadedConfig = configSnapshot.config;
+  const sourceConfig = configSnapshot.sourceConfig;
   const { resolvedConfig, diagnostics } =
     coldStart && params.allowMissingConfigFastPath === true
-      ? { resolvedConfig: sourceConfig, diagnostics: [] }
-      : await params.resolveConfig(sourceConfig);
+      ? { resolvedConfig: loadedConfig, diagnostics: [] }
+      : await params.resolveConfig(loadedConfig);
   const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
   // Token source conflicts are config-level diagnostics, even when secret resolution itself succeeded.
   return {

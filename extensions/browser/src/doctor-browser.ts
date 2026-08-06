@@ -12,6 +12,7 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
+import { listSystemProfiles } from "./browser/system-profiles.js";
 import { movePathToTrash } from "./browser/trash.js";
 import type { OpenClawConfig } from "./config/config.js";
 import { asRecord } from "./record-shared.js";
@@ -217,6 +218,7 @@ export async function noteChromeMcpBrowserReadiness(
     readVersion?: (executablePath: string) => string | null;
     configDir?: string;
     pathExists?: (targetPath: string) => boolean;
+    homeDir?: string;
   },
 ) {
   const noteFn = deps?.noteFn ?? note;
@@ -237,6 +239,25 @@ export async function noteChromeMcpBrowserReadiness(
   });
   if (legacyClawdResidue) {
     noteFn(formatLegacyClawdBrowserProfileResidueNote(legacyClawdResidue), "Browser");
+  }
+  if (platform === "darwin") {
+    const importEnabled = cfg.browser?.allowSystemProfileImport !== false;
+    const systemProfileCount = (["chrome", "brave", "edge", "chromium"] as const).reduce(
+      (count, browser) =>
+        count +
+        listSystemProfiles(browser, { homeDir: deps?.homeDir }).filter(
+          (profile) => profile.hasCookies,
+        ).length,
+      0,
+    );
+    noteFn(
+      [
+        `- System browser profile cookie import is ${importEnabled ? "enabled" : "disabled"} (browser.allowSystemProfileImport).`,
+        `- Importable Chrome-family profile cookie databases found: ${systemProfileCount}.`,
+        "- Doctor does not access the macOS Keychain; importing asks for consent separately.",
+      ].join("\n"),
+      "Browser",
+    );
   }
   const browserExecutable =
     managedProfiles.length > 0 ? resolveManagedExecutable(resolved, platform) : null;

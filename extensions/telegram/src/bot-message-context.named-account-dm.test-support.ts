@@ -141,6 +141,40 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     expect(ctx).toBeNull();
   });
 
+  it("allows named-account topic messages with an explicit topic agent", async () => {
+    setRuntimeConfigSnapshot(baseCfg);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: baseCfg,
+      accountId: "atlas",
+      options: { forceWasMentioned: true },
+      message: {
+        message_id: 1,
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Test Group",
+          is_forum: true,
+        },
+        message_thread_id: 42,
+        date: 1700000000,
+        text: "@bot hello",
+        from: { id: 814912386, first_name: "Alice" },
+      },
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: true },
+        topicConfig: { agentId: "topic-agent", requireMention: false },
+      }),
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.route.accountId).toBe("atlas");
+    expect(ctx?.route.agentId).toBe("topic-agent");
+    expect(ctx?.ctxPayload?.SessionKey).toBe(
+      "agent:topic-agent:telegram:group:-1001234567890:topic:42",
+    );
+  });
+
   it("uses the main session key for default-account DMs", async () => {
     setRuntimeConfigSnapshot(baseCfg);
 

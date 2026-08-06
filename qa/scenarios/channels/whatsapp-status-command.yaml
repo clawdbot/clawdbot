@@ -1,0 +1,41 @@
+title: WhatsApp status command reply
+
+scenario:
+  id: whatsapp-status-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify WhatsApp status returns the active session summary.
+  successCriteria:
+    - The status command succeeds in a WhatsApp DM.
+    - The reply includes OpenClaw and session information.
+  codeRefs:
+    - src/auto-reply/reply/commands-status.ts
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+  execution:
+    kind: flow
+    channel: whatsapp
+    summary: Run WhatsApp status and verify session text.
+
+flow:
+  steps:
+    - name: status includes session information
+      actions:
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /status
+        - waitForOutbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            textIncludes: OpenClaw
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "reply.text.toLowerCase().includes('session')"
+            message:
+              expr: "`status reply missing session text: ${reply.text}`"
+      detailsExpr: reply.text

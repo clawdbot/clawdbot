@@ -362,9 +362,11 @@ function collectManifestRuntimeDependencyNames(manifest: PackageManifest): strin
 }
 
 async function resolveInstalledPackageScanRoot(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   boundaryRealPath: string;
   dependencyName: string;
   packageDir: string;
+  trustedHostOpenClawRootRealPath: string | null;
 }): Promise<InstalledPackageScanRoot | undefined> {
   const packageDir = path.join(params.packageDir, "node_modules", params.dependencyName);
   let stats: Awaited<ReturnType<typeof fs.stat>>;
@@ -382,6 +384,16 @@ async function resolveInstalledPackageScanRoot(params: {
 
   const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
   if (!isSamePathOrInside(params.boundaryRealPath, realPath)) {
+    if (
+      params.allowManagedNpmRootPackagePeerSymlinks === true &&
+      params.dependencyName === "openclaw" &&
+      isTrustedHostOpenClawPath({
+        resolvedTargetPath: realPath,
+        trustedHostOpenClawRootRealPath: params.trustedHostOpenClawRootRealPath,
+      })
+    ) {
+      return undefined;
+    }
     throw new Error(
       `installed dependency scan found package outside install root at ${packageDir}`,
     );
@@ -391,12 +403,14 @@ async function resolveInstalledPackageScanRoot(params: {
 
 async function collectInstalledPackageScanRoots(params: {
   additionalPackageDirs?: string[];
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   dependencyScanRootDir?: string;
   packageDir: string;
 }): Promise<string[]> {
   const limits = resolvePackageManifestTraversalLimits();
   const boundaryDir = params.dependencyScanRootDir ?? params.packageDir;
   const boundaryRealPath = await fs.realpath(boundaryDir).catch(() => path.resolve(boundaryDir));
+  const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
   const packageRealPath = await fs
     .realpath(params.packageDir)
     .catch(() => path.resolve(params.packageDir));
@@ -444,17 +458,21 @@ async function collectInstalledPackageScanRoots(params: {
     }
     for (const dependencyName of collectManifestRuntimeDependencyNames(manifest)) {
       const nestedCandidate = await resolveInstalledPackageScanRoot({
+        allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
         boundaryRealPath,
         dependencyName,
         packageDir: current.packageDir,
+        trustedHostOpenClawRootRealPath,
       });
       const candidate =
         nestedCandidate ??
         (params.dependencyScanRootDir
           ? await resolveInstalledPackageScanRoot({
+              allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
               boundaryRealPath,
               dependencyName,
               packageDir: params.dependencyScanRootDir,
+              trustedHostOpenClawRootRealPath,
             })
           : undefined);
       if (candidate && !visitedRealPaths.has(candidate.realPath)) {
@@ -829,6 +847,25 @@ function resolvePolicySource(params: {
   return { kind: "local-path", authority: "unknown", mutable: true, network: false };
 }
 
+function shouldBypassOpenClawInstallFriction(params: {
+  source?: InstallPolicySource;
+  trustedSourceLinkedOfficialInstall?: boolean;
+}): boolean {
+  if (params.trustedSourceLinkedOfficialInstall === true) {
+    return true;
+  }
+  const source = params.source;
+  if (!source || source.mutable) {
+    return false;
+  }
+  if (source.authority === "official") {
+    return source.kind === "clawhub" || source.kind === "git" || source.kind === "npm";
+  }
+  return (
+    source.authority === "openclaw" && (source.kind === "bundled" || source.kind === "managed")
+  );
+}
+
 async function runOperatorInstallPolicy(params: {
   config?: OpenClawConfig;
   logger: InstallScanLogger;
@@ -853,6 +890,7 @@ async function runOperatorInstallPolicy(params: {
     version?: string;
     extensions?: string[];
   };
+  trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
   const result = await runInstallPolicy({
     config: params.config,
@@ -897,6 +935,30 @@ export async function scanBundleInstallSourceRuntime(
     source?: InstallPolicySource;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
+  const runPolicy = () =>
+    runOperatorInstallPolicy({
+      config: params.config,
+      logger: params.logger,
+      origin: { type: "plugin-bundle", ...(params.version ? { version: params.version } : {}) },
+      source:
+        params.source ?? resolvePolicySource({ requestKind: params.requestKind ?? "plugin-dir" }),
+      sourcePath: params.sourceDir,
+      sourcePathKind: "directory",
+      targetName: params.pluginId,
+      targetType: "plugin",
+      requestKind: params.requestKind ?? "plugin-dir",
+      requestMode: params.mode ?? "install",
+      requestedSpecifier: params.requestedSpecifier,
+      plugin: {
+        contentType: "bundle",
+        pluginId: params.pluginId,
+        manifestId: params.pluginId,
+        ...(params.version ? { version: params.version } : {}),
+      },
+    });
+  if (shouldBypassOpenClawInstallFriction({ source: params.source })) {
+    return await runPolicy();
+  }
   const dependencyBlocked = await scanPluginDependencyDenylist({
     logger: params.logger,
     packageDir: params.sourceDir,
@@ -906,26 +968,7 @@ export async function scanBundleInstallSourceRuntime(
     return dependencyBlocked;
   }
 
-  const policyResult = await runOperatorInstallPolicy({
-    config: params.config,
-    logger: params.logger,
-    origin: { type: "plugin-bundle", ...(params.version ? { version: params.version } : {}) },
-    source:
-      params.source ?? resolvePolicySource({ requestKind: params.requestKind ?? "plugin-dir" }),
-    sourcePath: params.sourceDir,
-    sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: params.requestKind ?? "plugin-dir",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin: {
-      contentType: "bundle",
-      pluginId: params.pluginId,
-      manifestId: params.pluginId,
-      ...(params.version ? { version: params.version } : {}),
-    },
-  });
+  const policyResult = await runPolicy();
   if (policyResult?.blocked) {
     return policyResult;
   }
@@ -966,8 +1009,44 @@ export async function scanPackageInstallSourceRuntime(
     manifestId?: string;
     version?: string;
     source?: InstallPolicySource;
+    trustedSourceLinkedOfficialInstall?: boolean;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
+  const runPolicy = () =>
+    runOperatorInstallPolicy({
+      config: params.config,
+      logger: params.logger,
+      origin: {
+        type: "plugin-package",
+        ...(params.packageName ? { packageName: params.packageName } : {}),
+        ...(params.version ? { version: params.version } : {}),
+      },
+      source:
+        params.source ?? resolvePolicySource({ requestKind: params.requestKind ?? "plugin-dir" }),
+      sourcePath: params.packageDir,
+      sourcePathKind: "directory",
+      targetName: params.pluginId,
+      targetType: "plugin",
+      requestKind: params.requestKind ?? "plugin-dir",
+      requestMode: params.mode ?? "install",
+      requestedSpecifier: params.requestedSpecifier,
+      plugin: {
+        contentType: "package",
+        pluginId: params.pluginId,
+        ...(params.packageName ? { packageName: params.packageName } : {}),
+        ...(params.manifestId ? { manifestId: params.manifestId } : {}),
+        ...(params.version ? { version: params.version } : {}),
+        extensions: params.extensions.slice(),
+      },
+    });
+  if (
+    shouldBypassOpenClawInstallFriction({
+      source: params.source,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    })
+  ) {
+    return await runPolicy();
+  }
   const dependencyBlocked = await scanPluginDependencyDenylist({
     logger: params.logger,
     packageDir: params.packageDir,
@@ -977,32 +1056,7 @@ export async function scanPackageInstallSourceRuntime(
     return dependencyBlocked;
   }
 
-  const policyResult = await runOperatorInstallPolicy({
-    config: params.config,
-    logger: params.logger,
-    origin: {
-      type: "plugin-package",
-      ...(params.packageName ? { packageName: params.packageName } : {}),
-      ...(params.version ? { version: params.version } : {}),
-    },
-    source:
-      params.source ?? resolvePolicySource({ requestKind: params.requestKind ?? "plugin-dir" }),
-    sourcePath: params.packageDir,
-    sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: params.requestKind ?? "plugin-dir",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin: {
-      contentType: "package",
-      pluginId: params.pluginId,
-      ...(params.packageName ? { packageName: params.packageName } : {}),
-      ...(params.manifestId ? { manifestId: params.manifestId } : {}),
-      ...(params.version ? { version: params.version } : {}),
-      extensions: params.extensions.slice(),
-    },
-  });
+  const policyResult = await runPolicy();
   if (policyResult?.blocked) {
     return policyResult;
   }
@@ -1045,11 +1099,40 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   source?: InstallPolicySource;
   trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
+  const requestKind = params.requestKind ?? "plugin-npm";
+  const runPolicy = () =>
+    runOperatorInstallPolicy({
+      config: params.config,
+      logger: params.logger,
+      origin: { type: "plugin-dependency-tree" },
+      source: params.source ?? resolvePolicySource({ requestKind }),
+      sourcePath: params.dependencyScanRootDir ?? params.packageDir,
+      sourcePathKind: "directory",
+      targetName: params.pluginId,
+      targetType: "plugin",
+      requestKind,
+      requestMode: params.mode ?? "install",
+      requestedSpecifier: params.requestedSpecifier,
+      plugin: {
+        contentType: "dependency-tree",
+        pluginId: params.pluginId,
+      },
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    });
+  if (
+    shouldBypassOpenClawInstallFriction({
+      source: params.source,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    })
+  ) {
+    return await runPolicy();
+  }
   const scanRoots = await collectInstalledPackageScanRoots({
     ...(params.additionalPackageDirs
       ? { additionalPackageDirs: params.additionalPackageDirs }
       : {}),
     dependencyScanRootDir: params.dependencyScanRootDir,
+    allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
     packageDir: params.packageDir,
   });
   const manifestScanRoots = await collectNonOverlappingPackageScanRoots(scanRoots);
@@ -1066,24 +1149,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
     }
   }
 
-  const requestKind = params.requestKind ?? "plugin-npm";
-  return await runOperatorInstallPolicy({
-    config: params.config,
-    logger: params.logger,
-    origin: { type: "plugin-dependency-tree" },
-    source: params.source ?? resolvePolicySource({ requestKind }),
-    sourcePath: params.dependencyScanRootDir ?? params.packageDir,
-    sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind,
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin: {
-      contentType: "dependency-tree",
-      pluginId: params.pluginId,
-    },
-  });
+  return await runPolicy();
 }
 
 export async function scanFileInstallSourceRuntime(
@@ -1211,24 +1277,30 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
   skillName: string;
   sourceDir: string;
 }): Promise<InstallSecurityScanResult | undefined> {
-  const policyResult = await runOperatorInstallPolicy({
-    config: params.config,
-    logger: params.logger,
-    origin: params.origin,
-    source:
-      params.source ?? resolvePolicySource({ requestKind: "skill-install", origin: params.origin }),
-    sourcePath: params.sourceDir,
-    sourcePathKind: "directory",
-    targetName: params.skillName,
-    targetType: "skill",
-    requestKind: "skill-install",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    skill: {
-      installId: params.installId,
-      ...(params.installSpec ? { installSpec: params.installSpec } : {}),
-    },
-  });
+  const runPolicy = () =>
+    runOperatorInstallPolicy({
+      config: params.config,
+      logger: params.logger,
+      origin: params.origin,
+      source:
+        params.source ??
+        resolvePolicySource({ requestKind: "skill-install", origin: params.origin }),
+      sourcePath: params.sourceDir,
+      sourcePathKind: "directory",
+      targetName: params.skillName,
+      targetType: "skill",
+      requestKind: "skill-install",
+      requestMode: params.mode ?? "install",
+      requestedSpecifier: params.requestedSpecifier,
+      skill: {
+        installId: params.installId,
+        ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+      },
+    });
+  if (shouldBypassOpenClawInstallFriction({ source: params.source })) {
+    return await runPolicy();
+  }
+  const policyResult = await runPolicy();
   if (policyResult?.blocked) {
     return policyResult;
   }
@@ -1251,3 +1323,4 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
   });
   return hookResult;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

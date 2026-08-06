@@ -1,11 +1,9 @@
 // Runs commitment extraction, scheduling, and follow-up lifecycle work.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCommitmentTimezone, resolveCommitmentsConfig } from "./config.js";
 import {
@@ -77,6 +75,21 @@ function clearTimer(handle: TimerHandle): void {
   (runtime.clearTimer ?? clearTimeout)(handle);
 }
 
+// Single-slot debounce: schedule one drain unless one is already pending. Shared
+// by enqueue (new work), the overflow branch, and drain failure paths so queued
+// work still progresses after a timer-fired extraction failure.
+function scheduleDrainSoon(debounceMs: number): void {
+  if (timer) {
+    return;
+  }
+  timer = setTimer(() => {
+    timer = null;
+    void drainCommitmentExtractionQueue().catch((err: unknown) => {
+      log.warn("commitment extraction failed", { error: String(err) });
+    });
+  }, debounceMs);
+}
+
 /** Installs runtime hooks for extraction tests or alternate batch extraction. */
 export function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
   runtime = next;
@@ -131,6 +144,10 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
       });
       queueOverflowWarned = true;
     }
+    // The queue can be full because a non-terminal failure restored its batch
+    // (see drainCommitmentExtractionQueue). Dropping this request must not also
+    // drop the retry: make sure a drain is scheduled before returning.
+    scheduleDrainSoon(resolved.extraction.debounceMs);
     return false;
   }
   queue.push({
@@ -150,14 +167,7 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
     ...(input.sourceRunId?.trim() ? { sourceRunId: input.sourceRunId.trim() } : {}),
     cfg: input.cfg,
   });
-  if (!timer) {
-    timer = setTimer(() => {
-      timer = null;
-      void drainCommitmentExtractionQueue().catch((err: unknown) => {
-        log.warn("commitment extraction failed", { error: String(err) });
-      });
-    }, resolved.extraction.debounceMs);
-  }
+  scheduleDrainSoon(resolved.extraction.debounceMs);
   return true;
 }
 
@@ -199,16 +209,6 @@ function openTerminalFailureCooldown(
   });
 }
 
-function resolveExtractionSessionFile(agentId: string, runId: string): string {
-  return path.join(
-    resolveStateDir(),
-    "commitments",
-    "extractor-sessions",
-    agentId,
-    `${runId}.jsonl`,
-  );
-}
-
 function joinPayloadText(result: EmbeddedAgentPayloadResult): string {
   return (
     result.payloads
@@ -248,7 +248,6 @@ async function defaultExtractBatch(params: {
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,
     agentId: first.agentId,
     trigger: "manual",
-    sessionFile: resolveExtractionSessionFile(first.agentId, runId),
     workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),
     config: cfg,
     provider: modelRef.provider,
@@ -281,6 +280,24 @@ async function hydrateBatch(
   );
 }
 
+function takeAgentBatch(
+  agentId: string,
+  maxItems: number,
+): Array<Omit<CommitmentExtractionItem, "existingPending"> & { cfg?: OpenClawConfig }> {
+  const batch = [];
+  for (let index = 0; index < queue.length && batch.length < maxItems;) {
+    if (queue[index]?.agentId !== agentId) {
+      index += 1;
+      continue;
+    }
+    const [item] = queue.splice(index, 1);
+    if (item) {
+      batch.push(item);
+    }
+  }
+  return batch;
+}
+
 /** Drains queued extraction work in batches and returns processed item count. */
 export async function drainCommitmentExtractionQueue(): Promise<number> {
   if (draining) {
@@ -290,9 +307,15 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
   try {
     let processed = 0;
     while (queue.length > 0) {
-      const firstCfg = queue[0]?.cfg;
+      const first = queue[0];
+      if (!first) {
+        break;
+      }
+      const firstCfg = first.cfg;
       const resolved = resolveCommitmentsConfig(firstCfg);
-      const batch = queue.splice(0, resolved.extraction.batchMaxItems);
+      // Extraction inherits the first item's model, credentials, workspace, and
+      // session file. Keep every prompt and failure policy scoped to that agent.
+      const batch = takeAgentBatch(first.agentId, resolved.extraction.batchMaxItems);
       const items = await hydrateBatch(batch);
       const extractor = runtime.extractBatch ?? defaultExtractBatch;
       let result: CommitmentExtractionBatchResult;
@@ -306,6 +329,18 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
             Date.now(),
             items[0]?.nowMs ?? Date.now(),
           );
+          if (queue.length > 0) {
+            scheduleDrainSoon(resolved.extraction.debounceMs);
+          }
+        } else {
+          // Non-terminal failure (e.g. transient model/network error): the batch
+          // was already spliced out, so restore it to the front in original order.
+          // A timer-fired drain has already cleared `timer`, so also re-arm the
+          // debounce; otherwise the restored batch sits only in memory and is lost
+          // on process exit if no later enqueue happens to reschedule a drain.
+          // Rethrow so the caller still logs; the next drain reprocesses it in order.
+          queue.unshift(...batch);
+          scheduleDrainSoon(resolved.extraction.debounceMs);
         }
         throw error;
       }

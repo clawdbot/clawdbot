@@ -10,7 +10,10 @@ const mocks = vi.hoisted(() => ({
   externalCliDiscoveryForProviderAuth: vi.fn(() => ({ kind: "none" })),
   loadModelsConfig: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
-  resolveKnownAgentId: vi.fn(({ rawAgentId }: { rawAgentId?: string }) => rawAgentId ?? undefined),
+  resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => {
+    const agentId = rawAgentId ?? "main";
+    return { agentDir: `/tmp/openclaw/agents/${agentId}`, agentId };
+  }),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -30,7 +33,7 @@ vi.mock("./load-config.js", () => ({
 }));
 
 vi.mock("./shared.js", () => ({
-  resolveKnownAgentId: mocks.resolveKnownAgentId,
+  resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
 }));
 
 function createRuntime(): OutputRuntimeEnv & { logs: string[]; jsonPayloads: unknown[] } {
@@ -59,7 +62,7 @@ describe("modelsAuthListCommand", () => {
     mocks.ensureAuthProfileStore.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockClear();
     mocks.resolveAuthProfileDisplayLabel.mockClear();
-    mocks.resolveKnownAgentId.mockClear();
+    mocks.resolveModelsTargetAgent.mockClear();
   });
 
   it("filters profiles by provider and redacts credential material in JSON output", async () => {
@@ -108,6 +111,7 @@ describe("modelsAuthListCommand", () => {
             id: "openai:user@example.com",
             label: "openai:user@example.com",
             provider: "openai",
+            recoveryHint: "Wait for cooldown or switch provider.",
             type: "oauth",
           },
         ],
@@ -115,6 +119,81 @@ describe("modelsAuthListCommand", () => {
       },
     ]);
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
+  });
+
+  it("shows the cooldown reason and re-authentication action in text and JSON", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "secret",
+          refresh: "secret",
+          expires: 1_900_000_000_000,
+        },
+      },
+      usageStats: {
+        "anthropic:claude-cli": {
+          cooldownUntil: 1_900_000_100_000,
+          cooldownReason: "session_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const textRuntime = createRuntime();
+    await modelsAuthListCommand({}, textRuntime);
+    expect(textRuntime.logs.at(-1)).toContain("cooldown:session_expired");
+    expect(textRuntime.logs.at(-1)).toContain(
+      "claude auth login && openclaw models auth login --provider anthropic --method cli",
+    );
+
+    const jsonRuntime = createRuntime();
+    await modelsAuthListCommand({ json: true }, jsonRuntime);
+    expect(jsonRuntime.jsonPayloads[0]).toMatchObject({
+      profiles: [
+        expect.objectContaining({
+          id: "anthropic:claude-cli",
+          cooldownReason: "session_expired",
+          recoveryHint:
+            "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
+        }),
+      ],
+    });
+  });
+
+  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "google-gemini-cli:legacy": {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "secret",
+          refresh: "secret",
+          expires: 1_900_000_000_000,
+        },
+      },
+      usageStats: {
+        "google-gemini-cli:legacy": {
+          cooldownUntil: 1_900_000_100_000,
+          cooldownReason: "session_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const runtime = createRuntime();
+    await modelsAuthListCommand({ json: true }, runtime);
+
+    expect(runtime.jsonPayloads[0]).toMatchObject({
+      profiles: [
+        expect.objectContaining({
+          id: "google-gemini-cli:legacy",
+          recoveryHint: expect.stringContaining("--provider google`"),
+        }),
+      ],
+    });
+    expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("--provider google-gemini-cli");
   });
 
   it("treats the OpenAI filter as the friendly view over API-key and OAuth profiles", async () => {

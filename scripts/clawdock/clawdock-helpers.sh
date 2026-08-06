@@ -23,11 +23,6 @@ _CLR_MAGENTA='\033[0;35m'
 _CLR_CYAN='\033[0;36m'
 _CLR_RED='\033[0;31m'
 
-# Styled command output (green + bold)
-_clr_cmd() {
-  echo -e "${_CLR_GREEN}${_CLR_BOLD}$1${_CLR_RESET}"
-}
-
 # Inline command for use in sentences
 _cmd() {
   echo "${_CLR_GREEN}${_CLR_BOLD}$1${_CLR_RESET}"
@@ -73,6 +68,27 @@ _clawdock_mask_value() {
   printf "%s" "<redacted:${length} chars>"
 }
 
+_clawdock_browser_url_for_gateway_url() {
+  local url="$1"
+  case "$url" in
+    http://127.0.0.1:18789*|http://localhost:18789*|https://127.0.0.1:18789*|https://localhost:18789*) ;;
+    *)
+      printf "%s" "$url"
+      return 0
+      ;;
+  esac
+
+  local published published_port
+  published=$(_clawdock_compose port openclaw-gateway 18789 2>/dev/null | head -n 1 | tr -d '\r')
+  published_port="${published##*:}"
+  if [[ ! "$published_port" =~ ^[0-9]+$ ]]; then
+    printf "%s" "$url"
+    return 0
+  fi
+
+  printf "%s" "${url/:18789/:${published_port}}"
+}
+
 _clawdock_read_config_dir() {
   if [[ ! -f "$CLAWDOCK_CONFIG" ]]; then
     return 1
@@ -101,10 +117,10 @@ _clawdock_ensure_dir() {
   fi
 
   # Auto-detect from common paths
-  local found_path=""
-  for path in "${CLAWDOCK_COMMON_PATHS[@]}"; do
-    if [[ -f "${path}/docker-compose.yml" ]]; then
-      found_path="$path"
+  local candidate found_path="" response
+  for candidate in "${CLAWDOCK_COMMON_PATHS[@]}"; do
+    if [[ -f "${candidate}/docker-compose.yml" ]]; then
+      found_path="$candidate"
       break
     fi
   done
@@ -375,7 +391,7 @@ clawdock-dashboard() {
 
   echo "🦞 Getting dashboard URL..."
   local output exit_status url
-  output=$(_clawdock_compose run --rm openclaw-cli dashboard --no-open 2>&1)
+  output=$(_clawdock_compose run --rm --no-deps openclaw-cli dashboard --no-open 2>&1)
   exit_status=$?
   url=$(printf "%s\n" "$output" | _clawdock_filter_warnings | grep -o 'http[s]\?://[^[:space:]]*' | head -n 1)
   if [[ $exit_status -ne 0 ]]; then
@@ -385,6 +401,7 @@ clawdock-dashboard() {
   fi
 
   if [[ -n "$url" ]]; then
+    url=$(_clawdock_browser_url_for_gateway_url "$url")
     echo -e "✅ Opening: ${_CLR_CYAN}${url}${_CLR_RESET}"
     open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || echo -e "   Please open manually: ${_CLR_CYAN}${url}${_CLR_RESET}"
     echo ""

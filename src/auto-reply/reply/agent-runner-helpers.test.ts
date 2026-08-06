@@ -4,17 +4,18 @@ import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const hoisted = vi.hoisted(() => {
-  const loadSessionStoreMock = vi.fn();
-  return { loadSessionStoreMock };
+  const loadSessionEntryMock = vi.fn();
+  return { loadSessionEntryMock };
 });
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
+    "../../config/sessions/session-accessor.js",
   );
   return {
     ...actual,
-    loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
+    loadSessionEntry: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
+    loadSessionEntryReadOnly: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
   };
 });
 
@@ -28,7 +29,7 @@ const {
 describe("agent runner helpers", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    hoisted.loadSessionStoreMock.mockReset();
+    hoisted.loadSessionEntryMock.mockReset();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
@@ -45,9 +46,7 @@ describe("agent runner helpers", () => {
   });
 
   it("uses session verbose level when present", () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "full" },
-    });
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "full" });
     const shouldEmitResult = createShouldEmitToolResult({
       sessionKey: "agent:main:main",
       storePath: "/tmp/store.json",
@@ -60,7 +59,9 @@ describe("agent runner helpers", () => {
     });
     expect(shouldEmitResult()).toBe(true);
     expect(shouldEmitOutput()).toBe(true);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/store.json", {
+    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/store.json",
       clone: false,
     });
   });
@@ -68,9 +69,7 @@ describe("agent runner helpers", () => {
   it("caches session verbose reads briefly while still refreshing live changes", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "full" },
-    });
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "full" });
     const shouldEmitOutput = createShouldEmitToolOutput({
       sessionKey: "agent:main:main",
       storePath: "/tmp/store.json",
@@ -78,19 +77,17 @@ describe("agent runner helpers", () => {
     });
 
     expect(shouldEmitOutput()).toBe(true);
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "off" },
-    });
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "off" });
     expect(shouldEmitOutput()).toBe(true);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledOnce();
+    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledOnce();
 
     vi.setSystemTime(1_251);
     expect(shouldEmitOutput()).toBe(false);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back when store read fails or session value is invalid", () => {
-    hoisted.loadSessionStoreMock.mockImplementation(() => {
+    hoisted.loadSessionEntryMock.mockImplementation(() => {
       throw new Error("boom");
     });
     const fallbackOn = createShouldEmitToolResult({
@@ -100,10 +97,8 @@ describe("agent runner helpers", () => {
     });
     expect(fallbackOn()).toBe(true);
 
-    hoisted.loadSessionStoreMock.mockClear();
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "weird" },
-    });
+    hoisted.loadSessionEntryMock.mockClear();
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "weird" });
     const fallbackFull = createShouldEmitToolOutput({
       sessionKey: "agent:main:main",
       storePath: "/tmp/store.json",

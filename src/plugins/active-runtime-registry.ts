@@ -1,18 +1,23 @@
 // Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
-import type { PluginRegistry } from "./registry-types.js";
-import {
-  getActivePluginChannelRegistry,
-  getActivePluginHttpRouteRegistry,
-  getActivePluginRegistry,
-  getActivePluginRegistryWorkspaceDir,
-} from "./runtime.js";
-
-export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-route";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
+}
+
+function isRuntimePluginRecordLoaded(plugin: PluginRecord): boolean {
+  return plugin.status === "loaded" && (plugin.format === "bundle" || plugin.imported !== false);
+}
+
+export function listLoadedRuntimePluginIds(): string[] {
+  return normalizeSortedUniqueStringEntries(
+    (getActivePluginRegistry()?.plugins ?? [])
+      .filter(isRuntimePluginRecordLoaded)
+      .map((plugin) => plugin.id),
+  );
 }
 
 function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefined {
@@ -32,10 +37,15 @@ export function registryContainsRuntimePluginIds(
   const present = new Set<string>();
   const loaded = new Set<string>();
   const pluginStatusById = new Map<string, string | undefined>();
+  const pluginRuntimeLoadedById = new Map<string, boolean>();
   for (const plugin of registry.plugins ?? []) {
     present.add(plugin.id);
     pluginStatusById.set(plugin.id, plugin.status);
-    if (plugin.status === undefined || plugin.status === "loaded") {
+    pluginRuntimeLoadedById.set(plugin.id, isRuntimePluginRecordLoaded(plugin));
+    // Deferred manifest records are metadata-only until their runtime module is
+    // imported. Reusing them here would skip the scoped load that registers the
+    // requested harness/provider/tool capabilities.
+    if (plugin.status === undefined || isRuntimePluginRecordLoaded(plugin)) {
       loaded.add(plugin.id);
     }
   }
@@ -52,7 +62,7 @@ export function registryContainsRuntimePluginIds(
         if (typeof pluginId === "string" && pluginId.length > 0) {
           present.add(pluginId);
           const status = pluginStatusById.get(pluginId);
-          if (status === undefined || status === "loaded") {
+          if (status === undefined || pluginRuntimeLoadedById.get(pluginId) === true) {
             loaded.add(pluginId);
           }
         }
@@ -65,34 +75,18 @@ export function registryContainsRuntimePluginIds(
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
 
-function resolveSurfaceRegistry(
-  surface: ActiveRuntimePluginRegistrySurface,
-): PluginRegistry | null {
-  switch (surface) {
-    case "active":
-      return getActivePluginRegistry();
-    case "channel":
-      return getActivePluginChannelRegistry();
-    case "http-route":
-      return getActivePluginHttpRouteRegistry();
-  }
-  return null;
-}
-
 export function getLoadedRuntimePluginRegistry(
   params: {
     env?: NodeJS.ProcessEnv;
     loadOptions?: PluginLoadOptions;
     workspaceDir?: string;
     requiredPluginIds?: readonly string[];
-    surface?: ActiveRuntimePluginRegistrySurface;
   } = {},
 ): PluginRegistry | undefined {
-  const surface = params.surface ?? "active";
   const requiredPluginIds = normalizeRequiredPluginIds(
     params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
   );
-  if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
+  if (params.loadOptions && requiredPluginIds?.length !== 0) {
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
     if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
       return undefined;
@@ -105,7 +99,7 @@ export function getLoadedRuntimePluginRegistry(
   if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
     return undefined;
   }
-  const registry = resolveSurfaceRegistry(surface);
+  const registry = getActivePluginRegistry();
   if (!registry) {
     return undefined;
   }

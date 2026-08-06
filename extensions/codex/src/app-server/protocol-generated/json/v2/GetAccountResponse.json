@@ -1,15 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "GetAccountResponse",
-  "type": "object",
-  "required": [
-    "requiresOpenaiAuth"
-  ],
   "properties": {
     "account": {
       "anyOf": [
         {
-          "$ref": "#/definitions/Account"
+          "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/Account"
         },
         {
           "type": "null"
@@ -20,83 +15,9 @@
       "type": "boolean"
     }
   },
-  "definitions": {
-    "Account": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "apiKey"
-              ],
-              "title": "ApiKeyAccountType"
-            }
-          },
-          "title": "ApiKeyAccount"
-        },
-        {
-          "type": "object",
-          "required": [
-            "email",
-            "planType",
-            "type"
-          ],
-          "properties": {
-            "email": {
-              "type": "string"
-            },
-            "planType": {
-              "$ref": "#/definitions/PlanType"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "chatgpt"
-              ],
-              "title": "ChatgptAccountType"
-            }
-          },
-          "title": "ChatgptAccount"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "amazonBedrock"
-              ],
-              "title": "AmazonBedrockAccountType"
-            }
-          },
-          "title": "AmazonBedrockAccount"
-        }
-      ]
-    },
-    "PlanType": {
-      "type": "string",
-      "enum": [
-        "free",
-        "go",
-        "plus",
-        "pro",
-        "prolite",
-        "team",
-        "self_serve_business_usage_based",
-        "business",
-        "enterprise_cbp_usage_based",
-        "enterprise",
-        "edu",
-        "unknown"
-      ]
-    }
-  }
+  "required": [
+    "requiresOpenaiAuth"
+  ],
+  "title": "GetAccountResponse",
+  "type": "object"
 }

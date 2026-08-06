@@ -1,5 +1,5 @@
 // Provides channel plugin fixtures for security audit tests.
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 /** Build a minimal channel plugin stub for security audit unit tests. */

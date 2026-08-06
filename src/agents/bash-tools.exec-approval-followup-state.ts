@@ -16,22 +16,24 @@ const EXEC_APPROVAL_FOLLOWUP_IDEMPOTENCY_NONCE_MARKER = ":nonce:";
 const EXEC_APPROVAL_FOLLOWUP_RUNTIME_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
 /** Single-use capability payload consumed by a follow-up agent turn. */
-export type ExecApprovalFollowupRuntimeHandoff = {
+type ExecApprovalFollowupRuntimeHandoff = {
   kind: "exec-approval-followup";
   approvalId: string;
   sessionKey: string;
   idempotencyKey: string;
-  bashElevated: ExecElevatedDefaults;
+  bashElevated?: ExecElevatedDefaults;
+  resultText?: string;
 };
 
 /** Registration handle returned to the gateway approval callback. */
-export type ExecApprovalFollowupRuntimeHandoffRegistration = {
+type ExecApprovalFollowupRuntimeHandoffRegistration = {
   handoffId: string;
   idempotencyKey: string;
 };
 
 type ExecApprovalFollowupRuntimeHandoffEntry = ExecApprovalFollowupRuntimeHandoff & {
   expiresAtMs: number;
+  claimId?: string;
 };
 
 const execApprovalFollowupRuntimeHandoffs = new Map<
@@ -61,7 +63,8 @@ function cloneExecApprovalFollowupRuntimeHandoff(
     approvalId: value.approvalId,
     sessionKey: value.sessionKey,
     idempotencyKey: value.idempotencyKey,
-    bashElevated: cloneExecElevatedDefaults(value.bashElevated),
+    ...(value.bashElevated ? { bashElevated: cloneExecElevatedDefaults(value.bashElevated) } : {}),
+    ...(value.resultText !== undefined ? { resultText: value.resultText } : {}),
   };
 }
 
@@ -99,11 +102,12 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
   approvalId: string;
   sessionKey: string;
   bashElevated?: ExecElevatedDefaults;
+  resultText?: string;
   nowMs?: number;
 }): ExecApprovalFollowupRuntimeHandoffRegistration | undefined {
   const approvalId = normalizeOptionalString(params.approvalId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
-  if (!approvalId || !sessionKey || !params.bashElevated) {
+  if (!approvalId || !sessionKey || (!params.bashElevated && params.resultText === undefined)) {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
@@ -125,24 +129,29 @@ export function registerExecApprovalFollowupRuntimeHandoff(params: {
     approvalId,
     sessionKey,
     idempotencyKey,
-    bashElevated: cloneExecElevatedDefaults(params.bashElevated),
+    ...(params.bashElevated
+      ? { bashElevated: cloneExecElevatedDefaults(params.bashElevated) }
+      : {}),
+    ...(params.resultText !== undefined ? { resultText: params.resultText } : {}),
     expiresAtMs,
   });
   return { handoffId, idempotencyKey };
 }
 
-/** Consume a matching handoff once, validating approval/session/idempotency data. */
-export function consumeExecApprovalFollowupRuntimeHandoff(params: {
+/** Claim a matching handoff while fallible run setup completes. */
+export function claimExecApprovalFollowupRuntimeHandoff(params: {
   handoffId?: string;
   approvalId?: string;
   idempotencyKey?: string;
   sessionKey?: string;
+  claimId?: string;
   nowMs?: number;
 }): ExecApprovalFollowupRuntimeHandoff | undefined {
   const handoffId = normalizeOptionalString(params.handoffId);
   const approvalId = normalizeOptionalString(params.approvalId);
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
-  if (!handoffId || !approvalId || !idempotencyKey) {
+  const claimId = normalizeOptionalString(params.claimId);
+  if (!handoffId || !approvalId || !idempotencyKey || !claimId) {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
@@ -165,11 +174,60 @@ export function consumeExecApprovalFollowupRuntimeHandoff(params: {
     // must not consume or expose the stored elevated defaults.
     return undefined;
   }
-  execApprovalFollowupRuntimeHandoffs.delete(handoffId);
+  if (entry.claimId && entry.claimId !== claimId) {
+    return undefined;
+  }
+  entry.claimId = claimId;
   return cloneExecApprovalFollowupRuntimeHandoff(entry);
 }
 
-/** Clear exec approval follow-up handoffs between tests. */
-export function resetExecApprovalFollowupRuntimeHandoffsForTests(): void {
-  execApprovalFollowupRuntimeHandoffs.clear();
+/** Finalize a claimed handoff once its run has been dispatched. */
+export function finalizeExecApprovalFollowupRuntimeHandoff(params: {
+  handoffId?: string;
+  claimId?: string;
+}): boolean {
+  const handoffId = normalizeOptionalString(params.handoffId);
+  const claimId = normalizeOptionalString(params.claimId);
+  if (!handoffId || !claimId) {
+    return false;
+  }
+  const entry = execApprovalFollowupRuntimeHandoffs.get(handoffId);
+  if (entry?.claimId !== claimId) {
+    return false;
+  }
+  execApprovalFollowupRuntimeHandoffs.delete(handoffId);
+  return true;
+}
+
+/** Release a claimed handoff when setup fails before dispatch. */
+export function releaseExecApprovalFollowupRuntimeHandoff(params: {
+  handoffId?: string;
+  claimId?: string;
+}): boolean {
+  const handoffId = normalizeOptionalString(params.handoffId);
+  const claimId = normalizeOptionalString(params.claimId);
+  if (!handoffId || !claimId) {
+    return false;
+  }
+  const entry = execApprovalFollowupRuntimeHandoffs.get(handoffId);
+  if (entry?.claimId !== claimId) {
+    return false;
+  }
+  delete entry.claimId;
+  return true;
+}
+
+/**
+ * A persisted exec-approval followup is stale when the session key it targeted
+ * has since been rebound to a different session id (via `/new` or `/reset`).
+ * Delivering it would leak the old approval result into the new session, so the
+ * gateway drops the followup instead of resuming the rebound session.
+ */
+export function isExecApprovalFollowupSessionRebound(params: {
+  expectedSessionId?: string;
+  resolvedSessionId?: string;
+}): boolean {
+  const expected = normalizeOptionalString(params.expectedSessionId);
+  const resolved = normalizeOptionalString(params.resolvedSessionId);
+  return Boolean(expected && resolved && expected !== resolved);
 }

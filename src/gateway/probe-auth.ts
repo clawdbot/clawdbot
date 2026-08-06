@@ -32,7 +32,7 @@ function buildGatewayProbeCredentialPolicy(params: {
   };
 }
 
-function resolveGatewayProbeCredentialConfig(params: {
+export function resolveGatewayProbeCredentialConfig(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
 }): OpenClawConfig {

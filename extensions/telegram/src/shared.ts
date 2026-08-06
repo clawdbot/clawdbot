@@ -30,7 +30,6 @@ import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { telegramSecurityAdapter } from "./security.js";
-import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
 const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -134,7 +133,7 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
 
 export function createTelegramPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
   | "id"
@@ -147,11 +146,12 @@ export function createTelegramPluginBase(params: {
   | "reload"
   | "configSchema"
   | "config"
-  | "setup"
+  | "setupContract"
   | "secrets"
 > {
   const base = createChannelPluginBase({
     id: TELEGRAM_CHANNEL,
+    setupContract: params.setupContract,
     meta: {
       ...getChatChannelMeta(TELEGRAM_CHANNEL),
       quickstartAllowFrom: true,
@@ -165,6 +165,7 @@ export function createTelegramPluginBase(params: {
       tts: {
         voice: {
           synthesisTarget: "voice-note",
+          captionedFinalText: true,
         },
       },
       polls: true,
@@ -246,16 +247,12 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            Boolean(inspected.token?.trim()) &&
+            inspected.tokenStatus !== "missing" &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
+          tokenStatus: inspected.tokenStatus,
         };
       },
-    },
-    setup: {
-      ...params.setup,
-      namedAccountPromotionKeys,
-      singleAccountKeysToMove,
     },
   });
   return {
@@ -276,7 +273,7 @@ export function createTelegramPluginBase(params: {
     | "reload"
     | "configSchema"
     | "config"
-    | "setup"
+    | "setupContract"
     | "secrets"
   >;
 }

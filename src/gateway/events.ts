@@ -3,7 +3,7 @@
 export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;
 
 /** Version metadata included in update-available gateway events. */
-export type UpdateAvailableEventData = {
+type UpdateAvailableEventData = {
   currentVersion: string;
   latestVersion: string;
   channel: string;

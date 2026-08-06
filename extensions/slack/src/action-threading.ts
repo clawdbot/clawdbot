@@ -1,12 +1,12 @@
 // Slack plugin module implements action threading behavior.
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseSlackTarget } from "./targets.js";
+import { slackContextTargetsMatch } from "./targets.js";
 
 export function resolveSlackAutoThreadId(params: {
   to: string;
   toolContext?: {
     currentChannelId?: string;
+    currentMessagingTarget?: string;
     currentThreadTs?: string;
     replyToMode?: "off" | "first" | "all" | "batched";
     hasRepliedRef?: { value: boolean };
@@ -14,17 +14,10 @@ export function resolveSlackAutoThreadId(params: {
   };
 }): string | undefined {
   const context = params.toolContext;
-  if (!context?.currentChannelId) {
+  if (!context?.currentChannelId && !context?.currentMessagingTarget) {
     return undefined;
   }
-  const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return undefined;
-  }
-  if (
-    normalizeLowercaseStringOrEmpty(parsedTarget.id) !==
-    normalizeLowercaseStringOrEmpty(context.currentChannelId)
-  ) {
+  if (!slackContextTargetsMatch(params.to, context)) {
     return undefined;
   }
   if (!context.currentThreadTs) {

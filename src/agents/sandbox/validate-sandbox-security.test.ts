@@ -8,12 +8,26 @@ import { withEnv } from "../../test-utils/env.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   getBlockedBindReason,
-  validateBindMounts,
   validateNetworkMode,
-  validateSeccompProfile,
-  validateApparmorProfile,
   validateSandboxSecurity,
 } from "./validate-sandbox-security.js";
+
+type SandboxSecurityConfig = Parameters<typeof validateSandboxSecurity>[0];
+
+function validateBindMounts(
+  binds: string[] | undefined,
+  options?: Omit<SandboxSecurityConfig, "binds">,
+): void {
+  validateSandboxSecurity({ ...options, binds });
+}
+
+function validateSeccompProfile(seccompProfile: string | undefined): void {
+  validateSandboxSecurity({ seccompProfile });
+}
+
+function validateApparmorProfile(apparmorProfile: string | undefined): void {
+  validateSandboxSecurity({ apparmorProfile });
+}
 
 function expectBindMountsToThrow(binds: string[], expected: RegExp, label: string) {
   expect(() => validateBindMounts(binds), label).toThrow(expected);
@@ -36,8 +50,22 @@ describe("getBlockedBindReason", () => {
     expectBlockedTargetReason("/var/run:/var/run:ro");
   });
 
-  it("does not block /var by default", () => {
-    expect(getBlockedBindReason("/var:/var")).toBeNull();
+  it("blocks parent sources that cover blocked descendants", () => {
+    const reason = getBlockedBindReason("/var:/var");
+    expect(reason).toMatchObject({
+      kind: "covers",
+      blockedPath: "/var/run",
+    });
+  });
+
+  it("blocks home parent sources that cover credential descendants", () => {
+    withEnv({ HOME: "/home/tester" }, () => {
+      const reason = getBlockedBindReason("/home/tester:/mnt/home:ro");
+      expect(reason).toMatchObject({
+        kind: "covers",
+        blockedPath: "/home/tester/.aws",
+      });
+    });
   });
 
   it("blocks sensitive home credential paths", () => {
@@ -165,8 +193,24 @@ describe("validateBindMounts", () => {
     }
   });
 
-  it("allows parent mounts that are not blocked", () => {
-    expect(validateBindMounts(["/var:/var"])).toBeUndefined();
+  it("allows parent mounts that do not cover blocked descendants", () => {
+    expect(validateBindMounts(["/var/data:/data"])).toBeUndefined();
+  });
+
+  it("blocks allowed source roots that cover blocked descendants", () => {
+    expect(() =>
+      validateBindMounts(["/var:/var"], {
+        allowedSourceRoots: ["/var"],
+      }),
+    ).toThrow(/covers blocked path "\/var\/run"/);
+
+    withEnv({ HOME: "/home/tester" }, () => {
+      expect(() =>
+        validateBindMounts(["/home/tester:/mnt/home:ro"], {
+          allowedSourceRoots: ["/home/tester"],
+        }),
+      ).toThrow(/covers blocked path "\/home\/tester\/\.aws"/);
+    });
   });
 
   it("blocks sensitive home credential binds", () => {

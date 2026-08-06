@@ -1,8 +1,14 @@
 // Test helpers for reading repository files through git-aware paths.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
+const GIT_LS_FILES_TIMEOUT_MS = 5_000;
 const gitTrackedFilesCache = new Map<string, string[] | null>();
+
+function filterExistingRepoFiles(repoRoot: string, files: readonly string[]): string[] {
+  return files.filter((file) => fs.existsSync(path.join(repoRoot, file)));
+}
 
 /** Normalizes file paths to repo-style forward slash separators. */
 export function toRepoPath(filePath: string): string {
@@ -26,13 +32,16 @@ export function listGitTrackedFiles(params: {
   const cacheKey = JSON.stringify({ repoRoot, pathspecs });
   const cached = gitTrackedFilesCache.get(cacheKey);
   if (cached !== undefined) {
-    return cached ? [...cached] : null;
+    return cached ? filterExistingRepoFiles(repoRoot, cached) : null;
   }
   const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
     cwd: repoRoot,
     encoding: "utf8",
+    // Bound repository scans; SIGKILL avoids waiting on a hung Git process after timeout.
+    killSignal: "SIGKILL",
     maxBuffer: 16 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: GIT_LS_FILES_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     gitTrackedFilesCache.set(cacheKey, null);
@@ -45,5 +54,6 @@ export function listGitTrackedFiles(params: {
       .filter((line) => line.length > 0),
   );
   gitTrackedFilesCache.set(cacheKey, files);
-  return [...files];
+  // Staged deletions remain in `git ls-files`, but callers scan the working tree.
+  return filterExistingRepoFiles(repoRoot, files);
 }

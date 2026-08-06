@@ -15,16 +15,24 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/re
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  readSessionUpdatedAt,
+  readAmbientTranscriptWatermark,
+  resolveAmbientTranscriptWatermarkKey,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
-import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
+import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
-import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
+import {
+  resolveTelegramApproval,
+  resolveTelegramLegacyApproval,
+} from "./exec-approval-resolver.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
@@ -32,8 +40,11 @@ import { wasSentByBot } from "./sent-message-cache.js";
 export type TelegramBotDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
   resolveStorePath: typeof resolveStorePath;
-  loadSessionStore?: typeof loadSessionStore;
+  getSessionEntry?: typeof getSessionEntry;
+  listSessionEntries?: typeof listSessionEntries;
   readSessionUpdatedAt?: typeof readSessionUpdatedAt;
+  readAmbientTranscriptWatermark?: typeof readAmbientTranscriptWatermark;
+  resolveAmbientTranscriptWatermarkKey?: typeof resolveAmbientTranscriptWatermarkKey;
   recordInboundSession?: typeof recordInboundSession;
   recordChannelActivity?: typeof recordChannelActivity;
   resolveInboundLastRouteSessionKey?: typeof resolveInboundLastRouteSessionKey;
@@ -48,12 +59,12 @@ export type TelegramBotDeps = {
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
   wasSentByBot: typeof wasSentByBot;
-  resolveExecApproval?: typeof resolveTelegramExecApproval;
+  resolveApproval?: typeof resolveTelegramApproval;
+  resolveLegacyApproval?: typeof resolveTelegramLegacyApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
-  createNativeTelegramToolProgressDraft?: typeof createNativeTelegramToolProgressDraft;
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
-  emitInternalMessageSentHook?: typeof emitInternalMessageSentHook;
+  emitTelegramMessageSentHooks?: typeof emitTelegramMessageSentHooks;
   editMessageTelegram?: typeof editMessageTelegram;
   recordOutboundMessageForPromptContext?: typeof recordOutboundMessageForPromptContext;
   createChannelMessageReplyPipeline?: typeof createChannelMessageReplyPipeline;
@@ -66,14 +77,23 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get resolveStorePath() {
     return resolveStorePath;
   },
+  get getSessionEntry() {
+    return getSessionEntry;
+  },
+  get listSessionEntries() {
+    return listSessionEntries;
+  },
   get readChannelAllowFromStore() {
     return readChannelAllowFromStore;
   },
-  get loadSessionStore() {
-    return loadSessionStore;
-  },
   get readSessionUpdatedAt() {
     return readSessionUpdatedAt;
+  },
+  get readAmbientTranscriptWatermark() {
+    return readAmbientTranscriptWatermark;
+  },
+  get resolveAmbientTranscriptWatermarkKey() {
+    return resolveAmbientTranscriptWatermarkKey;
   },
   get recordInboundSession() {
     return recordInboundSession;
@@ -114,14 +134,14 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get wasSentByBot() {
     return wasSentByBot;
   },
-  get resolveExecApproval() {
-    return resolveTelegramExecApproval;
+  get resolveApproval() {
+    return resolveTelegramApproval;
+  },
+  get resolveLegacyApproval() {
+    return resolveTelegramLegacyApproval;
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;
-  },
-  get createNativeTelegramToolProgressDraft() {
-    return createNativeTelegramToolProgressDraft;
   },
   get deliverReplies() {
     return deliverReplies;
@@ -129,8 +149,8 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get deliverInboundReplyWithMessageSendContext() {
     return deliverInboundReplyWithMessageSendContext;
   },
-  get emitInternalMessageSentHook() {
-    return emitInternalMessageSentHook;
+  get emitTelegramMessageSentHooks() {
+    return emitTelegramMessageSentHooks;
   },
   get editMessageTelegram() {
     return editMessageTelegram;

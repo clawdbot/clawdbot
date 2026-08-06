@@ -6,13 +6,14 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
 
 const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
-  opus: "claude-opus-4-8",
-  sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-5",
+  sonnet: "claude-sonnet-5",
+  fable: "claude-fable-5",
   haiku: "claude-haiku-4-5",
 };
 
 /** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
-export type ClaudeCliAnthropicModelRefs = {
+type ClaudeCliAnthropicModelRefs = {
   selectedRef: string;
   runtimeRefs: string[];
   rewriteRef?: string;
@@ -108,27 +109,27 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {
-  if (normalized.startsWith("claude-opus-4-8") || normalized.startsWith("claude-opus-4.8")) {
-    return null;
-  }
-  if (normalized.startsWith("claude-opus-4-7") || normalized.startsWith("claude-opus-4.7")) {
-    return null;
-  }
-  if (normalized.startsWith("claude-opus-4-6") || normalized.startsWith("claude-opus-4.6")) {
-    return null;
-  }
-  if (normalized.startsWith("claude-sonnet-4-6") || normalized.startsWith("claude-sonnet-4.6")) {
-    return null;
-  }
-  // claude-haiku-4-5 is a current production model and must not be migrated.
-  if (normalized.startsWith("claude-haiku-4-5") || normalized.startsWith("claude-haiku-4.5")) {
+  // Current Claude families, including Haiku, must never be migrated.
+  if (
+    hasRetiredVersionPrefix(normalized, "claude-opus-5") ||
+    [
+      "claude-opus-4-8",
+      "claude-opus-4.8",
+      "claude-opus-4-7",
+      "claude-opus-4.7",
+      "claude-opus-4-6",
+      "claude-opus-4.6",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4.6",
+      "claude-haiku-4-5",
+      "claude-haiku-4.5",
+    ].some((prefix) => normalized.startsWith(prefix))
+  ) {
     return null;
   }
   if (
     normalized === "claude-opus-4" ||
     hasAnyRetiredVersionPrefix(normalized, [
-      "claude-opus-4-7",
-      "claude-opus-4.7",
       "claude-opus-4-5",
       "claude-opus-4.5",
       "claude-opus-4-1",
@@ -138,7 +139,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     ]) ||
     /^claude-opus-4-20\d{6}/.test(normalized)
   ) {
-    return "claude-opus-4-8";
+    return "claude-opus-5";
   }
   if (
     normalized === "claude-sonnet-4" ||
@@ -155,7 +156,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
-    return "claude-opus-4-8";
+    return "claude-opus-5";
   }
   if (
     normalized.startsWith("claude-3") &&
@@ -163,24 +164,21 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
   ) {
     return "claude-sonnet-4-6";
   }
-  if (
-    normalized === "opus-4.5" ||
-    normalized === "opus-4.1" ||
-    normalized === "opus-4" ||
-    normalized === "opus-3"
-  ) {
-    return "claude-opus-4-8";
+  if (["opus-4.5", "opus-4.1", "opus-4", "opus-3"].includes(normalized)) {
+    return "claude-opus-5";
   }
   if (
-    normalized === "sonnet-4.5" ||
-    normalized === "sonnet-4.1" ||
-    normalized === "sonnet-4.0" ||
-    normalized === "sonnet-4" ||
-    normalized === "sonnet-3.7" ||
-    normalized === "sonnet-3.5" ||
-    normalized === "sonnet-3" ||
-    normalized === "haiku-3.5" ||
-    normalized === "haiku-3"
+    [
+      "sonnet-4.5",
+      "sonnet-4.1",
+      "sonnet-4.0",
+      "sonnet-4",
+      "sonnet-3.7",
+      "sonnet-3.5",
+      "sonnet-3",
+      "haiku-3.5",
+      "haiku-3",
+    ].includes(normalized)
   ) {
     return "claude-sonnet-4-6";
   }

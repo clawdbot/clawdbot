@@ -28,38 +28,24 @@ type BundledChannelDoctorContractApi = {
   }) => BundledChannelDoctorCompatibilityMutation;
 };
 
-function loadBundledChannelPublicArtifact(
-  channelId: string,
-  artifactBasenames: readonly string[],
-): BundledChannelDoctorContractApi | undefined {
-  for (const artifactBasename of artifactBasenames) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<BundledChannelDoctorContractApi>({
-        dirName: channelId,
-        artifactBasename,
-      });
-    } catch (error) {
-      // Only a missing public artifact is optional. Other loader errors mean a
-      // channel's doctor contract is present but broken, so surface them.
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-    }
-  }
-  return undefined;
-}
-
 /**
  * Loads a bundled channel's public doctor contract.
- *
- * `doctor-contract-api.js` is the canonical file; `contract-api.js` remains a
- * shipped fallback for channels that exposed doctor hooks before the split.
  */
 export function loadBundledChannelDoctorContractApi(
   channelId: string,
 ): BundledChannelDoctorContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, ["doctor-contract-api.js", "contract-api.js"]);
+  try {
+    return loadBundledPluginPublicArtifactModuleSync<BundledChannelDoctorContractApi>({
+      dirName: channelId,
+      artifactBasename: "doctor-contract-api.js",
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Unable to resolve bundled plugin public surface ")
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
 }

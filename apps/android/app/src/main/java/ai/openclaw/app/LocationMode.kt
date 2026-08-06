@@ -8,15 +8,27 @@ enum class LocationMode(
 ) {
   Off("off"),
   WhileUsing("whileUsing"),
+  Always("always"),
   ;
 
   companion object {
-    /** Parses persisted location mode text while migrating old always-on configs to while-using. */
+    /** Parses persisted location mode text. */
     fun fromRawValue(raw: String?): LocationMode {
       val normalized = raw?.trim()?.lowercase()
-      // Older configs used "always"; Android node currently exposes while-using location only.
-      if (normalized == "always") return WhileUsing
       return entries.firstOrNull { it.rawValue.lowercase() == normalized } ?: Off
     }
   }
 }
+
+/** Resolves the in-app mode after Android's external background-location settings return. */
+internal fun locationModeAfterBackgroundSettings(
+  previousMode: LocationMode,
+  foregroundGranted: Boolean,
+  backgroundGranted: Boolean,
+): LocationMode =
+  when {
+    foregroundGranted && backgroundGranted -> LocationMode.Always
+    !foregroundGranted -> LocationMode.Off
+    previousMode == LocationMode.Always -> LocationMode.WhileUsing
+    else -> previousMode
+  }

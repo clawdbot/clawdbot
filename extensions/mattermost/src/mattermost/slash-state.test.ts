@@ -1,4 +1,6 @@
 // Mattermost tests cover slash state plugin behavior.
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -6,8 +8,7 @@ import type { MattermostRegisteredCommand } from "./slash-commands.js";
 import {
   activateSlashCommands,
   deactivateSlashCommands,
-  resolveSlashHandlerForCommand,
-  resolveSlashHandlerForToken,
+  registerSlashCommandRoute,
 } from "./slash-state.js";
 
 function createResolvedMattermostAccount(accountId: string): ResolvedMattermostAccount {
@@ -50,139 +51,183 @@ const slashApi = {
 
 const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
 
+type AccountState = {
+  handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null;
+};
+
+function getAccountStates(): Map<string, AccountState> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const states = globalStore[ACCOUNT_STATES_KEY];
+  if (!(states instanceof Map)) {
+    throw new Error("expected Mattermost slash account state map");
+  }
+  return states as Map<string, AccountState>;
+}
+
+function replaceAccountHandler(accountId: string): void {
+  const state = getAccountStates().get(accountId);
+  if (!state) {
+    throw new Error(`expected Mattermost slash state for ${accountId}`);
+  }
+  state.handler = async (_req, res) => {
+    res.statusCode = 200;
+    res.end(accountId);
+  };
+}
+
+function createRequest(body: string): IncomingMessage {
+  const req = new PassThrough() as PassThrough & IncomingMessage;
+  req.method = "POST";
+  req.headers = { "content-type": "application/x-www-form-urlencoded" };
+  process.nextTick(() => {
+    req.end(body);
+  });
+  return req;
+}
+
+function createResponse(): { res: ServerResponse; getBody: () => string } {
+  let body = "";
+  const res = {
+    statusCode: 200,
+    setHeader() {},
+    end(chunk?: string | Buffer) {
+      body = chunk ? String(chunk) : "";
+    },
+  } as unknown as ServerResponse;
+  return { res, getBody: () => body };
+}
+
+async function routeSlashRequest(params: {
+  body: string;
+  register?: typeof registerSlashCommandRoute;
+}): Promise<{ statusCode: number; body: string; warn: ReturnType<typeof vi.fn> }> {
+  let routeHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined;
+  const warn = vi.fn();
+  (params.register ?? registerSlashCommandRoute)({
+    config: { channels: { mattermost: {} } },
+    logger: { warn },
+    registerHttpRoute(route: {
+      handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+    }) {
+      routeHandler = route.handler;
+    },
+  } as never);
+  if (!routeHandler) {
+    throw new Error("expected Mattermost slash route registration");
+  }
+  const response = createResponse();
+  await routeHandler(createRequest(params.body), response.res);
+  return { statusCode: response.res.statusCode, body: response.getBody(), warn };
+}
+
+function activate(params: {
+  accountId: string;
+  tokens: string[];
+  commands?: MattermostRegisteredCommand[];
+}): void {
+  activateSlashCommands({
+    account: createResolvedMattermostAccount(params.accountId),
+    commandTokens: params.tokens,
+    registeredCommands: params.commands ?? [],
+    api: slashApi,
+  });
+  replaceAccountHandler(params.accountId);
+}
+
 describe("slash-state global singleton", () => {
   afterEach(() => {
     deactivateSlashCommands();
   });
 
   it("anchors accountStates on globalThis", () => {
-    deactivateSlashCommands();
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["tok-a"],
-      registeredCommands: [],
-      api: slashApi,
-    });
-
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    const map = globalStore[ACCOUNT_STATES_KEY];
-    expect(map).toBeInstanceOf(Map);
-    expect((map as Map<string, unknown>).has("a1")).toBe(true);
+    activate({ accountId: "a1", tokens: ["tok-a"] });
+    expect(getAccountStates().has("a1")).toBe(true);
   });
 
-  it("preserves slash state across module reloads", async () => {
-    deactivateSlashCommands();
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["tok-reload"],
-      registeredCommands: [],
-      api: slashApi,
-    });
+  it("preserves slash routing state across module reloads", async () => {
+    activate({ accountId: "a1", tokens: ["tok-reload"] });
+    activate({ accountId: "a2", tokens: ["tok-other"] });
 
     vi.resetModules();
     const reloaded = await import("./slash-state.js");
-    const match = reloaded.resolveSlashHandlerForToken("tok-reload");
+    const result = await routeSlashRequest({
+      register: reloaded.registerSlashCommandRoute,
+      body: "token=tok-reload",
+    });
 
-    expect(match.kind).toBe("single");
-    if (match.kind !== "single") {
-      throw new Error("expected single match after module reload");
-    }
-    expect(match.accountIds).toEqual(["a1"]);
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toBe("a1");
   });
 });
 
-describe("slash-state token routing", () => {
-  it("returns single match when token belongs to one account", () => {
+describe("slash-state request routing", () => {
+  afterEach(() => {
     deactivateSlashCommands();
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["tok-a"],
-      registeredCommands: [],
-      api: slashApi,
-    });
-
-    const match = resolveSlashHandlerForToken("tok-a");
-    expect(match.kind).toBe("single");
-    if (match.kind !== "single") {
-      throw new Error("expected single match");
-    }
-    expect(match.source).toBe("token");
-    expect(match.accountIds).toEqual(["a1"]);
-    expect(typeof match.handler).toBe("function");
   });
 
-  it("returns ambiguous when same token exists in multiple accounts", () => {
-    deactivateSlashCommands();
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["tok-shared"],
-      registeredCommands: [],
-      api: slashApi,
-    });
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a2"),
-      commandTokens: ["tok-shared"],
-      registeredCommands: [],
-      api: slashApi,
-    });
+  it("routes a token owned by one account", async () => {
+    activate({ accountId: "a1", tokens: ["tok-a"] });
+    activate({ accountId: "a2", tokens: ["tok-b"] });
 
-    const match = resolveSlashHandlerForToken("tok-shared");
-    expect(match.kind).toBe("ambiguous");
-    if (match.kind !== "ambiguous") {
-      throw new Error("expected ambiguous match");
-    }
-    expect(match.source).toBe("token");
-    expect(match.accountIds.toSorted()).toEqual(["a1", "a2"]);
+    const result = await routeSlashRequest({ body: "token=tok-a" });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toBe("a1");
   });
 
-  it("routes by registered team and command when token lookup misses", () => {
-    deactivateSlashCommands();
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["old-token"],
-      registeredCommands: [createRegisteredCommand()],
-      api: slashApi,
-    });
+  it("rejects a token shared by multiple accounts", async () => {
+    activate({ accountId: "a1", tokens: ["tok-shared"] });
+    activate({ accountId: "a2", tokens: ["tok-shared"] });
 
-    const match = resolveSlashHandlerForCommand({
-      teamId: "team-1",
-      command: "/oc_status",
-    });
+    const result = await routeSlashRequest({ body: "token=tok-shared" });
 
-    expect(match.kind).toBe("single");
-    if (match.kind !== "single") {
-      throw new Error("expected single match");
-    }
-    expect(match.source).toBe("command");
-    expect(match.accountIds).toEqual(["a1"]);
-    expect(typeof match.handler).toBe("function");
+    expect(result.statusCode).toBe(409);
+    expect(result.body).toContain("command token is not unique");
+    expect(result.warn).toHaveBeenCalledWith(
+      "mattermost: slash callback matched multiple accounts via token (a1, a2)",
+    );
   });
 
-  it("returns ambiguous when registered team and command match multiple accounts", () => {
-    deactivateSlashCommands();
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a1"),
-      commandTokens: ["tok-a"],
-      registeredCommands: [createRegisteredCommand({ id: "cmd-a" })],
-      api: slashApi,
+  it("routes by registered team and command when token lookup misses", async () => {
+    activate({
+      accountId: "a1",
+      tokens: ["old-token"],
+      commands: [createRegisteredCommand()],
     });
-    activateSlashCommands({
-      account: createResolvedMattermostAccount("a2"),
-      commandTokens: ["tok-b"],
-      registeredCommands: [createRegisteredCommand({ id: "cmd-b" })],
-      api: slashApi,
+    activate({
+      accountId: "a2",
+      tokens: ["other-token"],
+      commands: [createRegisteredCommand({ id: "cmd-2", teamId: "team-2" })],
     });
 
-    const match = resolveSlashHandlerForCommand({
-      teamId: "team-1",
-      command: "/oc_status",
+    const result = await routeSlashRequest({
+      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
     });
 
-    expect(match.kind).toBe("ambiguous");
-    if (match.kind !== "ambiguous") {
-      throw new Error("expected ambiguous match");
-    }
-    expect(match.source).toBe("command");
-    expect(match.accountIds.toSorted()).toEqual(["a1", "a2"]);
+    expect(result.statusCode).toBe(200);
+    expect(result.body).toBe("a1");
+  });
+
+  it("rejects a registered team and command shared by multiple accounts", async () => {
+    activate({
+      accountId: "a1",
+      tokens: ["tok-a"],
+      commands: [createRegisteredCommand({ id: "cmd-a" })],
+    });
+    activate({
+      accountId: "a2",
+      tokens: ["tok-b"],
+      commands: [createRegisteredCommand({ id: "cmd-b" })],
+    });
+
+    const result = await routeSlashRequest({
+      body: "token=rotated&team_id=team-1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+    });
+
+    expect(result.statusCode).toBe(409);
+    expect(result.body).toContain("slash command is not unique");
+    expect(result.warn).toHaveBeenCalledWith(
+      "mattermost: slash callback matched multiple accounts via command (a1, a2)",
+    );
   });
 });

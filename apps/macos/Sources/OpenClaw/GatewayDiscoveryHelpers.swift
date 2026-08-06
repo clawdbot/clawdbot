@@ -14,12 +14,6 @@ enum GatewayDiscoveryHelpers {
     }
 
     static func serviceEndpoint(
-        for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> (host: String, port: Int)?
-    {
-        self.serviceEndpoint(serviceHost: gateway.serviceHost, servicePort: gateway.servicePort)
-    }
-
-    static func serviceEndpoint(
         serviceHost: String?,
         servicePort: Int?) -> (host: String, port: Int)?
     {

@@ -12,11 +12,9 @@ export type { AuthProfileEligibilityReasonCode } from "./auth-profiles/order.js"
 export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 export {
-  externalCliDiscoveryExisting,
   externalCliDiscoveryForConfigStatus,
   externalCliDiscoveryForProviderAuth,
   externalCliDiscoveryForProviders,
-  externalCliDiscoveryNone,
   externalCliDiscoveryScoped,
   type ExternalCliAuthDiscovery,
 } from "./auth-profiles/external-cli-discovery.js";
@@ -38,7 +36,10 @@ export {
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
+  removeAuthProfilesAcrossOwnerStores,
+  removeAuthProfilesWithLock,
   removeProviderAuthProfilesWithLock,
+  resolveSubscriptionAuthModeForProfiles,
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
@@ -48,17 +49,20 @@ export {
   suggestOAuthProfileIdForLegacyDefault,
 } from "./auth-profiles/repair.js";
 export {
-  buildPortableAuthProfileSecretsStoreForAgentCopy,
+  buildPortableAuthProfileStoreForAgentCopy,
   isAuthProfileCredentialPortableForAgentCopy,
   resolveAuthProfilePortability,
   type AuthProfilePortability,
   type AuthProfilePortabilityReason,
 } from "./auth-profiles/portability.js";
 export {
+  clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
+  hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
@@ -69,6 +73,8 @@ export {
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
+  withEnvOnlyAuthProfileStore,
+  withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,
@@ -92,6 +98,9 @@ export {
   markAuthProfileCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+  resolveInlineProviderApiKeyUnusableUntil,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   setAuthProfileFailureHook,

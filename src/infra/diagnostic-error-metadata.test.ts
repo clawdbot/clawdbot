@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   diagnosticErrorCategory,
   diagnosticErrorFailureKind,
+  diagnosticErrorMessage,
   diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "./diagnostic-error-metadata.js";
@@ -20,6 +21,24 @@ describe("diagnostic error metadata", () => {
     expect(diagnosticErrorCategory(namedFailure)).toBe("Error");
     expect(diagnosticErrorCategory("bad")).toBe("string");
     expect(diagnosticErrorCategory(null)).toBe("null");
+  });
+
+  it("normalizes Error and string messages", () => {
+    expect(diagnosticErrorMessage(new Error("  provider failed  "))).toBe("provider failed");
+    expect(diagnosticErrorMessage("  connection closed  ")).toBe("connection closed");
+    expect(diagnosticErrorMessage("   ")).toBeUndefined();
+  });
+
+  it("does not invoke message getters", () => {
+    const errorLike = Object.create(null, {
+      message: {
+        get() {
+          throw new Error("getter must not run");
+        },
+      },
+    });
+
+    expect(diagnosticErrorMessage(errorLike)).toBeUndefined();
   });
 
   it("accepts only own HTTP status data properties as error codes", () => {

@@ -1,5 +1,5 @@
 // Memory Host SDK module implements query expansion behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Query expansion for FTS-only search mode.
@@ -693,7 +693,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
           tokens.push(part);
           if (!useTrigram) {
             for (let i = 0; i < part.length - 1; i++) {
-              tokens.push(part[i] + part[i + 1]);
+              tokens.push(part.slice(i, i + 2));
             }
           }
         } else {
@@ -715,7 +715,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         // Default mode: unigrams + bigrams for phrase matching
         tokens.push(...chars);
         for (let i = 0; i < chars.length - 1; i++) {
-          tokens.push(chars[i] + chars[i + 1]);
+          tokens.push(chars.slice(i, i + 2).join(""));
         }
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {
@@ -773,60 +773,4 @@ export function extractKeywords(
   }
 
   return keywords;
-}
-
-/**
- * Expand a query for FTS search.
- * Returns both the original query and extracted keywords for OR-matching.
- *
- * @param query - User's original query
- * @returns Object with original query and extracted keywords
- */
-export function expandQueryForFts(
-  query: string,
-  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
-): {
-  original: string;
-  keywords: string[];
-  expanded: string;
-} {
-  const original = query.trim();
-  const keywords = extractKeywords(original, opts);
-
-  // Build expanded query: original terms OR extracted keywords
-  // This ensures both exact matches and keyword matches are found
-  const expanded = keywords.length > 0 ? `${original} OR ${keywords.join(" OR ")}` : original;
-
-  return { original, keywords, expanded };
-}
-
-/**
- * Type for an optional LLM-based query expander.
- * Can be provided to enhance keyword extraction with semantic understanding.
- */
-export type LlmQueryExpander = (query: string) => Promise<string[]>;
-
-/**
- * Expand query with optional LLM assistance.
- * Falls back to local extraction if LLM is unavailable or fails.
- */
-export async function expandQueryWithLlm(
-  query: string,
-  llmExpander?: LlmQueryExpander,
-  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
-): Promise<string[]> {
-  // If LLM expander is provided, try it first
-  if (llmExpander) {
-    try {
-      const llmKeywords = await llmExpander(query);
-      if (llmKeywords.length > 0) {
-        return llmKeywords;
-      }
-    } catch {
-      // LLM failed, fall back to local extraction
-    }
-  }
-
-  // Fall back to local keyword extraction
-  return extractKeywords(query, opts);
 }

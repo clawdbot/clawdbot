@@ -65,6 +65,48 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(resourceLoaderInit?.cwd).toBe(taskRepo);
   });
 
+  it("forwards native and routable channel targets into runtime tools", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:slack:direct:U123",
+      tempPaths,
+      attemptOverrides: {
+        chatId: "oc_native_chat",
+        currentChannelId: "D123",
+        currentMessagingTarget: "user:U123",
+        disableTools: false,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
+      | {
+          currentChannelId?: string;
+          currentMessagingTarget?: string;
+          nativeChannelId?: string;
+        }
+      | undefined;
+    expect(toolsCall).toMatchObject({
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      nativeChannelId: "oc_native_chat",
+    });
+  });
+
+  it("skips runtime tool construction when the selected model does not support tools", async () => {
+    hoisted.supportsModelToolsMock.mockReturnValueOnce(false);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:main",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+  });
+
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
     // Sandboxed attempts already remap the workspace; accepting an extra cwd
     // override would make tool roots ambiguous.
@@ -85,5 +127,30 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       }),
     ).rejects.toThrow("cwd override is not supported");
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("runs a managed worktree when sandbox workspace and cwd match", async () => {
+    const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-worktree-"));
+    tempPaths.push(worktree);
+    hoisted.resolveSandboxContextMock.mockResolvedValueOnce({
+      enabled: true,
+      workspaceAccess: "rw",
+      workspaceDir: worktree,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:dashboard:worktree",
+      tempPaths,
+      attemptOverrides: {
+        workspaceDir: worktree,
+        cwd: worktree,
+        disableTools: false,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
+    );
   });
 });

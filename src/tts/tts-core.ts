@@ -1,16 +1,12 @@
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
-import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
@@ -19,25 +15,30 @@ export {
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
+  resolveSpeechProviderApiKey,
   scheduleCleanup,
 } from "./tts-provider-helpers.js";
 
 type SummarizeTextDeps = {
-  completeSimple: typeof completeSimple;
-  getApiKeyForModel: typeof getApiKeyForModel;
-  prepareModelForSimpleCompletion: typeof prepareModelForSimpleCompletion;
-  requireApiKey: typeof requireApiKey;
-  resolveModelAsync: typeof resolveModelAsync;
+  completeWithPreparedSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
+  prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
+  requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
 
-function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
-  return {
-    completeSimple,
-    getApiKeyForModel,
-    prepareModelForSimpleCompletion,
+let defaultSummarizeTextDepsPromise: Promise<SummarizeTextDeps> | undefined;
+
+function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
+  // Speech provider imports should not initialize the LLM stack. Load it only
+  // when synthesis actually needs summarization, then reuse the module bindings.
+  return (defaultSummarizeTextDepsPromise ??= Promise.all([
+    import("../agents/simple-completion-runtime.js"),
+    import("../agents/model-auth.js"),
+  ]).then(([completionRuntime, { requireApiKey }]) => ({
+    completeWithPreparedSimpleCompletionModel:
+      completionRuntime.completeWithPreparedSimpleCompletionModel,
+    prepareSimpleCompletionModel: completionRuntime.prepareSimpleCompletionModel,
     requireApiKey,
-    resolveModelAsync,
-  };
+  })));
 }
 
 type SummarizeResult = {
@@ -87,7 +88,7 @@ export async function summarizeText(
     config: ResolvedTtsConfig;
     timeoutMs: number;
   },
-  deps: SummarizeTextDeps = resolveDefaultSummarizeTextDeps(),
+  deps?: SummarizeTextDeps,
 ): Promise<SummarizeResult> {
   const { text, targetLength, cfg, config, timeoutMs } = params;
   if (targetLength < 100 || targetLength > 10_000) {
@@ -95,16 +96,21 @@ export async function summarizeText(
   }
 
   const startTime = Date.now();
+  const resolvedDeps = deps ?? (await loadDefaultSummarizeTextDeps());
   const { ref } = resolveSummaryModelRef(cfg, config);
-  const resolved = await deps.resolveModelAsync(ref.provider, ref.model, undefined, cfg);
-  if (!resolved.model) {
-    throw new Error(resolved.error ?? `Unknown summary model: ${ref.provider}/${ref.model}`);
+  // Dynamic model discovery precedes the request timeout, matching the established
+  // summarization contract. The timeout below bounds only the completion request.
+  const prepared = await resolvedDeps.prepareSimpleCompletionModel({
+    cfg,
+    provider: ref.provider,
+    modelId: ref.model,
+    useAsyncModelResolution: true,
+  });
+  if ("error" in prepared) {
+    throw new Error(prepared.error);
   }
-  const completionModel = deps.prepareModelForSimpleCompletion({ model: resolved.model, cfg });
-  const apiKey = deps.requireApiKey(
-    await deps.getApiKeyForModel({ model: completionModel, cfg }),
-    ref.provider,
-  );
+  const completionModel = prepared.model;
+  const providerKey = resolvedDeps.requireApiKey(prepared.auth, ref.provider);
 
   try {
     const controller = new AbortController();
@@ -114,9 +120,10 @@ export async function summarizeText(
     try {
       // Keep summarization on the simple-completion path so provider auth,
       // aliases, and timeout behavior match other lightweight model calls.
-      const res = await deps.completeSimple(
-        completionModel,
-        {
+      const res = await resolvedDeps.completeWithPreparedSimpleCompletionModel({
+        model: completionModel,
+        auth: { ...prepared.auth, apiKey: providerKey },
+        context: {
           messages: [
             {
               role: "user",
@@ -129,13 +136,13 @@ export async function summarizeText(
             },
           ],
         },
-        {
-          apiKey,
+        cfg,
+        options: {
           maxTokens: Math.ceil(targetLength / 2),
           temperature: 0.3,
           signal: controller.signal,
         },
-      );
+      });
       const summary = res.content
         .filter(isTextContentBlock)
         .map((block) => block.text.trim())

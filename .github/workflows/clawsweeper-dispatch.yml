@@ -18,18 +18,26 @@ permissions:
   contents: read
 
 concurrency:
-  group: clawsweeper-dispatch-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
+  group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
 
 jobs:
   dispatch:
     runs-on: ubuntu-latest
     if: >-
       ${{
-        github.event_name == 'issue_comment' ||
+        (github.event_name != 'issue_comment' ||
+          (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
           endsWith(github.actor, '[bot]') &&
-          (github.event.action == 'labeled' || github.event.action == 'unlabeled')
+          (github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+          !(
+            github.event_name == 'issues' &&
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'stale' &&
+            contains(github.event.issue.labels.*.name, 'bug') &&
+            (github.actor_id == '257215752' || github.actor_id == '264559031')
+          )
         )
       }}
     env:
@@ -41,10 +49,38 @@ jobs:
         if: ${{ github.event.action == 'labeled' || github.event.action == 'unlabeled' }}
         run: sleep 20
 
+      - name: Debounce main push dispatch
+        if: ${{ github.event_name == 'push' }}
+        run: sleep 45
+
+      - name: Install GitHub API backoff helper
+        run: |
+          cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
+          gh_api_with_retry() {
+            local attempt output status lower_output
+            for attempt in 1 2 3 4 5; do
+              if output="$(gh api "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              status=$?
+              lower_output="${output,,}"
+              if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              echo "::warning::GitHub API throttled ClawSweeper dispatch on attempt ${attempt}; retrying after backoff." >&2
+              sleep $((attempt * attempt * 5))
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+          BASH
+
       - name: Create ClawSweeper dispatch token
         id: token
         if: ${{ env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
@@ -52,10 +88,28 @@ jobs:
           repositories: clawsweeper
           permission-contents: write
 
+      - name: Pre-filter ClawSweeper comment
+        id: comment_filter
+        if: ${{ github.event_name == 'issue_comment' }}
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|autoclose|auto([[:space:]]+|-)?merge)\b' <<< "$COMMENT_BODY"; then
+            echo "is_command=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create target comment token
         id: target_token
-        if: ${{ github.event_name == 'issue_comment' && env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        if: >-
+          ${{
+            github.event_name == 'issue_comment' &&
+            steps.comment_filter.outputs.is_command == 'true' &&
+            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
+          }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
@@ -77,6 +131,7 @@ jobs:
             echo "::notice::Skipping GitHub activity dispatch because no ClawSweeper app token is configured."
             exit 0
           fi
+          . "$RUNNER_TEMP/github-api-backoff.sh"
           activity="$(jq -c \
             --arg target_repo "$TARGET_REPO" \
             --arg event_name "$SOURCE_EVENT" \
@@ -143,7 +198,7 @@ jobs:
             ' "$GITHUB_EVENT_PATH")"
           payload="$(jq -nc --argjson activity "$activity" \
             '{event_type:"github_activity",client_payload:{activity:$activity}}')"
-          if gh api repos/openclaw/clawsweeper/dispatches \
+          if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then
             echo "Dispatched GitHub activity to ClawSweeper."
@@ -165,6 +220,7 @@ jobs:
             echo "::notice::Skipping ClawSweeper dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
             exit 0
           fi
+          . "$RUNNER_TEMP/github-api-backoff.sh"
           payload="$(jq -nc \
             --arg target_repo "$TARGET_REPO" \
             --argjson item_number "$ITEM_NUMBER" \
@@ -173,7 +229,7 @@ jobs:
             --arg source_action "$SOURCE_ACTION" \
             --argjson supersedes_in_progress "$SUPERSEDES_IN_PROGRESS" \
             '{event_type:"clawsweeper_item",client_payload:{target_repo:$target_repo,item_number:$item_number,item_kind:$item_kind,source_event:$source_event,source_action:$source_action,supersedes_in_progress:$supersedes_in_progress}}')"
-          if gh api repos/openclaw/clawsweeper/dispatches \
+          if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then
             echo "Dispatched ClawSweeper review."
@@ -182,7 +238,11 @@ jobs:
           fi
 
       - name: Acknowledge and dispatch ClawSweeper comment
-        if: ${{ github.event_name == 'issue_comment' }}
+        if: >-
+          ${{
+            github.event_name == 'issue_comment' &&
+            steps.comment_filter.outputs.is_command == 'true'
+          }}
         env:
           DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_TOKEN: ${{ steps.target_token.outputs.token }}
@@ -198,15 +258,12 @@ jobs:
             echo "::notice::Skipping ClawSweeper comment dispatch because no ClawSweeper app token is configured."
             exit 0
           fi
+          . "$RUNNER_TEMP/github-api-backoff.sh"
           body_file="$RUNNER_TEMP/clawsweeper-comment-body.txt"
           printf '%s\n' "$COMMENT_BODY" > "$body_file"
-          if ! grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|automerge|autoclose)\b' "$body_file"; then
-            echo "No ClawSweeper command found in comment."
-            exit 0
-          fi
           if [ -n "$TARGET_TOKEN" ]; then
             err="$(mktemp)"
-            if GH_TOKEN="$TARGET_TOKEN" gh api -X POST \
+            if GH_TOKEN="$TARGET_TOKEN" gh_api_with_retry -X POST \
               -H "Accept: application/vnd.github+json" \
               "repos/$TARGET_REPO/issues/comments/$COMMENT_ID/reactions" \
               -f content="eyes" 2>"$err" >/dev/null; then
@@ -233,7 +290,7 @@ jobs:
                   "Command router queued. I will update this comment with the next step.")"
                 status_payload="$(jq -nc --arg body "$status_body" '{body:$body}')"
                 status_err="$(mktemp)"
-                if status_response="$(GH_TOKEN="$TARGET_TOKEN" gh api \
+                if status_response="$(GH_TOKEN="$TARGET_TOKEN" gh_api_with_retry \
                   "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments" \
                   --method POST \
                   --input - <<< "$status_payload" 2>"$status_err")"; then
@@ -254,7 +311,7 @@ jobs:
             --arg source_event "issue_comment" \
             --arg source_action "$SOURCE_ACTION" \
             '{event_type:"clawsweeper_comment",client_payload:({target_repo:$target_repo,item_number:$item_number,comment_id:$comment_id,source_event:$source_event,source_action:$source_action,max_comments:"1"} + (if $status_comment_id != "" then {status_comment_id:($status_comment_id|tonumber)} else {} end))}')"
-          if GH_TOKEN="$DISPATCH_TOKEN" gh api repos/openclaw/clawsweeper/dispatches \
+          if GH_TOKEN="$DISPATCH_TOKEN" gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then
             echo "Dispatched ClawSweeper comment router."
@@ -276,6 +333,7 @@ jobs:
             echo "::notice::Skipping ClawSweeper commit dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
             exit 0
           fi
+          . "$RUNNER_TEMP/github-api-backoff.sh"
           case "$CREATE_CHECKS" in
             true|TRUE|1|yes|YES|on|ON) create_checks=true ;;
             *) create_checks=false ;;
@@ -287,7 +345,7 @@ jobs:
             --arg ref "$SOURCE_REF" \
             --argjson create_checks "$create_checks" \
             '{event_type:"clawsweeper_commit_review",client_payload:{target_repo:$target_repo,before_sha:$before_sha,after_sha:$after_sha,ref:$ref,enabled:true,create_checks:$create_checks}}')"
-          if gh api repos/openclaw/clawsweeper/dispatches \
+          if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then
             echo "Dispatched ClawSweeper commit review."

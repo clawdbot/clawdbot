@@ -58,11 +58,11 @@ vi.mock("../infra/retry.js", async () => {
   };
 });
 
-let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
+let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ summarizeWithFallback } = await import("./compaction.js"));
+  ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
 });
 
 describe("summarizeChunks partial summary preservation (#82952)", () => {
@@ -116,7 +116,7 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     );
   });
 
-  it("re-throws abort errors instead of returning partial summary", async () => {
+  it("re-throws abort errors when the caller signal is already aborted", async () => {
     const abortErr = new Error("aborted");
     abortErr.name = "AbortError";
 
@@ -124,19 +124,50 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       .mockResolvedValueOnce("Summary of chunk 1")
       .mockRejectedValue(abortErr);
 
-    const result = await callSummarize();
+    const controller = new AbortController();
+    controller.abort();
 
-    // Abort errors represent caller intent, so partial recovery must not mask
-    // cancellation as successful summarization.
-    expect(result).not.toBe("Summary of chunk 1");
-    expect(result).toContain("Context contained");
+    await expect(
+      summarizeWithFallback({
+        messages: twoChunkMessages,
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: controller.signal,
+        reserveTokens: 1000,
+        maxChunkTokens: 150,
+        contextWindow: 200_000,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // Caller abort is terminal — partial recovery must not mask cancellation.
     expect(compactionMocks.logWarn).not.toHaveBeenCalledWith(
       "chunk summarization failed after retries; partial summary available",
       expect.anything(),
     );
   });
 
-  it("re-throws timeout errors instead of returning partial summary", async () => {
+  it("returns partial summary when a later chunk fails with a provider-side AbortError", async () => {
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+
+    compactionMocks.generateSummary
+      .mockResolvedValueOnce("Summary of chunk 1")
+      .mockRejectedValue(providerAbortErr);
+
+    const result = await callSummarize();
+
+    // Provider-side disconnects are not caller cancellation; preserve completed work.
+    expect(result).toContain("Summary of chunk 1");
+    expect(result).toContain("[Partial summary:");
+    expect(result).toMatch(/chunks 1-1 of 2 were summarized/);
+    expect(compactionMocks.logWarn).toHaveBeenCalledWith(
+      "chunk summarization failed after retries; partial summary available",
+      expect.objectContaining({ err: providerAbortErr }),
+    );
+  });
+
+  it("throws CompactionError when timeout occurs and no partial summary is available", async () => {
     const timeoutErr = new Error("request timed out");
     timeoutErr.name = "TimeoutError";
 
@@ -144,10 +175,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       .mockResolvedValueOnce("Summary of chunk 1")
       .mockRejectedValue(timeoutErr);
 
-    const result = await callSummarize();
-
-    expect(result).not.toBe("Summary of chunk 1");
-    expect(result).toContain("Context contained");
+    await expect(callSummarize()).rejects.toThrow("All summarization attempts failed");
+    // Timeout errors propagate immediately without logging partial summary
     expect(compactionMocks.logWarn).not.toHaveBeenCalledWith(
       "chunk summarization failed after retries; partial summary available",
       expect.anything(),
@@ -165,15 +194,12 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     expect(compactionMocks.generateSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to default when the first chunk fails (no partial to recover)", async () => {
+  it("throws CompactionError when the first chunk fails (no partial to recover)", async () => {
     compactionMocks.generateSummary.mockRejectedValue(new Error("network error"));
 
-    const result = await callSummarize();
-
-    // With no successful chunk, summarizeChunks rethrows into
-    // summarizeWithFallback's outer catch -> final fallback path.
-    expect(result).toContain("Context contained");
-    expect(result).not.toBe("Summary of chunk 1");
+    await expect(callSummarize()).rejects.toThrow(
+      "All summarization attempts failed for 2 messages",
+    );
   });
 
   it("tries oversized-message retry before falling back to partial summary", async () => {

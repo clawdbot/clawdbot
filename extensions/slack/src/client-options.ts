@@ -1,7 +1,26 @@
 // Slack plugin module implements client options behavior.
-import type { Agent } from "node:http";
+import { createRequire } from "node:module";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
-import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  addActiveManagedProxyTlsOptions,
+  resolveFetch,
+  resolveEnvHttpProxyAgentOptions,
+} from "openclaw/plugin-sdk/fetch-runtime";
+import { isDebugProxyGlobalFetchPatchInstalled } from "openclaw/plugin-sdk/proxy-capture";
+import type { EnvHttpProxyAgent } from "undici";
+
+type SlackUndiciRuntime = Pick<typeof import("undici"), "EnvHttpProxyAgent" | "fetch">;
+type SlackProxyDispatcher = EnvHttpProxyAgent;
+
+const requireFromSlackSocketMode = (() => {
+  const require = createRequire(import.meta.url);
+  return createRequire(require.resolve("@slack/socket-mode/package.json"));
+})();
+
+function loadSlackUndiciRuntime(): SlackUndiciRuntime {
+  return requireFromSlackSocketMode("undici") as SlackUndiciRuntime;
+}
+export type SlackLookupClientOptions = Pick<WebClientOptions, "fetch" | "slackApiUrl" | "timeout">;
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
@@ -15,47 +34,106 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
-/**
- * Build an HTTPS proxy agent from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
- * for use as the `agent` option in Slack WebClient and Socket Mode connections.
- *
- * When set, this agent is forwarded through @slack/bolt -> @slack/socket-mode ->
- * SlackWebSocket as the `httpAgent`, which the `ws` library uses to tunnel the
- * WebSocket upgrade request through the proxy. This fixes Socket Mode in
- * environments where outbound traffic must go through an HTTP CONNECT proxy.
- *
- * Respects `NO_PROXY` / `no_proxy`; if `*.slack.com` (or a matching pattern)
- * appears in the exclusion list, returns `undefined` so the connection is direct.
- *
- * Returns `undefined` when no proxy env var is configured or when Slack hosts
- * are excluded by `NO_PROXY`.
- */
-function resolveSlackProxyAgent(): Agent | undefined {
+const SLACK_READ_TIMEOUT_MS = 30_000;
+
+const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
+  retries: 0,
+};
+
+/** Build the dispatcher shared by Slack Web API fetches and Socket Mode. */
+export function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined {
+  const options = resolveEnvHttpProxyAgentOptions();
+  if (!options) {
+    return undefined;
+  }
   try {
-    return createNodeProxyAgent({
-      mode: "env",
-      targetUrl: "https://slack.com/",
-      protocol: "https",
-    });
+    const { EnvHttpProxyAgent } = loadSlackUndiciRuntime();
+    return new EnvHttpProxyAgent(addActiveManagedProxyTlsOptions(options));
   } catch {
-    // Malformed proxy URL; degrade gracefully to direct connection.
+    // Malformed proxy URL; degrade gracefully to direct connections.
     return undefined;
   }
 }
 
-export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_DEFAULT_RETRY_OPTIONS,
-  };
+function buildSlackFetch(
+  dispatcher?: SlackProxyDispatcher,
+): NonNullable<WebClientOptions["fetch"]> | undefined {
+  if (!dispatcher || isDebugProxyGlobalFetchPatchInstalled()) {
+    // Debug capture patches global fetch after installing its proxy-aware dispatcher.
+    // A package-owned fetch would bypass capture whenever ambient proxy env is present.
+    return resolveFetch() as NonNullable<WebClientOptions["fetch"]> | undefined;
+  }
+  const { fetch: slackFetch } = loadSlackUndiciRuntime();
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    // Slack Web API invokes this hook with URL/string inputs. The cast only bridges
+    // duplicate Undici Request types while the package-owned fetch and dispatcher stay paired.
+    const slackInput = input as Parameters<typeof slackFetch>[0];
+    const slackInit = { ...init, dispatcher } as Parameters<typeof slackFetch>[1];
+    return slackFetch(slackInput, slackInit);
+  }) as NonNullable<WebClientOptions["fetch"]>;
 }
 
-export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
-    maxRequestConcurrency: options.maxRequestConcurrency ?? 1,
-  };
+function resolveSlackApiUrlFromEnv(): string | undefined {
+  return process.env.SLACK_API_URL?.trim() || undefined;
+}
+
+function applySlackApiUrlAndProxyOptions(
+  options: WebClientOptions,
+  dispatcher?: SlackProxyDispatcher,
+): void {
+  const slackApiUrl = options.slackApiUrl ?? resolveSlackApiUrlFromEnv();
+  if (dispatcher && !options.fetch) {
+    options.fetch = buildSlackFetch(dispatcher);
+  }
+  if (slackApiUrl !== undefined) {
+    options.slackApiUrl = slackApiUrl;
+  } else {
+    delete options.slackApiUrl;
+  }
+}
+
+export function resolveSlackWebClientOptions(
+  options: WebClientOptions = {},
+  dispatcher = resolveSlackProxyDispatcher(),
+): WebClientOptions {
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  resolved.fetch ??= buildSlackFetch(dispatcher);
+  resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
+  return resolved;
+}
+
+export function resolveSlackReadClientOptions(
+  options: WebClientOptions = {},
+  dispatcher = resolveSlackProxyDispatcher(),
+): WebClientOptions {
+  // The Slack SDK applies timeout per retry attempt. Keep its established read retry
+  // policy, while ensuring any one stalled request eventually releases the caller.
+  const resolved = resolveSlackWebClientOptions(options, dispatcher);
+  resolved.timeout ??= SLACK_READ_TIMEOUT_MS;
+  return resolved;
+}
+
+export function resolveSlackWriteClientOptions(
+  options: WebClientOptions = {},
+  dispatcher = resolveSlackProxyDispatcher(),
+): WebClientOptions {
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
+  return resolved;
+}
+
+export function resolveSlackLookupClientOptions(
+  options: SlackLookupClientOptions = {},
+  dispatcher = resolveSlackProxyDispatcher(),
+): WebClientOptions {
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved, dispatcher);
+  // Slack otherwise sleeps through the full Retry-After window after receiving 429,
+  // outside the Axios request timeout.
+  resolved.rejectRateLimitedCalls = true;
+  resolved.retryConfig = SLACK_LOOKUP_RETRY_OPTIONS;
+  resolved.timeout ??= SLACK_READ_TIMEOUT_MS;
+  return resolved;
 }

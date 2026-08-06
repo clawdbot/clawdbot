@@ -9,7 +9,7 @@ const DEFAULT_TAIL_LINE_LIMIT = 160;
 const RELOAD_NEEDLE = "config change detected; evaluating reload";
 const RESTART_NEEDLE = "config change requires gateway restart";
 
-export function inspectConfigReloadLogLine(line) {
+function inspectConfigReloadLogLine(line) {
   return {
     reload: line.includes(RELOAD_NEEDLE),
     restart: line.includes(RESTART_NEEDLE),

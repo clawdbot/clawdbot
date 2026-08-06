@@ -1,6 +1,8 @@
 /**
  * Tests for command gateway methods and command registry responses.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.types.js";
 
@@ -9,6 +11,7 @@ const mockSkillCommands = [
     skillName: "code-review",
     name: "code_review",
     description: "Run code review",
+    modelVisible: true,
     acceptsArgs: true,
   },
 ];
@@ -38,6 +41,15 @@ const mockChatCommands: ChatCommandDefinition[] = [
     textAliases: ["/help"],
     scope: "both",
     category: "session",
+  },
+  {
+    key: "login",
+    nativeName: "login",
+    nativeProviders: ["telegram"],
+    description: "Pair Codex login",
+    textAliases: ["/login"],
+    scope: "both",
+    category: "management",
   },
   {
     key: "commands",
@@ -218,7 +230,10 @@ function callHandler(params: Record<string, unknown> = {}) {
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
     result = { ok, payload, error };
   };
-  void commandsHandlers["commands.list"]({
+  void expectDefined(
+    commandsHandlers["commands.list"],
+    'commandsHandlers["commands.list"] test invariant',
+  )({
     params,
     respond,
     req: {} as never,
@@ -283,10 +298,10 @@ function providerFilteredPluginRegistrations(params: { nativeName?: string } = {
       },
     },
     {
-      pluginId: "phone-control",
+      pluginId: "demo-control",
       command: {
-        name: "phone",
-        description: "Control paired phones",
+        name: "demo",
+        description: "Demo command",
         ...(params.nativeName ? { nativeNames: { discord: params.nativeName } } : {}),
         channels: ["discord"],
       },
@@ -321,7 +336,7 @@ describe("commands.list handler", () => {
     expect(model.acceptsArgs).toBe(true);
     const args = model.args ?? [];
     expect(args).toHaveLength(1);
-    expect(args[0].choices).toEqual([
+    expect(expectDefined(args[0], "args[0] test invariant").choices).toEqual([
       { value: "gpt-5.4", label: "GPT-5.4" },
       { value: "sonnet-4.6", label: "sonnet-4.6" },
     ]);
@@ -347,8 +362,8 @@ describe("commands.list handler", () => {
     try {
       const debug = requireCommand(listCommands(), "debug_prompt");
       const args = debug.args as Array<Record<string, unknown>>;
-      expect(args[0].dynamic).toBe(true);
-      expect(args[0].choices).toBeUndefined();
+      expect(expectDefined(args[0], "args[0] test invariant").dynamic).toBe(true);
+      expect(expectDefined(args[0], "args[0] test invariant").choices).toBeUndefined();
     } finally {
       debugCmd.acceptsArgs = saved;
     }
@@ -358,6 +373,7 @@ describe("commands.list handler", () => {
     const commands = listCommands();
     const skill = commands.find((c) => c.name === "code_review");
     expect(skill?.source).toBe("skill");
+    expect(skill?.skillModelVisible).toBe(true);
     expect(skill?.category).toBe("tools");
   });
 
@@ -388,6 +404,22 @@ describe("commands.list handler", () => {
     const commands = listCommands({ provider: "discord" });
     expect(requireCommand(commands, "set_model").name).toBe("set_model");
     expect(commands.find((c) => c.name === "model")).toBeUndefined();
+  });
+
+  it("limits provider-specific native commands while keeping login text-visible", () => {
+    expect(listCommands({ provider: "discord" }).find((c) => c.name === "login")).toBeUndefined();
+    expect(
+      listCommands({ provider: "slack", scope: "native" }).find((c) => c.name === "login"),
+    ).toBeUndefined();
+    expect(requireCommand(listCommands({ provider: "telegram" }), "login").nativeName).toBe(
+      "login",
+    );
+    expect(requireCommand(listCommands({ provider: "discord", scope: "text" }), "login")).toEqual(
+      expect.objectContaining({
+        name: "login",
+        textAliases: ["/login"],
+      }),
+    );
   });
 
   it("normalizes mixed-case provider", () => {
@@ -434,34 +466,34 @@ describe("commands.list handler", () => {
   it("reads plugin commands from the gateway registry before the global command table", () => {
     setGatewayRegistry([
       {
-        pluginId: "phone-control",
+        pluginId: "demo-control",
         command: {
-          name: "  phone  ",
-          description: "  Control paired phones  ",
+          name: "  demo  ",
+          description: "  Demo command  ",
           acceptsArgs: true,
         },
       },
     ]);
 
     const commands = listCommands();
-    const phone = commands.find((c) => c.source === "plugin");
+    const demo = commands.find((c) => c.source === "plugin");
 
-    expect(phone?.name).toBe("phone");
-    expect(phone?.description).toBe("Control paired phones");
-    expect(phone?.textAliases).toEqual(["/phone"]);
-    expect(phone?.acceptsArgs).toBe(true);
+    expect(demo?.name).toBe("demo");
+    expect(demo?.description).toBe("Demo command");
+    expect(demo?.textAliases).toEqual(["/demo"]);
+    expect(demo?.acceptsArgs).toBe(true);
     expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
   });
 
   it("keeps provider-filtered native plugin names paired with their text aliases", () => {
-    setGatewayRegistry(providerFilteredPluginRegistrations({ nativeName: "discord_phone" }));
+    setGatewayRegistry(providerFilteredPluginRegistrations({ nativeName: "discord_demo" }));
 
     const commands = listCommands({ provider: "discord" });
     const plugin = pluginCommand({ provider: "discord" });
 
-    expect(plugin?.name).toBe("discord_phone");
-    expect(plugin?.nativeName).toBe("discord_phone");
-    expect(plugin?.textAliases).toEqual(["/phone"]);
+    expect(plugin?.name).toBe("discord_demo");
+    expect(plugin?.nativeName).toBe("discord_demo");
+    expect(plugin?.textAliases).toEqual(["/demo"]);
     expect(
       commands.find((c) => c.source === "plugin" && c.name === "android_only"),
     ).toBeUndefined();
@@ -475,7 +507,7 @@ describe("commands.list handler", () => {
     expect(
       commands.find((c) => c.source === "plugin" && c.name === "android_only"),
     ).toBeUndefined();
-    expect(commands.find((c) => c.source === "plugin")?.textAliases).toEqual(["/phone"]);
+    expect(commands.find((c) => c.source === "plugin")?.textAliases).toEqual(["/demo"]);
   });
 
   it("returns provider-specific plugin command names", () => {
@@ -492,7 +524,8 @@ describe("commands.list handler", () => {
     const originalCommands = [...mockChatCommands];
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
-    const longDescription = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH + 50);
+    const descriptionPrefix = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1);
+    const longDescription = `${descriptionPrefix}😀tail`;
     const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
       name: `${longToken}-${argIndex}`,
       description: longDescription,
@@ -524,14 +557,18 @@ describe("commands.list handler", () => {
 
       const commands = listCommands();
       expect(commands).toHaveLength(COMMAND_LIST_MAX_ITEMS);
-      const first = commands[0];
+      const first = expectDefined(commands[0], "commands[0] test invariant");
       expect(first.name.length).toBeLessThanOrEqual(COMMAND_NAME_MAX_LENGTH);
       expect((first.description as string).length).toBeLessThanOrEqual(
         COMMAND_DESCRIPTION_MAX_LENGTH,
       );
+      expect(first.description).toBe(descriptionPrefix);
       expect((first.textAliases as unknown[]).length).toBeLessThanOrEqual(COMMAND_ALIAS_MAX_ITEMS);
       expect(first.args as unknown[]).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
-      const firstArg = (first.args as Array<Record<string, unknown>>)[0];
+      const firstArg = expectDefined(
+        (first.args as Array<Record<string, unknown>>)[0],
+        "(first.args as Array<Record<string, unknown>>)[0] test invariant",
+      );
       expect(firstArg.choices as unknown[]).toHaveLength(COMMAND_ARG_CHOICES_MAX_ITEMS);
     } finally {
       mockChatCommands.length = 0;

@@ -35,7 +35,7 @@ import {
  * present. Preserves the historical 5-minute guard for unconfigured
  * deployments.
  */
-export const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
+const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
 
 interface AgentsDefaultsLike {
   timeoutSeconds?: unknown;

@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ModalInputSummary } from "./monitor/events/modal-input-summary.js";
 
-export type SlackInteractiveHandlerResult = {
+type SlackInteractiveHandlerResult = {
   handled?: boolean;
   systemEvent?: {
     summary?: string;
@@ -103,10 +103,20 @@ type SlackInteractiveDispatchContext = Omit<
 export async function dispatchSlackPluginInteractiveHandler(params: {
   data: string;
   interactionId: string;
+  channelType?: "im" | "mpim" | "channel" | "group";
   ctx: SlackInteractiveDispatchContext;
   respond: SlackInteractiveHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;
 }) {
+  const senderId = params.ctx.senderId?.trim();
+  const baseConversationId =
+    params.channelType === "im"
+      ? senderId
+        ? `user:${senderId}`
+        : ""
+      : params.ctx.conversationId.trim();
+  const threadId = params.ctx.threadId?.trim() || undefined;
+
   return await dispatchPluginInteractiveHandler<SlackInteractiveHandlerRegistration>({
     channel: "slack",
     data: params.data,
@@ -124,14 +134,20 @@ export async function dispatchSlackPluginInteractiveHandler(params: {
         },
         respond: params.respond,
         ...createInteractiveConversationBindingHelpers({
-          registration,
+          // The shared helpers fail closed without owner authority; never expose it to unauthenticated actions.
+          registration:
+            params.ctx.auth.isAuthorizedSender && baseConversationId
+              ? registration
+              : { ...registration, pluginRoot: undefined },
           senderId: params.ctx.senderId,
           conversation: {
             channel: "slack",
             accountId: params.ctx.accountId,
-            conversationId: params.ctx.conversationId,
-            parentConversationId: params.ctx.parentConversationId,
-            threadId: params.ctx.threadId,
+            conversationId: threadId ?? baseConversationId,
+            parentConversationId: threadId
+              ? (params.ctx.parentConversationId ?? baseConversationId)
+              : params.ctx.parentConversationId,
+            threadId,
           },
         }),
       }),

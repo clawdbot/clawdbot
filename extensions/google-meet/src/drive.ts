@@ -1,3 +1,4 @@
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 // Google Meet plugin module implements drive behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
@@ -5,6 +6,7 @@ import { googleApiError } from "./google-api-errors.js";
 const GOOGLE_DRIVE_API_BASE_URL = "https://www.googleapis.com/drive/v3";
 const GOOGLE_DRIVE_API_HOST = "www.googleapis.com";
 const GOOGLE_DRIVE_MEET_SCOPE = "https://www.googleapis.com/auth/drive.meet.readonly";
+const GOOGLE_DRIVE_REQUEST_TIMEOUT_MS = 30_000;
 const TEXT_PLAIN_MIME = "text/plain";
 
 function appendQuery(url: string, query: Record<string, string | undefined>) {
@@ -55,18 +57,17 @@ export async function exportGoogleDriveDocumentText(params: {
     },
     policy: { allowedHostnames: [GOOGLE_DRIVE_API_HOST] },
     auditContext: "google-meet.drive.files.export",
+    timeoutMs: GOOGLE_DRIVE_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Drive files.export",
         scopes: [GOOGLE_DRIVE_MEET_SCOPE],
       });
     }
-    return await response.text();
+    return await readProviderTextResponse(response, "Google Drive files.export");
   } finally {
     await release();
   }

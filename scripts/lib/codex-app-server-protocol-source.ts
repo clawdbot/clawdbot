@@ -2,7 +2,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { resolvePnpmRunner } from "../pnpm-runner.mjs";
+import { stageCodexAppServerProtocolArtifacts } from "./codex-app-server-protocol-artifacts.js";
 
 const PROTOCOL_SCHEMA_RELATIVE_PATH = "codex-rs/app-server-protocol/schema";
 const DEFAULT_PROTOCOL_GENERATION_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
@@ -18,7 +20,11 @@ export const selectedCodexAppServerJsonSchemas = [
   "v2/TurnStartResponse.json",
 ] as const;
 
-export type GeneratedCodexAppServerProtocolSource = {
+export const codexAppServerSharedDefinitionsSchema = "v2/CodexAppServerProtocolDefinitions.json";
+
+const localDefinitionRefPrefix = "#/definitions/";
+
+type GeneratedCodexAppServerProtocolSource = {
   root: string;
   codexRepo: string;
   typescriptRoot: string;
@@ -42,18 +48,14 @@ type ResolvePnpmCommandOptions = {
   platform?: NodeJS.Platform;
 };
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
-}
-
 export function resolveCodexProtocolPnpmCommand(
   args: string[],
   options: ResolvePnpmCommandOptions = {},
 ): PnpmCommand {
   const env = options.env ?? process.env;
   const command = resolvePnpmRunner({
-    comSpec: options.comSpec ?? resolveEnvValue(env, "ComSpec"),
+    comSpec: options.comSpec,
+    env,
     npmExecPath: options.npmExecPath ?? env.npm_execpath,
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,
@@ -162,6 +164,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   repoRoot = process.cwd(),
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
+  await validateCodexProtocolSourceVersion({ codexRepo, repoRoot });
   const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
   const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
@@ -174,8 +177,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   try {
     await assertCodexProtocolGenerationHeadroom({ codexRepo, repoRoot });
     runCargoProtocolGenerator(codexRepo, buildCodexProtocolExportArgs(manifestPath, generatedRoot));
-    await splitGeneratedProtocolOutput(generatedRoot, { jsonRoot, typescriptRoot });
-    await rewriteTypeScriptImports(typescriptRoot);
+    await stageCodexAppServerProtocolArtifacts(generatedRoot, { jsonRoot, typescriptRoot });
     formatGeneratedTypeScript(repoRoot, typescriptRoot);
   } catch (error) {
     await cleanup();
@@ -189,6 +191,41 @@ export async function generateExperimentalCodexAppServerProtocolSource(
     jsonRoot,
     cleanup,
   };
+}
+
+export function readCargoWorkspacePackageVersion(manifest: string): string | undefined {
+  const header = /^\s*\[workspace\.package\]\s*(?:#.*)?$/m.exec(manifest);
+  if (!header) {
+    return undefined;
+  }
+  const remainder = manifest.slice(header.index + header[0].length);
+  const nextSection = /^\s*\[/m.exec(remainder);
+  const workspacePackage = remainder.slice(0, nextSection?.index ?? remainder.length);
+  return /^\s*version\s*=\s*"([^"]+)"\s*(?:#.*)?$/m.exec(workspacePackage)?.[1];
+}
+
+export async function validateCodexProtocolSourceVersion(params: {
+  codexRepo: string;
+  repoRoot: string;
+}): Promise<void> {
+  const packageManifest = JSON.parse(
+    await fs.readFile(path.join(params.repoRoot, "extensions/codex/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const expectedVersion = packageManifest.dependencies?.["@openai/codex"];
+  if (typeof expectedVersion !== "string" || expectedVersion.length === 0) {
+    throw new Error("extensions/codex/package.json must pin @openai/codex to an exact version");
+  }
+
+  const cargoManifest = await fs.readFile(
+    path.join(params.codexRepo, "codex-rs/Cargo.toml"),
+    "utf8",
+  );
+  const sourceVersion = readCargoWorkspacePackageVersion(cargoManifest);
+  if (sourceVersion !== expectedVersion) {
+    throw new Error(
+      `Codex protocol source version ${sourceVersion ?? "<unknown>"} does not match @openai/codex ${expectedVersion}. Check out rust-v${expectedVersion} in ${params.codexRepo}.`,
+    );
+  }
 }
 
 async function collectCodexRepoCandidates(repoRoot: string): Promise<string[]> {
@@ -214,7 +251,7 @@ async function resolvePrimaryWorktreeSiblingCodex(repoRoot: string): Promise<str
     return undefined;
   }
 
-  const gitDir = path.resolve(repoRoot, match[1].trim());
+  const gitDir = path.resolve(repoRoot, expectDefined(match[1], "gitdir target").trim());
   const worktreeMarker = `${path.sep}.git${path.sep}worktrees${path.sep}`;
   const markerIndex = gitDir.indexOf(worktreeMarker);
   if (markerIndex < 0) {
@@ -284,52 +321,14 @@ async function resolveExistingStatfsPath(targetPath: string): Promise<string> {
   }
 }
 
-async function splitGeneratedProtocolOutput(
-  sourceRoot: string,
-  roots: { jsonRoot: string; typescriptRoot: string },
-): Promise<void> {
-  await copyGeneratedProtocolFiles(sourceRoot, sourceRoot, roots);
-}
-
-async function copyGeneratedProtocolFiles(
-  sourceRoot: string,
-  currentRoot: string,
-  roots: { jsonRoot: string; typescriptRoot: string },
-): Promise<void> {
-  const entries = await fs.readdir(currentRoot, { withFileTypes: true });
-  await Promise.all(
-    entries.map(async (entry) => {
-      const sourcePath = path.join(currentRoot, entry.name);
-      if (entry.isDirectory()) {
-        await copyGeneratedProtocolFiles(sourceRoot, sourcePath, roots);
-        return;
-      }
-      if (!entry.isFile()) {
-        return;
-      }
-
-      const relativePath = path.relative(sourceRoot, sourcePath);
-      const targetRoot = entry.name.endsWith(".ts")
-        ? roots.typescriptRoot
-        : entry.name.endsWith(".json")
-          ? roots.jsonRoot
-          : null;
-      if (targetRoot === null) {
-        return;
-      }
-
-      const targetPath = path.join(targetRoot, relativePath);
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.copyFile(sourcePath, targetPath);
-    }),
-  );
-}
-
 function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
   const result = spawnSync("cargo", args, {
     cwd: codexRepo,
     stdio: "inherit",
   });
+  if (result.error) {
+    throw new Error(`Failed to start cargo: ${result.error.message}`, { cause: result.error });
+  }
   if (result.status !== 0) {
     throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);
   }
@@ -350,6 +349,11 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
     stdio: "inherit",
     windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
+  if (result.error) {
+    throw new Error(`Failed to start protocol formatter: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
   if (result.status !== 0) {
     throw new Error(
       `pnpm exec oxfmt --write --threads=1 ${root} failed with exit code ${
@@ -359,27 +363,246 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
   }
 }
 
-export async function rewriteTypeScriptImports(root: string): Promise<void> {
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  await Promise.all(
-    entries.map(async (entry) => {
-      const fullPath = path.join(root, entry.name);
-      if (entry.isDirectory()) {
-        await rewriteTypeScriptImports(fullPath);
-        return;
+// Sort typed-object arrays for schema keywords whose item order does not affect
+// payload validity; preserve order everywhere else, especially prefixItems.
+const typeSortedSchemaArrayKeys = new Set(["anyOf", "enum", "oneOf", "required"]);
+
+export function canonicalizeCodexAppServerProtocolJson(
+  value: unknown,
+  parentKey?: string,
+): unknown {
+  if (Array.isArray(value)) {
+    const items = value.map((item) => canonicalizeCodexAppServerProtocolJson(item));
+    return parentKey !== undefined && typeSortedSchemaArrayKeys.has(parentKey)
+      ? sortCodexProtocolJsonArrayByType(items)
+      : items;
+  }
+
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const sorted: Record<string, unknown> = {};
+  const entries = Object.entries(value)
+    .map(([key, child]) => [key, canonicalizeCodexAppServerProtocolJson(child, key)] as const)
+    .toSorted(([left], [right]) => {
+      if (left < right) {
+        return -1;
       }
-      if (!entry.isFile() || !entry.name.endsWith(".ts")) {
-        return;
+      if (left > right) {
+        return 1;
       }
-      const text = await fs.readFile(fullPath, "utf8");
-      await fs.writeFile(fullPath, normalizeGeneratedTypeScript(text));
+      return 0;
+    });
+  for (const [key, child] of entries) {
+    sorted[key] = child;
+  }
+  return sorted;
+}
+
+export function normalizeCodexAppServerProtocolJsonText(text: string): string {
+  return JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)));
+}
+
+export function formatCodexAppServerProtocolJsonText(text: string): string {
+  return `${JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)), null, 2)}\n`;
+}
+
+/**
+ * Factors definitions shared by the selected Codex schemas into one generated
+ * document. Each compact schema remains standard JSON Schema by referencing
+ * that sibling document; consumers can expand it back to the upstream shape.
+ */
+export function compactCodexAppServerProtocolJsonSchemas(
+  schemas: ReadonlyMap<string, unknown>,
+): Map<string, unknown> {
+  const sharedDefinitions: Record<string, unknown> = {};
+  const compacted = new Map<string, unknown>();
+
+  for (const schemaPath of selectedCodexAppServerJsonSchemas) {
+    const schema = schemas.get(schemaPath);
+    if (!isPlainObject(schema)) {
+      throw new Error(`Codex app-server schema ${schemaPath} must be a JSON object`);
+    }
+    const definitions = schema.definitions;
+    if (definitions !== undefined && !isPlainObject(definitions)) {
+      throw new Error(`Codex app-server schema ${schemaPath} definitions must be an object`);
+    }
+    for (const [name, definition] of Object.entries(definitions ?? {})) {
+      const existing = sharedDefinitions[name];
+      if (
+        existing !== undefined &&
+        JSON.stringify(canonicalizeCodexAppServerProtocolJson(existing)) !==
+          JSON.stringify(canonicalizeCodexAppServerProtocolJson(definition))
+      ) {
+        throw new Error(`Codex app-server shared definition ${name} differs across schemas`);
+      }
+      sharedDefinitions[name] = definition;
+    }
+
+    const { definitions: _definitions, ...root } = schema;
+    const relativeBundlePath = path.posix.relative(
+      path.posix.dirname(schemaPath),
+      codexAppServerSharedDefinitionsSchema,
+    );
+    const bundleRefPrefix = `${relativeBundlePath.startsWith(".") ? "" : "./"}${relativeBundlePath}${localDefinitionRefPrefix}`;
+    compacted.set(
+      schemaPath,
+      canonicalizeCodexAppServerProtocolJson(
+        rewriteSchemaRefs(root, localDefinitionRefPrefix, bundleRefPrefix),
+      ),
+    );
+  }
+
+  compacted.set(
+    codexAppServerSharedDefinitionsSchema,
+    canonicalizeCodexAppServerProtocolJson({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      definitions: sharedDefinitions,
+      title: "CodexAppServerProtocolDefinitions",
+      type: "object",
     }),
+  );
+  return compacted;
+}
+
+/** Reconstructs one compact schema exactly as emitted by the pinned exporter. */
+export function expandCodexAppServerProtocolJsonSchema(params: {
+  schema: unknown;
+  schemaPath: string;
+  sharedSchema: unknown;
+}): unknown {
+  if (!isPlainObject(params.schema) || !isPlainObject(params.sharedSchema)) {
+    throw new Error(`Codex app-server compact schema ${params.schemaPath} must be a JSON object`);
+  }
+  const sharedDefinitions = params.sharedSchema.definitions;
+  if (!isPlainObject(sharedDefinitions)) {
+    throw new Error("Codex app-server shared definitions schema must contain definitions");
+  }
+
+  const relativeBundlePath = path.posix.relative(
+    path.posix.dirname(params.schemaPath),
+    codexAppServerSharedDefinitionsSchema,
+  );
+  const bundleRefPrefix = `${relativeBundlePath.startsWith(".") ? "" : "./"}${relativeBundlePath}${localDefinitionRefPrefix}`;
+  const root = rewriteSchemaRefs(params.schema, bundleRefPrefix, localDefinitionRefPrefix);
+  if (!isPlainObject(root)) {
+    throw new Error(
+      `Codex app-server compact schema ${params.schemaPath} must remain a JSON object`,
+    );
+  }
+  const reachable = collectDefinitionNames(root, localDefinitionRefPrefix);
+  const pending = [...reachable];
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name === undefined) {
+      continue;
+    }
+    const definition = sharedDefinitions[name];
+    if (definition === undefined) {
+      throw new Error(`Codex app-server shared definition ${name} is missing`);
+    }
+    for (const dependency of collectDefinitionNames(definition, localDefinitionRefPrefix)) {
+      if (!reachable.has(dependency)) {
+        reachable.add(dependency);
+        pending.push(dependency);
+      }
+    }
+  }
+
+  if (reachable.size === 0) {
+    return canonicalizeCodexAppServerProtocolJson(root);
+  }
+  const definitions = Object.fromEntries(
+    Object.entries(sharedDefinitions).filter(([name]) => reachable.has(name)),
+  );
+  return canonicalizeCodexAppServerProtocolJson({ ...root, definitions });
+}
+
+function rewriteSchemaRefs(value: unknown, fromPrefix: string, toPrefix: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewriteSchemaRefs(entry, fromPrefix, toPrefix));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "$ref" && typeof entry === "string" && entry.startsWith(fromPrefix)
+        ? `${toPrefix}${entry.slice(fromPrefix.length)}`
+        : rewriteSchemaRefs(entry, fromPrefix, toPrefix),
+    ]),
   );
 }
 
-export function normalizeGeneratedTypeScript(text: string): string {
-  return text
-    .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
-    .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
-    .replaceAll("| null | null", "| null");
+function collectDefinitionNames(
+  value: unknown,
+  refPrefix: string,
+  names = new Set<string>(),
+): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectDefinitionNames(entry, refPrefix, names);
+    }
+    return names;
+  }
+  if (!isPlainObject(value)) {
+    return names;
+  }
+  const reference = value.$ref;
+  if (typeof reference === "string" && reference.startsWith(refPrefix)) {
+    const encodedName = reference.slice(refPrefix.length).split("/", 1)[0];
+    if (encodedName) {
+      names.add(encodedName.replaceAll("~1", "/").replaceAll("~0", "~"));
+    }
+  }
+  for (const entry of Object.values(value)) {
+    collectDefinitionNames(entry, refPrefix, names);
+  }
+  return names;
+}
+
+function sortCodexProtocolJsonArrayByType(items: unknown[]): unknown[] {
+  if (!items.every(isPlainObject)) {
+    return items;
+  }
+
+  const typed = items
+    .map((item, index) => ({ index, item, type: stringRecordValue(item, "type") }))
+    .filter(
+      (entry): entry is { index: number; item: Record<string, unknown>; type: string } =>
+        entry.type !== undefined,
+    );
+  if (typed.length < 2) {
+    return items;
+  }
+
+  const sortedTyped = typed.toSorted((left, right) => {
+    if (left.type < right.type) {
+      return -1;
+    }
+    if (left.type > right.type) {
+      return 1;
+    }
+    return left.index - right.index;
+  });
+  const sortedByOriginalIndex = new Map(
+    typed.map((entry, index) => [entry.index, sortedTyped[index]?.item]),
+  );
+
+  return items.map((item, index) => sortedByOriginalIndex.get(index) ?? item);
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
   resolvePlannedSegmentArgv,
@@ -340,6 +341,58 @@ describe("exec-command-resolution", () => {
     expect(deep.allowlistEval.allowlistSatisfied).toBe(false);
   });
 
+  it
+    .runIf(process.platform !== "win32")
+    .each([
+      "bwrap",
+      "catchsegv",
+      "chroot",
+      "cpulimit",
+      "eatmydata",
+      "firejail",
+      "gosu",
+      "linux32",
+      "linux64",
+      "numactl",
+      "nsenter",
+      "pkexec",
+      "proot",
+      "proxychains",
+      "proxychains4",
+      "runuser",
+      "setarch",
+      "setpriv",
+      "su",
+      "systemd-run",
+      "torify",
+      "torsocks",
+      "unbuffer",
+      "unshare",
+      "watch",
+      "xvfb-run",
+    ])("blocks opaque dispatch wrapper allowlist matches: %s", (wrapperName) => {
+    const dir = makeTempDir();
+    const wrapperPath = makeExecutable(dir, wrapperName);
+    const pythonPath = makeExecutable(dir, "python3");
+    const env = makePathEnv(dir);
+    const argv = [wrapperPath, pythonPath, "-c", "print(1)"];
+    const resolution = resolveCommandResolutionFromArgv(argv, dir, env);
+    const segment = { raw: argv.join(" "), argv, resolution };
+
+    expect(resolution?.policyBlocked).toBe(true);
+    expect(resolution?.blockedWrapper).toBe(wrapperName);
+    expect(resolvePlannedSegmentArgv(segment)).toBeNull();
+
+    const evaluation = evaluateExecAllowlist({
+      analysis: { ok: true, segments: [segment] },
+      allowlist: [{ pattern: wrapperPath }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+      env,
+    });
+    expect(evaluation.allowlistSatisfied).toBe(false);
+  });
+
   it("resolves allowlist candidate paths from unresolved raw executables", () => {
     expect(
       resolveExecutionTargetCandidatePath(
@@ -469,6 +522,25 @@ describe("exec-command-resolution", () => {
     },
   );
 
+  it("keeps package-manager exec as the planned execution argv", () => {
+    const dir = makeTempDir();
+    const pnpmPath = makeExecutable(dir, "pnpm");
+    makeExecutable(dir, "eslint");
+    const env = makePathEnv(dir);
+    const argv = ["pnpm", "exec", "eslint", "."];
+    const resolution = resolveCommandResolutionFromArgv(argv, dir, env);
+    const segment = {
+      raw: argv.join(" "),
+      argv,
+      resolution,
+    };
+
+    expect(resolution?.policyBlocked).toBe(false);
+    expect(resolution?.execution.resolvedPath).toBe(pnpmPath);
+    expect(resolution?.effectiveArgv).toEqual(argv);
+    expect(resolvePlannedSegmentArgv(segment)).toEqual([pnpmPath, "exec", "eslint", "."]);
+  });
+
   it("normalizes argv tokens for short clusters, long options, and special sentinels", () => {
     expect(parseExecArgvToken("")).toEqual({ kind: "empty", raw: "" });
     expect(parseExecArgvToken("--")).toEqual({ kind: "terminator", raw: "--" });
@@ -491,27 +563,25 @@ describe("exec-command-resolution", () => {
   });
 
   it("does not synthesize cwd-joined allowlist candidates from drive-less windows roots", () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-
-    expect(
-      resolveAllowlistCandidatePath(
-        {
-          rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
-          executableName: "openclaw",
-        },
-        String.raw`C:\Users\demo\AI\system\openclaw`,
-      ),
-    ).toBeUndefined();
-    expect(
-      resolveAllowlistCandidatePath(
-        {
-          rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
-          executableName: "openclaw",
-        },
-        String.raw`C:\Users\demo\AI\system\openclaw`,
-      ),
-    ).toBeUndefined();
+    withMockedPlatform("win32", () => {
+      expect(
+        resolveAllowlistCandidatePath(
+          {
+            rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
+            executableName: "openclaw",
+          },
+          String.raw`C:\Users\demo\AI\system\openclaw`,
+        ),
+      ).toBeUndefined();
+      expect(
+        resolveAllowlistCandidatePath(
+          {
+            rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
+            executableName: "openclaw",
+          },
+          String.raw`C:\Users\demo\AI\system\openclaw`,
+        ),
+      ).toBeUndefined();
+    });
   });
 });

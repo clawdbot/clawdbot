@@ -6,7 +6,11 @@ import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 export type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 export type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 
-/** Legacy raw send result shape accepted from channel SDK adapters. */
+/**
+ * Legacy raw send result shape accepted from channel SDK adapters.
+ * @deprecated Return `OutboundDeliveryResult` and use
+ * `createAttachedChannelResultAdapter`. Removal with the next plugin-SDK major.
+ */
 export type ChannelSendRawResult = {
   /** Whether the channel send operation succeeded. */
   ok: boolean;
@@ -24,8 +28,8 @@ export function attachChannelToResult<T extends object>(
   result: T,
 ) {
   return {
-    channel,
     ...result,
+    channel,
   };
 }
 
@@ -84,6 +88,16 @@ export function createAttachedChannelResultAdapter(params: {
   };
 }
 
+function buildRawChannelAdapterResult(
+  channel: string,
+  result: ChannelSendRawResult,
+): OutboundDeliveryResult {
+  if (!result.ok) {
+    throw new Error(result.error?.trim() || `Channel send failed for ${channel}`);
+  }
+  return buildChannelSendResult(channel, result);
+}
+
 /** Wraps legacy raw text/media send methods and normalizes their results. */
 export function createRawChannelSendResultAdapter(params: {
   /** Channel id attached to every normalized legacy send result. */
@@ -95,10 +109,10 @@ export function createRawChannelSendResultAdapter(params: {
 }): Pick<ChannelOutboundAdapter, "sendText" | "sendMedia"> {
   return {
     sendText: params.sendText
-      ? async (ctx) => buildChannelSendResult(params.channel, await params.sendText!(ctx))
+      ? async (ctx) => buildRawChannelAdapterResult(params.channel, await params.sendText!(ctx))
       : undefined,
     sendMedia: params.sendMedia
-      ? async (ctx) => buildChannelSendResult(params.channel, await params.sendMedia!(ctx))
+      ? async (ctx) => buildRawChannelAdapterResult(params.channel, await params.sendMedia!(ctx))
       : undefined,
   };
 }

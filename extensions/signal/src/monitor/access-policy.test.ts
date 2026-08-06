@@ -1,6 +1,7 @@
 // Signal tests cover access policy plugin behavior.
 import type { AccessGroupsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
+import { resolveSignalSender } from "../identity.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 
 const SIGNAL_GROUP_ID = "signal-group-id";
@@ -10,6 +11,18 @@ const SIGNAL_SENDER = {
   e164: "+15551230000",
   raw: "+15551230000",
 };
+const SIGNAL_UUID = "f4d0fe67-3b38-446d-828e-317c285ffa75";
+
+function resolveAliasedSignalSender() {
+  const sender = resolveSignalSender({
+    sourceNumber: SIGNAL_SENDER.e164,
+    sourceUuid: SIGNAL_UUID,
+  });
+  if (!sender) {
+    throw new Error("expected Signal sender");
+  }
+  return sender;
+}
 
 async function resolveGroupAccess(params: {
   allowFrom?: string[];
@@ -181,6 +194,36 @@ describe("resolveSignalAccessState", () => {
     expect(senderAccess.effectiveAllowFrom).toEqual([SIGNAL_SENDER.e164]);
   });
 
+  it("keeps a UUID-paired sender allowed after signal-cli learns its phone alias", async () => {
+    const { senderAccess } = await resolveSignalAccessState({
+      accountId: "default",
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      groupAllowFrom: [],
+      sender: resolveAliasedSignalSender(),
+      isGroup: false,
+      readStoreAllowFrom: async () => [`uuid:${SIGNAL_UUID}`],
+    });
+
+    expect(senderAccess.decision).toBe("allow");
+    expect(senderAccess.effectiveAllowFrom).toContain(`uuid:${SIGNAL_UUID}`);
+  });
+
+  it("does not authorize an aliased sender through an unrelated UUID", async () => {
+    const { senderAccess } = await resolveSignalAccessState({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      allowFrom: ["uuid:00000000-0000-0000-0000-000000000000"],
+      groupAllowFrom: [],
+      sender: resolveAliasedSignalSender(),
+      isGroup: false,
+    });
+
+    expect(senderAccess.decision).toBe("block");
+  });
+
   it("does not let pairing-store senders satisfy group access", async () => {
     const { groupDecision } = await resolveGroupAccess({
       groupAllowFrom: [],
@@ -232,6 +275,24 @@ describe("resolveSignalAccessState", () => {
       hasControlCommand: true,
     });
 
+    expect(access.commandAccess.authorized).toBe(true);
+    expect(access.commandAccess.shouldBlockControlCommand).toBe(false);
+  });
+
+  it("authorizes group control commands through a sender UUID alias", async () => {
+    const access = await resolveSignalAccessState({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      groupAllowFrom: [`uuid:${SIGNAL_UUID}`],
+      sender: resolveAliasedSignalSender(),
+      groupId: SIGNAL_GROUP_ID,
+      isGroup: true,
+      hasControlCommand: true,
+    });
+
+    expect(access.senderAccess.decision).toBe("allow");
     expect(access.commandAccess.authorized).toBe(true);
     expect(access.commandAccess.shouldBlockControlCommand).toBe(false);
   });

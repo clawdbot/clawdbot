@@ -4,11 +4,26 @@
   gap: 12px;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  padding-bottom: 16px;
   --workboard-control-height: 34px;
   --workboard-control-radius: 7px;
   --workboard-control-bg: color-mix(in srgb, var(--bg-elevated) 72%, var(--bg) 28%);
   --workboard-control-border: color-mix(in srgb, var(--border-strong) 78%, transparent);
   --workboard-control-border-hover: color-mix(in srgb, var(--accent) 36%, var(--border-strong));
+}
+
+.workboard-page-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workboard-board-glyph--header {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 12px;
 }
 
 .workboard-main {
@@ -56,6 +71,7 @@
 .workboard-card__meta,
 .workboard-card__quick-actions,
 .workboard-card__top,
+.workboard-layout-controls,
 .workboard-layout-toggle,
 .workboard-labels {
   display: flex;
@@ -69,12 +85,108 @@
   min-width: 260px;
 }
 
+.workboard-refresh-status {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.2;
+  min-width: 104px;
+  white-space: nowrap;
+}
+
+.workboard-refresh-status--error {
+  color: var(--danger);
+}
+
+.workboard-health {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 2px;
+}
+
+.workboard-health__item {
+  --workboard-health-color: var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: 7px;
+  padding: 3px 8px;
+  background: color-mix(in srgb, var(--panel-strong) 44%, transparent);
+  color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
+  font-size: 0.76rem;
+  font-family: inherit;
+  line-height: 1;
+  margin: 0;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.workboard-health__item:hover {
+  border-color: color-mix(in srgb, var(--workboard-health-color) 44%, var(--border));
+  background: color-mix(in srgb, var(--workboard-health-color) 11%, var(--panel));
+  color: var(--text);
+}
+
+.workboard-health__item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--workboard-health-color) 56%, transparent);
+  outline-offset: 2px;
+}
+
+.workboard-health__item--active {
+  border-color: color-mix(in srgb, var(--workboard-health-color) 64%, var(--border));
+  background: color-mix(in srgb, var(--workboard-health-color) 18%, var(--panel));
+  color: var(--text);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--workboard-health-color) 24%, transparent) inset,
+    0 0 18px color-mix(in srgb, var(--workboard-health-color) 20%, transparent);
+}
+
+.workboard-health__item--empty:not(.workboard-health__item--active) {
+  color: color-mix(in srgb, var(--muted) 76%, transparent);
+}
+
+.workboard-health__item strong {
+  color: var(--text);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.workboard-health__item--blocked,
+.workboard-health__item--failedAttempts {
+  --workboard-health-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 24%, var(--border));
+  background: color-mix(in srgb, var(--danger) 9%, var(--panel));
+}
+
+.workboard-health__item--stale,
+.workboard-health__item--missingProof,
+.workboard-health__item--readyUnassigned {
+  --workboard-health-color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 24%, var(--border));
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+}
+
+.workboard-health__item--running {
+  --workboard-health-color: var(--info);
+}
+
 .workboard-layout-toggle {
   gap: 4px;
   padding: 2px;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--workboard-control-radius);
   background: color-mix(in srgb, var(--bg-elevated) 42%, transparent);
+}
+
+.workboard-layout-controls {
+  gap: 8px;
 }
 
 .workboard .input {
@@ -96,7 +208,7 @@
   border-color: var(--workboard-control-border-hover);
 }
 
-.workboard .input:focus {
+.workboard .input:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
   outline: none;
   box-shadow:
@@ -137,23 +249,32 @@
   min-width: min(280px, 100%);
 }
 
-.workboard-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: grid;
-  place-items: center;
-  padding: 28px;
-  background: color-mix(in srgb, #000 60%, transparent);
-  backdrop-filter: blur(8px);
+.workboard-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: var(--workboard-control-height);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.workboard-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
 }
 
 .workboard-draft {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
-  width: min(760px, calc(100vw - 44px));
-  max-height: min(820px, calc(100vh - 56px));
-  overflow: auto;
+  width: 100%;
+  height: min(860px, calc(100vh - 56px));
+  min-height: 0;
+  overflow: hidden;
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   border-radius: 10px;
@@ -184,6 +305,16 @@
   display: grid;
   gap: 10px;
   min-width: 0;
+}
+
+.workboard-draft__body {
+  display: grid;
+  gap: 14px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  overscroll-behavior: contain;
 }
 
 .workboard-template-strip {
@@ -226,7 +357,7 @@
   min-width: 0;
 }
 
-.workboard-field span {
+.workboard-field > span {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 650;
@@ -239,6 +370,110 @@
   max-width: none;
 }
 
+.workboard-select {
+  width: 100%;
+  min-width: 0;
+  --wa-form-control-activated-color: var(--accent);
+}
+
+.workboard-select--toolbar {
+  width: min(176px, 100%);
+  max-width: 176px;
+}
+
+.workboard-agent-select--toolbar {
+  width: min(236px, 100%);
+  max-width: 236px;
+}
+
+.workboard-select--toolbar-board {
+  width: min(224px, 100%);
+  max-width: 224px;
+}
+
+.workboard-agent-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.workboard-agent-select .agent-select__trigger {
+  min-height: var(--workboard-control-height);
+  border-color: var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  font-weight: 600;
+}
+
+.workboard-agent-select--toolbar .agent-select__trigger {
+  height: var(--workboard-control-height);
+}
+.workboard-select::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.workboard-select::part(combobox) {
+  min-height: var(--workboard-control-height);
+  width: 100%;
+  border-color: var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.workboard-select::part(listbox) {
+  /* Keep Web Awesome's collision-aware bound in the cap; replacing it outright
+     would let the listbox overflow when the popup has little room to open. */
+  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, var(--bg) 6%);
+  box-shadow:
+    0 16px 40px color-mix(in srgb, black 34%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
+}
+
+.workboard-select__option {
+  color: var(--text);
+}
+
+.workboard-select [slot="start"] {
+  display: inline-flex;
+  align-items: center;
+}
+
+.workboard-select__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 650;
+}
+
+.workboard-select__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workboard-select__description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
 .workboard-field--wide {
   grid-column: 1 / -1;
 }
@@ -247,6 +482,11 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.workboard-draft > .workboard-modal__actions {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .workboard-toolbar .btn,
@@ -290,6 +530,18 @@
 
 .workboard-board--comfortable .workboard-column {
   min-width: 312px;
+}
+
+.workboard-board--single-column {
+  grid-auto-columns: minmax(292px, min(50%, 720px));
+}
+
+.workboard-board--compact.workboard-board--single-column {
+  grid-auto-columns: minmax(262px, min(50%, 680px));
+}
+
+.workboard-board--comfortable.workboard-board--single-column {
+  grid-auto-columns: minmax(312px, min(50%, 760px));
 }
 
 .workboard-column {
@@ -358,14 +610,43 @@
   min-height: 0;
   padding: 10px;
   display: grid;
+  /* Pin implicit rows to content height so an overflowing column scrolls instead
+     of squeezing cards, which collapsed their line-clamped titles to 0px. */
+  grid-auto-rows: max-content;
   gap: 10px;
   align-content: start;
   overflow-y: auto;
 }
 
+.workboard-empty-state {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  min-height: 280px;
+  padding: 32px 18px;
+  border: 1px dashed color-mix(in srgb, var(--border-strong) 58%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-strong) 28%, transparent);
+  color: var(--muted);
+  text-align: center;
+}
+
+.workboard-empty-state strong {
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.workboard-empty-state span {
+  max-width: 420px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 .workboard-card {
   position: relative;
-  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
   border: 1px solid color-mix(in srgb, var(--border-strong) 58%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-elevated) 72%, var(--bg) 28%);
@@ -382,16 +663,17 @@
     transform var(--duration-fast) var(--ease-out);
 }
 
+.workboard-card:hover,
+.workboard-card:focus-within {
+  z-index: 2;
+}
+
 .workboard-card::before {
   position: absolute;
   inset: 0 auto 0 0;
   width: 3px;
   background: color-mix(in srgb, var(--muted) 44%, transparent);
   content: "";
-}
-
-.workboard-card--openable {
-  cursor: pointer;
 }
 
 .workboard-card--openable:hover {
@@ -409,12 +691,57 @@
   border-color: var(--accent);
 }
 
+.workboard-card--health-highlight {
+  --workboard-health-highlight-color: var(--accent);
+  border-color: color-mix(
+    in srgb,
+    var(--workboard-health-highlight-color) 70%,
+    var(--border-strong)
+  );
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--workboard-health-highlight-color) 42%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--workboard-health-highlight-color) 14%, transparent),
+    0 12px 30px color-mix(in srgb, #000 26%, transparent);
+}
+
+.workboard-card--health-highlight-running {
+  --workboard-health-highlight-color: var(--info);
+}
+
+.workboard-card--health-highlight-blocked,
+.workboard-card--health-highlight-failedAttempts {
+  --workboard-health-highlight-color: var(--danger);
+}
+
+.workboard-card--health-highlight-stale,
+.workboard-card--health-highlight-readyUnassigned,
+.workboard-card--health-highlight-missingProof {
+  --workboard-health-highlight-color: var(--warn);
+}
+
+.workboard-card--health-highlight::before {
+  background: var(--workboard-health-highlight-color);
+  inset: -1px auto -1px -1px;
+  width: 5px;
+  border-radius: 8px 0 0 8px;
+}
+
 .workboard-card--busy {
   opacity: 0.62;
 }
 
 .workboard-card--archived {
   opacity: 0.72;
+}
+
+.workboard-card.workboard-card--dragging {
+  opacity: 0.45;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+  transform: scale(0.985);
+  cursor: grabbing;
 }
 
 .workboard-card h3 {
@@ -446,24 +773,115 @@
   font-size: 0.76rem;
 }
 
+.workboard-card__top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .workboard-card__chips {
   min-width: 0;
   gap: 5px;
+  align-items: flex-start;
+  align-content: flex-start;
+  overflow: visible;
 }
 
 .workboard-card__quick-actions {
-  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  align-items: center;
   gap: 4px;
 }
 
+.workboard-card__updated {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-card__updated-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--muted) 84%, var(--text) 16%);
+}
+
+.workboard-card__updated-icon svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.workboard-card__updated span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .workboard-card__actions {
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
   min-height: 28px;
+  min-width: 0;
   padding-top: 2px;
+}
+
+.workboard-card__actions-primary {
+  display: grid;
+  grid-template-columns: 28px 28px minmax(0, 112px);
+  align-items: center;
+  justify-self: end;
+  justify-content: end;
+  gap: 8px;
+  width: min(100%, 172px);
+  min-width: 0;
+}
+
+.workboard-card__action-slot,
+.workboard-card__action-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+}
+
+.workboard-card__actions-primary .workboard-card__action-slot:last-child,
+.workboard-card__actions-primary .workboard-card__action-slot:last-child .workboard-card__move,
+.workboard-card__actions-primary
+  .workboard-card__action-slot:last-child
+  .workboard-card__action-placeholder {
+  width: 100%;
+  min-width: 0;
+  max-width: 112px;
+}
+
+.workboard-card__action-placeholder {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .workboard-card__badges {
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .workboard-dependencies {
@@ -532,7 +950,12 @@
   position: relative;
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   color: var(--muted);
+}
+
+.workboard-card__move--wide {
+  width: 100%;
 }
 
 .workboard-card__move-icon {
@@ -554,8 +977,9 @@
 
 .workboard-card__move-select {
   height: 28px;
+  width: 100%;
   max-width: 112px;
-  min-width: 92px;
+  min-width: 0;
   padding: 0 22px 0 25px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -572,7 +996,6 @@
     5px 5px;
   background-repeat: no-repeat;
   color: var(--muted);
-  cursor: pointer;
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
@@ -593,6 +1016,11 @@
 .workboard-card__move-select:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.workboard-card__move--wide .workboard-card__move-select {
+  max-width: none;
+  color: var(--text);
 }
 
 .workboard-card__quick-actions .workboard-card__icon,
@@ -667,6 +1095,17 @@
   white-space: nowrap;
 }
 
+.workboard-card__badges span,
+.workboard-labels span,
+.workboard-agent-chip,
+.workboard-card__priority,
+.workboard-card__archived {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .workboard-card__badges svg {
   width: 13px;
   height: 13px;
@@ -684,11 +1123,9 @@
 }
 
 .workboard-agent-chip {
-  max-width: 108px;
-  overflow: hidden;
+  max-width: 100%;
   background: color-mix(in srgb, var(--accent-2) 12%, var(--bg-hover));
   color: color-mix(in srgb, var(--accent-2) 62%, var(--text));
-  text-overflow: ellipsis;
 }
 
 .workboard-card__archived {
@@ -737,6 +1174,10 @@
 .workboard-board--compact .workboard-card p {
   -webkit-line-clamp: 2;
   font-size: 0.78rem;
+}
+
+.workboard-board--compact .workboard-card__actions {
+  gap: 8px;
 }
 
 .workboard-board--compact .workboard-labels,
@@ -801,6 +1242,11 @@
   background: color-mix(in srgb, var(--ok) 70%, transparent);
 }
 
+.workboard-card--health-highlight::before {
+  background: var(--workboard-health-highlight-color);
+  box-shadow: 1px 0 0 color-mix(in srgb, var(--workboard-health-highlight-color) 52%, transparent);
+}
+
 .workboard-live {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
@@ -831,13 +1277,10 @@
 }
 
 .workboard-detail-drawer {
-  position: fixed;
-  inset: 0 0 0 auto;
-  z-index: 900;
   display: flex;
   justify-content: flex-end;
-  width: min(460px, 100vw);
-  pointer-events: none;
+  width: 100%;
+  height: 100%;
 }
 
 .workboard-detail {
@@ -848,7 +1291,6 @@
   min-height: 0;
   padding: 16px;
   overflow: auto;
-  pointer-events: auto;
   border-left: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
   background: color-mix(in srgb, var(--panel) 98%, var(--bg) 2%);
   box-shadow: var(--shadow-xl);
@@ -893,6 +1335,90 @@
   font-size: 0.86rem;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+openclaw-workboard-card-dashboard {
+  display: block;
+}
+
+.workboard-card-dashboard {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.workboard-card-dashboard__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.workboard-card-dashboard__toggle:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid color-mix(in srgb, var(--accent) 68%, transparent);
+  outline-offset: 4px;
+}
+
+.workboard-card-dashboard__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workboard-card-dashboard__title svg,
+.workboard-card-dashboard__chevron svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.workboard-card-dashboard__chevron {
+  display: inline-flex;
+  transition: transform 140ms ease;
+}
+
+.workboard-card-dashboard__toggle[aria-expanded="true"] .workboard-card-dashboard__chevron {
+  transform: rotate(180deg);
+}
+
+.workboard-card-dashboard__body {
+  min-width: 0;
+  padding-top: 10px;
+}
+
+.workboard-card-dashboard__body[hidden] {
+  display: none;
+}
+
+.workboard-card-dashboard__body .board-view {
+  gap: 9px;
+}
+
+.workboard-card-dashboard__body .board-grid {
+  gap: 8px;
+  grid-auto-rows: 44px;
+}
+
+.workboard-detail__section p.workboard-card-dashboard__empty,
+.workboard-detail__section p.workboard-card-dashboard__collapsed-empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.workboard-detail__section p.workboard-card-dashboard__collapsed-empty {
+  margin-top: -2px;
 }
 
 .workboard-detail__grid {
@@ -995,6 +1521,7 @@
 
 .workboard-detail__actions {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: auto;
   padding-top: 12px;
@@ -1003,9 +1530,33 @@
 
 .workboard-detail__actions > .btn {
   justify-content: center;
+  min-width: 0;
+  white-space: normal;
+}
+
+.workboard-detail__actions > .workboard-card__move,
+.workboard-detail__actions > .workboard-card__execution-controls {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 860px) {
+  .workboard-draft {
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    padding: 14px;
+  }
+
+  .workboard-modal__header {
+    align-items: center;
+  }
+
+  .workboard-draft__body {
+    padding-right: 0;
+  }
+
   .workboard-toolbar {
     display: flex;
     flex-direction: column;
@@ -1021,9 +1572,15 @@
 
   .workboard-toolbar__filters .input[type="search"],
   .workboard-toolbar__filters .input,
+  .workboard-select--toolbar,
+  .workboard-agent-select--toolbar,
   .workboard-draft__meta .input {
     width: 100%;
     max-width: none;
+  }
+
+  .workboard-select::part(listbox) {
+    max-height: min(260px, var(--auto-size-available-height, calc(100vh - 48px)));
   }
 
   .workboard-draft__meta {
@@ -1031,34 +1588,56 @@
   }
 
   .workboard-board {
-    grid-auto-columns: minmax(282px, 84vw);
+    grid-auto-flow: row;
+    grid-auto-columns: unset;
+    grid-template-columns: minmax(0, 1fr);
+    overflow-x: hidden;
+    overflow-y: auto;
+    scroll-snap-type: none;
+  }
+
+  .workboard-board--compact,
+  .workboard-board--comfortable {
+    grid-auto-columns: unset;
+  }
+
+  .workboard-board--single-column,
+  .workboard-board--compact.workboard-board--single-column,
+  .workboard-board--comfortable.workboard-board--single-column {
+    grid-auto-columns: unset;
+  }
+
+  .workboard-column,
+  .workboard-board--compact .workboard-column,
+  .workboard-board--comfortable .workboard-column {
+    width: 100%;
+    min-height: auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow: visible;
+    scroll-snap-align: none;
+  }
+
+  .workboard-column__cards {
+    flex: none;
+    min-height: auto;
+    overflow: visible;
   }
 
   .workboard-detail-drawer {
-    inset: auto 0 0;
-    width: 100vw;
-    max-height: 82vh;
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
   }
 
   .workboard-detail {
-    border-top: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+    min-height: 100dvh;
+    border-top: 0;
     border-left: 0;
   }
 
   .workboard-detail__grid {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (hover: hover) {
-  .workboard-card__actions {
-    opacity: 0.34;
-    transition: opacity var(--duration-fast) var(--ease-out);
-  }
-
-  .workboard-card:hover .workboard-card__actions,
-  .workboard-card:focus-within .workboard-card__actions {
-    opacity: 1;
   }
 }
 

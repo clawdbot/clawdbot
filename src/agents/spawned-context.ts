@@ -79,10 +79,19 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   return agentId ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(agentId)) : undefined;
 }
 
-/** Return a spawned run's ingress workspace override only for child runs. */
-export function resolveIngressWorkspaceOverrideForSpawnedRun(
-  metadata?: Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> | null,
+/** Resolve the persisted workspace used when a session re-enters an agent runtime. */
+export function resolveIngressWorkspaceOverrideForSessionRun(
+  metadata?:
+    | (Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> & {
+        cwd?: string | null;
+      })
+    | null,
 ): string | undefined {
   const normalized = normalizeSpawnedRunMetadata(metadata);
-  return normalized.spawnedBy ? normalized.workspaceDir : undefined;
+  if (normalized.spawnedBy) {
+    return normalized.workspaceDir;
+  }
+  // Dashboard worktree sessions are not subagents, so their managed cwd is
+  // also the workspace that sandbox setup must mount on every later turn.
+  return normalizeOptionalString(metadata?.cwd);
 }

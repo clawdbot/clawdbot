@@ -2,6 +2,8 @@
  * ACPX turn adapters. Modern runtimes can expose startTurn directly; legacy
  * runtimes that only stream runTurn events are adapted to the newer contract.
  */
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -10,14 +12,8 @@ import type {
   AcpRuntimeTurnResult,
 } from "../runtime-api.js";
 
-function createDeferredResult<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
+function isCancellationStopReason(stopReason: string | undefined): boolean {
+  return stopReason === "cancel" || stopReason === "cancelled" || stopReason === "manual-cancel";
 }
 
 class LegacyRunTurnEventQueue {
@@ -72,7 +68,7 @@ class LegacyRunTurnEventQueue {
       return item;
     }
     if (this.error) {
-      throw toLintErrorObject(this.error, "Non-Error thrown");
+      throw toErrorObject(this.error, "Non-Error thrown");
     }
     if (this.closed) {
       return null;
@@ -94,7 +90,7 @@ class LegacyRunTurnEventQueue {
 }
 
 function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
-  const result = createDeferredResult<AcpRuntimeTurnResult>();
+  const result = createDeferred<AcpRuntimeTurnResult>();
   result.promise.catch(() => {});
   const queue = new LegacyRunTurnEventQueue();
   let resultSettled = false;
@@ -109,8 +105,12 @@ function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInpu
     try {
       for await (const event of runtime.runTurn(input)) {
         if (event.type === "done") {
+          // Legacy runTurn events omit result.status but preserve stopReason, so infer
+          // cancellation here instead of silently converting it to success.
           settleResult({
-            status: "completed",
+            status:
+              event.status ??
+              (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed"),
             ...(event.stopReason ? { stopReason: event.stopReason } : {}),
           });
           continue;
@@ -158,7 +158,7 @@ function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInpu
 }
 
 /** Start an ACP turn, adapting legacy runTurn-only runtimes when needed. */
-export function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
+function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
   return runtime.startTurn?.(input) ?? legacyRunTurnAsStartTurn(runtime, input);
 }
 
@@ -183,18 +183,4 @@ export function lazyStartRuntimeTurn(
       return turnPromise.then((turn) => turn.closeStream(inputArgs));
     },
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

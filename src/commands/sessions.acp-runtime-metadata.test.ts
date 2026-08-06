@@ -37,7 +37,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
  * agentRuntime.id should report `acpx` (or whatever runtime id is actually
  * driving the session) so that the JSON faithfully classifies the session.
  * The fix likely belongs at the caller (sessions.ts:294 and the other
- * call sites in `src/gateway/server-methods/sessions.ts`,
+ * call sites in `src/gateway/server-methods/sessions-*.ts`,
  * `src/gateway/session-utils.ts`) so it can pass session-key context to
  * `resolveModelAgentRuntimeMetadata`.
  */
@@ -64,6 +64,7 @@ function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
         },
         {
           id: "main",
+          default: true,
         },
       ],
       // No `defaults.agentRuntime` either.
@@ -216,5 +217,30 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
 
     expect(agentRuntime.id).not.toBe("acpx");
     expect(agentRuntime.source).not.toBe("session-key");
+  });
+
+  it("preserves locked Codex ownership ahead of stale OpenClaw session metadata", () => {
+    const agentRuntime = resolveModelAgentRuntimeMetadata({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: NON_ACP_SESSION_KEY,
+      sessionEntry: {
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+        modelSelectionLocked: true,
+      },
+    });
+
+    expect(agentRuntime).toEqual({ id: "codex", source: "session" });
   });
 });

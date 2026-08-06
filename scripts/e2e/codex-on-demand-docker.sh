@@ -13,6 +13,11 @@ HOST_BUILD="${OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 run_log=""
 
+# This lane installs the package and then exercises a managed npm install of Codex.
+# Keep the package install budget above the shared default so slow npm hosts reach
+# the Codex assertions instead of failing as a silent package-install timeout.
+export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"
+
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
     docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"

@@ -1,6 +1,6 @@
-// Memory Host SDK tests cover query expansion behavior.
+// Memory Host SDK tests cover query keyword extraction behavior.
 import { describe, expect, it } from "vitest";
-import { expandQueryForFts, extractKeywords } from "./query-expansion.js";
+import { extractKeywords } from "./query-expansion.js";
 
 describe("extractKeywords", () => {
   it("extracts keywords from English conversational query", () => {
@@ -179,35 +179,6 @@ describe("extractKeywords", () => {
     it("does not affect English keyword extraction", () => {
       const keywords = extractKeywords("that thing we discussed about the API", trigramOpts);
       expect(keywords).toStrictEqual(["discussed", "api"]);
-    });
-  });
-});
-
-describe("expandQueryForFts", () => {
-  it("returns original query and extracted keywords", () => {
-    const result = expandQueryForFts("that API we discussed");
-    expect(result).toStrictEqual({
-      original: "that API we discussed",
-      keywords: ["api", "discussed"],
-      expanded: "that API we discussed OR api OR discussed",
-    });
-  });
-
-  it("builds expanded OR query for FTS", () => {
-    const result = expandQueryForFts("the solution for bugs");
-    expect(result).toStrictEqual({
-      original: "the solution for bugs",
-      keywords: ["solution", "bugs"],
-      expanded: "the solution for bugs OR solution OR bugs",
-    });
-  });
-
-  it("returns original query when no keywords extracted", () => {
-    const result = expandQueryForFts("the");
-    expect(result).toStrictEqual({
-      original: "the",
-      keywords: [],
-      expanded: "the",
     });
   });
 });

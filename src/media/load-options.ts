@@ -10,7 +10,7 @@ export type OutboundMediaAccess = {
 };
 
 /** Legacy and current knobs accepted by outbound media loaders before normalization. */
-export type OutboundMediaLoadParams = {
+type OutboundMediaLoadParams = {
   maxBytes?: number;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[] | "any";
@@ -25,7 +25,7 @@ export type OutboundMediaLoadParams = {
 };
 
 /** Normalized outbound media loader options consumed by fetch/local media helpers. */
-export type OutboundMediaLoadOptions = {
+type OutboundMediaLoadOptions = {
   maxBytes?: number;
   localRoots?: readonly string[] | "any";
   readFile?: (filePath: string) => Promise<Buffer>;

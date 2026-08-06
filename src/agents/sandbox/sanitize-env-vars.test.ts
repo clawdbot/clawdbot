@@ -1,13 +1,20 @@
 // Sandbox env sanitizer tests cover credential filtering for inherited and
 // explicitly configured sandbox environment variables.
 import { describe, expect, it } from "vitest";
-import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
+import {
+  sanitizeEnvVars,
+  sanitizeExplicitSandboxEnvVars,
+  validateEnvVarValue,
+} from "./sanitize-env-vars.js";
 
 describe("sanitizeEnvVars", () => {
   it("keeps normal env vars and blocks obvious credentials", () => {
     const result = sanitizeEnvVars({
       NODE_ENV: "test",
       OPENAI_API_KEY: "sk-live-xxx", // pragma: allowlist secret
+      OPENAI_ADMIN_KEY: "sk-admin-live-xxx", // pragma: allowlist secret
+      ANTHROPIC_ADMIN_KEY: "sk-ant-admin-live-xxx", // pragma: allowlist secret
+      ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-api-live-xxx", // pragma: allowlist secret
       FOO: "bar",
       GITHUB_TOKEN: "gh-token", // pragma: allowlist secret
     });
@@ -16,7 +23,13 @@ describe("sanitizeEnvVars", () => {
       NODE_ENV: "test",
       FOO: "bar",
     });
-    expect(result.blocked).toStrictEqual(["OPENAI_API_KEY", "GITHUB_TOKEN"]);
+    expect(result.blocked).toStrictEqual([
+      "OPENAI_API_KEY",
+      "OPENAI_ADMIN_KEY",
+      "ANTHROPIC_ADMIN_KEY",
+      "ANTHROPIC_ADMIN_API_KEY",
+      "GITHUB_TOKEN",
+    ]);
   });
 
   it("blocks credentials even when suffix pattern matches", () => {
@@ -95,5 +108,13 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ SAFE_SECRET: "ok" });
     expect(result.blocked).toStrictEqual(["NULL_SECRET"]);
+  });
+
+  it("measures the value limit in UTF-8 bytes", () => {
+    const atLimit = "a!".repeat(16384);
+
+    expect(validateEnvVarValue(atLimit)).toBeUndefined();
+    expect(validateEnvVarValue(`${atLimit}x`)).toBe("Value exceeds maximum length");
+    expect(validateEnvVarValue("值".repeat(11000))).toBe("Value exceeds maximum length");
   });
 });

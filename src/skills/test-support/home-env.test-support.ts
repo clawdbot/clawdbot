@@ -1,11 +1,13 @@
 // Home environment test support isolates HOME-style paths for skill tests.
 import os from "node:os";
 import { vi } from "vitest";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 /** Process home env snapshot used by skill loader tests. */
 export type SkillsHomeEnvSnapshot = {
   previousHome: string | undefined;
   previousOpenClawHome: string | undefined;
+  previousOpenClawStateDir: string | undefined;
   previousUserProfile: string | undefined;
 };
 
@@ -13,13 +15,23 @@ export function setMockSkillsHomeEnv(fakeHome: string): SkillsHomeEnvSnapshot {
   const snapshot: SkillsHomeEnvSnapshot = {
     previousHome: process.env.HOME,
     previousOpenClawHome: process.env.OPENCLAW_HOME,
+    previousOpenClawStateDir: process.env.OPENCLAW_STATE_DIR,
     previousUserProfile: process.env.USERPROFILE,
   };
-  process.env.HOME = fakeHome;
-  delete process.env.OPENCLAW_HOME;
-  delete process.env.USERPROFILE;
+  setTestEnvValue("HOME", fakeHome);
+  deleteTestEnvValue("OPENCLAW_HOME");
+  deleteTestEnvValue("OPENCLAW_STATE_DIR");
+  deleteTestEnvValue("USERPROFILE");
   vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
   return snapshot;
+}
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    deleteTestEnvValue(key);
+  } else {
+    setTestEnvValue(key, value);
+  }
 }
 
 export async function restoreMockSkillsHomeEnv(
@@ -27,20 +39,9 @@ export async function restoreMockSkillsHomeEnv(
   cleanup?: () => Promise<void> | void,
 ) {
   vi.restoreAllMocks();
-  if (snapshot.previousHome === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = snapshot.previousHome;
-  }
-  if (snapshot.previousOpenClawHome === undefined) {
-    delete process.env.OPENCLAW_HOME;
-  } else {
-    process.env.OPENCLAW_HOME = snapshot.previousOpenClawHome;
-  }
-  if (snapshot.previousUserProfile === undefined) {
-    delete process.env.USERPROFILE;
-  } else {
-    process.env.USERPROFILE = snapshot.previousUserProfile;
-  }
+  restoreEnvValue("HOME", snapshot.previousHome);
+  restoreEnvValue("OPENCLAW_HOME", snapshot.previousOpenClawHome);
+  restoreEnvValue("OPENCLAW_STATE_DIR", snapshot.previousOpenClawStateDir);
+  restoreEnvValue("USERPROFILE", snapshot.previousUserProfile);
   await cleanup?.();
 }

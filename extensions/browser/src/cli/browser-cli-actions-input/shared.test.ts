@@ -1,6 +1,6 @@
 // Browser tests cover shared plugin behavior.
 import { describe, expect, it } from "vitest";
-import { readFields } from "./shared.js";
+import { readActionsPayload, readFields } from "./shared.js";
 
 describe("readFields", () => {
   it.each([
@@ -27,5 +27,29 @@ describe("readFields", () => {
     await expect(readFields({ fields: '[{"type":"textbox","value":"world"}]' })).rejects.toThrow(
       "fields[0] must include ref",
     );
+  });
+
+  it("throws descriptive error on malformed JSON", async () => {
+    await expect(readFields({ fields: "NOT JSON {{{" })).rejects.toThrow(
+      "fields must be valid JSON.",
+    );
+  });
+
+  it("throws descriptive error on empty fields", async () => {
+    await expect(readFields({ fields: "" })).rejects.toThrow("fields are required");
+  });
+
+  it("rejects conflicting inline and file form fields", async () => {
+    await expect(
+      readFields({ fields: "[]", fieldsFile: "/tmp/openclaw-browser-fields.json" }),
+    ).rejects.toThrow("Specify only one of --fields or --fields-file");
+  });
+});
+
+describe("readActionsPayload", () => {
+  it("rejects conflicting inline and file actions before reading the file", async () => {
+    await expect(
+      readActionsPayload({ actions: "[]", actionsFile: "/tmp/openclaw-browser-actions.json" }),
+    ).rejects.toThrow("Specify only one of --actions or --actions-file");
   });
 });

@@ -11,7 +11,7 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 - English docs are authored in `openclaw/openclaw`.
 - The source docs tree lives under `docs/`.
-- The source repo no longer keeps committed generated locale trees such as `docs/zh-CN/**`, `docs/zh-TW/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, `docs/ar/**`, `docs/it/**`, `docs/vi/**`, `docs/nl/**`, `docs/fa/**`, `docs/tr/**`, `docs/uk/**`, `docs/id/**`, `docs/pl/**`, or `docs/th/**`.
+- The source repo no longer keeps committed generated locale trees such as `docs/zh-CN/**`, `docs/zh-TW/**`, `docs/ja-JP/**`, `docs/es/**`, `docs/pt-BR/**`, `docs/ko/**`, `docs/de/**`, `docs/fr/**`, `docs/hi/**`, `docs/ar/**`, `docs/it/**`, `docs/vi/**`, `docs/nl/**`, `docs/fa/**`, `docs/ru/**`, `docs/tr/**`, `docs/uk/**`, `docs/id/**`, `docs/pl/**`, or `docs/th/**`.
 
 ## End-to-end flow
 
@@ -32,16 +32,16 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 ## Locale visibility
 
-- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, and `fa`.
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
 - Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
-- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; today that includes Vietnamese (`vi`) and Dutch (`nl`), but not Thai (`th`) or Persian (`fa`).
-- Do not treat missing `th` or `fa` entries in generated `docs/docs.json` as a pipeline failure. Verify their generated folders in `openclaw/docs` instead.
+- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; Russian (`ru`) and Hindi (`hi`) are now included in the publish configuration.
+- Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
 
 ## Files in this folder
 
 - `glossary.<lang>.json` — preferred term mappings used as prompt guidance.
-- `zh-Hans-navigation.json` — curated zh-Hans Mintlify locale navigation reinserted into the publish repo during sync.
-- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale metadata kept alongside the source repo, but the publish sync now clones the full English nav tree for clone-en locales so translated pages are visible in Mintlify without hand-maintaining per-locale nav JSON.
+- `zh-Hans-navigation.json` — curated zh-Hans tab and group labels overlaid onto the current English navigation tree during publish sync.
+- `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale labels kept alongside the source repo. Publish sync clones the full English navigation tree, prefixes locale routes, and overlays translated labels by matching shared page anchors.
 - `<lang>.tm.jsonl` — translation memory keyed by workflow + model + text hash.
 
 In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/zh-TW.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, `docs/.i18n/ar.tm.jsonl`, `docs/.i18n/it.tm.jsonl`, `docs/.i18n/vi.tm.jsonl`, `docs/.i18n/nl.tm.jsonl`, `docs/.i18n/fa.tm.jsonl`, `docs/.i18n/tr.tm.jsonl`, `docs/.i18n/uk.tm.jsonl`, `docs/.i18n/id.tm.jsonl`, `docs/.i18n/pl.tm.jsonl`, and `docs/.i18n/th.tm.jsonl` are intentionally no longer committed.

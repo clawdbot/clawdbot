@@ -1,5 +1,7 @@
 // Telegram plugin module implements reply threading behavior.
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { createTelegramChunkDeliveryTracker } from "../chunk-delivery.js";
 
 export type DeliveryProgress = {
   hasReplied: boolean;
@@ -38,6 +40,10 @@ export async function sendChunkedTelegramReplyText<
   replyMarkup?: TReplyMarkup;
   replyQuoteText?: string;
   quoteOnlyOnFirstChunk?: boolean;
+  invalidate: () => void;
+  onRejected: (error: unknown) => void;
+  isSilentSkip?: (error: unknown) => boolean;
+  onSilentSkip?: (error: unknown) => void;
   markDelivered?: (progress: TProgress) => void;
   sendChunk: (opts: {
     chunk: TChunk;
@@ -45,32 +51,65 @@ export async function sendChunkedTelegramReplyText<
     replyToMessageId?: number;
     replyMarkup?: TReplyMarkup;
     replyQuoteText?: string;
-  }) => Promise<void>;
+  }) => Promise<number>;
+  recordChunk: (result: number, chunk: TChunk) => Promise<void>;
 }): Promise<void> {
   const applyDelivered = params.markDelivered ?? markDelivered;
-  for (let i = 0; i < params.chunks.length; i += 1) {
-    const chunk = params.chunks[i];
+  const messageIds: string[] = [];
+  const tracker = createTelegramChunkDeliveryTracker({
+    invalidate: params.invalidate,
+    onRejected: params.onRejected,
+    isSilentSkip: params.isSilentSkip,
+    onSilentSkip: params.onSilentSkip,
+    partialDeliveryResult: () => ({ messageIds: [...messageIds], visibleReplySent: true }),
+  });
+  const suppressSingleUseReply =
+    params.chunks.length > 1 && isSingleUseReplyToMode(params.replyToMode);
+  let hasAcceptedChunk = false;
+  for (const chunk of params.chunks) {
     if (!chunk) {
       continue;
     }
-    const isFirstChunk = i === 0;
-    const replyToMessageId = resolveReplyToForSend({
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
-      progress: params.progress,
-    });
+    const isFirstChunk = !hasAcceptedChunk;
+    // Telegram Desktop can render long formatted native-reply chunks as
+    // unsupported messages. Multi-part `first` replies consume the reply target
+    // without adding native reply params, preserving visible text.
+    const replyToMessageId = suppressSingleUseReply
+      ? undefined
+      : resolveReplyToForSend({
+          replyToId: params.replyToId,
+          replyToMode: params.replyToMode,
+          progress: params.progress,
+        });
     const shouldAttachQuote =
       Boolean(replyToMessageId) &&
       Boolean(params.replyQuoteText) &&
       (params.quoteOnlyOnFirstChunk !== true || isFirstChunk);
-    await params.sendChunk({
-      chunk,
-      isFirstChunk,
-      replyToMessageId,
-      replyMarkup: isFirstChunk ? params.replyMarkup : undefined,
-      replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
-    });
-    markReplyApplied(params.progress, replyToMessageId);
+    const accepted = await tracker.attempt(
+      () =>
+        params.sendChunk({
+          chunk,
+          isFirstChunk,
+          replyToMessageId,
+          replyMarkup: isFirstChunk ? params.replyMarkup : undefined,
+          replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
+        }),
+      (result) => {
+        // Capture Telegram's accepted identity before fallible bookkeeping so
+        // partial delivery reports retain the concrete streamed messages.
+        messageIds.push(String(result));
+        return params.recordChunk(result, chunk);
+      },
+    );
+    if (accepted !== "accepted") {
+      continue;
+    }
+    hasAcceptedChunk = true;
+    markReplyApplied(
+      params.progress,
+      suppressSingleUseReply && isFirstChunk ? params.replyToId : replyToMessageId,
+    );
     applyDelivered(params.progress);
   }
+  tracker.finish();
 }

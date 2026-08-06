@@ -1,10 +1,12 @@
 // Register agent tests cover agent command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgentCommands } from "./register.agent.js";
+import { registerAgentTurnCommand } from "./register.agent-turn.js";
+import { registerAgentsCommands } from "./register.agent.js";
 
 const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
+  agentExecCommandMock: vi.fn(),
   agentsAddCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
   agentsBindCommandMock: vi.fn(),
@@ -21,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const agentCliCommandMock = mocks.agentCliCommandMock;
+const agentExecCommandMock = mocks.agentExecCommandMock;
 const agentsAddCommandMock = mocks.agentsAddCommandMock;
 const agentsBindingsCommandMock = mocks.agentsBindingsCommandMock;
 const agentsBindCommandMock = mocks.agentsBindCommandMock;
@@ -33,6 +36,10 @@ const runtime = mocks.runtime;
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: mocks.agentCliCommandMock,
+}));
+
+vi.mock("../../commands/agent-exec.js", () => ({
+  agentExecCommand: mocks.agentExecCommandMock,
 }));
 
 vi.mock("../../commands/agents.commands.add.js", () => ({
@@ -65,10 +72,11 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
 
-describe("registerAgentCommands", () => {
+describe("agent command registration", () => {
   async function runCli(args: string[]) {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentsCommands(program);
     await program.parseAsync(args, { from: "user" });
   }
 
@@ -76,6 +84,7 @@ describe("registerAgentCommands", () => {
     vi.clearAllMocks();
     runtime.exit.mockImplementation(() => {});
     agentCliCommandMock.mockResolvedValue(undefined);
+    agentExecCommandMock.mockResolvedValue({ exitCode: 0 });
     agentsAddCommandMock.mockResolvedValue(undefined);
     agentsBindingsCommandMock.mockResolvedValue(undefined);
     agentsBindCommandMock.mockResolvedValue(undefined);
@@ -92,6 +101,20 @@ describe("registerAgentCommands", () => {
     }
     return call;
   }
+
+  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+    const program = new Command();
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    const agent = program.commands.find((command) => command.name() === "agent");
+    const exec = agent?.commands.find((command) => command.name() === "exec");
+
+    expect(agent?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+    expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+  });
 
   it("runs agent command with verbose enabled for --verbose on", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "ON", "--json"]);
@@ -116,6 +139,17 @@ describe("registerAgentCommands", () => {
     expect(deps).toBeUndefined();
   });
 
+  it("forwards a message file to the agent command", async () => {
+    await runCli(["agent", "--message-file", "task.md", "--agent", "ops"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBeUndefined();
+    expect((options as { messageFile?: string }).messageFile).toBe("task.md");
+    expect((options as { agent?: string }).agent).toBe("ops");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
   it("accepts a model override for one-shot agent runs", async () => {
     await runCli(["agent", "--message", "hi", "--agent", "ops", "--model", "openai/gpt-5.4"]);
 
@@ -135,6 +169,90 @@ describe("registerAgentCommands", () => {
     expect((options as { sessionKey?: string }).sessionKey).toBe("agent:ops:incident-42");
     expect(callRuntime).toBe(runtime);
     expect(deps).toBeUndefined();
+  });
+
+  it("keeps bare agent on the existing parent action", async () => {
+    await runCli(["agent", "--message", "hi", "--agent", "ops"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
+    expect(agentExecCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an exec-valued parent message on the existing parent action", async () => {
+    await runCli(["agent", "--message", "exec", "--agent", "ops"]);
+
+    expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
+    expect(agentExecCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the nested headless exec command with repeatable fallbacks", async () => {
+    await runCli([
+      "agent",
+      "exec",
+      "fix it",
+      "--cwd",
+      "/tmp/project",
+      "--model",
+      "openai/gpt-5.6-sol",
+      "--code-mode",
+      "code",
+      "--local-model-lean",
+      "--fallback",
+      "anthropic/claude-sonnet-4-6",
+      "--fallback",
+      "google/gemini-3.1-pro-preview",
+      "--json",
+    ]);
+
+    expect(agentCliCommandMock).not.toHaveBeenCalled();
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({
+        cwd: "/tmp/project",
+        model: "openai/gpt-5.6-sol",
+        codeMode: "code",
+        localModelLean: true,
+        fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
+        // Stored credentials are the default so exec reaches the same logins as
+        // the rest of the CLI; --auth-env-only is the opt-in restriction.
+        authEnvOnly: false,
+        isolated: false,
+        timeout: "600",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("restricts credentials and config to the process environment with --auth-env-only", async () => {
+    await runCli(["agent", "exec", "fix it", "--auth-env-only"]);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ authEnvOnly: true }),
+      runtime,
+    );
+  });
+
+  it("forwards the pinned-config and isolated run flags", async () => {
+    await runCli(["agent", "exec", "fix it", "--config", "/tmp/ci.json", "--isolated"]);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ config: "/tmp/ci.json", isolated: true }),
+      runtime,
+    );
+  });
+
+  it("accepts parent options before the nested exec command", async () => {
+    await runCli(["agent", "--model", "openai/gpt-5.6-sol", "exec", "fix it", "--json"]);
+
+    expect(agentCliCommandMock).not.toHaveBeenCalled();
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ model: "openai/gpt-5.6-sol", json: true }),
+      runtime,
+    );
   });
 
   it("runs agents add and computes hasFlags based on explicit options", async () => {
@@ -167,6 +285,17 @@ describe("registerAgentCommands", () => {
     expect((betaOptions as { json?: boolean }).json).toBe(true);
     expect(betaRuntime).toBe(runtime);
     expect(betaFlags).toEqual({ hasFlags: true });
+  });
+
+  it("keeps JSON-only agent creation non-interactive", async () => {
+    await runCli(["agents", "add", "alpha", "--json"]);
+
+    const [options, callRuntime, flags] = commandCall(agentsAddCommandMock);
+    expect(options).toEqual(
+      expect.objectContaining({ name: "alpha", json: true, nonInteractive: false }),
+    );
+    expect(callRuntime).toBe(runtime);
+    expect(flags).toEqual({ hasFlags: true });
   });
 
   it("runs agents list when root agents command is invoked", async () => {
@@ -220,7 +349,7 @@ describe("registerAgentCommands", () => {
 
   it("documents bind accountId resolution behavior in help text", () => {
     const program = new Command();
-    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    registerAgentsCommands(program);
     const agents = program.commands.find((command) => command.name() === "agents");
     const bind = agents?.commands.find((command) => command.name() === "bind");
     const help = bind?.helpInformation() ?? "";

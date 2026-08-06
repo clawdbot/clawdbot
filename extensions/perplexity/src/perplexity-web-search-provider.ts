@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
@@ -11,14 +12,9 @@ import {
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
-type PerplexityWebSearchRuntime = typeof import("./perplexity-web-search-provider.runtime.js");
-
-let perplexityWebSearchRuntimePromise: Promise<PerplexityWebSearchRuntime> | undefined;
-
-function loadPerplexityWebSearchRuntime(): Promise<PerplexityWebSearchRuntime> {
-  perplexityWebSearchRuntimePromise ??= import("./perplexity-web-search-provider.runtime.js");
-  return perplexityWebSearchRuntimePromise;
-}
+const loadPerplexityWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./perplexity-web-search-provider.runtime.js"),
+);
 
 function createPerplexityParameters(transport?: string): Record<string, unknown> {
   const properties: Record<string, unknown> = {
@@ -101,9 +97,10 @@ function createPerplexityToolDefinition(
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
     parameters: createPerplexityParameters(schemaTransport),
-    execute: async (args) => {
+    execute: async (args, context) => {
+      context?.signal?.throwIfAborted();
       const { executePerplexitySearch } = await loadPerplexityWebSearchRuntime();
-      return await executePerplexitySearch(args, searchConfig);
+      return await executePerplexitySearch(args, searchConfig, context?.signal);
     },
   };
 }

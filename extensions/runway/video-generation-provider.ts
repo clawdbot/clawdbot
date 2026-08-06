@@ -1,17 +1,19 @@
 // Runway provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
-  fetchProviderOperationResponse,
+  pollProviderOperationJson,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -35,7 +37,6 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const MAX_DURATION_SECONDS = 10;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
@@ -65,16 +66,13 @@ const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
-async function readRunwayJsonResponse<T>(
-  response: Pick<Response, "json">,
-  label: string,
-): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+async function readRunwayJsonResponse<T>(response: Response, label: string): Promise<T> {
+  // Runway submit/poll task bodies are read through the shared byte-bounded reader
+  // (readResponseWithLimit, via readProviderJsonResponse) so a hostile or buggy endpoint
+  // that streams an unbounded JSON body cannot force the runtime to buffer the whole
+  // payload before parsing. Overflow cancels the stream and throws a bounded error;
+  // malformed JSON keeps the existing `${label}: malformed JSON response` wrapping.
+  const payload = await readProviderJsonResponse<unknown>(response, label);
   if (!isRecord(payload)) {
     throw new Error(`${label}: malformed JSON response`);
   }
@@ -125,14 +123,6 @@ function resolveRunwayBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ?? DEFAULT_RUNWAY_BASE_URL
   );
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -281,42 +271,25 @@ async function pollRunwayTask(params: {
     timeoutMs: params.timeoutMs,
     label: `Runway video generation task ${params.taskId}`,
   });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchProviderOperationResponse({
-      stage: "poll",
-      url: `${params.baseUrl}/v1/tasks/${params.taskId}`,
-      init: {
-        method: "GET",
-        headers: params.headers,
-      },
-      timeoutMs: createProviderOperationTimeoutResolver({
-        deadline,
-        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-      }),
-      fetchFn: params.fetchFn,
-      provider: "runway",
-      requestFailedMessage: "Runway video status request failed",
-    });
-    const payload = await readRunwayJsonResponse<RunwayTaskDetailResponse>(
-      response,
-      "Runway video status request failed",
-    );
-    const status = readRunwayTaskStatus(payload);
-    switch (status) {
-      case "SUCCEEDED":
-        return payload;
-      case "FAILED":
-      case "CANCELLED":
-        throw new Error(
-          readRunwayFailureMessage(payload.failure) ||
-            `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
-        );
-      default:
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        break;
-    }
-  }
-  throw new Error(`Runway video generation task ${params.taskId} did not finish in time`);
+  return await pollProviderOperationJson<RunwayTaskDetailResponse>({
+    url: `${params.baseUrl}/v1/tasks/${params.taskId}`,
+    headers: params.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "Runway video status request failed",
+    timeoutMessage: `Runway video generation task ${params.taskId} did not finish in time`,
+    isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
+    getFailureMessage: (payload) => {
+      const status = readRunwayTaskStatus(payload);
+      return status === "FAILED" || status === "CANCELLED"
+        ? readRunwayFailureMessage(payload.failure) ||
+            `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
+        : undefined;
+    },
+  });
 }
 
 async function downloadRunwayVideos(params: {
@@ -327,19 +300,44 @@ async function downloadRunwayVideos(params: {
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
+    const deadline = createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      label: "Runway generated video download",
+    });
+    const timeoutMs = createProviderOperationTimeoutResolver({
+      deadline,
+      defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
     const response = await fetchProviderDownloadResponse({
       url,
       init: { method: "GET" },
-      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      deadline,
       fetchFn: params.fetchFn,
       provider: "runway",
       requestFailedMessage: "Runway generated video download failed",
     });
+    try {
+      assertProviderBinaryResponseContent(response, "Runway generated video download", "video");
+    } catch (error) {
+      // A rejected binary response still owns a live socket until its unread body is canceled.
+      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+      // before the rejected response and its dispatcher can be released.
+      void response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      timeoutMs,
+      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+        new Error(
+          `Runway generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+        ),
       onOverflow: ({ maxBytes }) =>
         new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
     });
+    if (buffer.byteLength === 0) {
+      throw new Error("Runway generated video download: malformed video response");
+    }
     videos.push({
       buffer,
       mimeType,
@@ -356,11 +354,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     label: "Runway",
     defaultModel: DEFAULT_RUNWAY_MODEL,
     models: ["gen4.5", "gen4_turbo", "gen4_aleph", "gen3a_turbo", "veo3.1", "veo3.1_fast", "veo3"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "runway",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "runway", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -455,7 +449,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
         return {
           videos,

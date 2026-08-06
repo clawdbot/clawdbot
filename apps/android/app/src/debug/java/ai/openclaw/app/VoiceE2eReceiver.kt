@@ -10,6 +10,7 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -148,21 +149,38 @@ class VoiceE2eService : Service() {
     runtime.setManualHost(host)
     runtime.setManualPort(port)
     runtime.setManualTls(intent.getBooleanExtra("tls", false))
-    runtime.setGatewayToken(intent.getDecodedStringExtra("token").orEmpty())
-    runtime.setGatewayBootstrapToken(intent.getDecodedStringExtra("bootstrapToken").orEmpty())
-    runtime.setGatewayPassword(intent.getDecodedStringExtra("password").orEmpty())
     runtime.setOnboardingCompleted(true)
-    runtime.connectManual()
+    runtime.connect(
+      ai.openclaw.app.gateway.GatewayEndpoint
+        .manual(host, port),
+      NodeRuntime.GatewayConnectAuth(
+        token = intent.getDecodedStringExtra("token"),
+        bootstrapToken = intent.getDecodedStringExtra("bootstrapToken"),
+        password = intent.getDecodedStringExtra("password"),
+      ),
+    )
   }
 
   private suspend fun awaitGateway(
     runtime: NodeRuntime,
     timeoutMs: Long,
   ) {
-    withTimeout(timeoutMs) {
-      while (!runtime.isConnected.value) {
-        delay(100L)
+    try {
+      withTimeout(timeoutMs) {
+        while (!runtime.isConnected.value) {
+          voiceE2eTerminalGatewayFailure(runtime.gatewayConnectionProblem.value)?.let { error(it) }
+          delay(100L)
+        }
       }
+    } catch (err: TimeoutCancellationException) {
+      throw IllegalStateException(
+        voiceE2eGatewayTimeoutMessage(
+          timeoutMs = timeoutMs,
+          statusText = runtime.statusText.value,
+          problem = runtime.gatewayConnectionProblem.value,
+        ),
+        err,
+      )
     }
   }
 
@@ -192,4 +210,33 @@ private fun Intent.getDecodedStringExtra(name: String): String? {
     return String(Base64.decode(encoded, Base64.NO_WRAP), Charsets.UTF_8)
   }
   return getStringExtra(name)
+}
+
+internal fun voiceE2eTerminalGatewayFailure(problem: GatewayConnectionProblem?): String? =
+  problem
+    ?.takeIf { it.pauseReconnect && !it.canAutoRetry }
+    ?.message
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+
+internal fun voiceE2eGatewayTimeoutMessage(
+  timeoutMs: Long,
+  statusText: String,
+  problem: GatewayConnectionProblem?,
+): String {
+  val detail =
+    problem
+      ?.message
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?: statusText.trim().takeIf { it.isNotEmpty() }
+  return buildString {
+    append("Gateway connection timed out after ")
+    append(timeoutMs)
+    append(" ms")
+    if (detail != null) {
+      append(": ")
+      append(detail)
+    }
+  }
 }

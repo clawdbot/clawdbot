@@ -9,7 +9,7 @@ import type { SsrFPolicy } from "./ssrf-policy.js";
 // Remote memory HTTP wrapper that applies SSRF policy and releases guarded sockets.
 
 /** Proxy mode used only for URLs that the runtime classified as env-proxy safe. */
-export const MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE = "trusted_env_proxy";
+const MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE = "trusted_env_proxy";
 
 /** Build an SSRF allow policy from a configured remote base URL. */
 export const buildRemoteBaseUrlPolicy: (baseUrl: string) => SsrFPolicy | undefined =

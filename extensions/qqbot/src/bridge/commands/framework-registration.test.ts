@@ -19,11 +19,11 @@ function createConfig(): OpenClawConfig {
       qqbot: {
         appId: "app",
         allowFrom: ["TRUSTED_OPENID"],
-        streaming: false,
+        streaming: { mode: "off" },
         accounts: {
           default: {
             allowFrom: ["TRUSTED_OPENID"],
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -94,9 +94,25 @@ describe("registerQQBotFrameworkCommands", () => {
       createCommandContext(config, "qqbot:group:GROUP_OPENID"),
     );
 
-    expect(missingFromResult).toEqual({ text: "💡 请在私聊中使用此指令" });
-    expect(nonQQBotResult).toEqual({ text: "💡 请在私聊中使用此指令" });
-    expect(groupResult).toEqual({ text: "💡 请在私聊中使用此指令" });
+    expect(missingFromResult).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
+    expect(nonQQBotResult).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
+    expect(groupResult).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
+    expect(writes).toHaveLength(0);
+  });
+
+  it("keeps private-only framework commands private when command level is all", async () => {
+    const config = createConfig();
+    const qqbot = config.channels?.qqbot as Record<string, unknown>;
+    qqbot.groups = {
+      GROUP_OPENID: { commandLevel: "all" },
+    };
+    const writes: OpenClawConfig[] = [];
+    installCommandRuntime(config, writes);
+    const command = findCommand(registerCommands(), "bot-streaming");
+
+    const result = await command.handler(createCommandContext(config, "qqbot:group:GROUP_OPENID"));
+
+    expect(result).toEqual({ text: "该命令仅限私聊使用，请在私聊中发送。" });
     expect(writes).toHaveLength(0);
   });
 
@@ -113,7 +129,7 @@ describe("registerQQBotFrameworkCommands", () => {
       text: "✅ 流式消息已开启\n\nAI 的回复将以流式形式逐步显示（仅私聊生效）。",
     });
     expect(writes).toHaveLength(1);
-    expect(qqbot?.streaming).toBe(true);
-    expect(qqbot?.accounts?.default?.streaming).toBe(true);
+    expect(qqbot?.streaming).toEqual({ mode: "partial", nativeTransport: true });
+    expect(qqbot?.accounts?.default?.streaming).toEqual({ mode: "partial", nativeTransport: true });
   });
 });

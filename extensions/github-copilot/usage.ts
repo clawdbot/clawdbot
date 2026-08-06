@@ -1,5 +1,6 @@
 // Github Copilot plugin module implements usage behavior.
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,
@@ -8,6 +9,8 @@ import {
   type ProviderUsageSnapshot,
   type UsageWindow,
 } from "openclaw/plugin-sdk/provider-usage";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 type CopilotUsageResponse = {
   quota_snapshots?: {
@@ -21,9 +24,10 @@ export async function fetchCopilotUsage(
   token: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  githubDomain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
 ): Promise<ProviderUsageSnapshot> {
   const res = await fetchJson(
-    "https://api.github.com/copilot_internal/user",
+    `https://api.${githubDomain}/copilot_internal/user`,
     {
       headers: {
         Authorization: `token ${token}`,
@@ -35,13 +39,15 @@ export async function fetchCopilotUsage(
   );
 
   if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
     return buildUsageHttpErrorSnapshot({
       provider: "github-copilot",
       status: res.status,
     });
   }
 
-  const data = (await res.json()) as CopilotUsageResponse;
+  const payload = await readProviderJsonResponse<unknown>(res, "github-copilot-usage");
+  const data = isRecord(payload) ? (payload as CopilotUsageResponse) : {};
   const windows: UsageWindow[] = [];
 
   if (data.quota_snapshots?.premium_interactions) {

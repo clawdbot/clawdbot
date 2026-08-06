@@ -1,4 +1,5 @@
 // Check Gateway Cpu Scenarios tests cover check gateway cpu scenarios script behavior.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +13,18 @@ function makeTempRoot(): string {
   const root = mkdtempSync(path.join(artifactRoot, "gateway-cpu-test-"));
   tempRoots.push(root);
   return root;
+}
+
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/check-gateway-cpu-scenarios.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
 }
 
 function writeQaSuiteSummary(
@@ -33,6 +46,21 @@ function writeQaSuiteSummary(
           ...(counts.failed > 0 ? {} : { steps: [{ name: "mock step", status: "pass" }] }),
         },
       ],
+    })}\n`,
+  );
+}
+
+function writeConcurrencyReport(outputDir: string): void {
+  writeFileSync(
+    path.join(outputDir, "gateway-concurrency-bench.json"),
+    `${JSON.stringify({
+      mode: "mock-streaming-agent",
+      runs: [{ turnCount: 8 }],
+      summary: {
+        eventLoopDelayP99Ms: { max: 20 },
+        sessionsListLatencyMs: { p99: 30 },
+        controlUiLatencyMs: { p99: 25 },
+      },
     })}\n`,
   );
 }
@@ -92,14 +120,43 @@ describe("gateway CPU scenario guard", () => {
       "--cpu-core-warn",
       "--hot-wall-warn-ms",
     ]) {
-      expect(() => testing.parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => testing.parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
     }
   });
 
+  it("rejects duplicate single-value controls before running scenarios", () => {
+    expect(() =>
+      testing.parseArgs(["--output-dir", makeTempRoot(), "--output-dir", makeTempRoot()]),
+    ).toThrow("--output-dir was provided more than once");
+
+    const result = runCli("--runs", "1", "--runs", "2");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--runs was provided more than once");
+    expectNoNodeStack(result.stderr);
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const result = runCli("--wat");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expectNoNodeStack(result.stderr);
+  });
+
   it("prepares CLI startup artifacts before running the startup bench", async () => {
+    type SpawnCall = {
+      args: string[];
+      command: string;
+      env?: Record<string, string | undefined>;
+    };
     const outputDir = makeTempRoot();
     const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
-    const calls: Array<{ command: string; args: string[] }> = [];
+    const calls: SpawnCall[] = [];
     const options = testing.parseArgs([
       "--output-dir",
       outputDir,
@@ -111,11 +168,15 @@ describe("gateway CPU scenario guard", () => {
     ]);
 
     const result = await testing.runGatewayCpuScenarios(options, {
+      env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
-      spawnSync: (command: string, args: string[]) => {
-        calls.push({ command, args });
+      spawnSync: (command: string, args: string[], opts?: { env?: Record<string, string> }) => {
+        calls.push({ args, command, env: opts?.env });
         if (args.includes("scripts/bench-gateway-startup.ts")) {
           writeFileSync(startupOutput, `${JSON.stringify({ results: [{ id: "default" }] })}\n`);
+        }
+        if (args.includes("scripts/bench-gateway-concurrency.ts")) {
+          writeConcurrencyReport(outputDir);
         }
         return { status: 0 };
       },
@@ -125,8 +186,13 @@ describe("gateway CPU scenario guard", () => {
     expect(calls.map((call) => call.args[0])).toEqual([
       "scripts/ensure-cli-startup-build.mjs",
       "--import",
+      "scripts/bench-gateway-concurrency.ts",
     ]);
     expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
+    expect(calls[2]?.args).toContain("scripts/bench-gateway-concurrency.ts");
+    expect(calls[0]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
+    expect(calls[1]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
+    expect(calls[2]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
   });
 
   it("fails successful startup benches that do not write a report", async () => {
@@ -203,6 +269,7 @@ describe("gateway CPU scenario guard", () => {
     expect(result.summary.steps).toEqual([
       { name: "startup build", signal: null, status: 1 },
       { name: "startup bench", signal: null, status: 1 },
+      { name: "concurrency bench", signal: null, status: 1 },
     ]);
   });
 
@@ -228,6 +295,7 @@ describe("gateway CPU scenario guard", () => {
     expect(result.summary.steps).toEqual([
       { name: "startup build", error: "spawn ENOENT", signal: null, status: 1 },
       { name: "startup bench", signal: null, status: 1 },
+      { name: "concurrency bench", signal: null, status: 1 },
     ]);
   });
 
@@ -245,6 +313,7 @@ describe("gateway CPU scenario guard", () => {
 
     const result = await testing.runGatewayCpuScenarios(options, {
       cwd,
+      env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
       spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
         calls.push({ args, env: opts?.env });
@@ -273,6 +342,7 @@ describe("gateway CPU scenario guard", () => {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
       OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
       USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
     });
     expect(calls[0]?.env?.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS).toBeUndefined();
@@ -320,6 +390,7 @@ describe("gateway CPU scenario guard", () => {
       OPENCLAW_CONFIG_PATH: path.join(outputDir, "qa-state-root", "state", "openclaw.json"),
       OPENCLAW_HOME: path.join(outputDir, "qa-state-root", "home"),
       OPENCLAW_STATE_DIR: path.join(outputDir, "qa-state-root", "state"),
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
       USERPROFILE: path.join(outputDir, "qa-state-root", "home"),
     });
     expect(calls[0]?.env?.HOME).not.toBe("/real/user/home");

@@ -27,7 +27,6 @@ export const EXISTING_SESSION_LIMITS = {
     selectTimeout: "existing-session select does not support timeoutMs overrides.",
     fillTimeout: "existing-session fill does not support timeoutMs overrides.",
     waitNetworkIdle: "existing-session wait does not support loadState=networkidle yet.",
-    evaluateTimeout: "existing-session evaluate does not support timeoutMs overrides.",
     batch: "existing-session batch is not supported yet; send actions individually.",
   },
   hooks: {
@@ -51,4 +50,5 @@ export const EXISTING_SESSION_LIMITS = {
       "selector/frame snapshots are not supported for existing-session profiles; snapshot the whole page and use refs.",
   },
   responseBody: "response body is not supported for existing-session profiles yet.",
+  extract: "extract is not supported for existing-session profiles; use snapshot instead.",
 } as const;

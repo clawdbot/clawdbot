@@ -1,15 +1,11 @@
 // Covers task executor runtime selection, lifecycle updates, and error paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
@@ -19,8 +15,6 @@ import {
   createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  retryBlockedFlowAsQueuedTaskRun,
-  runTaskInFlow,
   runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
@@ -29,20 +23,26 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
-  resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
-  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
-  findLatestTaskForFlowId,
   findTaskByRunId,
+  listTasksForFlowId,
+  markTaskTerminalById,
+} from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  resetTaskFlowRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
   setTaskRegistryControlRuntimeForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  setTaskRegistryDeliveryRuntimeForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -73,6 +73,15 @@ function createManagedTaskFlow(
   }
   return flow;
 }
+
+function runTaskInFlow(
+  params: Omit<Parameters<typeof runTaskInFlowForOwner>[0], "callerOwnerKey">,
+) {
+  return runTaskInFlowForOwner({
+    ...params,
+    callerOwnerKey: "agent:main:main",
+  });
+}
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
@@ -102,17 +111,16 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
   await withStateDirEnv("openclaw-task-executor-", async ({ stateDir }) => {
     resetDetachedTaskLifecycleRuntimeForTests();
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryControlRuntimeForTests();
-    resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
     setTaskRegistryControlRuntimeForTests({
+      cancelActiveCronTaskRun: () => false,
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
       }),
@@ -122,11 +130,9 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
       await run(stateDir);
     } finally {
       resetSystemEventsForTest();
-      resetHeartbeatWakeStateForTests();
       resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryControlRuntimeForTests();
-      resetAgentRunContextForTest();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
     }
@@ -213,11 +219,9 @@ describe("task-executor", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
     resetSystemEventsForTest();
-    resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryControlRuntimeForTests();
-    resetAgentRunContextForTest();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
@@ -363,6 +367,91 @@ describe("task-executor", () => {
     });
   });
 
+  it("keeps detached tasks standalone when task-flow restore fails", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_IOERR: task-flow restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+
+      const created = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:standalone",
+        runId: "run-executor-flow-restore-failed",
+        task: "Continue without a one-task flow",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+
+      expect(created.parentFlowId).toBeUndefined();
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        status: "running",
+        parentFlowId: undefined,
+      });
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("promotes a provisional kill in an already-cancelled one-task flow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:mirrored-kill",
+        runId: "run-mirrored-provisional-kill",
+        task: "Stop mirrored child",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+      const flowId = expectParentFlowId(child);
+      failTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: false,
+        runId: child.runId!,
+        sessionKey: child.childSessionKey!,
+        targetState: {
+          state: "terminal",
+          task: { status: "cancelled", endedAt: 20, error: SUBAGENT_KILL_TASK_ERROR },
+        },
+      });
+      expect(getTaskFlowById(flowId)?.status).toBe("cancelled");
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId });
+      completeTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        endedAt: 30,
+        terminalSummary: "completed too late",
+      });
+
+      expect(cancelled).toMatchObject({ found: true, cancelled: true });
+      expect(getTaskFlowById(flowId)?.status).toBe("cancelled");
+      expect(getTaskById(child.taskId)).toMatchObject({
+        status: "cancelled",
+        endedAt: 20,
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
   it("does not auto-create one-task flows for non-returning bookkeeping runs", async () => {
     await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({
@@ -378,75 +467,6 @@ describe("task-executor", () => {
 
       expect(created.parentFlowId).toBeUndefined();
       expect(listTaskFlowRecords()).toStrictEqual([]);
-    });
-  });
-
-  it("records blocked metadata on one-task flows and reuses the same flow for queued retries", async () => {
-    await withTaskExecutorStateDir(async () => {
-      const created = createRunningTaskRun({
-        runtime: "acp",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        requesterOrigin: {
-          channel: "notifychat",
-          to: "notifychat:123",
-        },
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-executor-blocked",
-        task: "Patch file",
-        startedAt: 10,
-        deliveryStatus: "pending",
-      });
-
-      completeTaskRunByRunId({
-        runId: "run-executor-blocked",
-        endedAt: 40,
-        lastEventAt: 40,
-        terminalOutcome: "blocked",
-        terminalSummary: "Writable session required.",
-      });
-
-      const blockedTask = getTaskById(created.taskId);
-      expect(blockedTask?.taskId).toBe(created.taskId);
-      expect(blockedTask?.status).toBe("succeeded");
-      expect(blockedTask?.terminalOutcome).toBe("blocked");
-      expect(blockedTask?.terminalSummary).toBe("Writable session required.");
-      const parentFlowId = expectParentFlowId(created);
-      const blockedFlow = getTaskFlowById(parentFlowId);
-      expect(blockedFlow?.flowId).toBe(parentFlowId);
-      expect(blockedFlow?.status).toBe("blocked");
-      expect(blockedFlow?.blockedTaskId).toBe(created.taskId);
-      expect(blockedFlow?.blockedSummary).toBe("Writable session required.");
-      expect(blockedFlow?.endedAt).toBe(40);
-
-      const retried = retryBlockedFlowAsQueuedTaskRun({
-        flowId: parentFlowId,
-        runId: "run-executor-retry",
-        childSessionKey: "agent:codex:acp:retry-child",
-      });
-
-      expect(retried.found).toBe(true);
-      expect(retried.retried).toBe(true);
-      if (!retried.retried) {
-        throw new Error("Expected blocked flow retry");
-      }
-      if (!retried.previousTask || !retried.task) {
-        throw new Error("Expected retry result payload");
-      }
-      expect(retried.previousTask.taskId).toBe(created.taskId);
-      expect(retried.task.parentFlowId).toBe(parentFlowId);
-      expect(retried.task.parentTaskId).toBe(created.taskId);
-      expect(retried.task.status).toBe("queued");
-      expect(retried.task.runId).toBe("run-executor-retry");
-      const queuedFlow = getTaskFlowById(parentFlowId);
-      expect(queuedFlow?.flowId).toBe(parentFlowId);
-      expect(queuedFlow?.status).toBe("queued");
-      expect(findLatestTaskForFlowId(parentFlowId)?.runId).toBe("run-executor-retry");
-      const original = findTaskByRunId("run-executor-blocked");
-      expect(original?.taskId).toBe(created.taskId);
-      expect(original?.status).toBe("succeeded");
-      expect(original?.terminalOutcome).toBe("blocked");
-      expect(original?.terminalSummary).toBe("Writable session required.");
     });
   });
 
@@ -488,6 +508,61 @@ describe("task-executor", () => {
       const cancelledFlow = getTaskFlowById(flow.flowId);
       expect(cancelledFlow?.flowId).toBe(flow.flowId);
       expect(cancelledFlow?.status).toBe("cancelled");
+    });
+  });
+
+  it("promotes provisional subagent kills before cancelling a managed TaskFlow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Cancel a killed child",
+      });
+      const created = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "subagent",
+        childSessionKey: "agent:worker:subagent:flow-killed",
+        runId: "run-flow-provisional-kill",
+        task: "Stop the child",
+        status: "running",
+        startedAt: 10,
+      });
+      const child = requireCreatedFlowTask(created);
+      failTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: false,
+        runId: child.runId!,
+        sessionKey: child.childSessionKey!,
+        targetState: {
+          state: "terminal",
+          task: { status: "cancelled", endedAt: 20, error: SUBAGENT_KILL_TASK_ERROR },
+        },
+      });
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
+      completeTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        endedAt: 30,
+        terminalSummary: "completed too late",
+      });
+
+      expect(cancelled).toMatchObject({ found: true, cancelled: true });
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("cancelled");
+      expect(getTaskById(child.taskId)).toMatchObject({
+        status: "cancelled",
+        endedAt: 20,
+        error: "Cancelled by operator.",
+      });
     });
   });
 
@@ -660,7 +735,7 @@ describe("task-executor", () => {
       expect(created.found).toBe(false);
       expect(created.created).toBe(false);
       expect(created.reason).toBe("Flow not found.");
-      expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
+      expect(listTasksForFlowId(flow.flowId)[0]).toBeUndefined();
     });
   });
 
@@ -702,6 +777,75 @@ describe("task-executor", () => {
       });
       expect(cancelled.found).toBe(true);
       expect(cancelled.cancelled).toBe(true);
+    });
+  });
+
+  it("dispatches cancellation for tasks owned only by the registered runtime", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const cancelDetachedTaskRunByIdSpy = vi.fn(async () => ({
+        found: true,
+        cancelled: true,
+      }));
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: "runtime-owned-task",
+        reason: "operator request",
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
+        cfg: {} as never,
+        taskId: "runtime-owned-task",
+        reason: "operator request",
+      });
+      expect(cancelled).toEqual({
+        found: true,
+        cancelled: true,
+      });
+    });
+  });
+
+  it("checks linked flow readiness before invoking a registered cancellation runtime", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningAcpChildTaskRun({
+        runId: "run-external-cancel-restore-failed",
+      });
+      expect(child.parentFlowId).toBeTruthy();
+      const cancelDetachedTaskRunByIdSpy = spyOnRuntimeCancel();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_IOERR: cancellation flow restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).not.toHaveBeenCalled();
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: expect.stringContaining(
+          "Task-flow registry restore failed: SQLITE_IOERR: cancellation flow restore failed",
+        ),
+        task: {
+          taskId: child.taskId,
+          status: "running",
+        },
+      });
+      expect(getTaskById(child.taskId)?.status).toBe("running");
     });
   });
 
@@ -772,6 +916,102 @@ describe("task-executor", () => {
       expect(task?.taskId).toBe(child.taskId);
       expect(task?.status).toBe("running");
       expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("dispatches provisional terminal projections to their registered runtime", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:provisional",
+        runId: "run-provisional-runtime-owned",
+        task: "Cancel provisional runtime task",
+        startedAt: 10,
+        deliveryStatus: "not_applicable",
+      });
+      markTaskTerminalById({
+        taskId: child.taskId,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      const cancelDetachedTaskRunByIdSpy = vi.fn(async () => ({
+        found: true,
+        cancelled: true,
+      }));
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+      expect(cancelled).toEqual({
+        found: true,
+        cancelled: true,
+      });
+    });
+  });
+
+  it("checks linked flow readiness before dispatching provisional terminal projections", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:subagent:provisional-restore-failed",
+        runId: "run-provisional-runtime-restore-failed",
+        task: "Gate provisional runtime cancellation",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+      expect(child.parentFlowId).toBeTruthy();
+      markTaskTerminalById({
+        taskId: child.taskId,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      const cancelDetachedTaskRunByIdSpy = vi.fn(async () => ({
+        found: true,
+        cancelled: true,
+      }));
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+      });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            throw new Error("SQLITE_IOERR: provisional cancellation restore failed");
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      const cancelled = await cancelDetachedTaskRunById({
+        cfg: {} as never,
+        taskId: child.taskId,
+      });
+
+      expect(cancelDetachedTaskRunByIdSpy).not.toHaveBeenCalled();
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: expect.stringContaining(
+          "Task-flow registry restore failed: SQLITE_IOERR: provisional cancellation restore failed",
+        ),
+      });
     });
   });
 
@@ -891,3 +1131,4 @@ describe("task-executor", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,6 @@
 // Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
+import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -15,6 +16,7 @@ import {
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
@@ -32,6 +34,7 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
+  resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordChannelPolicyCommandAuthorizer,
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";
@@ -40,7 +43,6 @@ import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import {
-  resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandChannelAccessContext,
@@ -57,6 +59,7 @@ import {
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
   safeDiscordInteractionCall,
+  settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
 import { maybeDeliverDiscordDirectStatus } from "./native-command-status.js";
 import {
@@ -83,7 +86,6 @@ import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 const log = createSubsystemLogger("discord/native-command");
-export { testing, testing as __testing } from "./native-command.runtime.js";
 
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
@@ -112,13 +114,15 @@ export function createDiscordNativeCommand(params: {
           includeBundledChannelFallback: false,
         }) ?? fallbackCommandDefinition);
   const argDefinitions = commandDefinition.args ?? command.args;
+  const resolveCurrentConfig = () => getRuntimeConfigSnapshot() ?? cfg;
   const commandOptions = buildDiscordCommandOptions({
     command: commandDefinition,
     cfg,
+    resolveConfig: resolveCurrentConfig,
     authorizeChoiceContext: async (interaction) =>
       await resolveDiscordNativeAutocompleteAuthorized({
         interaction,
-        cfg,
+        cfg: resolveCurrentConfig(),
         discordConfig,
         accountId,
         skipCommandOwnerAllowFrom: pluginCommandMatch !== null,
@@ -126,7 +130,7 @@ export function createDiscordNativeCommand(params: {
     resolveChoiceContext: async (interaction) =>
       resolveDiscordNativeChoiceContext({
         interaction,
-        cfg,
+        cfg: resolveCurrentConfig(),
         accountId,
         threadBindings,
       }),
@@ -215,7 +219,7 @@ async function dispatchDiscordCommandInteraction(params: {
     prompt,
     command,
     commandArgs,
-    cfg,
+    cfg: inputConfig,
     discordConfig,
     accountId,
     sessionPrefix,
@@ -224,6 +228,7 @@ async function dispatchDiscordCommandInteraction(params: {
     responseEphemeral,
     suppressReplies,
   } = params;
+  const cfg = getRuntimeConfigSnapshot() ?? inputConfig;
   const commandName = command.nativeName ?? command.key;
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
     const ephemeral = options?.ephemeral ?? responseEphemeral;
@@ -240,7 +245,7 @@ async function dispatchDiscordCommandInteraction(params: {
     });
   };
 
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const user = interaction.user;
   if (!user) {
     return { accepted: false };
@@ -293,7 +298,8 @@ async function dispatchDiscordCommandInteraction(params: {
     allowNameMatching,
   });
   const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
-  const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+  const senderIsCommandOwner = commandOwnerOk;
+  const commandOwnerAccessAllowed = senderIsCommandOwner || commandOwnerAllowAll;
   const ownerAllowListConfigured = discordOwnerAllowList != null;
   const ownerOk = discordOwnerOk;
   const { commandsAllowFromAccess, guildInfo, channelConfig } =
@@ -457,7 +463,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const pluginMatch = nativeCommandRuntime.matchPluginCommand(prompt);
   if (
     commandOwnerAllowFrom &&
-    !senderIsCommandOwner &&
+    !commandOwnerAccessAllowed &&
     !commandsAllowFromAccess.allowed &&
     commandName !== "status" &&
     !pluginMatch
@@ -481,12 +487,28 @@ async function dispatchDiscordCommandInteraction(params: {
         threadBindings,
       })
     : null;
+  // Native /think must not wait on provider discovery; persisted rows retain its metadata.
+  const menuModelCatalog =
+    command.key === "think" && menuNeedsModelContext
+      ? await loadPreparedModelCatalog({
+          config: cfg,
+          ...(menuModelContext?.agentId
+            ? {
+                agentId: menuModelContext.agentId,
+                agentDir: resolveAgentDir(cfg, menuModelContext.agentId),
+              }
+            : {}),
+          readOnly: true,
+        })
+      : undefined;
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,
     cfg,
     provider: menuModelContext?.provider,
     model: menuModelContext?.model,
+    agentRuntime: menuModelContext?.agentRuntime,
+    ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
   });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({
@@ -525,6 +547,7 @@ async function dispatchDiscordCommandInteraction(params: {
 
   if (pluginMatch && commandName !== "status") {
     if (suppressReplies) {
+      await settleDiscordInteractionWithoutVisibleReply(interaction);
       return { accepted: true };
     }
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
@@ -562,6 +585,10 @@ async function dispatchDiscordCommandInteraction(params: {
       messageThreadId,
       threadParentId: pluginThreadParentId,
     });
+    if (pluginReply.suppressReply === true) {
+      await settleDiscordInteractionWithoutVisibleReply(interaction);
+      return { accepted: true, effectiveRoute };
+    }
     if (!hasRenderableReplyPayload(pluginReply)) {
       await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
       return { accepted: true, effectiveRoute };
@@ -719,3 +746,4 @@ export function createDiscordModelPickerFallbackSelect(
     dispatchCommandInteraction: dispatchDiscordCommandInteraction,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

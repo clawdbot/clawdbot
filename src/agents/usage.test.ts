@@ -13,6 +13,30 @@ import {
 } from "./usage.js";
 
 describe("normalizeUsage", () => {
+  it("preserves only complete context snapshots", () => {
+    expect(
+      normalizeUsage({
+        input: 12,
+        contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
+      }),
+    ).toMatchObject({
+      input: 12,
+      contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
+    });
+    expect(
+      normalizeUsage({
+        input: 12,
+        contextUsage: { state: "available", promptTokens: 163_978, totalTokens: 148_874 },
+      }),
+    ).toEqual({
+      input: 12,
+      output: undefined,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("normalizes cache fields from provider response", () => {
     const usage = normalizeUsage({
       input: 1000,
@@ -127,6 +151,25 @@ describe("normalizeUsage", () => {
       reasoningTokens: 11,
       total: 150,
     });
+  });
+
+  it.each([
+    { provider: "Anthropic", details: { thinking_tokens: 17 }, expected: 17 },
+    { provider: "Anthropic zero", details: { thinking_tokens: 0 }, expected: 0 },
+    { provider: "OpenAI", details: { reasoning_tokens: 17 }, expected: 17 },
+    {
+      provider: "OpenAI precedence",
+      details: { reasoning_tokens: 17, thinking_tokens: 22 },
+      expected: 17,
+    },
+  ])("normalizes $provider output reasoning token details", ({ details, expected }) => {
+    expect(
+      normalizeUsage({
+        input_tokens: 30,
+        output_tokens: 40,
+        output_tokens_details: details,
+      }),
+    ).toMatchObject({ input: 30, output: 40, reasoningTokens: expected });
   });
 
   it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {
@@ -374,6 +417,66 @@ describe("deriveContextPromptTokens", () => {
     ).toBe(81_000);
   });
 
+  it("prefers explicit prompt buckets over total-minus-output fallback", () => {
+    expect(
+      deriveContextPromptTokens({
+        lastCallUsage: { input: 20, cacheRead: 100, output: 30, total: 250 },
+      }),
+    ).toBe(120);
+  });
+
+  it("prefers an explicit final-iteration context snapshot over aggregate billing usage", () => {
+    expect(
+      deriveContextPromptTokens({
+        lastCallUsage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: {
+            state: "available",
+            promptTokens: 148_874,
+            totalTokens: 163_978,
+          },
+          total: 927_907,
+        },
+      }),
+    ).toBe(148_874);
+  });
+
+  it("does not reconstruct context when the provider snapshot is unavailable", () => {
+    expect(
+      deriveContextPromptTokens({
+        lastCallUsage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: { state: "unavailable" },
+          total: 927_907,
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat total-only usage as a prompt snapshot", () => {
+    expect(
+      deriveContextPromptTokens({
+        lastCallUsage: { input: 1_000, total: 1_200 },
+      }),
+    ).toBe(1_000);
+    expect(
+      deriveContextPromptTokens({
+        lastCallUsage: { total: 1_200 },
+      }),
+    ).toBeUndefined();
+    expect(
+      deriveContextPromptTokens({
+        lastCallUsage: { output: 200, total: 1_200 },
+      }),
+    ).toBe(1_000);
+  });
+
   it("falls back to accumulated usage when no prompt snapshot exists", () => {
     expect(
       deriveContextPromptTokens({
@@ -381,9 +484,65 @@ describe("deriveContextPromptTokens", () => {
       }),
     ).toBe(100_000);
   });
+
+  it("keeps accumulated usage on its component-based context snapshot", () => {
+    expect(
+      deriveContextPromptTokens({
+        usage: { input: 10_000, cacheRead: 26_000, output: 1_000, total: 36_000 },
+      }),
+    ).toBe(36_000);
+  });
 });
 
 describe("deriveSessionTotalTokens", () => {
+  it("prefers last-call usage over aggregate billing usage", () => {
+    expect(
+      deriveSessionTotalTokens({
+        lastCallUsage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
+        usage: {
+          input: 497_720,
+          output: 7_485,
+          cacheRead: 1_323_520,
+          total: 1_828_725,
+        },
+      }),
+    ).toBe(158_653);
+  });
+
+  it("prefers the explicit context snapshot over aggregate billing buckets", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: {
+            state: "available",
+            promptTokens: 148_874,
+            totalTokens: 163_978,
+          },
+          total: 927_907,
+        },
+      }),
+    ).toBe(148_874);
+  });
+
+  it("does not store aggregate billing as session context when the snapshot is unavailable", () => {
+    expect(
+      deriveSessionTotalTokens({
+        usage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: { state: "unavailable" },
+          total: 927_907,
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("includes cache tokens in total calculation", () => {
     const totalTokens = deriveSessionTotalTokens({
       usage: {

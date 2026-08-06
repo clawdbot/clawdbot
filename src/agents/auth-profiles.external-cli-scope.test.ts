@@ -55,25 +55,21 @@ describe("external CLI auth scope", () => {
             primary: "anthropic/claude-opus-4-7",
             fallbacks: ["openai/gpt-5.5"],
           },
-          imageGenerationModel: "minimax-portal/image-01",
+          mediaModels: { image: "minimax-portal/image-01" },
           voiceModel: "elevenlabs/eleven_multilingual_v2",
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "claude-cli/claude-opus-4-7": { alias: "opus" },
           },
         },
-        list: [
-          {
-            id: "worker",
+        entries: {
+          worker: {
             model: "opencode-go/kimi-k2.6",
             models: {
               "opencode-go/kimi-k2.6": { agentRuntime: { id: "codex-app-server" } },
             },
             subagents: { model: { primary: "z.ai/glm-4.7" } },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 
@@ -97,9 +93,6 @@ describe("external CLI auth scope", () => {
       agents: {
         defaults: {
           model: "openai/gpt-5.5",
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "openai/gpt-5.5": { agentRuntime: { id: "claude-cli" } },
           },
@@ -108,5 +101,21 @@ describe("external CLI auth scope", () => {
     });
 
     expect(scope?.providerIds).toContain("claude-cli");
+  });
+
+  it("includes Gemini CLI when it is the configured Google model runtime", () => {
+    const scope = resolveExternalCliAuthScopeFromConfig({
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3.1-pro-preview": {
+              agentRuntime: { id: "google-gemini-cli" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(scope?.providerIds).toContain("google-gemini-cli");
   });
 });

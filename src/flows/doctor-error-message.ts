@@ -1,3 +1,5 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 // Shared sanitization for doctor/lint/repair errors shown in terminal output.
 const ERR_MESSAGE_MAX_LEN = 256;
 
@@ -14,5 +16,5 @@ export function scrubDoctorErrorMessage(err: unknown): string {
   if (stripped.length <= ERR_MESSAGE_MAX_LEN) {
     return stripped;
   }
-  return `${stripped.slice(0, ERR_MESSAGE_MAX_LEN - 3)}...`;
+  return `${truncateUtf16Safe(stripped, ERR_MESSAGE_MAX_LEN - 3)}...`;
 }

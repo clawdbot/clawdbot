@@ -35,6 +35,16 @@ vi.mock("./pw-session.js", () => {
     markObservedDialogsHandledRemotelyForPage,
     refLocator,
     restoreRoleRefsForTarget,
+    wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
+    withPageNavigationRequestGuard: vi.fn(
+      async ({
+        action,
+        page: guardedPage,
+      }: {
+        action: (url: string) => Promise<unknown>;
+        page: { url: () => string };
+      }) => await action(guardedPage.url()),
+    ),
   };
 });
 
@@ -91,6 +101,7 @@ describe("evaluateViaPlaywright (abort)", () => {
       cdpUrl: "http://127.0.0.1:9222",
       fn,
       ref,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       signal: ctrl.signal,
     });
 
@@ -98,7 +109,12 @@ describe("evaluateViaPlaywright (abort)", () => {
     ctrl.abort(new Error("aborted by test"));
 
     await expect(p).rejects.toThrow("aborted by test");
-    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalled();
+    expect(forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: undefined,
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      reason: "evaluate aborted",
+    });
   });
 
   it("does not disconnect when evaluate is blocked by an observed dialog", async () => {
@@ -130,7 +146,8 @@ describe("evaluateViaPlaywright (abort)", () => {
     await expect(p).rejects.toThrow("blocked by dialog");
     expect(forceDisconnectPlaywrightForTarget).not.toHaveBeenCalled();
     resolveEval(true);
-    await Promise.resolve();
-    expect(markObservedDialogsHandledRemotelyForPage).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(markObservedDialogsHandledRemotelyForPage).toHaveBeenCalled();
+    });
   });
 });

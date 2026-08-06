@@ -5,6 +5,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackDmHistoryMessage = {
@@ -38,6 +39,7 @@ export async function resolveSlackDmHistoryContext(params: {
   channelId: string;
   currentMessageTs?: string;
   limit: number;
+  eventScope?: SlackEventScope;
   envelopeOptions: ReturnType<
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
@@ -48,7 +50,9 @@ export async function resolveSlackDmHistoryContext(params: {
   }
 
   try {
-    const response = (await params.ctx.app.client.conversations.history({
+    const response = (await (
+      params.eventScope?.client ?? params.ctx.app.client
+    ).conversations.history({
       token: params.ctx.botToken,
       channel: params.channelId,
       ...(params.currentMessageTs ? { latest: params.currentMessageTs, inclusive: true } : {}),
@@ -75,7 +79,9 @@ export async function resolveSlackDmHistoryContext(params: {
       if (cached) {
         return cached;
       }
-      const resolved = normalizeOptionalString((await params.ctx.resolveUserName(userId)).name);
+      const resolved = normalizeOptionalString(
+        (await params.ctx.resolveUserName(userId, params.eventScope)).name,
+      );
       const label = resolved ?? userId;
       userNames.set(userId, label);
       return label;

@@ -37,6 +37,8 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
+const CANONICALIZE_BASE64_CHUNK_SIZE = 8192;
+
 function isBase64DataChar(code: number): boolean {
   return (
     (code >= 0x41 && code <= 0x5a) ||
@@ -47,14 +49,40 @@ function isBase64DataChar(code: number): boolean {
   );
 }
 
+function base64DataValue(code: number): number {
+  if (code >= 0x41 && code <= 0x5a) {
+    return code - 0x41;
+  }
+  if (code >= 0x61 && code <= 0x7a) {
+    return code - 0x61 + 26;
+  }
+  if (code >= 0x30 && code <= 0x39) {
+    return code - 0x30 + 52;
+  }
+  return code === 0x2b ? 62 : 63;
+}
+
 /**
  * Normalizes and validates a base64 string, returning canonical no-whitespace
  * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  let cleaned = "";
+  const chunks: string[] = [];
+  let current = "";
+  let cleanedLength = 0;
   let padding = 0;
   let sawPadding = false;
+  let lastDataCode = 0;
+
+  const append = (char: string): void => {
+    current += char;
+    cleanedLength += 1;
+    if (current.length >= CANONICALIZE_BASE64_CHUNK_SIZE) {
+      chunks.push(current);
+      current = "";
+    }
+  };
+
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
     if (code <= 0x20) {
@@ -66,16 +94,32 @@ export function canonicalizeBase64(base64: string): string | undefined {
         return undefined;
       }
       sawPadding = true;
-      cleaned += "=";
+      append("=");
       continue;
     }
     if (sawPadding || !isBase64DataChar(code)) {
       return undefined;
     }
-    cleaned += base64[i];
+    lastDataCode = code;
+    append(base64[i] ?? "");
   }
-  if (!cleaned || cleaned.length % 4 !== 0) {
+  if (cleanedLength === 0) {
     return undefined;
   }
-  return cleaned;
+  const remainder = cleanedLength % 4;
+  if (remainder !== 0) {
+    if (sawPadding || remainder === 1) {
+      return undefined;
+    }
+    current += "=".repeat(4 - remainder);
+  }
+  const effectivePadding = remainder === 0 ? padding : 4 - remainder;
+  const padBitMask = effectivePadding === 2 ? 0x0f : effectivePadding === 1 ? 0x03 : 0;
+  if (padBitMask !== 0 && (base64DataValue(lastDataCode) & padBitMask) !== 0) {
+    return undefined;
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks.join("");
 }

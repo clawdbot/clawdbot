@@ -5,6 +5,7 @@ import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   applyAgentDefaultModelPrimary,
+  applyOnboardAuthAgentModelsAndProviders,
   applyProviderConfigWithDefaultModelPreset,
   applyProviderConfigWithModelCatalogPreset,
   applyProviderConfigWithDefaultModel,
@@ -59,6 +60,233 @@ describe("onboard auth provider config merges", () => {
     ]);
     expect(next.models?.providers?.custom?.apiKey).toBe("test-key");
     expect(next.agents?.defaults?.models).toEqual(agentModels);
+  });
+
+  it("preserves provider-level settings when applying onboarding provider patches", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://old.example.com/v1",
+              timeoutSeconds: 900,
+              models: [makeModel("model-a")],
+            },
+            other: {
+              api: "openai-responses",
+              baseUrl: "https://other.example.com/v1",
+              timeoutSeconds: 300,
+              models: [makeModel("other-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
+    expect(next.models?.providers?.custom?.baseUrl).toBe("https://new.example.com/v1");
+    expect(next.models?.providers?.custom?.models?.map((m) => m.id)).toEqual(["model-b"]);
+    expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
+  });
+
+  it("omits empty provider request settings", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://old.example.com/v1",
+              models: [makeModel("model-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(next.models?.providers?.custom).not.toHaveProperty("request");
+  });
+
+  it("preserves settings without resurrecting a non-canonical provider key", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          providers: {
+            Custom: {
+              api: "openai-completions",
+              baseUrl: "https://old.example.com/v1",
+              timeoutSeconds: 900,
+              models: [makeModel("model-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
+    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
+  });
+
+  it("prefers canonical settings and removes every non-canonical provider key", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          providers: {
+            Custom: {
+              api: "openai-completions",
+              baseUrl: "https://stale.example.com/v1",
+              timeoutSeconds: 300,
+              models: [makeModel("stale-a")],
+            },
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://canonical.example.com/v1",
+              timeoutSeconds: 900,
+              models: [makeModel("canonical-a")],
+            },
+            CUSTOM: {
+              api: "openai-completions",
+              baseUrl: "https://older.example.com/v1",
+              timeoutSeconds: 600,
+              models: [makeModel("older-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
+    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
+    expect(next.models?.providers?.custom?.baseUrl).toBe("https://new.example.com/v1");
+  });
+
+  it("collapses duplicate provider keys when applying a provider preset", () => {
+    const next = applyProviderConfigWithDefaultModels(
+      {
+        models: {
+          providers: {
+            Custom: {
+              api: "openai-completions",
+              baseUrl: "https://stale.example.com/v1",
+              timeoutSeconds: 300,
+              models: [makeModel("stale-a")],
+            },
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://canonical.example.com/v1",
+              timeoutSeconds: 900,
+              models: [makeModel("canonical-a")],
+            },
+            CUSTOM: {
+              api: "openai-completions",
+              baseUrl: "https://older.example.com/v1",
+              timeoutSeconds: 600,
+              models: [makeModel("older-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providerId: "custom",
+        api: "openai-completions",
+        baseUrl: "https://new.example.com/v1",
+        defaultModels: [makeModel("model-b")],
+        defaultModelId: "model-b",
+      },
+    );
+
+    expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
+    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
+    expect(next.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+      "canonical-a",
+      "model-b",
+    ]);
+  });
+
+  it("lets onboarding provider patches clear omitted auth fields", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          providers: {
+            custom: {
+              api: "anthropic-messages",
+              baseUrl: "https://old.example.com/v1",
+              apiKey: "stale-key",
+              auth: "api-key",
+              authHeader: true,
+              headers: { authorization: "stale-header" },
+              request: {
+                allowPrivateNetwork: true,
+                auth: { mode: "authorization-bearer", token: "stale-token" },
+                headers: { "x-stale-auth": "stale-request-header" },
+              },
+              timeoutSeconds: 900,
+              models: [makeModel("model-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "anthropic-messages",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(next.models?.providers?.custom?.apiKey).toBeUndefined();
+    expect(next.models?.providers?.custom?.auth).toBeUndefined();
+    expect(next.models?.providers?.custom?.authHeader).toBeUndefined();
+    expect(next.models?.providers?.custom?.headers).toBeUndefined();
+    expect(next.models?.providers?.custom?.request).toEqual({ allowPrivateNetwork: true });
+    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
   });
 
   it("preserves existing agent model entries when adding provider models", () => {

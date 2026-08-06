@@ -1,6 +1,6 @@
 // Whatsapp tests cover channel react action plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleWhatsAppReactAction } from "./channel-react-action.js";
+import { handleWhatsAppMessageAction } from "./channel-react-action.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -107,7 +107,7 @@ describe("whatsapp react action messageId resolution", () => {
   it("sends upload-file through the WhatsApp media send path", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("media"));
 
-    const result = await handleWhatsAppReactAction({
+    const result = await handleWhatsAppMessageAction({
       action: "upload-file",
       params: {
         to: "+1555",
@@ -150,13 +150,50 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it("uses toolContext current chat for same-chat upload-file", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
+
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        filePath: "/tmp/pic.png",
+        caption: "picture caption",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+
+    expect(hoisted.resolveAuthorizedWhatsAppOutboundTarget).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      chatJid: "+1555",
+      accountId: "default",
+      actionLabel: "upload-file",
+    });
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "picture caption",
+      expect.objectContaining({
+        accountId: "default",
+        mediaReadFile,
+        mediaUrl: "/tmp/pic.png",
+      }),
+    );
+  });
+
   it("does not send upload-file when target authorization fails", async () => {
     hoisted.resolveAuthorizedWhatsAppOutboundTarget.mockImplementationOnce(() => {
       throw new Error("WhatsApp upload-file blocked");
     });
 
     await expect(
-      handleWhatsAppReactAction({
+      handleWhatsAppMessageAction({
         action: "upload-file",
         params: {
           to: "+1555",
@@ -169,12 +206,12 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("sends upload-file from the hydrated buffer payload", async () => {
-    await handleWhatsAppReactAction({
+  it("sends upload-file from a whitespace-heavy base64 data URL", async () => {
+    await handleWhatsAppMessageAction({
       action: "upload-file",
       params: {
         to: "+1555",
-        buffer: Buffer.from("hello").toString("base64"),
+        buffer: " \n DATA:text/plain;BASE64, aG Vs\nbG8= \n ",
         contentType: "text/plain",
         filename: "hello.txt",
         filePath: "/tmp/hello.txt",
@@ -203,28 +240,51 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it.each(["SGVsbG8=!", "data:text/plain,hello", "data:text/plain;base64"])(
+    "rejects malformed upload-file buffer %s",
+    async (buffer) => {
+      await expect(
+        handleWhatsAppMessageAction({
+          action: "upload-file",
+          params: { to: "+1555", buffer },
+          cfg: baseCfg,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("must be valid base64 or a base64 data URL");
+      expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects upload-file buffers above the WhatsApp media limit", async () => {
     hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValueOnce(4);
+    const encoded = Buffer.from("hello").toString("base64");
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
 
-    await expect(
-      handleWhatsAppReactAction({
-        action: "upload-file",
-        params: {
-          to: "+1555",
-          buffer: Buffer.from("hello").toString("base64"),
-          contentType: "text/plain",
-          filename: "hello.txt",
-        },
-        cfg: baseCfg,
-        accountId: "default",
-      }),
-    ).rejects.toThrow("WhatsApp upload-file buffer exceeds configured media limit");
-    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    try {
+      await expect(
+        handleWhatsAppMessageAction({
+          action: "upload-file",
+          params: {
+            to: "+1555",
+            buffer: encoded,
+            contentType: "text/plain",
+            filename: "hello.txt",
+          },
+          cfg: baseCfg,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("WhatsApp upload-file buffer exceeds configured media limit");
+      const bufferFromCalls = bufferFromSpy.mock.calls as unknown[][];
+      expect(bufferFromCalls.some((call) => call[1] === "base64")).toBe(false);
+      expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
   });
 
   it("requires upload-file media path input", async () => {
     await expect(
-      handleWhatsAppReactAction({
+      handleWhatsAppMessageAction({
         action: "upload-file",
         params: {
           to: "+1555",
@@ -238,7 +298,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("uses explicit messageId when provided", async () => {
-    await handleWhatsAppReactAction({
+    await handleWhatsAppMessageAction({
       action: "react",
       params: { messageId: "explicit-id", emoji: "👍", to: "+1555" },
       cfg: baseCfg,
@@ -260,7 +320,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("falls back to toolContext.currentMessageId when messageId omitted", async () => {
-    await handleWhatsAppReactAction({
+    await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "❤️", to: "+1555" },
       cfg: baseCfg,
@@ -286,8 +346,35 @@ describe("whatsapp react action messageId resolution", () => {
     );
   });
 
+  it("falls back to toolContext current chat for same-chat reactions", async () => {
+    await handleWhatsAppMessageAction({
+      action: "react",
+      params: { emoji: "❤️" },
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      {
+        action: "react",
+        chatJid: "+1555",
+        messageId: "ctx-msg-42",
+        emoji: "❤️",
+        remove: undefined,
+        participant: undefined,
+        accountId: "default",
+        fromMe: undefined,
+      },
+      baseCfg,
+    );
+  });
+
   it("converts numeric toolContext messageId to string", async () => {
-    await handleWhatsAppReactAction({
+    await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "🎉", to: "+1555" },
       cfg: baseCfg,
@@ -314,7 +401,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("throws ToolInputError when messageId missing and no toolContext", async () => {
-    const err = await handleWhatsAppReactAction({
+    const err = await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "+1555" },
       cfg: baseCfg,
@@ -325,7 +412,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("skips context fallback when targeting a different chat", async () => {
-    const err = await handleWhatsAppReactAction({
+    const err = await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "+9999" },
       cfg: baseCfg,
@@ -341,7 +428,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("uses context fallback when target matches current chat", async () => {
-    await handleWhatsAppReactAction({
+    await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "12345@g.us" },
       cfg: baseCfg,
@@ -369,7 +456,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("keeps direct-chat reactions without an inferred participant", async () => {
-    await handleWhatsAppReactAction({
+    await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "+1555" },
       cfg: baseCfg,
@@ -397,7 +484,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("prefers explicit participant over inferred current-message participant", async () => {
-    await handleWhatsAppReactAction({
+    await handleWhatsAppMessageAction({
       action: "react",
       params: {
         emoji: "👍",
@@ -429,7 +516,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("does not reuse the current-chat participant for cross-chat reactions", async () => {
-    const err = await handleWhatsAppReactAction({
+    const err = await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "99999@g.us" },
       cfg: baseCfg,
@@ -447,7 +534,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("does not infer participant when messageId is explicitly provided", async () => {
-    await handleWhatsAppReactAction({
+    await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "12345@g.us", messageId: "older-msg-7" },
       cfg: baseCfg,
@@ -475,7 +562,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("skips context fallback when source is another provider", async () => {
-    const err = await handleWhatsAppReactAction({
+    const err = await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "+1555" },
       cfg: baseCfg,
@@ -491,7 +578,7 @@ describe("whatsapp react action messageId resolution", () => {
   });
 
   it("skips context fallback when currentChannelId is missing with explicit target", async () => {
-    const err = await handleWhatsAppReactAction({
+    const err = await handleWhatsAppMessageAction({
       action: "react",
       params: { emoji: "👍", to: "+1555" },
       cfg: baseCfg,

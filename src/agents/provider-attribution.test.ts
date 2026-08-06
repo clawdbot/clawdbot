@@ -1,5 +1,5 @@
 // Verifies provider attribution headers and endpoint classification policies.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   // Policy helpers return broad records; assertions pin only the relevant fields.
@@ -17,12 +17,20 @@ const providerEndpointPlugins = vi.hoisted(() => [
   {
     // Mirrors manifest-declared endpoint metadata without loading real plugins.
     providerEndpoints: [
-      { endpointClass: "openai-public", hosts: ["api.openai.com"] },
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.openai.com"],
+        hostSuffixes: [".api.openai.com"],
+      },
       { endpointClass: "openai", hosts: ["chatgpt.com"] },
       { endpointClass: "azure-openai", hostSuffixes: [".openai.azure.com"] },
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
       { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
       { endpointClass: "mistral-public", hosts: ["api.mistral.ai"] },
+      {
+        endpointClass: "minimax-native",
+        hosts: ["api.minimax.io", "api.minimaxi.com"],
+      },
       { endpointClass: "chutes-native", hosts: ["llm.chutes.ai"] },
       { endpointClass: "deepseek-native", hosts: ["api.deepseek.com"] },
       { endpointClass: "github-copilot-native", hostSuffixes: [".githubcopilot.com"] },
@@ -73,6 +81,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
         hosts: ["integrate.api.nvidia.com"],
         baseUrls: ["https://integrate.api.nvidia.com/v1"],
       },
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
     ],
     providerRequest: {
       providers: {
@@ -90,6 +107,8 @@ const providerEndpointPlugins = vi.hoisted(() => [
         openrouter: { family: "openrouter" },
         qwen: { family: "modelstudio" },
         together: { family: "together" },
+        xiaomi: { family: "xiaomi" },
+        "xiaomi-token-plan": { family: "xiaomi" },
         xai: { family: "xai" },
         zai: { family: "zai" },
       },
@@ -97,26 +116,229 @@ const providerEndpointPlugins = vi.hoisted(() => [
   },
 ]);
 
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: providerEndpointPlugins,
-    diagnostics: [],
-  }),
+const providerMetadataState = vi.hoisted(() => ({
+  defaultDiscoveryCompatible: true,
+  pluginIdScoped: false,
+  snapshot: undefined as unknown,
+}));
+const loadPluginMetadataSnapshot = vi.hoisted(() =>
+  vi.fn(() => ({
+    owners: {
+      providerEndpoints: [],
+      providerRequests: new Map(),
+    },
+  })),
+);
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: (params?: {
+    allowScopedSnapshot?: boolean;
+    requireDefaultDiscoveryContext?: boolean;
+  }) =>
+    (providerMetadataState.pluginIdScoped && params?.allowScopedSnapshot !== true) ||
+    (params?.requireDefaultDiscoveryContext === true &&
+      !providerMetadataState.defaultDiscoveryCompatible)
+      ? undefined
+      : (providerMetadataState.snapshot ?? {
+          owners: {
+            providerEndpoints: providerEndpointPlugins.flatMap((manifest) =>
+              (manifest.providerEndpoints ?? []).map((endpoint) =>
+                Object.assign({}, endpoint, {
+                  hosts: endpoint.hosts ?? [],
+                  hostSuffixes: endpoint.hostSuffixes ?? [],
+                  baseUrls: (endpoint.baseUrls ?? []).map((baseUrl) =>
+                    baseUrl.toLowerCase().replace(/\/+$/, ""),
+                  ),
+                }),
+              ),
+            ),
+            providerRequests: new Map(
+              providerEndpointPlugins.flatMap((manifest) =>
+                Object.entries(manifest.providerRequest?.providers ?? {}),
+              ),
+            ),
+          },
+        }),
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot,
+}));
+
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
-  listProviderAttributionPolicies,
-  resolveProviderAttributionHeaders,
-  resolveProviderAttributionIdentity,
-  resolveProviderAttributionPolicy,
   resolveProviderEndpoint,
-  resolveProviderRequestAttributionHeaders,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
   describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
 
+type ProviderAttributionTestEnv = Parameters<typeof resolveProviderRequestPolicy>[1];
+
+function resolveProviderAttributionPolicy(provider: string, env: ProviderAttributionTestEnv) {
+  return resolveProviderRequestPolicy({ provider }, env).policy;
+}
+
+function resolveProviderAttributionIdentity(env: ProviderAttributionTestEnv) {
+  const policy = resolveProviderAttributionPolicy("openrouter", env);
+  return policy ? { product: policy.product, version: policy.version } : undefined;
+}
+
+function listProviderAttributionPolicies(env: ProviderAttributionTestEnv) {
+  return [
+    "openrouter",
+    "nvidia",
+    "google",
+    "openai",
+    "xai",
+    "anthropic",
+    "groq",
+    "mistral",
+    "together",
+  ].flatMap((provider) => {
+    const policy = resolveProviderAttributionPolicy(provider, env);
+    return policy ? [policy] : [];
+  });
+}
+
 describe("provider attribution", () => {
+  afterEach(() => {
+    providerMetadataState.defaultDiscoveryCompatible = true;
+    providerMetadataState.pluginIdScoped = false;
+    providerMetadataState.snapshot = undefined;
+    loadPluginMetadataSnapshot.mockClear();
+    clearPluginMetadataLifecycleCaches();
+  });
+
+  it("uses provider facts from the replacement plugin snapshot after reload", () => {
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [
+          {
+            endpointClass: "openai-public",
+            hosts: ["reload.example.com"],
+            hostSuffixes: [],
+            baseUrls: [],
+          },
+        ],
+        providerRequests: new Map([["reload", { family: "before-reload" }]]),
+      },
+    };
+    expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
+      "openai-public",
+    );
+    expect(resolveProviderRequestPolicy({ provider: "reload" }).knownProviderFamily).toBe(
+      "before-reload",
+    );
+
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [
+          {
+            endpointClass: "anthropic-public",
+            hosts: ["reload.example.com"],
+            hostSuffixes: [],
+            baseUrls: [],
+          },
+        ],
+        providerRequests: new Map([["reload", { family: "after-reload" }]]),
+      },
+    };
+
+    expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
+      "anthropic-public",
+    );
+    expect(resolveProviderRequestPolicy({ provider: "reload" }).knownProviderFamily).toBe(
+      "after-reload",
+    );
+  });
+
+  it("rejects provider facts from a plugin-id-scoped current snapshot", () => {
+    providerMetadataState.pluginIdScoped = true;
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [
+          {
+            endpointClass: "openai-public",
+            hosts: ["scoped-only.example"],
+            hostSuffixes: [],
+            baseUrls: [],
+          },
+        ],
+        providerRequests: new Map(),
+      },
+    };
+
+    expect(resolveProviderEndpoint("https://scoped-only.example").endpointClass).toBe("custom");
+  });
+
+  it("reuses lifecycle provider facts without a default-discovery fallback", () => {
+    providerMetadataState.defaultDiscoveryCompatible = false;
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [],
+        providerRequests: new Map([["custom-provider", { family: "custom" }]]),
+      },
+    };
+
+    for (let index = 0; index < 10; index += 1) {
+      expect(
+        resolveProviderRequestPolicy({ provider: "custom-provider" }).knownProviderFamily,
+      ).toBe("custom");
+    }
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("scans plugin metadata once when falling back without a lifecycle snapshot", () => {
+    providerMetadataState.pluginIdScoped = true;
+    providerMetadataState.snapshot = undefined;
+
+    for (let index = 0; index < 10; index += 1) {
+      resolveProviderRequestPolicy({ provider: "fallback-provider" });
+    }
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+
+    clearPluginMetadataLifecycleCaches();
+    resolveProviderRequestPolicy({ provider: "fallback-provider" });
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses explicitly prepared provider facts without reading process metadata", () => {
+    providerMetadataState.pluginIdScoped = true;
+    providerMetadataState.snapshot = undefined;
+    const providerMetadataOwners = {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerEndpoints: [
+        {
+          endpointClass: "anthropic-public" as const,
+          hosts: ["prepared.example"],
+          hostSuffixes: [],
+          baseUrls: [],
+        },
+      ],
+      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
+    };
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "prepared",
+        baseUrl: "https://prepared.example",
+        providerMetadataOwners,
+      }),
+    ).toMatchObject({
+      endpointClass: "anthropic-public",
+      knownProviderFamily: "prepared-family",
+    });
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
   it("resolves the canonical OpenClaw product and runtime version", () => {
     const identity = resolveProviderAttributionIdentity({
       OPENCLAW_VERSION: "2026.3.99",
@@ -156,6 +378,7 @@ describe("provider attribution", () => {
       OPENCLAW_VERSION: "2026.3.22",
     });
 
+    expect(policy).toBeDefined();
     expect(policy).toEqual({
       provider: "nvidia",
       enabledByDefault: true,
@@ -169,16 +392,34 @@ describe("provider attribution", () => {
         "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
       },
     });
-    expect(resolveProviderAttributionHeaders("NVIDIA", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
-      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+  });
+
+  it("returns a documented Google Gemini attribution policy", () => {
+    const policy = resolveProviderAttributionPolicy("google", {
+      OPENCLAW_VERSION: "2026.3.22",
+    });
+
+    expect(policy).toEqual({
+      provider: "google",
+      enabledByDefault: true,
+      verification: "vendor-documented",
+      hook: "request-headers",
+      docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
+      reviewNote:
+        "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
+      product: "OpenClaw",
+      version: "2026.3.22",
+      headers: {
+        "x-goog-api-client": "openclaw/2026.3.22",
+      },
     });
   });
 
-  it("normalizes aliases when resolving provider headers", () => {
+  it("normalizes aliases when resolving provider policy headers", () => {
     expect(
-      resolveProviderAttributionHeaders("OpenRouter", {
+      resolveProviderAttributionPolicy("OpenRouter", {
         OPENCLAW_VERSION: "2026.3.22",
-      }),
+      })?.headers,
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
@@ -203,7 +444,9 @@ describe("provider attribution", () => {
         "User-Agent": "openclaw/2026.3.22",
       },
     });
-    expect(resolveProviderAttributionHeaders("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
+    expect(
+      resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })?.headers,
+    ).toEqual({
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
@@ -244,7 +487,9 @@ describe("provider attribution", () => {
         "User-Agent": "openclaw/2026.3.22",
       },
     });
-    expect(resolveProviderAttributionHeaders("xai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
+    expect(
+      resolveProviderAttributionPolicy("xai", { OPENCLAW_VERSION: "2026.3.22" })?.headers,
+    ).toEqual({
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
@@ -252,7 +497,7 @@ describe("provider attribution", () => {
   });
 
   it("lists the current attribution support matrix", () => {
-    // Matrix order is user-facing evidence for docs/review summaries.
+    // Resolve every supported provider through the production request-policy path.
     expect(
       listProviderAttributionPolicies({ OPENCLAW_VERSION: "2026.3.22" }).map((policy) => [
         policy.provider,
@@ -263,10 +508,10 @@ describe("provider attribution", () => {
     ).toEqual([
       ["openrouter", true, "vendor-documented", "request-headers"],
       ["nvidia", true, "vendor-documented", "request-headers"],
+      ["google", true, "vendor-documented", "request-headers"],
       ["openai", true, "vendor-hidden-api-spec", "request-headers"],
       ["xai", true, "vendor-hidden-api-spec", "request-headers"],
       ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
-      ["google", false, "vendor-sdk-hook-only", "user-agent-extra"],
       ["groq", false, "vendor-sdk-hook-only", "default-headers"],
       ["mistral", false, "vendor-sdk-hook-only", "custom-user-agent"],
       ["together", false, "vendor-sdk-hook-only", "default-headers"],
@@ -292,7 +537,7 @@ describe("provider attribution", () => {
       },
     );
     expect(
-      resolveProviderRequestAttributionHeaders(
+      resolveProviderRequestPolicy(
         {
           provider: "xai",
           api: "openai-responses",
@@ -301,7 +546,7 @@ describe("provider attribution", () => {
           capability: "llm",
         },
         { OPENCLAW_VERSION: "2026.3.22" },
-      ),
+      ).attributionHeaders,
     ).toEqual({
       originator: "openclaw",
       version: "2026.3.22",
@@ -458,6 +703,27 @@ describe("provider attribution", () => {
     );
   });
 
+  it("classifies native MiniMax hosts centrally", () => {
+    for (const hostname of ["api.minimax.io", "api.minimaxi.com"]) {
+      expectRecordFields(resolveProviderEndpoint(`https://${hostname}/v1`), {
+        endpointClass: "minimax-native",
+        hostname,
+      });
+      expectRecordFields(
+        resolveProviderRequestCapabilities({
+          provider: "minimax",
+          baseUrl: `https://${hostname}`,
+          capability: "image",
+          transport: "media-understanding",
+        }),
+        {
+          endpointClass: "minimax-native",
+          isKnownNativeEndpoint: true,
+        },
+      );
+    }
+  });
+
   it("classifies native OpenAI-compatible vendor hosts centrally", () => {
     expectRecordFields(resolveProviderEndpoint("https://api.x.ai/v1"), {
       endpointClass: "xai-native",
@@ -547,12 +813,12 @@ describe("provider attribution", () => {
     );
 
     expect(
-      resolveProviderRequestAttributionHeaders({
+      resolveProviderRequestPolicy({
         provider: "openrouter",
         baseUrl: "https://proxy.example.com/v1",
         transport: "stream",
         capability: "llm",
-      }),
+      }).attributionHeaders,
     ).toBeUndefined();
   });
 
@@ -574,25 +840,71 @@ describe("provider attribution", () => {
     );
 
     expect(
-      resolveProviderRequestAttributionHeaders({
+      resolveProviderRequestPolicy({
         provider: "custom-nim",
         api: "openai-completions",
         baseUrl: "https://integrate.api.nvidia.com/v1",
         transport: "stream",
         capability: "llm",
-      }),
+      }).attributionHeaders,
     ).toEqual({
       "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
     });
 
     expect(
-      resolveProviderRequestAttributionHeaders({
+      resolveProviderRequestPolicy({
         provider: "nvidia",
         api: "openai-completions",
         baseUrl: "https://proxy.example.com/v1",
         transport: "stream",
         capability: "llm",
-      }),
+      }).attributionHeaders,
+    ).toBeUndefined();
+  });
+
+  it("gates documented Google Gemini attribution to official Generative Language endpoints", () => {
+    expectRecordFields(
+      resolveProviderRequestPolicy(
+        {
+          provider: "google",
+          api: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          transport: "stream",
+          capability: "llm",
+        },
+        { OPENCLAW_VERSION: "2026.3.22" },
+      ),
+      {
+        endpointClass: "google-generative-ai",
+        knownProviderFamily: "google",
+        attributionProvider: "google",
+        allowsHiddenAttribution: false,
+      },
+    );
+
+    expect(
+      resolveProviderRequestPolicy(
+        {
+          provider: "google",
+          api: "openai-completions",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          transport: "stream",
+          capability: "llm",
+        },
+        { OPENCLAW_VERSION: "2026.3.22" },
+      ).attributionHeaders,
+    ).toEqual({
+      "x-goog-api-client": "openclaw/2026.3.22",
+    });
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "google",
+        api: "google-generative-ai",
+        baseUrl: "https://proxy.example.com/v1beta",
+        transport: "stream",
+        capability: "llm",
+      }).attributionHeaders,
     ).toBeUndefined();
   });
 
@@ -689,7 +1001,7 @@ describe("provider attribution", () => {
       }),
       {
         knownProviderFamily: "google",
-        attributionProvider: undefined,
+        attributionProvider: "google",
         allowsHiddenAttribution: false,
       },
     );
@@ -717,6 +1029,13 @@ describe("provider attribution", () => {
     expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/anthropic"), {
       endpointClass: "custom",
       hostname: "proxy.example.com",
+    });
+  });
+
+  it("classifies WebSocket provider URLs by hostname", () => {
+    expectRecordFields(resolveProviderEndpoint("wss://api.openai.com/v1/realtime"), {
+      endpointClass: "openai-public",
+      hostname: "api.openai.com",
     });
   });
 
@@ -839,6 +1158,11 @@ describe("provider attribution", () => {
       hostname: "api.openai.com.attacker.example",
     });
 
+    expectRecordFields(resolveProviderEndpoint("https://attackerapi.openai.com"), {
+      endpointClass: "custom",
+      hostname: "attackerapi.openai.com",
+    });
+
     expectRecordFields(resolveProviderEndpoint("attacker.example/?target=api.openai.com"), {
       endpointClass: "custom",
       hostname: "attacker.example",
@@ -849,6 +1173,15 @@ describe("provider attribution", () => {
       hostname: "openrouter.ai.attacker.example",
     });
   });
+
+  it.each(["https://us.api.openai.com/v1", "https://eu.api.openai.com/v1"])(
+    "classifies regional OpenAI endpoint %s as public",
+    (baseUrl) => {
+      expectRecordFields(resolveProviderEndpoint(baseUrl), {
+        endpointClass: "openai-public",
+      });
+    },
+  );
 
   it("ignores non-http schemes when normalizing native comparable base URLs", () => {
     expectRecordFields(resolveProviderEndpoint("javascript:alert(1)"), {
@@ -1357,3 +1690,4 @@ describe("provider attribution", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,9 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadExtraBootstrapFiles, loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
+import {
+  loadExtraBootstrapFilesWithDiagnostics,
+  loadWorkspacePatternFilesWithDiagnostics,
+} from "./workspace.js";
 
-describe("loadExtraBootstrapFiles", () => {
+describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
 
@@ -26,20 +29,25 @@ describe("loadExtraBootstrapFiles", () => {
     }
   });
 
+  async function loadExtraBootstrapFileList(dir: string, extraPatterns: string[]) {
+    const { files } = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
+    return files;
+  }
+
   it("loads recognized bootstrap files from glob patterns", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
+    await fs.writeFile(path.join(packageDir, "SOUL.md"), "soul", "utf-8");
     await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/*"]);
 
     expect(files).toStrictEqual([
       {
-        name: "TOOLS.md",
-        path: path.join(packageDir, "TOOLS.md"),
-        content: "tools",
+        name: "SOUL.md",
+        path: path.join(packageDir, "SOUL.md"),
+        content: "soul",
         missing: false,
       },
     ]);
@@ -51,7 +59,7 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "AGENTS.md"), "agents", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["./packages/*/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["./packages/*/AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
@@ -69,13 +77,31 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "AGENTS.md"), "literal agents", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["pkg[1]/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["pkg[1]/AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
         name: "AGENTS.md",
         path: path.join(packageDir, "AGENTS.md"),
         content: "literal agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("loads bootstrap files from valid child directories beginning with two dots", async () => {
+    const workspaceDir = await createWorkspaceDir("dotdot-name");
+    const packageDir = path.join(workspaceDir, "..notes");
+    await fs.mkdir(packageDir);
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "agents", "utf-8");
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["..notes/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: "agents",
         missing: false,
       },
     ]);
@@ -89,7 +115,7 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["../outside/AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["../outside/AGENTS.md"]);
 
     expect(files).toHaveLength(0);
   });
@@ -106,7 +132,7 @@ describe("loadExtraBootstrapFiles", () => {
     await fs.writeFile(path.join(realWorkspace, "AGENTS.md"), "linked agents", "utf-8");
     await fs.symlink(realWorkspace, linkedWorkspace, "dir");
 
-    const files = await loadExtraBootstrapFiles(linkedWorkspace, ["AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(linkedWorkspace, ["AGENTS.md"]);
 
     expect(files).toStrictEqual([
       {
@@ -142,7 +168,7 @@ describe("loadExtraBootstrapFiles", () => {
       throw err;
     }
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["AGENTS.md"]);
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["AGENTS.md"]);
     expect(files).toHaveLength(0);
   });
 
@@ -158,4 +184,67 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files).toHaveLength(0);
     expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("security");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "reports unreadable glob branches during strict doctor discovery",
+    async () => {
+      const workspaceDir = await createWorkspaceDir("strict-unreadable");
+      const blockedDir = path.join(workspaceDir, "packages", "blocked");
+      const readableDir = path.join(workspaceDir, "packages", "readable");
+      await fs.mkdir(blockedDir, { recursive: true });
+      await fs.mkdir(readableDir, { recursive: true });
+      await fs.writeFile(path.join(blockedDir, "TOOLS.md"), "blocked", "utf-8");
+      await fs.writeFile(path.join(readableDir, "TOOLS.md"), "readable", "utf-8");
+      await fs.chmod(blockedDir, 0o000);
+      try {
+        const result = await loadWorkspacePatternFilesWithDiagnostics(
+          workspaceDir,
+          ["packages/*/TOOLS.md"],
+          {
+            acceptedBasenames: new Set(["TOOLS.md"]),
+            strictPatternRead: true,
+          },
+        );
+        expect(result.files).toEqual([]);
+        expect(result.diagnostics).toEqual([
+          expect.objectContaining({
+            reason: "io",
+            path: path.join(workspaceDir, "packages", "*", "TOOLS.md"),
+          }),
+        ]);
+      } finally {
+        await fs.chmod(blockedDir, 0o700);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not descend into unreadable branches that cannot satisfy a shallow pattern",
+    async () => {
+      const workspaceDir = await createWorkspaceDir("strict-pruned");
+      const privateDir = path.join(workspaceDir, "packages", "blocked", "node_modules", "private");
+      const readableDir = path.join(workspaceDir, "packages", "readable");
+      await fs.mkdir(privateDir, { recursive: true });
+      await fs.mkdir(readableDir, { recursive: true });
+      await fs.writeFile(path.join(privateDir, "TOOLS.md"), "irrelevant", "utf-8");
+      await fs.writeFile(path.join(readableDir, "TOOLS.md"), "readable", "utf-8");
+      await fs.chmod(privateDir, 0o000);
+      try {
+        const result = await loadWorkspacePatternFilesWithDiagnostics(
+          workspaceDir,
+          ["packages/*/TOOLS.md"],
+          {
+            acceptedBasenames: new Set(["TOOLS.md"]),
+            strictPatternRead: true,
+          },
+        );
+        expect(result.diagnostics).toEqual([]);
+        expect(result.files).toEqual([
+          expect.objectContaining({ path: path.join(readableDir, "TOOLS.md") }),
+        ]);
+      } finally {
+        await fs.chmod(privateDir, 0o700);
+      }
+    },
+  );
 });

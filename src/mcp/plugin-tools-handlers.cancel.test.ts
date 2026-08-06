@@ -2,6 +2,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
+import { consumeTrackedToolExecutionStarted } from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -12,12 +13,14 @@ describe("plugin tools MCP cancellation", () => {
       resolveObservedSignal = resolve;
     });
     let abortObserved = false;
+    let observedToolCallId: string | undefined;
 
     const tool = {
       name: "probe_cancel",
       description: "Probe cancellation forwarding",
       parameters: { type: "object", properties: {} },
-      execute: async (_toolCallId: string, _params: unknown, signal?: AbortSignal) => {
+      execute: async (toolCallId: string, _params: unknown, signal?: AbortSignal) => {
+        observedToolCallId = toolCallId;
         resolveObservedSignal(signal);
         await new Promise<void>((resolve, reject) => {
           if (!signal) {
@@ -62,6 +65,11 @@ describe("plugin tools MCP cancellation", () => {
 
       await expect(callPromise).rejects.toBeDefined();
       expect(abortObserved).toBe(true);
+      expect(observedToolCallId).toBeDefined();
+      if (!observedToolCallId) {
+        throw new Error("tool.execute did not receive a call id");
+      }
+      expect(consumeTrackedToolExecutionStarted(observedToolCallId)).toBeUndefined();
     } finally {
       await client.close();
       await server.close();

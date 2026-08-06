@@ -3,25 +3,33 @@ import { describe, expect, it } from "vitest";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
 
-function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
-  if (!config.test) {
+type ExpectedTestConfig = {
+  isolate?: boolean;
+  name?: string;
+  pool?: string;
+  projects?: unknown[];
+  runner?: string;
+};
+
+function requireTestConfig(config: unknown): ExpectedTestConfig {
+  if (!config || typeof config !== "object" || !("test" in config) || !config.test) {
     throw new Error("expected ui package vitest test config");
   }
-  return config.test as NonNullable<T["test"]>;
+  return config.test as ExpectedTestConfig;
 }
 
 describe("ui package vitest config", () => {
-  it("keeps the standalone ui package on thread workers without isolation", () => {
+  it("keeps the standalone ui package on thread workers without broad isolation", () => {
     const testConfig = requireTestConfig(uiConfig);
 
     expect(testConfig.pool).toBe("threads");
     expect(testConfig.isolate).toBe(false);
-    expect(testConfig.projects).toHaveLength(3);
+    expect(testConfig.projects).toHaveLength(4);
 
-    for (const project of testConfig.projects) {
+    for (const project of testConfig.projects ?? []) {
       const projectTestConfig = requireTestConfig(project);
       expect(projectTestConfig.pool).toBe("threads");
-      expect(projectTestConfig.isolate).toBe(false);
+      expect(projectTestConfig.isolate).toBe(projectTestConfig.name === "unit-mock-registry");
       expect(projectTestConfig.runner).toBeUndefined();
     }
   });

@@ -12,8 +12,8 @@ type CaptureSubagentCompletionReply =
 type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
-type SubagentRegistryTesting = (typeof import("./subagent-registry.js"))["testing"];
-type SubagentSpawnTesting = (typeof import("./subagent-spawn.js"))["testing"];
+type SubagentRegistryTesting = (typeof import("./subagent-registry.test-helpers.js"))["testing"];
+type SubagentSpawnTesting = (typeof import("./subagent-spawn.test-support.js"))["testing"];
 type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
 type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
 type AgentWaitCall = { runId?: string; timeoutMs?: number };
@@ -192,7 +192,10 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Lazily installs test deps before constructing the real sessions_spawn tool.
   if (!cachedSubagentSpawnTesting || !cachedSubagentRegistryTesting) {
     const [{ testing: subagentSpawnTesting }, { testing: subagentRegistryTesting }] =
-      await Promise.all([import("./subagent-spawn.js"), import("./subagent-registry.js")]);
+      await Promise.all([
+        import("./subagent-spawn.test-support.js"),
+        import("./subagent-registry.test-helpers.js"),
+      ]);
     cachedSubagentSpawnTesting = subagentSpawnTesting;
     cachedSubagentRegistryTesting = subagentRegistryTesting;
   }
@@ -206,22 +209,34 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       compact: async () => ({ ok: true, compacted: false }),
       ingest: async () => ({ ingested: false }),
     }),
-    resolveParentForkDecision: async () => ({
-      status: "fork",
-      maxTokens: 100_000,
+    forkSessionEntryFromParent: async () => ({
+      status: "forked",
+      fork: {
+        sessionId: "forked-session-id",
+        sessionFile: "/tmp/forked-session.jsonl",
+      },
+      parentEntry: {
+        sessionId: "parent-session-id",
+        updatedAt: Date.now(),
+      },
+      sessionEntry: {
+        sessionId: "forked-session-id",
+        sessionFile: "/tmp/forked-session.jsonl",
+        forkedFromParent: true,
+        updatedAt: Date.now(),
+      },
+      decision: {
+        status: "fork",
+        maxTokens: 100_000,
+      },
     }),
-    forkSessionFromParent: async () => ({
-      sessionId: "forked-session-id",
-      sessionFile: "/tmp/forked-session.jsonl",
-    }),
-    updateSessionStore: async (_storePath, mutator) => mutator({}),
   });
   cachedSubagentRegistryTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     getRuntimeConfig: () => hoisted.state.configOverride,
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
-    ensureRuntimePluginsLoaded: () => {},
+    loadAgentRuntimePluginRegistryHandle: () => undefined,
     persistSubagentRunsToDisk: () => {
       hoisted.notifyEventWaiters();
     },
@@ -358,6 +373,10 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  isConfiguredSessionStoreAgentId: (
+    cfg: { agents?: { list?: Array<{ id?: string }> } },
+    agentId: string,
+  ) => agentId === "main" || cfg.agents?.list?.some((agent) => agent.id === agentId) === true,
   loadSessionStore: () => hoisted.sessionStore,
   mergeSessionEntry: (existing: object | undefined, patch: object) => ({
     ...existing,
@@ -369,6 +388,7 @@ vi.mock("../config/sessions.js", () => ({
     cfg?: { session?: { mainKey?: string } };
     agentId: string;
   }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
+  resolveExistingAgentSessionStoreTargetsSync: () => [],
   resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
   updateSessionStore: async (
     _storePath: string,
@@ -382,6 +402,7 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: vi.fn(),
   createRunningTaskRun: vi.fn(),
   failTaskRunByRunId: vi.fn(),
+  findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
   setDetachedTaskDeliveryStatusByRunId: vi.fn(),
 }));
 

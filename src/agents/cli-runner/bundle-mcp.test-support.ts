@@ -5,7 +5,7 @@ import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
 } from "../../plugins/bundle-mcp.test-support.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 const tempHarness = createBundleMcpTempHarness();
@@ -47,7 +47,7 @@ export function setupCliBundleMcpTestHarness(): void {
     bundleProbeHomeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
     bundleProbeWorkspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
     const emptyBundledDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-bundled-");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = emptyBundledDir;
+    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", emptyBundledDir);
     ({ serverPath: bundleProbeServerPath } = await createBundleProbePlugin(bundleProbeHomeDir));
   });
 
@@ -69,11 +69,10 @@ function createEnabledBundleProbeConfig(): OpenClawConfig {
 
 export async function prepareBundleProbeCliConfig(params?: {
   additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
+  env?: Parameters<typeof prepareCliBundleMcpConfig>[0]["env"];
 }) {
-  const env = captureEnv(["HOME"]);
-  try {
-    // Bundle discovery reads HOME for per-user plugin roots.
-    process.env.HOME = bundleProbeHomeDir;
+  // Bundle discovery reads HOME for per-user plugin roots.
+  return await withEnvAsync({ HOME: bundleProbeHomeDir }, async () => {
     return await prepareCliBundleMcpConfig({
       enabled: true,
       mode: "claude-config-file",
@@ -84,8 +83,7 @@ export async function prepareBundleProbeCliConfig(params?: {
       workspaceDir: bundleProbeWorkspaceDir,
       config: createEnabledBundleProbeConfig(),
       additionalConfig: params?.additionalConfig,
+      env: params?.env,
     });
-  } finally {
-    env.restore();
-  }
+  });
 }

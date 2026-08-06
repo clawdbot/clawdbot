@@ -72,13 +72,3 @@ export function buildCopilotAssistantUsage(params: {
     totalTokens: usage?.total ?? 0,
   };
 }
-
-export function deriveCopilotUsageTotal(usage?: NormalizedUsage): number | undefined {
-  if (!usage) {
-    return undefined;
-  }
-
-  return (
-    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)
-  );
-}

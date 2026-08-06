@@ -1,4 +1,5 @@
-/** Parameter contracts shared by directive-only and fast-lane directive handlers. */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+/** Parameter contracts for the canonical directive transaction handler. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -8,7 +9,7 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
 /** Core directive handler inputs that do not depend on the inbound message shape. */
-export type HandleDirectiveOnlyCoreParams = {
+type HandleDirectiveOnlyCoreParams = {
   cfg: OpenClawConfig;
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
@@ -22,9 +23,10 @@ export type HandleDirectiveOnlyCoreParams = {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+    ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
   >;
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
@@ -32,6 +34,7 @@ export type HandleDirectiveOnlyCoreParams = {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  canPersistStickyModelSelection?: boolean;
 };
 
 /** Full directive-only command handler inputs. */
@@ -39,7 +42,7 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   ctx?: MsgContext;
   messageProvider?: string;
   currentThinkLevel?: ThinkLevel;
-  currentFastMode?: boolean;
+  currentFastMode?: FastMode;
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;
@@ -48,24 +51,10 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   gatewayClientScopes?: string[];
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
-};
-
-/** Inputs for applying inline directives before the full reply run is prepared. */
-export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams & {
-  commandAuthorized: boolean;
-  senderIsOwner: boolean;
-  ctx: MsgContext;
-  workspaceDir?: string;
-  agentId?: string;
-  isGroup: boolean;
-  agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];
-  modelState: {
-    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
-    resolveThinkingCatalog: () => Promise<ModelCatalogEntry[] | undefined>;
-    allowedModelKeys: Set<string>;
-    allowedModelCatalog: Awaited<
-      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
-    >;
-    resetModelOverride: boolean;
+  /** Mixed messages consume the transaction outcome without repeating persistence. */
+  persistenceState?: {
+    outcome:
+      | { kind: "pending" | "applied"; provider: string; model: string }
+      | { kind: "rejected"; errorText: string };
   };
 };

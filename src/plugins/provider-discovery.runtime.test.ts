@@ -4,6 +4,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => {
+  // Bind provider discovery to this file's mocks in non-isolated plugin workers.
+  vi.resetModules();
   const loadSource = vi.fn();
   const loaderCache = { kind: "provider-discovery-loader-cache", clear: vi.fn() };
   return {
@@ -67,7 +69,7 @@ function createManifestPlugin(id: string): PluginManifestRecord {
 
 function createManifestPluginWithModelCatalog(
   id: string,
-  discovery: "static" | "runtime" = "static",
+  discovery: "static" | "refreshable" | "runtime" = "static",
 ): PluginManifestRecord {
   return {
     ...createManifestPluginWithoutDiscovery({ id }),
@@ -84,6 +86,7 @@ function createManifestPluginWithModelCatalog(
               input: ["text"],
               contextWindow: 128000,
               maxTokens: 4096,
+              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
               cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
             },
           ],
@@ -158,7 +161,6 @@ function createManifestPluginWithEntryAndRuntimeDiscovery(): PluginManifestRecor
 
 function createManifestPluginWithoutDiscovery(params: {
   id: string;
-  providerAuthEnvVars?: Record<string, string[]>;
   setupProviders?: NonNullable<PluginManifestRecord["setup"]>["providers"];
 }): PluginManifestRecord {
   const { providerDiscoverySource: _providerDiscoverySource, ...plugin } = createManifestPlugin(
@@ -167,7 +169,6 @@ function createManifestPluginWithoutDiscovery(params: {
   return {
     ...plugin,
     ...(params.setupProviders ? { setup: { providers: params.setupProviders } } : {}),
-    ...(params.providerAuthEnvVars ? { providerAuthEnvVars: params.providerAuthEnvVars } : {}),
   };
 }
 
@@ -261,6 +262,38 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       [],
     );
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize manifest entry providers for refreshable catalogs", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("token-plan", "refreshable")],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toStrictEqual(
+      [],
+    );
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("loads the full plugin for refreshable manifest catalog rows", () => {
+    const refreshableProvider = createProvider({ id: "token-plan", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
+    mocks.resolvePluginProviders.mockReturnValue([refreshableProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("token-plan", "refreshable")],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toStrictEqual([refreshableProvider]);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["token-plan"]);
   });
 
   it("loads the full plugin when one manifest catalog provider is runtime-owned", () => {
@@ -490,11 +523,11 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
           createManifestPlugin("deepseek"),
           createManifestPluginWithoutDiscovery({
             id: "kilocode",
-            providerAuthEnvVars: { kilocode: ["KILOCODE_API_KEY"] },
+            setupProviders: [{ id: "kilocode", envVars: ["KILOCODE_API_KEY"] }],
           }),
           createManifestPluginWithoutDiscovery({
             id: "unused",
-            providerAuthEnvVars: { unused: ["UNUSED_API_KEY"] },
+            setupProviders: [{ id: "unused", envVars: ["UNUSED_API_KEY"] }],
           }),
         ],
         diagnostics: [],
@@ -636,6 +669,30 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 
+  it("returns synthetic-auth discovery entries only when explicitly requested", () => {
+    const syntheticProvider: ProviderPlugin = {
+      id: "claude-cli",
+      label: "Claude CLI",
+      auth: [],
+      resolveSyntheticAuth: () => ({
+        apiKey: "synthetic-token",
+        source: "test",
+        mode: "oauth",
+      }),
+    };
+    mocks.loadSource.mockReturnValue(syntheticProvider);
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toEqual([]);
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      discoveryEntriesOnly: true,
+      includeSyntheticAuthProviders: true,
+    });
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({ id: "claude-cli", pluginId: "deepseek" });
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
   it("returns manifest model catalogs as static discovery entries", async () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
@@ -668,6 +725,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
               id: "catalog-model",
               name: "Catalog Model",
               reasoning: true,
+              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
             }),
           ],
         },
@@ -686,6 +744,25 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     });
 
     const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers).toStrictEqual([]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("can omit manifest model catalogs from static discovery entries", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("openai")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      discoveryEntriesOnly: true,
+      includeManifestModelCatalogProviders: false,
+    });
 
     expect(providers).toStrictEqual([]);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();

@@ -1,37 +1,21 @@
 // Normalizes model input config into provider and model references.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { modelKey } from "../shared/model-key.js";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
 };
-
-function modelKeyForConfig(provider: string, model: string): string {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
-}
 
 type AgentModelInput = AgentModelConfig | AgentToolModelConfig;
 
@@ -77,20 +61,19 @@ const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vert
 /** Canonicalizes provider/model refs before they are persisted to config. */
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return trimmed;
   }
 
-  const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelSuffix = trimmed.slice(slash + 1);
+  const { provider, modelId: modelSuffix } = parsed;
   const normalizedModel =
     GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
       ? normalizeGooglePreviewModelId(modelSuffix)
       : provider === "together"
         ? normalizeTogetherModelId(modelSuffix)
         : modelSuffix;
-  return modelKeyForConfig(provider, normalizedModel);
+  return modelKey(provider, normalizedModel);
 }
 
 function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {

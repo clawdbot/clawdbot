@@ -2,17 +2,7 @@
  * Maps bootstrap context files into the attempt workspace.
  */
 import path from "node:path";
-import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
-
-/**
- * Returns whether a session should receive primary bootstrap context. Subagents
- * and ACP worker sessions inherit/run their own context path instead of getting
- * the top-level bootstrap payload again.
- */
-export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
-  return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
-}
 
 function isRelativePathInsideOrEqual(relativePath: string): boolean {
   // `path.relative` returns "" for the workspace root; reject parent escapes and absolute paths.

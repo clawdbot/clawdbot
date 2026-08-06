@@ -1,26 +1,5 @@
 // Telegram tests cover bot message context.topic agentid plugin behavior.
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { defaultRouteConfig } = vi.hoisted(() => ({
-  defaultRouteConfig: {
-    agents: {
-      list: [{ id: "main", default: true }, { id: "zu" }, { id: "q" }, { id: "support" }],
-    },
-    channels: { telegram: {} },
-    messages: { groupChat: { mentionPatterns: [] } },
-  },
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    getRuntimeConfig: vi.fn(() => defaultRouteConfig),
-  };
-});
+import { describe, expect, it, vi } from "vitest";
 
 const { buildTelegramMessageContextForTest } =
   await import("./bot-message-context.test-harness.js");
@@ -56,10 +35,6 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       }),
     });
   }
-
-  beforeEach(() => {
-    vi.mocked(getRuntimeConfig).mockReturnValue(defaultRouteConfig as never);
-  });
 
   it("uses group-level agent when no topic agentId is set", async () => {
     const ctx = await buildForumContext({ topicConfig: { systemPrompt: "Be nice" } });
@@ -116,7 +91,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       resolveTelegramGroupConfig,
     });
 
-    expect(resolveTelegramGroupConfig).toHaveBeenCalledWith(-1001234567890, 3);
+    expect(resolveTelegramGroupConfig).toHaveBeenCalledWith(-1001234567890, 3, expect.any(Object));
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:zu:");
     expect(ctx?.ctxPayload?.SessionKey).toContain("telegram:group:-1001234567890:topic:3");
   });
@@ -130,14 +105,6 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   });
 
   it("preserves an unknown topic agentId in the session key", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      agents: {
-        list: [{ id: "main", default: true }, { id: "zu" }],
-      },
-      channels: { telegram: {} },
-      messages: { groupChat: { mentionPatterns: [] } },
-    } as never);
-
     const ctx = await buildForumContext({ topicConfig: { agentId: "ghost" } });
 
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:ghost:");

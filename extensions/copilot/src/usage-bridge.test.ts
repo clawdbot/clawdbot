@@ -1,11 +1,7 @@
 // Copilot tests cover usage bridge plugin behavior.
 import type { NormalizedUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  buildCopilotAssistantUsage,
-  deriveCopilotUsageTotal,
-  normalizeCopilotUsage,
-} from "./usage-bridge.js";
+import { buildCopilotAssistantUsage, normalizeCopilotUsage } from "./usage-bridge.js";
 
 const ZERO_SNAPSHOT: NormalizedUsage = {
   cacheRead: undefined,
@@ -248,24 +244,6 @@ describe("usage-bridge", () => {
         output: 0,
         totalTokens: 0,
       });
-    });
-  });
-
-  describe("deriveCopilotUsageTotal", () => {
-    it("returns undefined when usage is undefined", () => {
-      expect(deriveCopilotUsageTotal(undefined)).toBeUndefined();
-    });
-
-    it("sums input/output/cacheRead/cacheWrite for total", () => {
-      const usage: NormalizedUsage = {
-        cacheRead: 3,
-        cacheWrite: 4,
-        input: 1,
-        output: 2,
-        total: 999,
-      };
-
-      expect(deriveCopilotUsageTotal(usage)).toBe(10);
     });
   });
 });

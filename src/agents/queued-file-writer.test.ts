@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getQueuedFileWriter, resolveQueuedFileAppendFlags } from "./queued-file-writer.js";
+import { getQueuedFileWriter } from "./queued-file-writer.js";
 
 const tempDirs: string[] = [];
 
@@ -21,16 +21,6 @@ afterEach(() => {
 });
 
 describe("getQueuedFileWriter", () => {
-  it("keeps append flags usable when O_NOFOLLOW is unavailable", () => {
-    expect(
-      resolveQueuedFileAppendFlags({
-        O_APPEND: 0x01,
-        O_CREAT: 0x02,
-        O_WRONLY: 0x04,
-      }),
-    ).toBe(0x07);
-  });
-
   it("creates log files with restrictive permissions", async () => {
     const tmpDir = makeTempDir();
     const filePath = path.join(tmpDir, "trace.jsonl");

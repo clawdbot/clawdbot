@@ -22,9 +22,10 @@ export function loadAgentTurnMediaRuntime() {
 }
 
 /** Runtime surface needed to resolve agent-turn media attachments. */
-export type AgentTurnAttachmentRuntime = Pick<
+type AgentTurnAttachmentRuntime = Pick<
   Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
   | "MediaAttachmentCache"
+  | "isImageAttachment"
   | "isMediaUnderstandingSkipError"
   | "normalizeAttachments"
   | "resolveMediaAttachmentLocalRoots"
@@ -33,20 +34,11 @@ export type AgentTurnAttachmentRuntime = Pick<
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
-function isImageAgentTurnAttachment(attachment: MediaAttachment): boolean {
-  return attachment.mime?.startsWith("image/") === true;
-}
-
 function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   return (
     Array.isArray(ctx.InboundHistory) &&
     ctx.InboundHistory.some((entry) => Array.isArray(entry.media) && entry.media.length > 0)
   );
-}
-
-/** True when current or recent inbound history may contain agent-turn attachments. */
-export function hasPotentialAgentTurnAttachments(ctx: MsgContext): boolean {
-  return hasInboundMedia(ctx) || hasInboundHistoryMedia(ctx);
 }
 
 /** Resolves image attachments for the current agent turn and recent image history. */
@@ -55,8 +47,10 @@ export async function resolveAgentTurnAttachments(params: {
   cfg: OpenClawConfig;
   runtime?: AgentTurnAttachmentRuntime;
   includeRecentHistoryImages?: boolean;
+  includeAttachmentIndexes?: boolean;
 }): Promise<{
   attachments: AgentTurnAttachment[];
+  attachmentIndexes?: number[];
   recentHistoryImages: RecentInboundHistoryImage[];
 }> {
   const includeRecentHistoryImages = params.includeRecentHistoryImages ?? true;
@@ -75,7 +69,10 @@ export async function resolveAgentTurnAttachments(params: {
         : attachment,
     );
   const recentHistoryImages = includeRecentHistoryImages
-    ? resolveRecentInboundHistoryImages({ ctx: params.ctx })
+    ? resolveRecentInboundHistoryImages({
+        ctx: params.ctx,
+        isImageAttachment: runtime.isImageAttachment,
+      })
     : [];
   const firstHistoryAttachmentIndex =
     currentAttachments.reduce(
@@ -86,6 +83,7 @@ export async function resolveAgentTurnAttachments(params: {
   const historyAttachments: MediaAttachment[] = recentHistoryImages.map((image, index) => ({
     path: image.path,
     mime: image.contentType,
+    kind: image.kind,
     index: firstHistoryAttachmentIndex + index,
   }));
   const historyAttachmentByIndex = new Map(
@@ -99,25 +97,30 @@ export async function resolveAgentTurnAttachments(params: {
     }),
   });
   const results: AgentTurnAttachment[] = [];
+  const resultIndexes: number[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
-    const mediaType = attachment.mime ?? "application/octet-stream";
-    if (!isImageAgentTurnAttachment(attachment)) {
+    if (!runtime.isImageAttachment(attachment)) {
       return false;
     }
     if (!normalizeOptionalString(attachment.path)) {
       return false;
     }
     try {
-      const { buffer } = await cache.getBuffer({
+      const { buffer, mime: mediaType } = await cache.getBuffer({
         attachmentIndex: attachment.index,
         maxBytes: AGENT_TURN_ATTACHMENT_MAX_BYTES,
         timeoutMs: AGENT_TURN_ATTACHMENT_TIMEOUT_MS,
       });
+      // Declared image kind selects the candidate; byte-aware cache detection owns the provider MIME.
+      if (!mediaType?.startsWith("image/")) {
+        return false;
+      }
       results.push({
         mediaType,
         data: buffer.toString("base64"),
       });
+      resultIndexes.push(attachment.index);
       const historyImage = historyAttachmentByIndex.get(attachment.index);
       if (historyImage) {
         resolvedHistoryImages.push(historyImage);
@@ -140,7 +143,7 @@ export async function resolveAgentTurnAttachments(params: {
 
   let currentImageResolved = false;
   const hasCurrentMedia = currentAttachments.length > 0;
-  const hasCurrentImageCandidate = currentAttachments.some(isImageAgentTurnAttachment);
+  const hasCurrentImageCandidate = currentAttachments.some(runtime.isImageAttachment);
   for (const attachment of currentAttachments) {
     currentImageResolved = (await resolveImageAttachment(attachment)) || currentImageResolved;
   }
@@ -154,16 +157,11 @@ export async function resolveAgentTurnAttachments(params: {
       await resolveImageAttachment(attachment);
     }
   }
-  return { attachments: results, recentHistoryImages: resolvedHistoryImages };
-}
-
-/** Resolves only the attachment payloads for callers that do not need history metadata. */
-export async function resolveAgentAttachments(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  runtime?: AgentTurnAttachmentRuntime;
-}): Promise<AgentTurnAttachment[]> {
-  return (await resolveAgentTurnAttachments(params)).attachments;
+  return {
+    attachments: results,
+    ...(params.includeAttachmentIndexes ? { attachmentIndexes: resultIndexes } : {}),
+    recentHistoryImages: resolvedHistoryImages,
+  };
 }
 
 /** Converts inline image content into ACP attachment payloads. */

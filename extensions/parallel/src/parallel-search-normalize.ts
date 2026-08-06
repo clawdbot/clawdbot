@@ -4,10 +4,13 @@
 // lives here instead of being copied into each runtime.
 import {
   buildSearchCacheKey,
+  DEFAULT_SEARCH_COUNT,
+  readPositiveIntegerParam,
   resolveSiteName,
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
 const PARALLEL_MAX_SEARCH_COUNT = 40;
@@ -24,7 +27,7 @@ export const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
 export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
 
-export type ParallelSearchResult = {
+type ParallelSearchResult = {
   title?: unknown;
   url?: unknown;
   publish_date?: unknown;
@@ -39,7 +42,17 @@ export type ParallelSearchResponse = {
   usage?: unknown;
 };
 
-export function resolveParallelSearchCount(value: number): number {
+export function resolveParallelSearchCount(
+  args: Record<string, unknown>,
+  configuredCount: unknown,
+): number {
+  const requestedCount = readPositiveIntegerParam(args, "count", {
+    max: PARALLEL_MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${PARALLEL_MAX_SEARCH_COUNT}.`,
+  });
+  const value =
+    requestedCount ??
+    (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
   return Math.max(1, Math.min(PARALLEL_MAX_SEARCH_COUNT, Math.floor(value)));
 }
 
@@ -58,7 +71,7 @@ export function normalizeParallelObjective(value: string | undefined): string | 
   }
   return trimmed.length <= PARALLEL_MAX_OBJECTIVE_CHARS
     ? trimmed
-    : trimmed.slice(0, PARALLEL_MAX_OBJECTIVE_CHARS);
+    : truncateUtf16Safe(trimmed, PARALLEL_MAX_OBJECTIVE_CHARS);
 }
 
 export function normalizeParallelClientModel(value: string | undefined): string | undefined {
@@ -68,7 +81,7 @@ export function normalizeParallelClientModel(value: string | undefined): string 
   }
   return trimmed.length <= PARALLEL_CLIENT_MODEL_MAX_LENGTH
     ? trimmed
-    : trimmed.slice(0, PARALLEL_CLIENT_MODEL_MAX_LENGTH);
+    : truncateUtf16Safe(trimmed, PARALLEL_CLIENT_MODEL_MAX_LENGTH);
 }
 
 // Parallel's API caps each entry at 200 chars and accepts up to 5 queries. We
@@ -90,7 +103,7 @@ export function normalizeParallelSearchQueries(value: unknown): string[] {
     const capped =
       trimmed.length <= PARALLEL_MAX_SEARCH_QUERY_CHARS
         ? trimmed
-        : trimmed.slice(0, PARALLEL_MAX_SEARCH_QUERY_CHARS);
+        : truncateUtf16Safe(trimmed, PARALLEL_MAX_SEARCH_QUERY_CHARS);
     if (seen.has(capped)) {
       continue;
     }

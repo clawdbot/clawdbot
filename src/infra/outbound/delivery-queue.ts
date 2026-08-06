@@ -2,32 +2,21 @@
 export {
   ackDelivery,
   enqueueDelivery,
+  enqueueDeliveryOnce,
+  enqueuePreparedDeliveryOnce,
   failDelivery,
-  loadPendingDelivery,
-  loadPendingDeliveries,
-  markDeliveryPlatformOutcomeUnknown,
-  markDeliveryPlatformSendAttemptStarted,
-  moveToFailed,
-} from "./delivery-queue-storage.js";
-export type {
-  QueuedDelivery,
-  QueuedDeliveryPayload,
-  QueuedReplyPayloadSendingHook,
-  QueuedRenderedMessageBatchPlan,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
+  markDeliveryPlatformSendDispatched,
 } from "./delivery-queue-storage.js";
 export {
-  computeBackoffMs,
+  claimReusableDeliveryPlatformSendAttempt,
+  renewDeliveryPlatformSendLease,
+} from "./delivery-queue-platform-lease.js";
+export type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
+export {
   drainPendingDeliveries,
-  isEntryEligibleForRecoveryRetry,
-  isPermanentDeliveryError,
-  MAX_RETRIES,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
-export type {
-  ActiveDeliveryClaimResult,
-  DeliverFn,
-  PendingDeliveryDrainDecision,
-  RecoveryLogger,
-  RecoverySummary,
-} from "./delivery-queue-recovery.js";
+export type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";

@@ -3,10 +3,19 @@
  * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
+import { readResponseBodySnippet } from "../../infra/http-error-body.js";
+import {
+  postJsonRequest,
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfigWithOriginTrust,
+} from "../../media-understanding/shared.js";
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
+import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
+import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
 type PdfInput = {
   base64: string;
@@ -17,54 +26,62 @@ const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
 const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
 
-async function readErrorBodySnippet(res: Response): Promise<string> {
+type NativePdfProviderRequestConfig = {
+  headers?: Record<string, string>;
+  request?: ModelProviderRequestTransportOverrides;
+};
+
+type NativePdfJsonRequest = {
+  url: string;
+  headers: Headers;
+  body: unknown;
+  allowPrivateNetwork: boolean;
+  ssrfPolicy: Parameters<typeof postJsonRequest>[0]["ssrfPolicy"];
+  dispatcherPolicy: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
+  failureLabel: string;
+  responseLabel: string;
+  nonJsonMessage: string;
+  signal?: AbortSignal;
+};
+
+async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<string, unknown>> {
+  const headers = new Headers(params.headers);
+  for (const [name, value] of headers.entries()) {
+    headers.set(
+      name,
+      unwrapSecretSentinelsForProviderEgress(value, `${params.failureLabel} header handoff`),
+    );
+  }
+  const { response, release } = await postJsonRequest({
+    url: params.url,
+    headers,
+    body: params.body,
+    timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
+    ...(params.signal ? { signal: params.signal } : {}),
+    fetchFn: fetch,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
+  });
+
   try {
-    const body = res.body;
-    if (!body || typeof body.getReader !== "function") {
-      return (await res.text()).slice(0, NATIVE_PDF_ERROR_BODY_MAX_CHARS);
+    if (!response.ok) {
+      const body = await readResponseBodySnippet(response, {
+        maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
+        maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
+      });
+      throw new Error(
+        `${params.failureLabel} (${response.status} ${response.statusText})${body ? `: ${body}` : ""}`,
+      );
     }
 
-    const reader = body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let truncated = false;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done || !value?.byteLength) {
-          break;
-        }
-        const remaining = NATIVE_PDF_ERROR_BODY_MAX_BYTES - total;
-        if (remaining <= 0) {
-          truncated = true;
-          break;
-        }
-        if (value.byteLength > remaining) {
-          chunks.push(value.subarray(0, remaining));
-          total += remaining;
-          truncated = true;
-          break;
-        }
-        chunks.push(value);
-        total += value.byteLength;
-        if (total >= NATIVE_PDF_ERROR_BODY_MAX_BYTES) {
-          truncated = true;
-          break;
-        }
-      }
-    } finally {
-      if (truncated) {
-        await reader.cancel().catch(() => undefined);
-      }
-      try {
-        reader.releaseLock();
-      } catch {}
+    const json = await readProviderJsonResponse<unknown>(response, params.responseLabel);
+    if (!isRecord(json)) {
+      throw new Error(params.nonJsonMessage);
     }
-    return new TextDecoder()
-      .decode(Buffer.concat(chunks, total))
-      .slice(0, NATIVE_PDF_ERROR_BODY_MAX_CHARS);
-  } catch {
-    return "";
+    return json;
+  } finally {
+    await release();
   }
 }
 
@@ -97,6 +114,8 @@ export async function anthropicAnalyzePdf(params: {
   pdfs: PdfInput[];
   maxTokens?: number;
   baseUrl?: string;
+  requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -116,33 +135,46 @@ export async function anthropicAnalyzePdf(params: {
   }
   content.push({ type: "text", text: params.prompt });
 
-  const res = await fetch(resolveAnthropicMessagesUrl(params.baseUrl), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
-    body: JSON.stringify({
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: params.baseUrl,
+      defaultBaseUrl: resolveAnthropicMessagesUrl(undefined).replace(/\/messages$/u, ""),
+      defaultHeaders: {
+        ...params.requestConfig?.headers,
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "pdfs-2024-09-25",
+      },
+      request: params.requestConfig?.request,
+      provider: "anthropic",
+      api: "anthropic-messages",
+      capability: "other",
+      transport: "http",
+    });
+  headers.set("Content-Type", "application/json");
+  const url = resolveAnthropicMessagesUrl(baseUrl);
+
+  const json = await postNativePdfJson({
+    url,
+    headers,
+    body: {
       model: params.modelId,
       max_tokens: params.maxTokens ?? 4096,
       messages: [{ role: "user", content }],
+    },
+    allowPrivateNetwork,
+    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+      baseUrl,
+      url,
+      allowPrivateNetwork,
+      trustConfiguredBaseUrlOrigin,
     }),
-    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
+    dispatcherPolicy,
+    failureLabel: "Anthropic PDF request failed",
+    responseLabel: "Anthropic PDF response",
+    nonJsonMessage: "Anthropic PDF response was not JSON.",
+    signal: params.signal,
   });
-
-  if (!res.ok) {
-    const body = await readErrorBodySnippet(res);
-    throw new Error(
-      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
-    );
-  }
-
-  const json = (await res.json().catch(() => null)) as unknown;
-  if (!isRecord(json)) {
-    throw new Error("Anthropic PDF response was not JSON.");
-  }
 
   const responseContent = json.content as AnthropicResponseContent | undefined;
   if (!Array.isArray(responseContent)) {
@@ -177,6 +209,8 @@ export async function geminiAnalyzePdf(params: {
   prompt: string;
   pdfs: PdfInput[];
   baseUrl?: string;
+  requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -202,40 +236,55 @@ export async function geminiAnalyzePdf(params: {
       baseUrl: params.baseUrl,
     },
   }) ?? { baseUrl: params.baseUrl };
-  const baseUrl = (transport.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(
-    /\/v1beta$/i,
-    "",
-  );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: transport.baseUrl,
+      defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      defaultHeaders: {
+        ...params.requestConfig?.headers,
+        "x-goog-api-key": apiKey,
+      },
+      request: params.requestConfig?.request,
+      provider: "google",
+      api: "google-generative-ai",
+      capability: "other",
+      transport: "http",
+    });
+  headers.set("Content-Type", "application/json");
+  const normalizedBaseUrl = baseUrl.replace(/\/v1beta$/i, "");
+  const url = `${normalizedBaseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
+  const json = await postNativePdfJson({
+    url,
+    headers,
+    body: {
       contents: [{ role: "user", parts }],
+    },
+    allowPrivateNetwork,
+    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+      baseUrl,
+      url,
+      allowPrivateNetwork,
+      trustConfiguredBaseUrlOrigin,
     }),
-    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
+    dispatcherPolicy,
+    failureLabel: "Gemini PDF request failed",
+    responseLabel: "Gemini PDF response",
+    nonJsonMessage: "Gemini PDF response was not JSON.",
+    signal: params.signal,
   });
-
-  if (!res.ok) {
-    const body = await readErrorBodySnippet(res);
-    throw new Error(
-      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
-    );
-  }
-
-  const json = (await res.json().catch(() => null)) as unknown;
-  if (!isRecord(json)) {
-    throw new Error("Gemini PDF response was not JSON.");
-  }
 
   const candidates = json.candidates as GeminiCandidate[] | undefined;
   if (!Array.isArray(candidates) || candidates.length === 0) {
     throw new Error("Gemini PDF returned no candidates.");
   }
 
-  const textParts = candidates[0].content?.parts?.filter((p) => typeof p.text === "string") ?? [];
-  const text = textParts.map((p) => p.text!).join("");
+  const candidate = candidates.at(0);
+  if (!candidate) {
+    throw new Error("Gemini PDF returned no candidates.");
+  }
+  const textParts = candidate.content?.parts?.filter((part) => typeof part.text === "string") ?? [];
+  const text = textParts.map((part) => part.text).join("");
 
   if (!text.trim()) {
     throw new Error("Gemini PDF returned no text.");

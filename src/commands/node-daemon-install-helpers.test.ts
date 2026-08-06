@@ -58,6 +58,7 @@ describe("buildNodeInstallPlan", () => {
     });
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
+      OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
     });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -95,7 +96,7 @@ describe("buildNodeInstallPlan", () => {
     });
   });
 
-  it("marks node gateway tokens as file-backed service env", async () => {
+  it("marks node gateway credentials as file-backed service env", async () => {
     mocks.resolveNodeProgramArguments.mockResolvedValue({
       programArguments: ["node", "node-host"],
       workingDirectory: "/Users/me",
@@ -108,19 +109,25 @@ describe("buildNodeInstallPlan", () => {
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
       OPENCLAW_GATEWAY_TOKEN: "node-token",
+      OPENCLAW_GATEWAY_PASSWORD: "node-password",
       OPENCLAW_SERVICE_VERSION: "2026.3.22",
     });
 
     const plan = await buildNodeInstallPlan({
-      env: { OPENCLAW_GATEWAY_TOKEN: "node-token" },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "node-token",
+        OPENCLAW_GATEWAY_PASSWORD: "node-password",
+      },
       host: "127.0.0.1",
       port: 18789,
       runtime: "node",
     });
 
     expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
+    expect(plan.environment.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
+      OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
     });
   });
 });

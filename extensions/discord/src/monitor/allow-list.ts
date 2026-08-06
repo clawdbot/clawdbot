@@ -1,11 +1,15 @@
 // Discord plugin module implements allow list behavior.
-import type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
+import {
+  type AllowlistMatch,
+  resolveAllowlistMatchByCandidates,
+} from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
+import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -37,7 +41,7 @@ type DiscordChannelOverrideConfig = {
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
 };
 
-export type DiscordGuildEntryResolved = {
+export type DiscordGuildEntryResolved = Pick<DiscordGuildEntry, "presenceEvents"> & {
   id?: string;
   slug?: string;
   requireMention?: boolean;
@@ -181,10 +185,7 @@ function resolveDiscordUserAllowed(params: {
   );
 }
 
-export function resolveDiscordRoleAllowed(params: {
-  allowList?: string[];
-  memberRoleIds: string[];
-}) {
+function resolveDiscordRoleAllowed(params: { allowList?: string[]; memberRoleIds: string[] }) {
   // Role allowlists accept role IDs only. Names are ignored.
   const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
   if (!allowList) {
@@ -308,6 +309,36 @@ export function resolveDiscordOwnerAccess(params: {
       )
     : false;
   return { ownerAllowList, ownerAllowed };
+}
+
+export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
+  const raw = cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const entries: string[] = [];
+  for (const entry of raw) {
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex > 0) {
+      const prefix = trimmed.slice(0, separatorIndex).toLowerCase();
+      if (prefix === "discord") {
+        const remainder = normalizeOptionalString(trimmed.slice(separatorIndex + 1)) ?? "";
+        if (remainder) {
+          entries.push(remainder);
+        }
+        continue;
+      }
+      if (prefix !== "user" && prefix !== "pk") {
+        continue;
+      }
+    }
+    entries.push(trimmed);
+  }
+  return entries.length > 0 ? entries : undefined;
 }
 
 export function resolveDiscordCommandAuthorized(params: {
@@ -576,13 +607,14 @@ export function resolveGroupDmAllow(params: {
   if (!channels || channels.length === 0) {
     return true;
   }
-  const allowList = new Set(channels.map((entry) => normalizeDiscordSlug(entry)));
-  const candidates = [
-    normalizeDiscordSlug(channelId),
-    channelSlug,
-    channelName ? normalizeDiscordSlug(channelName) : "",
-  ].filter(Boolean);
-  return allowList.has("*") || candidates.some((candidate) => allowList.has(candidate));
+  return resolveAllowlistMatchByCandidates({
+    allowList: channels.map((entry) => normalizeDiscordSlug(entry)),
+    candidates: [
+      { value: normalizeDiscordSlug(channelId), source: "id" },
+      { value: channelSlug, source: "slug" },
+      { value: channelName ? normalizeDiscordSlug(channelName) : undefined, source: "name" },
+    ],
+  }).allowed;
 }
 
 export function shouldEmitDiscordReactionNotification(params: {

@@ -4,10 +4,10 @@ import type { Model } from "../../llm/types.js";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
 /** Runtime knobs consumed by the compaction safeguard extension. */
-export type CompactionSafeguardRuntimeValue = {
+type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
   contextWindowTokens?: number;
-  identifierPolicy?: AgentCompactionIdentifierPolicy;
+  identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
   identifierInstructions?: string;
   customInstructions?: string;
   /**
@@ -49,14 +49,9 @@ export function setCompactionSafeguardCancelReason(
   const current = getCompactionSafeguardRuntime(sessionManager);
   const trimmed = reason?.trim();
 
-  if (!current) {
-    if (!trimmed) {
-      return;
-    }
-    setCompactionSafeguardRuntime(sessionManager, { cancelReason: trimmed });
+  if (!current && !trimmed) {
     return;
   }
-
   const next = { ...current };
   if (trimmed) {
     next.cancelReason = trimmed;

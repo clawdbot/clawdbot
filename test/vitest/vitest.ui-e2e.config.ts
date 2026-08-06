@@ -5,7 +5,7 @@ import { sharedVitestConfig } from "./vitest.shared.config.ts";
 
 const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts"];
 
-export function createUiE2eVitestConfig(
+function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
   argv: string[] = process.argv,
 ) {
@@ -25,13 +25,19 @@ export function createUiE2eVitestConfig(
       ...baseTest,
       environment: "node",
       exclude,
+      // Vitest's expect.poll defaults to a 1s deadline; these polls await real
+      // Chromium renders, which loaded CI runners regularly stall past 1s.
+      // Correctness is the eventual state, so a larger budget only trades
+      // failure latency, not coverage.
+      expect: { poll: { interval: 100, timeout: 15_000 } },
       fileParallelism: false,
+      globalSetup: ["test/vitest/vitest.ui-e2e.global-setup.ts"],
       include,
       isolate: true,
       name: "ui-e2e",
       pool: "forks",
       runner: undefined,
-      setupFiles: [],
+      setupFiles: ["test/vitest/vitest.ui-e2e.setup.ts"],
     },
   });
 }

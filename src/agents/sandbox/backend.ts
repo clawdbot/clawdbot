@@ -1,7 +1,7 @@
 /**
  * Sandbox backend registry.
  *
- * Stores process-wide backend factories so core and plugins can register Docker, SSH, or custom sandbox providers.
+ * Stores process-wide backend factories so core and plugins can register local container, SSH, or custom sandbox providers.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -10,6 +10,7 @@ import type {
   SandboxBackendId,
   SandboxBackendManager,
   SandboxBackendRegistration,
+  SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
 
 export type {
@@ -19,18 +20,22 @@ export type {
   SandboxBackendManager,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirValidation,
+  SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
 export type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
   SandboxBackendHandle,
+  SandboxBackendPreparedWorkdirDiscarder,
+  SandboxBackendWorkdirValidator,
 } from "./backend-handle.types.js";
 
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
 
 // Process-wide sandbox backend registry. Tests and plugins can install temporary
-// factories while core still auto-registers the bundled Docker and SSH backends.
+// factories while core still auto-registers the bundled container and SSH backends.
 function getSandboxBackendFactories(): Map<SandboxBackendId, RegisteredSandboxBackend> {
   const globalStore = globalThis as typeof globalThis & {
     [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<SandboxBackendId, RegisteredSandboxBackend>;
@@ -77,6 +82,11 @@ export function getSandboxBackendManager(id: string): SandboxBackendManager | nu
   return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.manager ?? null;
 }
 
+/** Look up optional backend workdir resolution that does not start the runtime. */
+export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWorkdirResolver | null {
+  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.resolveWorkdir ?? null;
+}
+
 /** Resolve a backend factory or throw the user-facing configuration error. */
 export function requireSandboxBackendFactory(id: string): SandboxBackendFactory {
   const factory = getSandboxBackendFactory(id);
@@ -91,15 +101,33 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
   );
 }
 
-import { createDockerSandboxBackend, dockerSandboxBackendManager } from "./docker-backend.js";
-import { createSshSandboxBackend, sshSandboxBackendManager } from "./ssh-backend.js";
+import {
+  createDockerSandboxBackend,
+  createPodmanSandboxBackend,
+  dockerSandboxBackendManager,
+  podmanSandboxBackendManager,
+} from "./docker-backend.js";
+import {
+  createSshSandboxBackend,
+  resolveSshRuntimePaths,
+  sshSandboxBackendManager,
+} from "./ssh-backend.js";
 
 registerSandboxBackend("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
+  resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+});
+
+registerSandboxBackend("podman", {
+  factory: createPodmanSandboxBackend,
+  manager: podmanSandboxBackendManager,
+  resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
 });
 
 registerSandboxBackend("ssh", {
   factory: createSshSandboxBackend,
   manager: sshSandboxBackendManager,
+  resolveWorkdir: ({ cfg, scopeKey }) =>
+    resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir,
 });

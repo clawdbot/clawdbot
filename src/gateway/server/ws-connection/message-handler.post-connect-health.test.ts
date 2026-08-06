@@ -2,12 +2,27 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
-import type { HealthSummary } from "../../../commands/health.types.js";
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticSecurityEvent,
+} from "../../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
+import { setAvatar } from "../../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
   buildGatewaySnapshotMock,
@@ -15,6 +30,9 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  adoptTailscaleProfileAvatarMock,
+  ensureProfileForEmailMock,
+  resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   buildGatewaySnapshotMock: vi.fn(() => ({
@@ -37,12 +55,31 @@ const {
       auth: { mode: "none" },
       controlUi: {
         allowedOrigins: ["http://127.0.0.1:19001"],
-        dangerouslyDisableDeviceAuth: true,
       },
     },
   })),
+  adoptTailscaleProfileAvatarMock: vi.fn(),
+  ensureProfileForEmailMock: vi.fn(),
+  resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
+
+vi.mock("../../../state/user-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../state/user-profiles.js")>();
+  adoptTailscaleProfileAvatarMock.mockImplementation(actual.adoptTailscaleProfileAvatar);
+  ensureProfileForEmailMock.mockImplementation(actual.ensureProfileForEmail);
+  return {
+    ...actual,
+    adoptTailscaleProfileAvatar: adoptTailscaleProfileAvatarMock,
+    ensureProfileForEmail: ensureProfileForEmailMock,
+  };
+});
+
+vi.mock("./auth-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./auth-context.js")>();
+  resolveConnectAuthStateMock.mockImplementation(actual.resolveConnectAuthState);
+  return { ...actual, resolveConnectAuthState: resolveConnectAuthStateMock };
+});
 
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: loadConfigMock,
@@ -73,6 +110,13 @@ const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
 } as const satisfies Record<string, unknown>;
+const NODE_PAIR_REMOVE_PARAMS = {
+  nodeId: "device-1",
+} as const satisfies Record<string, unknown>;
+
+function waitForFast(assertion: () => void | Promise<void>) {
+  return vi.waitFor(assertion, { interval: 1 });
+}
 
 function createLogger() {
   return {
@@ -153,11 +197,30 @@ function createSetCloseCauseMock() {
   return vi.fn<SetCloseCause>();
 }
 
+function captureSecurityEvents(): {
+  events: DiagnosticSecurityEvent[];
+  stop: () => void;
+} {
+  const events: DiagnosticSecurityEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "security.event") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
+
 function attachGatewayHarness(options: {
   connId: string;
   connectNonce: string;
   refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
   requestOrigin?: string;
+  requestHost?: string;
+  headers?: Record<string, string>;
+  remoteAddr?: string;
+  localAddr?: string;
+  resolvedAuth?: ResolvedGatewayAuth;
+  rateLimiter?: AuthRateLimiter;
   client?: unknown;
   close?: CloseGatewayConnection;
   isClosed?: () => boolean;
@@ -179,30 +242,38 @@ function attachGatewayHarness(options: {
   } as unknown as WebSocket;
   const send = vi.fn();
   let client: unknown = options.client ?? null;
-  const resolvedAuth: ResolvedGatewayAuth = {
+  const requestHost = options.requestHost ?? "127.0.0.1:19001";
+  const remoteAddr = options.remoteAddr ?? "127.0.0.1";
+  const localAddr = options.localAddr ?? "127.0.0.1";
+  const resolvedAuth: ResolvedGatewayAuth = options.resolvedAuth ?? {
     mode: "none",
     allowTailscale: false,
   };
+  const advanceHandshakePhase = vi.fn();
+  const logWsControl = createLogger();
   attachGatewayWsMessageHandler({
     socket,
     upgradeReq: {
       headers: {
-        host: "127.0.0.1:19001",
+        host: requestHost,
         ...(options.requestOrigin ? { origin: options.requestOrigin } : {}),
+        ...options.headers,
       },
-      socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
     connId: options.connId,
-    remoteAddr: "127.0.0.1",
-    localAddr: "127.0.0.1",
-    requestHost: "127.0.0.1:19001",
+    remoteAddr,
+    localAddr,
+    requestHost,
     requestOrigin: options.requestOrigin,
     connectNonce: options.connectNonce,
     getResolvedAuth: () => resolvedAuth,
+    rateLimiter: options.rateLimiter,
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
     buildRequestContext: () => ({}) as GatewayRequestContext,
+    nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
     send,
@@ -215,36 +286,47 @@ function attachGatewayHarness(options: {
       return true;
     },
     setHandshakeState: vi.fn(),
+    advanceHandshakePhase,
     setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
     logGateway: createLogger() as never,
     logHealth: createLogger() as never,
-    logWsControl: createLogger() as never,
+    logWsControl: logWsControl as never,
   });
   if (onMessage === undefined) {
     throw new Error("expected websocket message handler");
   }
   const sendMessage = onMessage;
   return {
+    advanceHandshakePhase,
+    logWsControl,
+    send,
     socketSend,
-    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
+    sendRequest: (
+      id: string,
+      method: string,
+      params: Record<string, unknown> = {},
+      traceparent?: string,
+    ) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method,
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
-    sendConnect: (id: string, params: Record<string, unknown>) => {
+    sendConnect: (id: string, params: Record<string, unknown>, traceparent?: string) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method: "connect",
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
@@ -254,8 +336,107 @@ function attachGatewayHarness(options: {
   };
 }
 
+describe("WebSocket request trace context", () => {
+  const upstreamTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+  const upstreamSpanId = "00f067aa0ba902b7";
+  const upstreamTraceparent = `00-${upstreamTraceId}-${upstreamSpanId}-01`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not carry connect-frame trace context into later requests", async () => {
+    let observed: DiagnosticTraceContext | undefined;
+    vi.mocked(handleGatewayRequest).mockImplementation(async () => {
+      observed = getActiveDiagnosticTraceContext();
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-connect-trace",
+      connectNonce: "nonce-connect-trace",
+    });
+
+    harness.sendConnect(
+      "connect-1",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      },
+      upstreamTraceparent,
+    );
+    await waitForFast(() => {
+      expect(harness.client).not.toBeNull();
+    });
+
+    harness.sendRequest("untraced-1", "status.summary");
+
+    await waitForFast(() => {
+      expect(observed).toBeDefined();
+    });
+    expect(observed?.traceId).not.toBe(upstreamTraceId);
+  });
+});
+
+function connectTrustedProxyUser(connId: string) {
+  loadConfigMock.mockImplementationOnce(() => ({
+    gateway: {
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+        },
+      },
+      trustedProxies: ["10.0.0.1"],
+      controlUi: {
+        allowedOrigins: ["http://127.0.0.1:19001"],
+      },
+    },
+  }));
+  const harness = attachGatewayHarness({
+    connId,
+    connectNonce: `nonce-${connId}`,
+    requestHost: "gateway.example.com:18789",
+    requestOrigin: "http://127.0.0.1:19001",
+    remoteAddr: "10.0.0.1",
+    resolvedAuth: {
+      mode: "trusted-proxy",
+      allowTailscale: false,
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto"],
+      },
+    },
+    headers: {
+      "x-forwarded-user": "alice@example.com",
+      "x-forwarded-proto": "https",
+    },
+  });
+  harness.sendConnect(`connect-${connId}`, {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: {
+      id: "openclaw-control-ui",
+      version: "dev",
+      platform: "test",
+      mode: "ui",
+    },
+    role: "operator",
+    caps: [],
+  });
+  return harness;
+}
+
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     vi.clearAllMocks();
   });
 
@@ -310,19 +491,61 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseMutation).toBeTypeOf("function");
     });
 
     releaseMutation?.();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
     expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
       reason: "device-token-revoked",
+      method: "status.summary",
+    });
+  });
+
+  it("waits for device-backed node removal before dispatching later queued requests", async () => {
+    let releaseMutation: (() => void) | undefined;
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const client = createConnectedTestClient({ connId: "conn-node-invalidating" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      expect(opts.req.method).toBe("node.pair.remove");
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+      client.invalidated = true;
+      client.invalidatedReason = "device-pair-removed";
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-node-invalidating",
+      connectNonce: "nonce-node-invalidating",
+      client,
+      close,
+      setCloseCause,
+    });
+
+    harness.sendRequest("remove-node-1", "node.pair.remove", NODE_PAIR_REMOVE_PARAMS);
+    harness.sendRequest("queued-1", "status.summary");
+
+    await waitForFast(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseMutation).toBeTypeOf("function");
+    });
+
+    releaseMutation?.();
+
+    await waitForFast(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-pair-removed");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-pair-removed",
       method: "status.summary",
     });
   });
@@ -358,13 +581,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     harness.sendRequest("revoke-1", "device.token.revoke", DEVICE_TOKEN_MUTATION_PARAMS);
     harness.sendRequest("queued-1", "status.summary");
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
       expect(releaseFirstMutation).toBeTypeOf("function");
     });
 
     releaseFirstMutation?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
       expect(releaseSecondMutation).toBeTypeOf("function");
     });
@@ -374,7 +597,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
 
     releaseSecondMutation?.();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
     });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
@@ -391,35 +614,435 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const isClosed = vi.fn(() => false);
     const harness = attachGatewayHarness({
       connId: "conn-1",
-      requestOrigin: "http://127.0.0.1:19001",
       connectNonce: "nonce-1",
       refreshHealthSnapshot,
       isClosed,
     });
+    const captured = captureSecurityEvents();
 
-    harness.sendConnect("connect-1", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "openclaw-control-ui",
-        version: "dev",
-        platform: "test",
-        mode: "ui",
-      },
-      role: "operator",
-      caps: [],
-    });
+    try {
+      harness.sendConnect("connect-1", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      });
 
-    await vi.waitFor(() => {
-      expect(harness.socketSend).toHaveBeenCalled();
-    });
+      await waitForFast(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+      });
+    } finally {
+      captured.stop();
+    }
     const hello = JSON.parse(harness.socketSend.mock.calls.at(0)?.[0] ?? "{}") as { ok?: boolean };
     expect(hello.ok).toBe(true);
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "gateway.auth.succeeded",
+      outcome: "success",
+      severity: "low",
+      actor: { kind: "operator", role: "operator" },
+      target: { kind: "gateway", name: "websocket" },
+      policy: { id: "gateway.websocket-auth", decision: "allow" },
+      control: { id: "gateway.ws.connect", family: "auth" },
+      attributes: {
+        auth_mode: "none",
+        auth_method: "none",
+        auth_provided: "none",
+        client_mode: "backend",
+        has_device_identity: false,
+        scope_count: 0,
+      },
+    });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
+  });
+
+  it("projects a stable durable profile into presence and refreshes avatar state on reconnect", async () => {
+    await withOpenClawTestState({ label: "gateway-profile-presence" }, async () => {
+      const connect = async (suffix: string) => {
+        const connId = `conn-trusted-proxy-user-${suffix}`;
+        const harness = connectTrustedProxyUser(connId);
+        await waitForFast(() => {
+          expect(upsertPresenceMock).toHaveBeenCalledWith(connId, expect.anything());
+        });
+        const presence = upsertPresenceMock.mock.calls.find(([key]) => key === connId)?.[1] as {
+          user?: { id: string; email?: string; name?: string; avatarUrl?: string };
+        };
+        return { connId, harness, presence };
+      };
+
+      const first = await connect("first");
+      const profileId = first.presence.user?.id;
+      expect(profileId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
+      expect(first.presence.user).toEqual({
+        id: profileId,
+        email: "alice@example.com",
+        name: "alice",
+        // Published route carries the profile revision (?v=<updatedAt>) so a
+        // reconnecting viewer's <img> refetches after an avatar upload instead
+        // of reusing the stale cached image for an unchanged URL.
+        avatarUrl: expect.stringMatching(
+          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
+        ),
+      });
+      expect(first.harness.client).toMatchObject({
+        authenticatedUserId: "alice@example.com",
+        authenticatedUserProfile: {
+          profileId,
+          displayName: "alice",
+          hasAvatar: false,
+        },
+      });
+
+      expect(setAvatar(profileId!, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
+      const second = await connect("second");
+      expect(second.presence.user).toEqual({
+        id: profileId,
+        email: "alice@example.com",
+        name: "alice",
+        avatarUrl: expect.stringMatching(
+          new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
+        ),
+      });
+      expect(second.harness.client).toMatchObject({
+        authenticatedUserProfile: { profileId, hasAvatar: true },
+      });
+      expect(ensureProfileForEmailMock).toHaveBeenCalledTimes(2);
+      expect(first.harness.logWsControl.info).toHaveBeenCalledWith(
+        "authenticated user connected conn=conn-trusted-proxy-user-first user=alice@example.com",
+      );
+    });
+  });
+
+  it("registers a verified profile before detached Tailscale avatar adoption completes", async () => {
+    await withOpenClawTestState({ label: "gateway-tailscale-avatar-detached" }, async () => {
+      let resolveAvatar:
+        | ((profile: {
+            id: string;
+            displayName: string | null;
+            avatarMime: "image/png" | "image/jpeg" | "image/webp" | null;
+            mergedInto: string | null;
+            createdAt: number;
+            updatedAt: number;
+          }) => void)
+        | undefined;
+      adoptTailscaleProfileAvatarMock.mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            resolveAvatar = resolve;
+          }),
+      );
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: {
+            login: "ada@github",
+            name: "Ada Lovelace",
+            profilePic: "https://avatars.example.test/ada.png",
+          },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+        sharedAuthProvided: false,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-tailscale-avatar-detached",
+        connectNonce: "nonce-tailscale-avatar-detached",
+      });
+
+      harness.sendConnect("connect-tailscale-avatar-detached", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserId: "ada@github",
+          authenticatedUserIsTailscaleProvider: true,
+          authenticatedUserProfile: { displayName: "Ada Lovelace", hasAvatar: false },
+        });
+        expect(adoptTailscaleProfileAvatarMock).toHaveBeenCalledOnce();
+      });
+      expect(harness.socketSend).toHaveBeenCalled();
+
+      const profile = (
+        harness.client as {
+          authenticatedUserProfile: { profileId: string; displayName: string; updatedAt: number };
+        }
+      ).authenticatedUserProfile;
+      resolveAvatar?.({
+        id: profile.profileId,
+        displayName: profile.displayName,
+        avatarMime: "image/png",
+        mergedInto: null,
+        createdAt: profile.updatedAt,
+        updatedAt: profile.updatedAt + 1,
+      });
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserProfile: { hasAvatar: true, updatedAt: profile.updatedAt + 1 },
+        });
+      });
+    });
+  });
+
+  it("falls back to email identity when durable profile resolution fails", async () => {
+    ensureProfileForEmailMock.mockImplementationOnce(() => {
+      throw new Error("profile store unavailable");
+    });
+    const harness = connectTrustedProxyUser("conn-profile-store-failure");
+
+    await waitForFast(() => {
+      expect(upsertPresenceMock).toHaveBeenCalledWith(
+        "conn-profile-store-failure",
+        expect.objectContaining({
+          user: { id: "alice@example.com", email: "alice@example.com" },
+        }),
+      );
+    });
+    expect(harness.client).toMatchObject({ authenticatedUserId: "alice@example.com" });
+    expect(harness.client).not.toMatchObject({ authenticatedUserProfile: expect.anything() });
+    expect(harness.logWsControl.warn).toHaveBeenCalledTimes(1);
+    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+      expect.stringContaining("profile store unavailable"),
+    );
+  });
+
+  it("does not project user identity for a token-authenticated backend", async () => {
+    const harness = attachGatewayHarness({
+      connId: "conn-token-userless",
+      connectNonce: "nonce-token-userless",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+    });
+
+    harness.sendConnect("connect-token-userless", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      caps: [],
+      auth: { token: "gateway-token" },
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend.mock.calls.length + harness.send.mock.calls.length).toBeGreaterThan(
+        0,
+      );
+    });
+    const tokenHello = harness.socketSend.mock.calls.at(0)?.[0];
+    expect(
+      typeof tokenHello === "string" ? JSON.parse(tokenHello) : harness.send.mock.calls.at(0)?.[0],
+    ).toMatchObject({
+      ok: true,
+    });
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
+    expect(harness.client).not.toMatchObject({ authenticatedUserId: expect.anything() });
+    expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("emits a security event for rejected gateway auth", async () => {
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-auth-failed",
+      connectNonce: "nonce-auth-failed",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      close,
+    });
+    const captured = captureSecurityEvents();
+
+    try {
+      harness.sendConnect("connect-auth-failed", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        scopes: ["operator.admin"],
+        caps: [],
+        auth: { token: "wrong-token" },
+      });
+
+      await waitForFast(() => {
+        expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("unauthorized"));
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(captured.events).toHaveLength(1);
+    expect(captured.events[0]).toMatchObject({
+      action: "gateway.auth.failed",
+      outcome: "denied",
+      severity: "medium",
+      reason: "token_mismatch",
+      actor: { kind: "operator", role: "operator" },
+      target: { kind: "gateway", name: "websocket" },
+      policy: {
+        id: "gateway.websocket-auth",
+        decision: "deny",
+        reason: "token_mismatch",
+      },
+      control: { id: "gateway.ws.connect", family: "auth" },
+      attributes: {
+        auth_mode: "token",
+        auth_method: "token",
+        auth_provided: "token",
+        client_mode: "backend",
+        has_device_identity: false,
+        scope_count: 0,
+        rate_limited: false,
+      },
+    });
+    expect(JSON.stringify(captured.events)).not.toContain("wrong-token");
+    expect(JSON.stringify(captured.events)).not.toContain("gateway-token");
+    const response = harness.send.mock.calls.at(0)?.[0] as
+      | { error?: Record<string, unknown> }
+      | undefined;
+    expect(response?.error).not.toHaveProperty("retryable");
+    expect(response?.error).not.toHaveProperty("retryAfterMs");
+  });
+
+  it("returns retry timing when gateway auth is rate-limited", async () => {
+    const retryAfterMs = 15_000;
+    const rateLimiter: AuthRateLimiter = {
+      check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs })),
+      recordFailure: vi.fn(),
+      recordFailureAndDelay: vi.fn(async () => {}),
+      reset: vi.fn(),
+      size: vi.fn(() => 0),
+      prune: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-auth-rate-limited",
+      connectNonce: "nonce-auth-rate-limited",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.51",
+      resolvedAuth: {
+        mode: "token",
+        token: "test-token",
+        allowTailscale: false,
+      },
+      rateLimiter,
+      close,
+    });
+
+    harness.sendConnect("connect-auth-rate-limited", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: [],
+      caps: [],
+      auth: { token: "test-token" },
+    });
+
+    await waitForFast(() => {
+      expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("retry later"));
+    });
+
+    const response = harness.send.mock.calls.at(0)?.[0] as
+      | { error?: Record<string, unknown> }
+      | undefined;
+    expect(response?.error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      retryable: true,
+      details: {
+        code: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+        authReason: "rate_limited",
+      },
+    });
+    expect(response?.error?.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it("records credential and hello preparation phases during connect", async () => {
+    const harness = attachGatewayHarness({
+      connId: "conn-phases",
+      connectNonce: "nonce-phases",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+    });
+
+    harness.sendConnect("connect-phases", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: [],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+      },
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    expect(harness.advanceHandshakePhase.mock.calls.map(([phase]) => phase)).toEqual([
+      "auth_credentials_received",
+      "auth_validated",
+      "session_attached",
+      "hello_payload_prepared",
+      "ready",
+    ]);
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
   });
 
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {
@@ -446,7 +1069,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       caps: [],
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
@@ -484,13 +1107,185 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(harness.socketSend).toHaveBeenCalled();
     });
     const connectedClient = harness.client as {
       internal?: { approvalRuntime?: boolean };
     } | null;
     expect(connectedClient?.internal?.approvalRuntime).toBe(true);
+  });
+
+  it("does not trust approval runtime tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-approval-runtime-token",
+      connectNonce: "nonce-remote-approval-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-remote-approval-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.approvals"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+      },
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: { approvalRuntime?: boolean };
+    } | null;
+    expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
+  });
+
+  it("marks local backend clients with a valid agent runtime identity token", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-agent-runtime-token",
+      connectNonce: "nonce-agent-runtime-token",
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await waitForFast(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: {
+        agentRuntimeIdentity?: { agentId?: string; sessionKey?: string };
+      };
+    } | null;
+    expect(connectedClient?.internal?.agentRuntimeIdentity).toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+    });
+  });
+
+  it("rejects agent runtime identity tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-agent-runtime-token",
+      connectNonce: "nonce-remote-agent-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-remote-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await waitForFast(() => {
+      expect(close).toHaveBeenCalledWith(
+        1008,
+        "agent runtime identity token is only accepted from local backend gateway clients",
+      );
+    });
+    expect(harness.client).toBeNull();
+  });
+
+  it("rejects invalid local agent runtime identity tokens", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-invalid-agent-runtime-token",
+      connectNonce: "nonce-invalid-agent-runtime-token",
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-invalid-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: "not-a-valid-token",
+      },
+    });
+
+    await waitForFast(() => {
+      expect(close).toHaveBeenCalledWith(1008, "invalid agent runtime identity token");
+    });
+    expect(harness.client).toBeNull();
   });
 });
 
@@ -548,6 +1343,8 @@ describe("resolvePinnedClientMetadata", () => {
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
     ["openclaw-android", "Android 16", "Android 15", "Android"],
+    ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
+    ["openclaw-macos", "macOS 27.0.0", "macOS 26.5.1", "Mac"],
   ])(
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
@@ -570,6 +1367,62 @@ describe("resolvePinnedClientMetadata", () => {
     },
   );
 
+  it.each(["node", "ui"])("allows a macOS platform version refresh in %s mode", (clientMode) => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode,
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macOS 26.5.1",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
+  it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "node-host",
+        clientMode: "node",
+        claimedPlatform: "macos",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macOS 26.5.2",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+    });
+  });
+
+  it("refreshes a shared node-host macOS pin from the native Mac app", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode: "ui",
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macos",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
   it("still requires approval when an iOS device family changes", () => {
     expect(
       testing.resolvePinnedClientMetadata({
@@ -589,7 +1442,50 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 
-  it("keeps non-mobile platform version changes approval-bound", () => {
+  it("still requires approval when a macOS device family changes", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode: "node",
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "VirtualMac",
+        pairedPlatform: "macOS 26.5.1",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: true,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
+  it.each([
+    ["node-host", "macOS 26.5.2", "macOS 26.5.1"],
+    ["openclaw-macos", "macOS anything", "macOS previous"],
+    ["openclaw-macos", "macOS", "macOS 26.5.1"],
+  ])(
+    "keeps non-version macOS platform changes approval-bound for %s",
+    (clientId, claimed, paired) => {
+      expect(
+        testing.resolvePinnedClientMetadata({
+          clientId,
+          clientMode: "node",
+          claimedPlatform: claimed,
+          claimedDeviceFamily: "Mac",
+          pairedPlatform: paired,
+          pairedDeviceFamily: "Mac",
+        }),
+      ).toMatchObject({
+        platformMismatch: true,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: undefined,
+      });
+    },
+  );
+
+  it("keeps non-native-app platform version changes approval-bound", () => {
     expect(
       testing.resolvePinnedClientMetadata({
         clientId: "node-host",
@@ -607,3 +1503,4 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -9,21 +9,33 @@ import {
   type ThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  collectProviderApiKeysForExecution,
+  executeWithApiKeyRotation,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderHttpError,
+  providerOperationRetryConfig,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
+  sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
   type WritableTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -83,6 +95,7 @@ type GoogleGenerateContentRequest = {
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
+const GOOGLE_SSE_EVENT_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n){2}/u;
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -119,6 +132,10 @@ const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 type GoogleSseChunk = {
   responseId?: string;
+  promptFeedback?: {
+    blockReason?: string;
+    blockReasonMessage?: string;
+  };
   candidates?: Array<{
     content?: {
       parts?: Array<{
@@ -133,12 +150,14 @@ type GoogleSseChunk = {
       }>;
     };
     finishReason?: string;
+    finishMessage?: string;
   }>;
   usageMetadata?: {
     promptTokenCount?: number;
     cachedContentTokenCount?: number;
     candidatesTokenCount?: number;
     thoughtsTokenCount?: number;
+    toolUsePromptTokenCount?: number;
     totalTokenCount?: number;
   };
 };
@@ -151,11 +170,11 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
+  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = normalizeLowercaseStringOrEmpty(modelId).match(/^gemini(?:-live)?-(\d+)/);
+  const match = normalizeLowercaseStringOrEmpty(modelId).match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return true;
   }
@@ -357,10 +376,7 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-export function resolveGoogleVertexBaseOrigin(
-  model: GoogleTransportModel,
-  location: string,
-): string {
+function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {
@@ -391,7 +407,9 @@ function buildGoogleVertexRequestUrl(
 ): string {
   const project = encodeURIComponent(resolveGoogleVertexProject(options));
   const location = encodeURIComponent(resolveGoogleVertexLocation(options));
-  const modelId = encodeURIComponent(model.id);
+  // Mirror resolveGoogleModelPath: strip the google/ provider prefix so a
+  // provider-qualified id does not become an invalid models/google%2F... path.
+  const modelId = encodeURIComponent(stripGoogleProviderPrefix(model.id));
   const origin = resolveGoogleVertexBaseOrigin(model, decodeURIComponent(location));
   return `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;
 }
@@ -476,7 +494,7 @@ function resolveGoogleThinkingConfig(
     }
     return normalizeGoogleThinkingConfig(model.id, config);
   }
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
@@ -524,7 +542,20 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
     },
   );
+  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
+  // live inside functionResponse, so hold them until the consecutive result run ends.
+  const pendingToolResultImageTurns: Array<Record<string, unknown>> = [];
+  let activeToolResultParts: Array<Record<string, unknown>> | undefined;
+  const flushToolResultRun = (): void => {
+    contents.push(...pendingToolResultImageTurns);
+    pendingToolResultImageTurns.length = 0;
+    activeToolResultParts = undefined;
+  };
+
   for (const msg of transformedMessages) {
+    if (msg.role !== "toolResult") {
+      flushToolResultRun();
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         contents.push({
@@ -632,55 +663,49 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     }
 
     if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter(
-          (item): item is Extract<(typeof msg.content)[number], { type: "text" }> =>
-            item.type === "text",
-        )
-        .map((item) => item.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image",
+              item.type === "image" && describeToolResultMediaPlaceholder([item]) !== undefined,
           )
         : [];
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
-        : imageContent.length > 0
-          ? "(see attached image)"
-          : "";
+        : (mediaPlaceholder ?? "");
       const imageParts = imageContent.map((imageBlock) => ({
         inlineData: {
           mimeType: imageBlock.mimeType,
           data: imageBlock.data,
         },
       }));
+      const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
       const functionResponse = {
         functionResponse: {
           name: msg.toolName,
           response: msg.isError ? { error: responseValue } : { output: responseValue },
-          ...(supportsMultimodalFunctionResponse(model.id) && imageParts.length > 0
+          ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
             ? { parts: imageParts }
             : {}),
           ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
         },
       };
-      const last = contents[contents.length - 1];
-      if (
-        last?.role === "user" &&
-        Array.isArray(last.parts) &&
-        last.parts.some((part) => "functionResponse" in part)
-      ) {
-        (last.parts as Array<Record<string, unknown>>).push(functionResponse);
+      if (activeToolResultParts) {
+        activeToolResultParts.push(functionResponse);
       } else {
-        contents.push({ role: "user", parts: [functionResponse] });
+        activeToolResultParts = [functionResponse];
+        contents.push({ role: "user", parts: activeToolResultParts });
       }
-      if (imageParts.length > 0 && !supportsMultimodalFunctionResponse(model.id)) {
-        contents.push({ role: "user", parts: [{ text: "Tool result image:" }, ...imageParts] });
+      if (imageParts.length > 0 && !modelSupportsMultimodalFunctionResponse) {
+        pendingToolResultImageTurns.push({
+          role: "user",
+          parts: [{ text: "Tool result image:" }, ...imageParts],
+        });
       }
     }
   }
+  flushToolResultRun();
   if (contents.length === 0) {
     contents.push({ role: "user", parts: [{ text: " " }] });
   }
@@ -693,7 +718,7 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,
@@ -761,19 +786,61 @@ function buildGoogleHeaders(
 ): Record<string, string> {
   const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
   return (
-    mergeTransportHeaders(
-      {
-        "Content-Type": "application/json",
-        accept: "text/event-stream",
-      },
-      authHeaders,
-      model.headers,
-      optionHeaders,
-    ) ?? {
+    resolveProviderRequestHeaders({
+      provider: model.provider,
+      api: normalizeGoogleTransportRouteApi(model.api),
+      baseUrl: model.baseUrl,
+      capability: "llm",
+      transport: "stream",
+      defaultHeaders: mergeTransportHeaders(
+        {
+          "Content-Type": "application/json",
+          accept: "text/event-stream",
+        },
+        authHeaders,
+        model.headers,
+      ),
+      callerHeaders: optionHeaders,
+      precedence: "caller-wins",
+    }) ?? {
       "Content-Type": "application/json",
       accept: "text/event-stream",
     }
   );
+}
+
+function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
+  return Boolean(
+    apiKey?.trimStart().startsWith("{") && parseGeminiAuth(apiKey).headers.Authorization,
+  );
+}
+
+function hasGoogleAuthHeader(headers: Record<string, string> | undefined): boolean {
+  return Object.keys(headers ?? {}).some((name) => {
+    const normalized = name.trim().toLowerCase();
+    return normalized === "authorization" || normalized === "x-goog-api-key";
+  });
+}
+
+function collectGoogleTransportApiKeys(params: {
+  kind: CanonicalGoogleTransportApi;
+  model: GoogleTransportModel;
+  options: GoogleTransportOptions | undefined;
+  primaryApiKey: string | undefined;
+}): string[] {
+  if (
+    params.kind !== "google-generative-ai" ||
+    !isOfficialGoogleGenerativeAiBaseUrl(params.model.baseUrl) ||
+    isGoogleOauthApiKey(params.primaryApiKey) ||
+    hasGoogleAuthHeader(params.model.headers) ||
+    hasGoogleAuthHeader(params.options?.headers)
+  ) {
+    return [];
+  }
+  return collectProviderApiKeysForExecution({
+    provider: params.model.provider,
+    primaryApiKey: params.primaryApiKey,
+  });
 }
 
 async function buildGoogleVertexHeaders(
@@ -816,13 +883,14 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
     return true;
   }
   try {
-    return new URL(baseUrl).hostname === "generativelanguage.googleapis.com";
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" && url.hostname === "generativelanguage.googleapis.com";
   } catch {
     return false;
   }
 }
 
-export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
+function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   if (raw === undefined || raw.trim() === "") {
     return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
@@ -860,7 +928,7 @@ function cloneGoogleGenerateContentRequest(
   return JSON.parse(serialized) as GoogleGenerateContentRequest;
 }
 
-export function buildGoogleGemini3FirstResponseRetryParams(params: {
+function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
 }): GoogleGenerateContentRequest | undefined {
@@ -1119,33 +1187,54 @@ async function* parseGoogleSseChunks(
   signal?.addEventListener("abort", abortHandler);
   try {
     while (true) {
-      if (signal?.aborted) {
-        throw new Error("Request was aborted");
-      }
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
+      // Cancellation settles a pending read as done; never mistake that for EOF.
+      signal?.throwIfAborted();
       if (done) {
+        buffer += decoder.decode();
+        if (
+          buffer
+            .split(/\r\n|\n|\r/u)
+            .some((line) => line.startsWith("data:") && line.slice(5).trim().length > 0)
+        ) {
+          throw new Error("Google SSE stream ended with an incomplete frame");
+        }
         completed = true;
         break;
       }
-      buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
-      let boundary = buffer.indexOf("\n\n");
-      while (boundary >= 0) {
-        const rawEvent = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        boundary = buffer.indexOf("\n\n");
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
+      while (boundary) {
+        const rawEvent = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
         const data = rawEvent
-          .split("\n")
+          .split(/\r\n|\n|\r/u)
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).trim())
           .join("\n");
         if (!data || data === "[DONE]") {
           continue;
         }
+        let chunk: unknown;
         try {
-          yield JSON.parse(data) as GoogleSseChunk;
+          chunk = JSON.parse(data);
         } catch {
           throw new Error("Google SSE stream returned malformed JSON");
         }
+        if (isRecord(chunk) && isRecord(chunk.error)) {
+          const providerError = chunk.error;
+          throw Object.assign(
+            new Error(normalizeOptionalString(providerError.message) ?? "Google stream failed"),
+            {
+              code: normalizeOptionalString(providerError.status) ?? "GOOGLE_STREAM_ERROR",
+              status: typeof providerError.code === "number" ? providerError.code : undefined,
+              type: "google_stream_failed",
+            },
+          );
+        }
+        yield chunk as GoogleSseChunk;
       }
     }
   } finally {
@@ -1161,19 +1250,29 @@ function updateUsage(
   output: MutableAssistantOutput,
   model: GoogleTransportModel,
   chunk: GoogleSseChunk,
-) {
-  const usage = chunk.usageMetadata;
-  if (!usage) {
+  knownUsage: NonNullable<GoogleSseChunk["usageMetadata"]>,
+): void {
+  if (!chunk.usageMetadata) {
     return;
   }
-  const promptTokens = usage.promptTokenCount || 0;
-  const cacheRead = usage.cachedContentTokenCount || 0;
+  for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
+    const value = chunk.usageMetadata[field];
+    if (typeof value === "number") {
+      knownUsage[field] = value;
+    }
+  }
+  const promptTokens = knownUsage.promptTokenCount ?? 0;
+  const cacheRead = knownUsage.cachedContentTokenCount ?? 0;
+  const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount ?? 0;
+  const outputTokens =
+    (knownUsage.candidatesTokenCount ?? 0) + (knownUsage.thoughtsTokenCount ?? 0);
   output.usage = {
-    input: Math.max(0, promptTokens - cacheRead),
-    output: (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0),
+    input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
+    output: outputTokens,
     cacheRead,
     cacheWrite: 0,
-    totalTokens: usage.totalTokenCount || 0,
+    totalTokens:
+      chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, output.usage);
@@ -1232,24 +1331,55 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           params = nextParams as GoogleGenerateContentRequest;
         }
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
-        const requestHeaders = await buildGoogleTransportHeaders({
-          kind,
-          model,
-          apiKey,
-          optionHeaders: options?.headers,
-          fetchImpl: (options as { fetch?: typeof fetch } | undefined)?.fetch,
-        });
-        const sse = await openGoogleSseChunks({
+        const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
+        const openSse = async (apiKeyForRequest: string | undefined) => {
+          const requestHeaders = await buildGoogleTransportHeaders({
+            kind,
+            model,
+            apiKey: apiKeyForRequest,
+            optionHeaders: options?.headers,
+            fetchImpl,
+          });
+          return await openGoogleSseChunks({
+            kind,
+            model,
+            options,
+            guardedFetch,
+            url: requestUrl,
+            headers: requestHeaders,
+            request: params,
+          });
+        };
+        const apiKeys = collectGoogleTransportApiKeys({
           kind,
           model,
           options,
-          guardedFetch,
-          url: requestUrl,
-          headers: requestHeaders,
-          request: params,
+          primaryApiKey: apiKey,
         });
+        const sse =
+          apiKeys.length > 0
+            ? await executeWithApiKeyRotation({
+                provider: model.provider,
+                apiKeys,
+                transientRetry: providerOperationRetryConfig("read"),
+                execute: openSse,
+              })
+            : await openSse(apiKey);
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
+        let sawTerminalReason = false;
+        let terminalGenerationError: Error | undefined;
+        const knownUsage: NonNullable<GoogleSseChunk["usageMetadata"]> = {
+          promptTokenCount: 0,
+          cachedContentTokenCount: 0,
+          toolUsePromptTokenCount: 0,
+          candidatesTokenCount: 0,
+          thoughtsTokenCount: 0,
+        };
+        const toolCallBlocksById = new Map<
+          string,
+          Extract<GoogleTransportContentBlock, { type: "toolCall" }>
+        >();
         const chunks =
           sse.firstChunk === undefined
             ? sse.chunks
@@ -1259,8 +1389,19 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               })(sse.firstChunk);
         for await (const chunk of chunks) {
           output.responseId ||= chunk.responseId;
-          updateUsage(output, model, chunk);
+          updateUsage(output, model, chunk, knownUsage);
           const candidate = chunk.candidates?.[0];
+          const promptFeedback = chunk.promptFeedback;
+          if (!candidate && promptFeedback) {
+            const blockReason =
+              normalizeOptionalString(promptFeedback.blockReason) ?? "PROMPT_BLOCKED";
+            const blockMessage = normalizeOptionalString(promptFeedback.blockReasonMessage);
+            const message = `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`;
+            throw Object.assign(new Error(message), {
+              code: blockReason,
+              type: "google_prompt_blocked",
+            });
+          }
           if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
               const hasThoughtSignature =
@@ -1340,18 +1481,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   currentBlockIndex = -1;
                 }
                 const providedId = part.functionCall.id;
-                const isDuplicate = output.content.some(
-                  (block) => block.type === "toolCall" && block.id === providedId,
-                );
                 const existingToolCall =
-                  typeof providedId === "string"
-                    ? output.content.find(
-                        (
-                          block,
-                        ): block is Extract<GoogleTransportContentBlock, { type: "toolCall" }> =>
-                          block.type === "toolCall" && block.id === providedId,
-                      )
-                    : undefined;
+                  typeof providedId === "string" ? toolCallBlocksById.get(providedId) : undefined;
+                const isDuplicate = existingToolCall !== undefined;
                 const toolCallId =
                   providedId && !isDuplicate
                     ? providedId
@@ -1361,12 +1493,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   id: toolCallId,
                   name: part.functionCall.name || "",
                   arguments: part.functionCall.args ?? {},
-                  thoughtSignature: retainThoughtSignature(
-                    existingToolCall?.thoughtSignature,
-                    part.thoughtSignature,
-                  ),
+                  ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
                 };
                 output.content.push(toolCall);
+                if (!toolCallBlocksById.has(toolCall.id)) {
+                  toolCallBlocksById.set(toolCall.id, toolCall);
+                }
                 const blockIndex = output.content.length - 1;
                 stream.push({
                   type: "toolcall_start",
@@ -1389,14 +1521,38 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             }
           }
           if (typeof candidate?.finishReason === "string") {
+            sawTerminalReason = true;
             output.stopReason = mapStopReasonString(candidate.finishReason);
-            if (output.content.some((block) => block.type === "toolCall")) {
+            if (output.stopReason === "error") {
+              const finishMessage = normalizeOptionalString(candidate.finishMessage);
+              terminalGenerationError = Object.assign(
+                new Error(
+                  `Google generation stopped (${candidate.finishReason})${finishMessage ? `: ${finishMessage}` : ""}`,
+                ),
+                { code: candidate.finishReason, type: "google_generation_failed" },
+              );
+            }
+            // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+            // Google stop may promote parsed calls into an executable tool-use turn.
+            if (
+              output.stopReason === "stop" &&
+              output.content.some((block) => block.type === "toolCall")
+            ) {
               output.stopReason = "toolUse";
             }
           }
         }
         if (currentBlockIndex >= 0) {
           pushTextBlockEnd(stream, output, currentBlockIndex);
+        }
+        if (terminalGenerationError && !options?.signal?.aborted) {
+          throw terminalGenerationError;
+        }
+        if (!sawTerminalReason && !options?.signal?.aborted) {
+          throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {
+            code: "STREAM_INCOMPLETE",
+            type: "google_incomplete_stream",
+          });
         }
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
@@ -1414,3 +1570,4 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
 export function createGoogleVertexTransportStreamFn(): StreamFn {
   return createGoogleTransportStreamFn("google-vertex");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

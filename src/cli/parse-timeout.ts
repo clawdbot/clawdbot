@@ -55,6 +55,9 @@ export function parseTimeoutMsWithFallback(
   }
 
   if (!value) {
+    if (options.invalidType === "error") {
+      throw invalidTimeout();
+    }
     return fallbackMs;
   }
 

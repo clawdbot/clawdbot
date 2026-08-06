@@ -30,7 +30,6 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 const getChannelPluginCatalogEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: (opts?: unknown) => listChannelPluginCatalogEntries(opts),
   listRawChannelPluginCatalogEntries: (opts?: unknown) => listChannelPluginCatalogEntries(opts),
   getChannelPluginCatalogEntry: (...args: unknown[]) =>
     getChannelPluginCatalogEntry(...(args as [string, Record<string, unknown>])),
@@ -55,6 +54,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
 }));
 
 import { resolveChannelSetupEntries } from "./discovery.js";
@@ -151,10 +151,12 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       meta: workspaceEntry.meta,
       install: { npmSpec: "@openclaw/telegram" },
     };
-    listChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
-      (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace
-        ? [bundledEntry]
-        : [workspaceEntry],
+    listChannelPluginCatalogEntries.mockReturnValue([workspaceEntry]);
+    getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, opts?: { excludePluginRefs?: Array<{ pluginId: string }> }) =>
+        opts?.excludePluginRefs?.some((entry) => entry.pluginId === "evil-telegram-shadow")
+          ? bundledEntry
+          : undefined,
     );
 
     resolveChannelSetupEntries({
@@ -163,12 +165,15 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       installedPlugins: [],
     });
 
-    const fallbackCall = listChannelPluginCatalogEntries.mock.calls.find(
-      ([opts]) => (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace === true,
+    const fallbackCall = getChannelPluginCatalogEntry.mock.calls.find(
+      ([, opts]) =>
+        (
+          opts as { excludePluginRefs?: Array<{ pluginId: string; origin?: string }> } | undefined
+        )?.excludePluginRefs?.some(
+          (entry) => entry.pluginId === "evil-telegram-shadow" && entry.origin === "workspace",
+        ) === true,
     );
-    expect(
-      (fallbackCall?.[0] as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace,
-    ).toBe(true);
+    expect(fallbackCall).toBeTruthy();
   });
 
   it("still returns bundled-origin entries", () => {

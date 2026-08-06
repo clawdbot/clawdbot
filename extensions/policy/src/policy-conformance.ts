@@ -4,6 +4,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isPolicyValueAtLeastAsStrict,
   policyContainerShapeFindings,
@@ -11,14 +12,15 @@ import {
   type PolicyRuleMetadata,
   type PolicyScopeSelectorKind,
 } from "./doctor/register.js";
+import { getPolicyPath, scopedPolicyValue } from "./policy-value.js";
 
-export const POLICY_CONFORMANCE_CHECK_IDS = {
+const POLICY_CONFORMANCE_CHECK_IDS = {
   missing: "policy/policy-conformance-missing",
   weaker: "policy/policy-conformance-weaker",
   invalid: "policy/policy-conformance-invalid",
 } as const;
 
-export type PolicyConformanceFinding = {
+type PolicyConformanceFinding = {
   readonly checkId: (typeof POLICY_CONFORMANCE_CHECK_IDS)[keyof typeof POLICY_CONFORMANCE_CHECK_IDS];
   readonly severity: "error";
   readonly message: string;
@@ -333,6 +335,8 @@ function baselineRuleIsNoOp(metadata: PolicyRuleMetadata, baseline: unknown): bo
     case "exact-list":
     case "ordered-string":
       return false;
+    case "routing-probes":
+      return policyRuleListIsEmpty(baseline, metadata);
   }
   return false;
 }
@@ -355,17 +359,49 @@ function policyRuleValueIsValid(metadata: PolicyRuleMetadata, value: unknown): b
     case "string":
       return typeof value === "string" && policyStringIsAllowed(metadata, value);
     case "string-list":
-      return (
-        Array.isArray(value) &&
-        value.every(
-          (entry) =>
-            typeof entry === "string" &&
-            entry.trim() !== "" &&
-            policyStringIsAllowed(metadata, entry),
-        )
+      if (!Array.isArray(value)) {
+        return false;
+      }
+      if (isExecApprovalAllowlistExpectedRule(metadata)) {
+        return value.every(isExecApprovalAllowlistRequirement);
+      }
+      return value.every(
+        (entry) =>
+          typeof entry === "string" &&
+          entry.trim() !== "" &&
+          policyStringIsAllowed(metadata, entry),
       );
+    case "routing-probes":
+      return Array.isArray(value);
   }
   return false;
+}
+
+function isExecApprovalAllowlistExpectedRule(metadata: PolicyRuleMetadata): boolean {
+  return metadata.policyPath.join(".") === "execApprovals.agents.allowlist.expected";
+}
+
+function unsupportedPolicyKey(
+  value: Record<string, unknown>,
+  supported: readonly string[],
+): string | undefined {
+  return Object.keys(value).find((key) => !supported.includes(key));
+}
+
+function isExecApprovalAllowlistRequirement(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim() !== "";
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (unsupportedPolicyKey(value, ["argPattern", "pattern"]) !== undefined) {
+    return false;
+  }
+  if (typeof value.pattern !== "string" || value.pattern.trim() === "") {
+    return false;
+  }
+  return value.argPattern === undefined || typeof value.argPattern === "string";
 }
 
 function policyStringIsAllowed(metadata: PolicyRuleMetadata, value: string): boolean {
@@ -393,6 +429,9 @@ function policyRuleListIsEmpty(value: unknown, metadata: PolicyRuleMetadata): bo
     return false;
   }
   if (metadata.valueType === "channel-provider-deny-rules") {
+    return value.length === 0;
+  }
+  if (metadata.valueType === "routing-probes") {
     return value.length === 0;
   }
   return value.length === 0;
@@ -506,7 +545,25 @@ function collectScopedPolicyRuleClaims(document: PolicyDocument): readonly Polic
       }
     }
   }
-  return claims;
+  return coalesceScopedPolicyRuleClaims(claims);
+}
+
+function coalesceScopedPolicyRuleClaims(
+  claims: readonly PolicyRuleClaim[],
+): readonly PolicyRuleClaim[] {
+  const byKey = new Map<string, PolicyRuleClaim>();
+  for (const claim of claims) {
+    const previous = byKey.get(claim.key);
+    if (
+      previous !== undefined &&
+      isPolicyValueAtLeastAsStrict(previous.metadata, claim.value, previous.value)
+    ) {
+      byKey.set(claim.key, claim);
+      continue;
+    }
+    byKey.set(claim.key, previous ?? claim);
+  }
+  return [...byKey.values()];
 }
 
 function normalizeSelectorValues(
@@ -521,22 +578,6 @@ function normalizeSelectorValues(
     .map((entry) =>
       selector === "agentIds" ? normalizeAgentId(entry) : entry.trim().toLowerCase(),
     );
-}
-
-function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const scopedRoot = path[0] === "agents" ? overlay.agents : overlay[path[0]];
-  return getPolicyPath(scopedRoot, path.slice(1));
-}
-
-function getPolicyPath(value: unknown, path: readonly string[]): unknown {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return current;
 }
 
 async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResult> {
@@ -575,8 +616,4 @@ function ocPathSegment(value: string): string {
     return value;
   }
   return JSON.stringify(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

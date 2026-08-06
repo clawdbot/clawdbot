@@ -2,11 +2,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
+const itUnix = process.platform === "win32" ? it.skip : it;
 
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -18,7 +19,7 @@ const nestedGitEnvKeys = [
 ] as const;
 
 function createNestedGitEnv(): NodeJS.ProcessEnv {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
@@ -41,6 +42,23 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function stubHangingGit(cwd: string, stalledSubcommand: "ls-files" | "show") {
+  const binDir = path.join(cwd, "fake-git-bin");
+  mkdirSync(binDir);
+  const fixture = `#!${process.execPath}
+if (process.argv[2] === ${JSON.stringify(stalledSubcommand)}) {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1_000);
+} else if (process.argv[2] === "ls-files") {
+  process.stdout.write("package.json\\0");
+} else {
+  process.exitCode = 1;
+}
+`;
+  writeFileSync(path.join(binDir, "git"), fixture, { mode: 0o755 });
+  vi.stubEnv("PATH", `${binDir}${path.delimiter}${process.env.PATH ?? ""}`);
+}
+
 function makeRepo() {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-");
   git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -48,6 +66,7 @@ function makeRepo() {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   cleanupTempDirs(tempDirs);
 });
 
@@ -160,6 +179,30 @@ packageExtensions:
 
     expect(collectDependencyPinViolations(dir)).toEqual([]);
   });
+
+  itUnix("terminates a SIGTERM-resistant git ls-files at the dependency-pin timeout", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-ls-files-timeout-");
+    stubHangingGit(dir, "ls-files");
+
+    expect(() => collectDependencyPinViolations(dir, { gitTimeoutMs: 200 })).toThrow(
+      "dependency pin guard: git ls-files -z -- *package.json timed out after 200ms.",
+    );
+  });
+
+  itUnix(
+    "terminates a SIGTERM-resistant sparse-index git show at the dependency-pin timeout",
+    () => {
+      const dir = makeRepo();
+      writeJson(path.join(dir, "package.json"), {});
+      git(dir, ["add", "package.json"]);
+      rmSync(path.join(dir, "package.json"));
+      stubHangingGit(dir, "show");
+
+      expect(() => collectDependencyPinViolations(dir, { gitTimeoutMs: 200 })).toThrow(
+        "dependency pin guard: git show :package.json timed out after 200ms.",
+      );
+    },
+  );
 
   it("rejects floating workspace overrides and package extension dependencies", () => {
     const dir = makeRepo();

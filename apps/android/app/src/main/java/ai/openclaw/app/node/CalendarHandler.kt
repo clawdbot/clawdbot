@@ -37,10 +37,16 @@ internal data class CalendarAddRequest(
   val startMs: Long,
   val endMs: Long,
   val isAllDay: Boolean,
+  val timeZoneId: String,
   val location: String?,
   val notes: String?,
   val calendarId: Long?,
   val calendarTitle: String?,
+)
+
+private data class CalendarAddRange(
+  val start: Instant,
+  val end: Instant,
 )
 
 /**
@@ -148,7 +154,7 @@ private object SystemCalendarDataSource : CalendarDataSource {
         put(CalendarContract.Events.DTSTART, request.startMs)
         put(CalendarContract.Events.DTEND, request.endMs)
         put(CalendarContract.Events.ALL_DAY, if (request.isAllDay) 1 else 0)
-        put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+        put(CalendarContract.Events.EVENT_TIMEZONE, request.timeZoneId)
         request.location?.let { put(CalendarContract.Events.EVENT_LOCATION, it) }
         request.notes?.let { put(CalendarContract.Events.DESCRIPTION, it) }
       }
@@ -393,15 +399,32 @@ class CalendarHandler private constructor(
     val end =
       parseISO((params["endISO"] as? JsonPrimitive)?.content)
         ?: return null
+    val isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
+    val addRange = normalizeAddRange(start, end, isAllDay)
     return CalendarAddRequest(
       title = (params["title"] as? JsonPrimitive)?.content?.trim().orEmpty(),
-      startMs = start.toEpochMilli(),
-      endMs = end.toEpochMilli(),
-      isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false,
+      startMs = addRange.start.toEpochMilli(),
+      endMs = addRange.end.toEpochMilli(),
+      isAllDay = isAllDay,
+      timeZoneId = if (isAllDay) "UTC" else TimeZone.getDefault().id,
       location = (params["location"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
       notes = (params["notes"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
       calendarId = (params["calendarId"] as? JsonPrimitive)?.content?.toLongOrNull(),
       calendarTitle = (params["calendarTitle"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+    )
+  }
+
+  private fun normalizeAddRange(
+    start: Instant,
+    end: Instant,
+    isAllDay: Boolean,
+  ): CalendarAddRange {
+    if (!isAllDay || end <= start) return CalendarAddRange(start = start, end = end)
+    val dayStart = start.truncatedTo(ChronoUnit.DAYS)
+    val dayEnd = end.truncatedTo(ChronoUnit.DAYS)
+    return CalendarAddRange(
+      start = dayStart,
+      end = if (dayEnd > dayStart) dayEnd else dayStart.plus(1, ChronoUnit.DAYS),
     )
   }
 

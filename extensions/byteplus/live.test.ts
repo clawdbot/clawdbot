@@ -4,9 +4,9 @@ import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
-import { BYTEPLUS_CODING_BASE_URL, BYTEPLUS_DEFAULT_COST } from "./models.js";
+import { BYTEPLUS_CODING_BASE_URL } from "./models.js";
 
 const BYTEPLUS_KEY = process.env.BYTEPLUS_API_KEY ?? "";
 const BYTEPLUS_CODING_MODEL = process.env.BYTEPLUS_CODING_MODEL?.trim() || "ark-code-latest";
@@ -33,7 +33,7 @@ describeLive("byteplus coding plan live", () => {
       baseUrl: BYTEPLUS_CODING_BASE_URL,
       reasoning: false,
       input: ["text"],
-      cost: BYTEPLUS_DEFAULT_COST,
+      cost: { input: 0.0001, output: 0.0002, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 256000,
       maxTokens: 4096,
     };

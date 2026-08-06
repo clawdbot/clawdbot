@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Control UI indexed reads must account for missing entries.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/ui.tsbuildinfo"
+  },
+  "include": ["ui/**/*", "src/**/*.d.ts", "packages/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
+}

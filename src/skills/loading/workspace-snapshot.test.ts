@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { withPathResolutionEnv } from "../../test-utils/env.js";
+import { withEnv, withPathResolutionEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
@@ -109,6 +109,47 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.skills).toStrictEqual([]);
   });
 
+  it("keeps symlinked compatibility skills out of isolated session snapshots", async () => {
+    if (!tempHome) {
+      throw new Error("temporary home is unavailable");
+    }
+    const home = await fs.realpath(tempHome.home);
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const compatibilitySkillsDir = path.join(home, ".claude", "skills");
+    const personalSkillDir = path.join(compatibilitySkillsDir, "personal-compat");
+    await writeSkill({
+      dir: personalSkillDir,
+      name: "personal-compat",
+      description: "Personal compatibility skill",
+    });
+    await fs.mkdir(path.join(home, ".agents"), { recursive: true });
+    await fs.symlink(compatibilitySkillsDir, path.join(home, ".agents", "skills"), "dir");
+    const buildHomeSnapshot = () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      });
+    try {
+      const defaultSnapshot = withEnv(
+        { HOME: home, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") },
+        buildHomeSnapshot,
+      );
+      expectSnapshotNamesAndPrompt(defaultSnapshot, { contains: ["personal-compat"] });
+      expect(defaultSnapshot.resolvedSkills?.[0]?.filePath).toBe(
+        await fs.realpath(path.join(personalSkillDir, "SKILL.md")),
+      );
+
+      const isolatedSnapshot = withEnv(
+        { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "scratch-state") },
+        buildHomeSnapshot,
+      );
+      expectSnapshotNamesAndPrompt(isolatedSnapshot, { omits: ["personal-compat"] });
+    } finally {
+      await fs.rm(path.join(home, ".agents", "skills"), { force: true });
+      await fs.rm(path.join(home, ".claude"), { recursive: true, force: true });
+    }
+  });
+
   it("omits disable-model-invocation skills from the prompt", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     await writeSkill({
@@ -174,6 +215,33 @@ describe("buildWorkspaceSkillSnapshot", () => {
     );
 
     expect(snapshot.prompt).toBe(prompt);
+  });
+
+  it("renders a deterministic version that changes when SKILL.md content changes", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const skillDir = path.join(workspaceDir, "skills", "visible");
+    await writeSkill({
+      dir: skillDir,
+      name: "visible",
+      description: "Visible",
+      body: "# Visible\nfirst body\n",
+    });
+
+    const before = buildSnapshot(workspaceDir);
+    await writeSkill({
+      dir: skillDir,
+      name: "visible",
+      description: "Visible",
+      body: "# Visible\nsecond body\n",
+    });
+    const after = buildSnapshot(workspaceDir);
+
+    const beforeVersion = before.prompt.match(/<version>([^<]+)<\/version>/)?.[1];
+    const afterVersion = after.prompt.match(/<version>([^<]+)<\/version>/)?.[1];
+    expect(beforeVersion).toMatch(/^sha256:[a-f0-9]{16}$/);
+    expect(afterVersion).toMatch(/^sha256:[a-f0-9]{16}$/);
+    expect(afterVersion).not.toBe(beforeVersion);
+    expect(after.prompt).toContain("If a skill's <version> differs from a previous turn");
   });
 
   it("truncates the skills prompt when it exceeds the configured char budget", async () => {

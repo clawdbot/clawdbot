@@ -5,11 +5,11 @@ import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 
-export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
-export type WebProviderConfigKey = "webSearch" | "webFetch";
+type WebProviderContract = "webSearchProviders" | "webFetchProviders";
+type WebProviderConfigKey = "webSearch" | "webFetch";
 
 /** Manifest-backed plugin id candidates for a web provider family. */
-export type WebProviderCandidateResolution = {
+type WebProviderCandidateResolution = {
   pluginIds: string[] | undefined;
   manifestRecords?: readonly PluginManifestRecord[];
 };
@@ -87,6 +87,7 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
+  sandboxed?: boolean;
 }): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
 }
@@ -100,6 +101,7 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
+  sandboxed?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
 }): WebProviderCandidateResolution {
   const scopedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
@@ -119,6 +121,11 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
     .filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
+        // Sandboxed web tools may run bundled providers or a verified official install,
+        // never an arbitrary workspace or external plugin with the same contract.
+        (!params.sandboxed ||
+          plugin.origin === "bundled" ||
+          plugin.trustedOfficialInstall === true) &&
         (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
         pluginManifestDeclaresProviderConfig(plugin, params.configKey, params.contract),
     )
@@ -129,7 +136,7 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   }
   // Unscoped resolution falls back to runtime registry loading; scoped/origin-filtered
   // calls must return an explicit empty candidate set instead.
-  if (params.origin || scopedPluginIds !== undefined) {
+  if (params.origin || params.sandboxed || scopedPluginIds !== undefined) {
     return { pluginIds: [], manifestRecords };
   }
   return { pluginIds: undefined, manifestRecords };

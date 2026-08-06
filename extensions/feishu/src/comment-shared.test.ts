@@ -1,9 +1,17 @@
 // Feishu tests cover comment shared plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  parseCommentContentElements,
-  resolveCommentLinkedDocumentFromUrl,
-} from "./comment-shared.js";
+import { parseCommentContentElements } from "./comment-shared.js";
+
+function resolveCommentLinkedDocumentFromUrl(params: {
+  rawUrl: string;
+  currentDocument?: Parameters<typeof parseCommentContentElements>[0]["currentDocument"];
+}) {
+  const parsed = parseCommentContentElements({
+    elements: [{ type: "docs_link", docs_link: { url: params.rawUrl } }],
+    currentDocument: params.currentDocument,
+  });
+  return parsed.linkedDocuments[0] ?? { rawUrl: params.rawUrl, urlKind: "unknown" as const };
+}
 
 const VALID_TOKEN_22 = "ABCDEFGHIJKLMNOPQRSTUV";
 const VALID_TOKEN_27 = "ZsJfdxrBFo0RwuxteOLc1Ekvneb";

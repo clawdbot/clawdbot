@@ -8,6 +8,7 @@ export type BatchHttpClientConfig = {
   baseUrl?: string;
   headers?: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
 };
 
 /** Normalize batch API base URLs by removing one trailing slash. */
@@ -32,14 +33,51 @@ export function buildBatchHeaders(
   return headers;
 }
 
-/** Split provider requests into max-sized groups while preserving order. */
-export function splitBatchRequests<T>(requests: T[], maxRequests: number): T[][] {
-  if (requests.length <= maxRequests) {
-    return [requests];
+const jsonlEncoder = new TextEncoder();
+
+function estimateJsonlLineBytes(request: unknown): number {
+  return jsonlEncoder.encode(JSON.stringify(request) ?? "").byteLength;
+}
+
+function normalizePositiveInteger(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
   }
+  return Math.floor(value);
+}
+
+export function splitBatchRequestsByLimits<T>(
+  requests: T[],
+  limits: { maxRequests: number; maxJsonlBytes?: number },
+): T[][] {
+  const maxRequests = normalizePositiveInteger(limits.maxRequests) ?? 1;
+  const maxJsonlBytes = normalizePositiveInteger(limits.maxJsonlBytes);
+  if (requests.length === 0) {
+    return maxJsonlBytes ? [] : [requests];
+  }
+
   const groups: T[][] = [];
-  for (let i = 0; i < requests.length; i += maxRequests) {
-    groups.push(requests.slice(i, i + maxRequests));
+  let current: T[] = [];
+  let currentBytes = 0;
+  for (const request of requests) {
+    const requestBytes = estimateJsonlLineBytes(request);
+    const separatorBytes = current.length === 0 ? 0 : 1;
+    const wouldExceedRequests = current.length >= maxRequests;
+    const wouldExceedBytes =
+      maxJsonlBytes !== undefined &&
+      current.length > 0 &&
+      currentBytes + separatorBytes + requestBytes > maxJsonlBytes;
+    if (current.length > 0 && (wouldExceedRequests || wouldExceedBytes)) {
+      groups.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+
+    currentBytes += (current.length === 0 ? 0 : 1) + requestBytes;
+    current.push(request);
+  }
+  if (current.length > 0) {
+    groups.push(current);
   }
   return groups;
 }

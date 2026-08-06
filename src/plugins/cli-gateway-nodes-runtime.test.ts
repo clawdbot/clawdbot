@@ -1,10 +1,8 @@
 /** Tests plugin CLI node Gateway runtime timeout and invocation behavior. */
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createPluginCliGatewayNodesRuntime,
-  resolvePluginCliNodeInvokeGatewayTimeoutMs,
-} from "./cli-gateway-nodes-runtime.js";
+import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 
 const callGatewayMock = vi.fn();
 
@@ -37,16 +35,69 @@ describe("createPluginCliGatewayNodesRuntime", () => {
       }),
     );
   });
-});
 
-describe("resolvePluginCliNodeInvokeGatewayTimeoutMs", () => {
-  it("preserves absent and non-positive timeout behavior", () => {
-    expect(resolvePluginCliNodeInvokeGatewayTimeoutMs(undefined)).toBeUndefined();
-    expect(resolvePluginCliNodeInvokeGatewayTimeoutMs(0)).toBeUndefined();
-    expect(resolvePluginCliNodeInvokeGatewayTimeoutMs(-1)).toBeUndefined();
+  it("forwards requested node invoke scopes for bundled plugin CLI runtime", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await withPluginRuntimePluginScope({ pluginId: "google-meet", pluginOrigin: "bundled" }, () =>
+      nodes.invoke({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        scopes: ["operator.admin"],
+      }),
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.invoke",
+        scopes: ["operator.admin"],
+      }),
+    );
   });
 
-  it("adds gateway grace for normal positive timeouts", () => {
-    expect(resolvePluginCliNodeInvokeGatewayTimeoutMs(10_000)).toBe(15_000);
+  it("drops requested node invoke scopes for third-party plugin CLI runtime", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await withPluginRuntimePluginScope({ pluginId: "third-party", pluginOrigin: "global" }, () =>
+      nodes.invoke({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        scopes: ["operator.admin"],
+      }),
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        scopes: expect.anything(),
+      }),
+    );
+  });
+
+  it("forwards node invocation cancellation to the Gateway request", async () => {
+    const controller = new AbortController();
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await nodes.invoke({
+      nodeId: "node-1",
+      command: "ollama.chat",
+      signal: controller.signal,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.invoke",
+        signal: controller.signal,
+      }),
+    );
+    expect(callGatewayMock.mock.calls[0]?.[0].params).not.toHaveProperty("signal");
+  });
+
+  it("preserves the existing Gateway request shape when no signal is supplied", async () => {
+    const nodes = createPluginCliGatewayNodesRuntime();
+
+    await nodes.invoke({ nodeId: "node-1", command: "ollama.chat" });
+
+    expect(callGatewayMock.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+    expect(callGatewayMock.mock.calls[0]?.[0].params).not.toHaveProperty("signal");
   });
 });

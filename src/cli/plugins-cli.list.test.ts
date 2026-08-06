@@ -1,6 +1,12 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
-import { beforeEach, describe, expect, it } from "vitest";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ConfigFileSnapshot,
+  ConfigValidationIssue,
+  OpenClawConfig,
+} from "../config/types.openclaw.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
@@ -8,6 +14,7 @@ import {
   buildPluginSnapshotReport,
   inspectPluginRegistry,
   loadConfig,
+  loadPluginManifestRegistry,
   readConfigFileSnapshot,
   resetPluginsCliTestState,
   refreshPluginRegistry,
@@ -17,9 +24,53 @@ import {
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
 
+const workshopMocks = vi.hoisted(() => ({
+  detectToolPolicyDiagnostic: vi.fn(),
+}));
+
+const cleanDoctorMessage =
+  "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+  'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
+
+async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssue[]) {
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: ["imessage", "memory-core"],
+      entries: { google: { config: { apiKey: "test-google-key" } } },
+    },
+  };
+  loadConfig.mockReturnValue(config);
+  const snapshot = (await readConfigFileSnapshot()) as ConfigFileSnapshot;
+  readConfigFileSnapshot.mockResolvedValueOnce({ ...snapshot, valid: true, warnings });
+  loadPluginManifestRegistry.mockReturnValue({
+    plugins: ["google", "imessage", "memory-core"].map((id) => ({
+      id,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: `/plugins/${id}`,
+      source: `/plugins/${id}`,
+      manifestPath: `/plugins/${id}/openclaw.plugin.json`,
+    })),
+    diagnostics: [],
+  });
+  buildPluginDiagnosticsReport.mockReturnValue({
+    plugins: [createPluginRecord({ id: "google", enabled: false, status: "disabled" })],
+    diagnostics: [],
+  });
+}
+
+vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
+  detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
+}));
+
 describe("plugins cli list", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    workshopMocks.detectToolPolicyDiagnostic.mockReset();
   });
 
   it("includes imported state in JSON output", async () => {
@@ -83,7 +134,238 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
+  });
+
+  it.each([
+    { format: "human", args: [] },
+    { format: "JSON", args: ["--json"] },
+  ])(
+    "reports validated disabled-plugin configuration warnings in $format output",
+    async ({ args }) => {
+      await mockPluginDoctorValidationWarnings([
+        {
+          path: "plugins.entries.google",
+          message: "plugin disabled (not in allowlist) but config is present",
+        },
+      ]);
+
+      await runPluginsCommand(["plugins", "doctor", ...args]);
+
+      const warning =
+        "- plugins.entries.google: plugin disabled (not in allowlist) but config is present";
+      if (args.includes("--json")) {
+        const output = JSON.parse(runtimeLogs[0] ?? "null") as {
+          ok: boolean;
+          configurationWarnings: string[];
+        };
+        expect(output.ok).toBe(false);
+        expect(output.configurationWarnings).toEqual([warning]);
+        return;
+      }
+      expect(runtimeLogs.join("\n")).toContain(warning);
+      expect(runtimeLogs).not.toContain(cleanDoctorMessage);
+    },
+  );
+
+  it("deduplicates plugin validation warnings while ignoring other config owners", async () => {
+    const googleWarning = {
+      path: "plugins.entries.google",
+      message: "plugin disabled (not in allowlist) but config is present",
+    };
+    await mockPluginDoctorValidationWarnings([
+      { path: "gateway.auth", message: "owned by gateway doctor" },
+      { path: "plugins", message: "root plugin warning" },
+      googleWarning,
+      googleWarning,
+      { path: "pluginsOther.entries.google", message: "not a plugin-owned path" },
+    ]);
+
+    await runPluginsCommand(["plugins", "doctor", "--json"]);
+
+    const output = JSON.parse(runtimeLogs[0] ?? "null") as {
+      ok: boolean;
+      configurationWarnings: string[];
+    };
+    expect(output.ok).toBe(false);
+    expect(output.configurationWarnings).toEqual([
+      "- plugins: root plugin warning",
+      "- plugins.entries.google: plugin disabled (not in allowlist) but config is present",
+    ]);
+  });
+
+  it.each([
+    { format: "human", args: [] },
+    { format: "JSON", args: ["--json"] },
+  ])("ignores unrelated validation warnings in $format doctor output", async ({ args }) => {
+    await mockPluginDoctorValidationWarnings([
+      { path: "gateway.auth", message: "owned by gateway doctor" },
+    ]);
+
+    await runPluginsCommand(["plugins", "doctor", ...args]);
+
+    if (args.includes("--json")) {
+      expect(JSON.parse(runtimeLogs[0] ?? "null")).toMatchObject({
+        ok: true,
+        configurationWarnings: [],
+      });
+      return;
+    }
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
+  });
+
+  it.each([
+    { format: "human", args: [] },
+    { format: "JSON", args: ["--json"] },
+  ])("sanitizes plugin warning terminal controls in $format doctor output", async ({ args }) => {
+    await mockPluginDoctorValidationWarnings([
+      {
+        path: "plugins.\nentries.google\u001b[31m",
+        message: "bad\r\n\tvalue\u001b[0m\u0007",
+      },
+    ]);
+
+    await runPluginsCommand(["plugins", "doctor", ...args]);
+
+    const warning = "- plugins.\\nentries.google: bad\\r\\n\\tvalue";
+    if (args.includes("--json")) {
+      expect(JSON.parse(runtimeLogs[0] ?? "null")).toMatchObject({
+        ok: false,
+        configurationWarnings: [warning],
+      });
+      return;
+    }
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain(warning);
+    expect(output).not.toContain("\u0007");
+    expect(output).not.toContain("\u001b");
+  });
+
+  it("emits one sanitized JSON doctor report without human decoration", async () => {
+    const homeDir = "/tmp/openclaw-plugin-doctor-home";
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        createPluginRecord({
+          id: "broken",
+          origin: "config",
+          source: `${homeDir}/plugins/broken/index.ts`,
+          status: "error",
+          error: `failed to load ${homeDir}/plugins/broken/runtime.ts`,
+        }),
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "broken",
+          source: `${homeDir}/plugins/shadowed/index.ts`,
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            `global plugin will be overridden by config plugin (${homeDir}/plugins/broken/index.ts)`,
+        },
+        {
+          level: "warn",
+          message: `failed to inspect ${homeDir}/plugins/unreadable`,
+        },
+      ],
+    });
+
+    await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+      await runPluginsCommand(["plugins", "doctor", "--json"]);
+    });
+
+    expect(runtimeLogs).toHaveLength(1);
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeLogs[0]).not.toContain(homeDir);
+    expect(runtimeLogs[0]).not.toContain("Plugin errors:");
+    expect(runtimeLogs[0]).not.toContain("Docs:");
+    expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
+      ok: false,
+      pluginErrors: [
+        {
+          id: "broken",
+          error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+        },
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          message: "failed to inspect $OPENCLAW_HOME/plugins/unreadable",
+        },
+      ],
+      sourceShadowing: [
+        {
+          pluginId: "broken",
+          message:
+            "duplicate plugin id resolved by explicit config-selected plugin; " +
+            "global plugin will be overridden by config plugin ($OPENCLAW_HOME/plugins/broken/index.ts)",
+          active: {
+            source: "$OPENCLAW_HOME/plugins/broken/index.ts",
+            origin: "config",
+            status: "error",
+            error: "failed to load $OPENCLAW_HOME/plugins/broken/runtime.ts",
+          },
+          shadowedSource: "$OPENCLAW_HOME/plugins/shadowed/index.ts",
+          repair: [
+            "openclaw plugins inspect broken",
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        },
+      ],
+      compatibility: [],
+      configurationWarnings: [],
+    });
+  });
+
+  it.each([
+    {
+      description: "a required plugin is missing",
+      diagnostic: {
+        level: "warn" as const,
+        pluginId: "calendar",
+        message: 'plugin "calendar" requires plugin "contacts"; install "contacts" to use it',
+      },
+      expected: 'calendar: plugin "calendar" requires plugin "contacts"',
+    },
+    {
+      description: "discovery cannot read an extensions directory",
+      diagnostic: {
+        level: "warn" as const,
+        message: "failed to read extensions dir: /tmp/plugins (permission denied)",
+      },
+      expected: "failed to read extensions dir: /tmp/plugins (permission denied)",
+    },
+  ])(
+    "reports actionable discovery warnings when $description",
+    async ({ diagnostic, expected }) => {
+      buildPluginDiagnosticsReport.mockReturnValue({ plugins: [], diagnostics: [diagnostic] });
+
+      await runPluginsCommand(["plugins", "doctor"]);
+
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain("Diagnostics:");
+      expect(output).toContain(expected);
+      expect(output).not.toContain(cleanDoctorMessage);
+    },
+  );
+
+  it("keeps actionable discovery warnings alongside existing errors", async () => {
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        { level: "error", pluginId: "broken", message: "plugin manifest invalid" },
+        { level: "warn", pluginId: "calendar", message: "required plugin contacts is missing" },
+      ],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("broken: plugin manifest invalid");
+    expect(output).toContain("calendar: required plugin contacts is missing");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports stale plugin config in doctor output without claiming full plugin health", async () => {
@@ -123,9 +405,8 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
-    expect(output).toContain('plugins.allow: stale plugin reference "lossless-claw" was found.');
     expect(output).toContain(
-      'plugins.entries.lossless-claw: stale plugin reference "lossless-claw" was found.',
+      "Stale plugin references (plugins.allow/deny/entries): lossless-claw.",
     );
     expect(output).toContain(
       'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',
@@ -136,7 +417,7 @@ describe("plugins cli list", () => {
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports missing configured Codex runtime plugin in doctor output", async () => {
@@ -182,7 +463,7 @@ describe("plugins cli list", () => {
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports missing configured ACPX runtime plugin in doctor output", async () => {
@@ -204,7 +485,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain("openclaw doctor --fix");
     expect(output).toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports blocked configured ACPX runtime with ACP-specific guidance", async () => {
@@ -232,7 +513,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("disable ACP/acpx in acp config");
     expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports disabled configured ACPX runtime with ACP-specific guidance", async () => {
@@ -255,7 +536,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("disable ACP/acpx in acp config");
     expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("does not report implicit OpenAI Codex preference as configured runtime", async () => {
@@ -276,7 +557,7 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).not.toContain('Configured runtime "codex"');
-    expect(output).toContain("No plugin issues detected.");
+    expect(output).toContain(cleanDoctorMessage);
   });
 
   it("does not report configured Codex runtime when the plugin is enabled", async () => {
@@ -299,7 +580,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports configured Codex runtime when the plugin record is disabled", async () => {
@@ -327,7 +608,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('but "codex" is disabled');
     expect(output).toContain('Enable the "codex" plugin');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports blocked configured Codex runtime without install advice", async () => {
@@ -359,7 +640,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Remove "codex" from plugins.deny');
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports disabled configured Codex runtime entry without install advice", async () => {
@@ -393,7 +674,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("Set plugins.entries.codex.enabled=true");
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
-    expect(output).not.toContain("No plugin issues detected.");
+    expect(output).not.toContain(cleanDoctorMessage);
   });
 
   it("reports config-selected plugin source shadowing in doctor output", async () => {
@@ -453,7 +734,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(runtimeLogs).toContain("No plugin issues detected.");
+    expect(runtimeLogs).toContain(cleanDoctorMessage);
   });
 
   it("reports persisted plugin registry state without refreshing", async () => {
@@ -619,5 +900,40 @@ describe("plugins cli list", () => {
     expect(buildPluginSnapshotReport).toHaveBeenCalledWith({ config: {} });
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing-plugin");
+  });
+
+  it("explains a policy-hidden built-in Skill Workshop at the legacy inspect surface", async () => {
+    const config: OpenClawConfig = {
+      tools: { profile: "messaging" },
+    };
+    loadConfig.mockReturnValue(config);
+    workshopMocks.detectToolPolicyDiagnostic.mockReturnValue({
+      agentId: "main",
+      source: "tools.profile",
+      detail: 'tools.profile: "messaging" does not include "skill_workshop".',
+      fix: 'Add tools.alsoAllow: ["skill_workshop"].',
+      message:
+        'Skill Workshop is active, but "skill_workshop" is hidden for agent "main": tools.profile: "messaging" does not include "skill_workshop". Add tools.alsoAllow: ["skill_workshop"].',
+    });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await expect(runPluginsCommand(["plugins", "inspect", "skill-workshop"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Skill Workshop is built into OpenClaw, not a plugin; configure it under skills.workshop.",
+    );
+    expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
+      config,
+      workshopEnabled: true,
+    });
+    expect(runtimeErrors.at(-1)).toContain(
+      'tools.profile: "messaging" does not include "skill_workshop".',
+    );
+    expect(runtimeErrors.at(-1)).toContain('Add tools.alsoAllow: ["skill_workshop"].');
   });
 });

@@ -1,17 +1,8 @@
 // Powershell script supports OpenClaw repository automation.
-import {
-  configPathMapKey,
-  modelProviderConfigBatchJson,
-  providerIdFromModelId,
-  providerTimeoutConfigJson,
-} from "./provider-auth.ts";
+import { modelProviderConfigBatchJson, providerIdFromModelId } from "./provider-auth.ts";
 
 export function psSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-export function psArray(values: string[]): string {
-  return `@(${values.map(psSingleQuote).join(", ")})`;
 }
 
 export function encodePowerShell(script: string): string {
@@ -42,37 +33,6 @@ export const windowsScopedEnvFunction = String.raw`function Invoke-WithScopedEnv
     }
   }
 }`;
-
-export function windowsModelProviderTimeoutScript(modelId: string): string {
-  const providerId = providerIdFromModelId(modelId);
-  const configJson = providerTimeoutConfigJson(modelId, "windows");
-  if (!providerId || !configJson) {
-    return "";
-  }
-  const batchJson = JSON.stringify([
-    {
-      path: `models.providers.${providerId}`,
-      value: JSON.parse(configJson) as unknown,
-    },
-    {
-      path: `agents.defaults.models${configPathMapKey(modelId)}`,
-      value: {
-        alias: "GPT",
-        params: {
-          transport: "sse",
-        },
-      },
-    },
-  ]);
-  return `$providerTimeoutBatchPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-provider-timeout.batch.json'
-@'
-${batchJson}
-'@ | Set-Content -Path $providerTimeoutBatchPath -Encoding UTF8
-Invoke-OpenClaw config set --batch-file $providerTimeoutBatchPath --strict-json
-$providerTimeoutExit = $LASTEXITCODE
-Remove-Item $providerTimeoutBatchPath -Force -ErrorAction SilentlyContinue
-if ($providerTimeoutExit -ne 0) { throw "model provider timeout config set failed" }`;
-}
 
 export function windowsAgentTurnConfigPatchScript(modelId: string): string {
   const batchJson = modelProviderConfigBatchJson(modelId, "windows");
@@ -169,7 +129,11 @@ Remove-Item Env:OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED -Force -ErrorA
 if ($agentTurnConfigPatchExit -ne 0) { throw "agent turn config patch failed" }`;
 }
 
-export const windowsOpenClawResolver = String.raw`function Resolve-OpenClawCommand {
+export const windowsOpenClawResolver = String.raw`$portableNode = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs\nodejs' } else { $null }
+if ($portableNode -and (Test-Path (Join-Path $portableNode 'node.exe'))) {
+  $env:PATH = "$portableNode;$env:PATH"
+}
+function Resolve-OpenClawCommand {
   if ($script:OpenClawResolvedCommand) { return $script:OpenClawResolvedCommand }
   $shimCandidates = @()
   if ($env:APPDATA) {

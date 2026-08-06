@@ -1,17 +1,19 @@
 // Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  readCodexModelListResponse,
+  assertCodexModelListResponse,
+  assertCodexThreadForkParams,
   readCodexTurn,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function makeMinimalThread(overrides: Record<string, unknown> = {}) {
   return {
     id: "thread-1",
     sessionId: "session-1",
-    cliVersion: "0.129.0",
+    cliVersion: CODEX_APP_SERVER_VERSION,
     createdAt: 1715299200,
     updatedAt: 1715299200,
     cwd: "/tmp",
@@ -38,17 +40,35 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex thread response validators", () => {
-  it("normalizes missing sessionId from id for start and resume responses", () => {
+  // The pinned Codex protocol requires both thread identities; never silently
+  // invent a session identity when a malformed response omits one.
+  it("rejects thread responses missing sessionId", () => {
     for (const assertResponse of [
       assertCodexThreadStartResponse,
       assertCodexThreadResumeResponse,
     ]) {
       const response = makeMinimalResponse({ sessionId: undefined });
       delete (response.thread as Record<string, unknown>).sessionId;
-      const result = assertResponse(response);
-      expect(result.thread.id).toBe("thread-1");
-      expect(result.thread.sessionId).toBe("thread-1");
+      expect(() => assertResponse(response)).toThrow("Invalid Codex app-server");
     }
+  });
+});
+
+describe("assertCodexThreadForkParams", () => {
+  it("accepts the experimental beforeTurnId boundary", () => {
+    expect(
+      assertCodexThreadForkParams({
+        threadId: "thread-1",
+        beforeTurnId: "turn-2",
+        excludeTurns: true,
+      }),
+    ).toMatchObject({ beforeTurnId: "turn-2" });
+  });
+
+  it("rejects a non-string beforeTurnId", () => {
+    expect(() => assertCodexThreadForkParams({ threadId: "thread-1", beforeTurnId: 2 })).toThrow(
+      "Invalid Codex app-server thread/fork params",
+    );
   });
 });
 
@@ -58,14 +78,7 @@ describe("assertCodexThreadStartResponse", () => {
     const result = assertCodexThreadStartResponse(response);
     expect(result.thread.id).toBe("thread-1");
     expect(result.thread.sessionId).toBe("session-1");
-  });
-
-  it("normalizes missing id from sessionId", () => {
-    const response = makeMinimalResponse({ id: undefined, sessionId: "session-1" });
-    delete (response.thread as Record<string, unknown>).id;
-    const result = assertCodexThreadStartResponse(response);
-    expect(result.thread.id).toBe("session-1");
-    expect(result.thread.sessionId).toBe("session-1");
+    expect(result.thread.historyMode).toBe("legacy");
   });
 
   it("throws on invalid response", () => {
@@ -73,9 +86,47 @@ describe("assertCodexThreadStartResponse", () => {
   });
 });
 
-describe("readCodexModelListResponse", () => {
+describe("assertCodexThreadResumeResponse", () => {
+  it("accepts the bounded initial turns page shipped by the managed Codex version", () => {
+    const result = assertCodexThreadResumeResponse({
+      ...makeMinimalResponse(),
+      initialTurnsPage: {
+        data: [{ id: "turn-running", items: [], status: "inProgress" }],
+        nextCursor: null,
+        backwardsCursor: "resume-anchor",
+      },
+    });
+
+    expect(result.thread.turns).toEqual([]);
+    expect(result.initialTurnsPage?.data).toEqual([
+      { id: "turn-running", items: [], status: "inProgress" },
+    ]);
+  });
+});
+
+describe("assertCodexModelListResponse", () => {
+  it.each([
+    { label: "missing response", value: undefined },
+    { label: "null response", value: null },
+    { label: "missing model data", value: {} },
+    { label: "non-array model data", value: { data: {} } },
+    { label: "null model row", value: { data: [null] } },
+    { label: "invalid pagination cursor", value: { data: [], nextCursor: 42 } },
+  ])("rejects $label", ({ value }) => {
+    expect(() => assertCodexModelListResponse(value)).toThrow(
+      /Invalid Codex app-server model\/list response/,
+    );
+  });
+
+  it.each([{ data: [] }, { data: [], nextCursor: null }])(
+    "accepts a genuinely empty model catalog",
+    (value) => {
+      expect(assertCodexModelListResponse(value)).toMatchObject({ data: [] });
+    },
+  );
+
   it("applies defaults from generated schemas behind local refs", () => {
-    const response = readCodexModelListResponse({
+    const response = assertCodexModelListResponse({
       data: [
         {
           id: "gpt-test",
@@ -90,8 +141,8 @@ describe("readCodexModelListResponse", () => {
       ],
     });
 
-    const model = response?.data[0] as
-      | (NonNullable<ReturnType<typeof readCodexModelListResponse>>["data"][number] & {
+    const model = response.data[0] as
+      | (ReturnType<typeof assertCodexModelListResponse>["data"][number] & {
           serviceTiers?: unknown;
           supportsPersonality?: unknown;
         })

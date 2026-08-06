@@ -1,5 +1,8 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Qqbot plugin module implements remind logic behavior.
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 
 /**
  * QQBot reminder tool core logic.
@@ -58,9 +61,6 @@ type RemindCronPlan =
       error: string;
     };
 
-const PREPARED_CRON_PARAMS_INSTRUCTION =
-  "Gateway cron action prepared for internal QQ reminder scheduling.";
-
 /**
  * JSON Schema for AI tool parameters (used by framework registration).
  * AI Tool 参数的 JSON Schema 定义（供框架注册使用）。
@@ -71,7 +71,7 @@ export const RemindSchema = {
     action: {
       type: "string",
       description:
-        "Action type. add=create a reminder, list=show reminders, remove=delete a reminder.",
+        "Action type. add=create a reminder only after explicit user request, list=show reminders, remove=delete a reminder by confirmed job ID.",
       enum: ["add", "list", "remove"],
     },
     content: {
@@ -93,11 +93,12 @@ export const RemindSchema = {
         '1. Relative time, for example "5m", "1h", "1h30m", or "2d"\n' +
         '2. Cron expression, for example "0 8 * * *" or "0 9 * * 1-5"\n' +
         "Values containing spaces are treated as cron expressions; everything else is treated as a one-shot relative delay.\n" +
-        "Required when action=add.",
+        "Required when action=add. Ask for clarification before scheduling if the time is ambiguous.",
     },
     timezone: {
       type: "string",
-      description: 'Timezone used for cron reminders. Defaults to "Asia/Shanghai".',
+      description:
+        "Optional IANA timezone used for cron reminders. Include it when the user provides or confirms a timezone; if omitted, Gateway cron uses the host timezone.",
     },
     name: {
       type: "string",
@@ -119,7 +120,7 @@ export const RemindSchema = {
  *
  * @returns Milliseconds or null if unparseable.
  */
-export function parseRelativeTime(timeStr: string): number | null {
+function parseRelativeTime(timeStr: string): number | null {
   const s = timeStr.trim().toLowerCase();
   if (/^\d+$/.test(s)) {
     return Number.parseInt(s, 10) * 60_000;
@@ -136,8 +137,12 @@ export function parseRelativeTime(timeStr: string): number | null {
     }
     matched = true;
     consumed = regex.lastIndex;
-    const value = Number.parseFloat(match[1]);
+    const valueText = match[1];
     const unit = match[2];
+    if (valueText === undefined || unit === undefined) {
+      return null;
+    }
+    const value = Number.parseFloat(valueText);
     switch (unit) {
       case "d":
         totalMs += value * 86_400_000;
@@ -160,7 +165,7 @@ export function parseRelativeTime(timeStr: string): number | null {
  * Check whether a time string is a cron expression (3–6 space-separated fields).
  * 判断时间字符串是否为 cron 表达式。
  */
-export function isCronExpression(timeStr: string): boolean {
+function isCronExpression(timeStr: string): boolean {
   const parts = timeStr.trim().split(/\s+/);
   if (parts.length < 3 || parts.length > 6) {
     return false;
@@ -172,14 +177,14 @@ export function isCronExpression(timeStr: string): boolean {
  * Generate a cron job name from reminder content (first 20 chars).
  * 根据提醒内容生成 cron job 名称。
  */
-export function generateJobName(content: string): string {
+function generateJobName(content: string): string {
   const trimmed = content.trim();
-  const short = trimmed.length > 20 ? `${trimmed.slice(0, 20)}…` : trimmed;
+  const short = trimmed.length > 20 ? `${truncateUtf16Safe(trimmed, 20)}…` : trimmed;
   return `Reminder: ${short}`;
 }
 
 /** Build the reminder system prompt sent to the AI. */
-export function buildReminderPrompt(content: string): string {
+function buildReminderPrompt(content: string): string {
   return (
     `You are a warm reminder assistant. Please remind the user about: ${content}. ` +
     `Requirements: (1) do not reply with HEARTBEAT_OK (2) do not explain who you are ` +
@@ -196,13 +201,15 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "at" as const, atMs },
+      schedule: { kind: "at" as const, at: new Date(atMs).toISOString() },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       deleteAfterRun: true,
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,
@@ -218,17 +225,23 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
 function buildCronJob(params: RemindParams, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
-  const tz = params.timezone || "Asia/Shanghai";
+  const timezone = params.timezone?.trim();
   return {
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "cron" as const, expr: params.time!.trim(), tz },
+      schedule: {
+        kind: "cron" as const,
+        expr: params.time!.trim(),
+        ...(timezone ? { tz: timezone } : {}),
+      },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,
@@ -241,7 +254,7 @@ function buildCronJob(params: RemindParams, to: string, accountId: string) {
 }
 
 /** Format a delay in milliseconds as a short string (e.g. "5m", "1h30m"). */
-export function formatDelay(ms: number): string {
+function formatDelay(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   if (totalSeconds < 60) {
     return `${totalSeconds}s`;
@@ -258,18 +271,7 @@ export function formatDelay(ms: number): string {
   return `${hours}h${minutes}m`;
 }
 
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
-
-function formatSchedulerError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function prepareRemindCronAction(
+function prepareRemindCronAction(
   params: RemindParams,
   ctx: RemindExecuteContext = {},
 ): RemindCronPlan {
@@ -306,11 +308,12 @@ export function prepareRemindCronAction(
   const resolvedAccountId = ctx.fallbackAccountId || "default";
 
   if (isCronExpression(params.time)) {
+    const timezone = params.timezone?.trim();
     return {
       ok: true,
       action: "add",
       cronAction: buildCronJob(params, resolvedTo, resolvedAccountId),
-      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || "Asia/Shanghai"})`,
+      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${timezone || "gateway local"})`,
     };
   }
 
@@ -337,30 +340,6 @@ export function prepareRemindCronAction(
   };
 }
 
-/**
- * Execute the reminder tool logic.
- * 执行提醒工具逻辑。
- *
- * Validates params, parses time, and returns a structured result
- * containing cron job params that the framework shell passes back
- * as the tool output.
- *
- * When the AI omits `to` / `accountId`, the bridge layer can supply
- * `ctx.fallbackTo` / `ctx.fallbackAccountId` (typically resolved from
- * the request-scoped AsyncLocalStorage) to fill them in.
- */
-export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = {}) {
-  const plan = prepareRemindCronAction(params, ctx);
-  if (!plan.ok) {
-    return json({ error: plan.error });
-  }
-  return json({
-    _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
-    action: plan.action,
-    summary: plan.summary,
-  });
-}
-
 export async function executeScheduledRemind(
   params: RemindParams,
   ctx: RemindExecuteContext,
@@ -381,7 +360,7 @@ export async function executeScheduledRemind(
     });
   } catch (error) {
     return json({
-      error: `Failed to run Gateway cron action: ${formatSchedulerError(error)}`,
+      error: `Failed to run Gateway cron action: ${formatErrorMessage(error)}`,
       action: plan.action,
     });
   }

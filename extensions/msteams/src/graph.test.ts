@@ -4,12 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
+  fetchWithSsrFGuardMock,
   readAccessTokenMock,
   resolveMSTeamsCredentialsMock,
 } = vi.hoisted(() => {
   return {
     loadMSTeamsSdkWithAuthMock: vi.fn(),
     createMSTeamsTokenProviderMock: vi.fn(),
+    fetchWithSsrFGuardMock: vi.fn(
+      async (params: { url: string; init?: RequestInit; timeoutMs?: number }) => ({
+        response: await globalThis.fetch(params.url, params.init),
+        finalUrl: params.url,
+        release: async () => undefined,
+      }),
+    ),
     readAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
   };
@@ -32,25 +40,23 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../runtime-api.js")>();
   return {
     ...original,
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => undefined,
-    }),
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
-import { searchGraphUsers } from "./graph-users.js";
+import { findGraphUsersByExactIdentity, searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
   escapeOData,
   fetchAllGraphPages,
+  fetchGraphAbsoluteUrl,
   fetchGraphJson,
   listChannelsForTeam,
+  listChannelsForTeamWithPageInfo,
   listTeamsByName,
+  listTeamsByNameWithPageInfo,
+  mutateGraphJson,
   normalizeQuery,
-  postGraphBetaJson,
-  postGraphJson,
   resolveGraphToken,
 } from "./graph.js";
 
@@ -90,6 +96,26 @@ function mockJsonFetchResponse(body: unknown, init?: ResponseInit) {
 
 function mockTextFetchResponse(body: string, init?: ResponseInit) {
   mockFetch(async () => textResponse(body, init));
+}
+
+function graphStreamResponse(body: unknown): {
+  response: Response;
+  arrayBuffer: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(JSON.stringify(body));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  const response = new Response(stream, {
+    headers: { "content-type": "application/json" },
+  });
+  const arrayBuffer = vi.spyOn(response, "arrayBuffer").mockImplementation(async () => {
+    throw new Error("Graph response must stay streaming");
+  });
+  return { response, arrayBuffer };
 }
 
 function graphCollection<T>(...items: T[]) {
@@ -190,6 +216,17 @@ describe("msteams graph helpers", () => {
     expect(escapeOData("alice.o'hara")).toBe("alice.o''hara");
   });
 
+  it("lets the shared SSRF guard select the Graph transport", async () => {
+    mockGraphCollection();
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups",
+    });
+
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+  });
+
   it("fetches Graph JSON and surfaces Graph errors with response text", async () => {
     mockGraphCollection(groupOne);
 
@@ -204,6 +241,10 @@ describe("msteams graph helpers", () => {
     expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/groups?$select=id");
     expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
     expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
 
     mockTextFetchResponse("forbidden", { status: 403 });
 
@@ -229,27 +270,88 @@ describe("msteams graph helpers", () => {
     );
   });
 
-  it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {
-    mockFetch(async (input) => {
+  it("keeps successful Graph responses streaming for bounded JSON parsing", async () => {
+    const { response, arrayBuffer } = graphStreamResponse(graphCollection(groupOne));
+    mockFetch(async () => response);
+
+    await expect(
+      fetchGraphJson<{ value: Array<{ id: string }> }>({
+        token: graphToken,
+        path: "/groups?$select=id",
+      }),
+    ).resolves.toEqual(graphCollection(groupOne));
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("passes the remaining operation deadline to the guarded Graph transport", async () => {
+    mockGraphCollection(groupOne);
+    const remainingMs = 5_000;
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups?$select=id",
+      deadline: {
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: remainingMs,
+        deadlineAtMs: Date.now() + remainingMs,
+      },
+    });
+
+    const timeoutMs = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs;
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(remainingMs);
+  });
+
+  it("bounds absolute Graph pagination requests", async () => {
+    mockGraphCollection(groupOne);
+
+    await fetchGraphAbsoluteUrl({
+      token: graphToken,
+      url: "https://graph.microsoft.com/v1.0/groups?$skiptoken=next",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+  });
+
+  it("mutates Graph JSON at v1 and beta roots and treats empty responses as undefined", async () => {
+    mockFetch(async (input, init) => {
       if (requestUrl(input).startsWith("https://graph.microsoft.com/beta")) {
         return new Response(null, { status: 204 });
+      }
+      if (init?.method === "PATCH") {
+        return new Response(null, { headers: { "content-length": "0" } });
       }
       return jsonResponse({ id: "created-1" });
     });
 
     await expect(
-      postGraphJson<{ id: string }>({
+      mutateGraphJson<{ id: string }>({
         token: graphToken,
         path: "/chats/chat-1/pinnedMessages",
+        method: "POST",
         body: { messageId: "msg-1" },
       }),
     ).resolves.toEqual({ id: "created-1" });
 
     await expect(
-      postGraphBetaJson<undefined>({
+      mutateGraphJson<undefined>({
         token: graphToken,
         path: "/chats/chat-1/messages/msg-1/setReaction",
+        method: "POST",
         body: { reactionType: "like" },
+        beta: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      mutateGraphJson<undefined>({
+        token: graphToken,
+        path: "/chats/chat-1",
+        method: "PATCH",
+        body: { topic: "New topic" },
       }),
     ).resolves.toBeUndefined();
 
@@ -263,6 +365,9 @@ describe("msteams graph helpers", () => {
     );
     expect(fetchCallInit(1)?.method).toBe("POST");
     expect(fetchCallInit(1)?.body).toBe(JSON.stringify({ reactionType: "like" }));
+    expect(fetchCallUrl(2)).toBe("https://graph.microsoft.com/v1.0/chats/chat-1");
+    expect(fetchCallInit(2)?.method).toBe("PATCH");
+    expect(fetchCallInit(2)?.body).toBe(JSON.stringify({ topic: "New topic" }));
   });
 
   it("surfaces POST and DELETE graph failures with method-specific labels", async () => {
@@ -275,9 +380,10 @@ describe("msteams graph helpers", () => {
     });
 
     await expectRejectsToThrow(
-      postGraphJson({
+      mutateGraphJson({
         token: graphToken,
         path: "/teams/team-1/channels",
+        method: "POST",
         body: { displayName: "Deployments" },
       }),
       "Graph POST /teams/team-1/channels failed (403): denied",
@@ -290,6 +396,32 @@ describe("msteams graph helpers", () => {
       }),
       "Graph DELETE /teams/team-1/channels/channel-1 failed (404): not found",
     );
+  });
+
+  it("releases a successful bodyful DELETE response", async () => {
+    const upstreamCancel = vi.fn();
+    const release = vi.fn(async () => undefined);
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("deleted"));
+        },
+        cancel: upstreamCancel,
+      }),
+    );
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      finalUrl: "https://graph.microsoft.com/v1.0/chats/chat-1/messages/msg-1",
+      release,
+    });
+
+    await deleteGraphRequest({
+      token: graphToken,
+      path: "/chats/chat-1/messages/msg-1",
+    });
+
+    expect(upstreamCancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("resolves Graph tokens through the SDK auth provider", async () => {
@@ -342,6 +474,51 @@ describe("msteams graph helpers", () => {
     );
     expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName");
     expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
+  });
+
+  it("exposes pagination completeness for authorization lookups", async () => {
+    mockFetch(async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/groups?$skip=1")) {
+        return jsonResponse(graphCollection({ id: "team-2", displayName: "Ops" }));
+      }
+      if (url.includes("/groups?")) {
+        return jsonResponse({
+          value: [opsTeam],
+          "@odata.nextLink": "https://graph.microsoft.com/v1.0/groups?$skip=1",
+        });
+      }
+      if (url.includes("/channels?$skip=1")) {
+        return jsonResponse(graphCollection({ id: "channel-2", displayName: "Incidents" }));
+      }
+      return jsonResponse({
+        value: [deploymentsChannel],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/channels?$skip=1",
+      });
+    });
+
+    await expect(listTeamsByNameWithPageInfo(graphToken, "Ops")).resolves.toEqual({
+      items: [opsTeam, { id: "team-2", displayName: "Ops" }],
+      truncated: false,
+    });
+    await expect(listChannelsForTeamWithPageInfo(graphToken, "team-1")).resolves.toEqual({
+      items: [deploymentsChannel, { id: "channel-2", displayName: "Incidents" }],
+      truncated: false,
+    });
+  });
+
+  it("builds an exact identity filter for authorization user lookup", async () => {
+    mockGraphCollection(userOne);
+
+    await expect(
+      findGraphUsersByExactIdentity({
+        token: graphToken,
+        query: "Alice O'Hara",
+      }),
+    ).resolves.toEqual({ items: [userOne], truncated: false });
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "(displayName eq 'Alice O''Hara' or mail eq 'Alice O''Hara' or userPrincipalName eq 'Alice O''Hara')",
+    );
   });
 
   it("returns no graph users for blank queries", async () => {

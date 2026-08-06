@@ -5,19 +5,26 @@ import type {
   GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { PluginOrigin } from "../plugin-origin.types.js";
+import type { PluginRegistry } from "../registry-types.js";
 
-export type PluginRuntimeGatewayRequestScope = {
+type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
   client?: GatewayRequestOptions["client"];
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
   pluginId?: string;
   pluginSource?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
+  pluginRegistry?: PluginRegistry;
 };
 
-export type PluginRuntimePluginScope = {
+type PluginRuntimePluginScope = {
   pluginId: string;
   pluginSource?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
 };
 
 const PLUGIN_RUNTIME_GATEWAY_REQUEST_SCOPE_KEY: unique symbol = Symbol.for(
@@ -41,6 +48,21 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   return pluginRuntimeGatewayRequestScope.run(scope, run);
 }
 
+/** Runs work against an owned registry handle while preserving any gateway request facts. */
+export function withPluginRuntimeRegistryScope<T>(
+  registry: PluginRegistry | undefined,
+  run: () => T,
+): T {
+  if (!registry) {
+    return run();
+  }
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  return pluginRuntimeGatewayRequestScope.run(
+    { isWebchatConnect: () => false, ...current, pluginRegistry: registry },
+    run,
+  );
+}
+
 /**
  * Runs work under the current gateway request scope while attaching plugin identity.
  */
@@ -56,6 +78,16 @@ export function withPluginRuntimePluginScope<T>(scope: PluginRuntimePluginScope,
     scoped.pluginSource = scope.pluginSource;
   } else {
     delete scoped.pluginSource;
+  }
+  if (scope.pluginOrigin !== undefined) {
+    scoped.pluginOrigin = scope.pluginOrigin;
+  } else {
+    delete scoped.pluginOrigin;
+  }
+  if (scope.pluginTrustedOfficialInstall !== undefined) {
+    scoped.pluginTrustedOfficialInstall = scope.pluginTrustedOfficialInstall;
+  } else {
+    delete scoped.pluginTrustedOfficialInstall;
   }
   return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }

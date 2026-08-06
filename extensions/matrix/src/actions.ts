@@ -117,17 +117,22 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
   };
 }
 
+function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: string | null }) {
+  if (!params.accountId && requiresExplicitMatrixDefaultAccount(params.cfg)) {
+    return null;
+  }
+  const account = resolveMatrixAccount({
+    cfg: params.cfg,
+    accountId: params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  });
+  return account.enabled && account.configured ? account : null;
+}
+
 export const matrixMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     const resolvedCfg = cfg as CoreConfig;
-    if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
-      return { actions: [], capabilities: [] };
-    }
-    const account = resolveMatrixAccount({
-      cfg: resolvedCfg,
-      accountId: accountId ?? resolveDefaultMatrixAccountId(resolvedCfg),
-    });
-    if (!account.enabled || !account.configured) {
+    const account = resolveMatrixActionAccount({ cfg: resolvedCfg, accountId });
+    if (!account) {
       return { actions: [], capabilities: [] };
     }
     const gate = createActionGate(account.config.actions);
@@ -139,7 +144,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     const listedActions = Array.from(actions);
     return {
       actions: listedActions,
-      capabilities: [],
+      capabilities: ["presentation"],
       schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
       mediaSourceParams: listedActions.includes("set-profile")
         ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
@@ -149,6 +154,16 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
+  },
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const account = resolveMatrixActionAccount({
+      cfg: ctx.cfg as CoreConfig,
+      accountId: ctx.accountId,
+    });
+    return account && createActionGate(account.config.actions)("messages") ? payload : null;
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
@@ -160,7 +175,18 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           ...(accountId ? { accountId } : {}),
         },
         cfg as CoreConfig,
-        { mediaLocalRoots },
+        {
+          ...(action === "send" && ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
+          mediaLocalRoots,
+          readContext: {
+            accountId,
+            requesterAccountId: ctx.requesterAccountId,
+            currentChannelId: ctx.toolContext?.currentChannelId,
+            currentChannelProvider: ctx.toolContext?.currentChannelProvider,
+            currentChatType: ctx.toolContext?.currentChatType,
+            conversationReadOrigin: ctx.conversationReadOrigin,
+          },
+        },
       );
     const resolveRoomId = () =>
       readStringParam(params, "roomId") ??
@@ -177,6 +203,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       const content = readStringParam(params, "message", {
         required: !mediaUrl,
         allowEmpty: true,
+        trim: false,
       });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
@@ -246,7 +273,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "edit") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const content = readStringParam(params, "message", { required: true });
+      const content = readStringParam(params, "message", { required: true, trim: false });
       return await dispatch({
         action: "editMessage",
         roomId: resolveRoomId(),
@@ -297,7 +324,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       return await dispatch({
         action: "memberInfo",
         userId,
-        roomId: readStringParam(params, "roomId") ?? readStringParam(params, "channelId"),
+        roomId: resolveRoomId(),
       });
     }
 

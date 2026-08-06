@@ -3,21 +3,26 @@
  * Exercises result coercion, error wrapping, client delegation, and conflict
  * detection at the ToolDefinition boundary.
  */
+import os from "node:os";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   isClientToolNameConflictError,
   toClientToolDefinitions,
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
+const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 async function executeThrowingTool(name: string, callId: string) {
   const tool = {
@@ -48,6 +53,27 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  it("preserves argument preparation and execution mode contracts", () => {
+    const prepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
+    const tool = {
+      name: "serial_tool",
+      label: "Serial Tool",
+      description: "runs sequentially",
+      parameters: Type.Object({}),
+      prepareArguments,
+      executionMode: "sequential",
+      execute: async () => ({
+        content: [{ type: "text", text: "done" }],
+        details: {},
+      }),
+    } satisfies AgentTool;
+
+    const [definition] = toToolDefinitions([tool]);
+
+    expect(definition?.prepareArguments).toBe(prepareArguments);
+    expect(definition?.executionMode).toBe("sequential");
+  });
+
   it("wraps tool errors into a tool result", async () => {
     const result = await executeThrowingTool("boom", "call1");
 
@@ -69,6 +95,186 @@ describe("agent tool definition adapter", () => {
     expect(details?.status).toBe("error");
     expect(details?.tool).toBe("exec");
     expect(details?.error).toBe("nope");
+  });
+
+  it("preserves exec deny before prepared workdir failures", async () => {
+    const tool = createExecTool({
+      security: "deny",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+    const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
+
+    const existing = await expectDefined(definition, "definition test invariant").execute(
+      "call-denied-existing-cwd",
+      {
+        command: "echo denied",
+        workdir: process.cwd(),
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    const missing = await expectDefined(definition, "definition test invariant").execute(
+      "call-denied-missing-cwd",
+      {
+        command: "echo denied",
+        workdir: missingWorkdir,
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const expected = {
+      status: "error",
+      error: "exec denied: host=gateway security=deny",
+    };
+    expect(existing.details).toMatchObject(expected);
+    expect(missing.details).toMatchObject(expected);
+    expect(JSON.stringify(missing)).not.toContain("unavailable or not a directory");
+  });
+
+  it("does not validate backend sandbox workdirs before exec deny", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "deny",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-denied-backend-cwd",
+      {
+        command: "echo denied",
+        workdir: "/remote/workspace/generated",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "exec denied: host=sandbox security=deny",
+    });
+    expect(validateWorkdir).not.toHaveBeenCalled();
+  });
+
+  it("does not throw WeakMap errors when preparing malformed exec params", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-exec-params",
+      "not-an-object",
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+  });
+
+  it("does not throw WeakMap errors when preparing malformed backend sandbox exec params", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-backend-sandbox-exec-params",
+      "not-an-object",
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+    expect(JSON.stringify(result)).not.toContain("WeakMap");
+    expect(validateWorkdir).not.toHaveBeenCalled();
+  });
+
+  it("reports malformed exec params when elevated logging is enabled", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      elevated: { enabled: true, allowed: true, defaultLevel: "on" },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-elevated-exec-params",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+  });
+
+  it("does not validate backend sandbox workdirs before malformed exec params fail", async () => {
+    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "remote-sandbox-workdir-test",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        validateWorkdir,
+      },
+    });
+    const [definition] = toToolDefinitions([tool]);
+
+    const result = await expectDefined(definition, "definition test invariant").execute(
+      "call-malformed-backend-sandbox-exec-params",
+      {
+        workdir: "/remote/workspace/generated",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Provide a command to start.",
+    });
+    expect(validateWorkdir).not.toHaveBeenCalled();
   });
 
   it("coerces details-only tool results to include content", async () => {
@@ -111,6 +317,35 @@ describe("agent tool definition adapter", () => {
     });
     expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+
+  it("does not re-run hook preparation for an already wrapped tool", async () => {
+    const prepareBeforeToolCallParams = vi.fn((params: unknown) => params);
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "done" }],
+      details: {},
+    }));
+    const tool = {
+      name: "wrapped_tool",
+      label: "Wrapped Tool",
+      description: "already owns hook execution",
+      parameters: Type.Object({}),
+      prepareBeforeToolCallParams,
+      execute,
+    } as AgentTool & {
+      prepareBeforeToolCallParams: typeof prepareBeforeToolCallParams;
+    };
+    const hookContext = { agentId: "agent-main", sessionId: "session-wrapped-tool" };
+    const wrappedTool = wrapToolWithBeforeToolCallHook(tool, hookContext);
+    const [definition] = toToolDefinitions([wrappedTool], hookContext);
+    if (!definition) {
+      throw new Error("missing wrapped tool definition");
+    }
+
+    await definition.execute("call-wrapped", {}, undefined, undefined, extensionContext);
+
+    expect(prepareBeforeToolCallParams).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
   });
 });
 
@@ -186,10 +421,19 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(calledWith).toEqual({ query: "hello" });
   });
 
-  it("falls back to empty object for invalid JSON string", async () => {
-    const { calledWith } = await executeClientTool("not-json");
-    expect(calledWith).toStrictEqual({});
-  });
+  it.each(["not-json", "[1,2,3]", "42", '"query"'])(
+    "returns a visible error instead of dispatching malformed client arguments: %s",
+    async (params) => {
+      const { calledWith, result } = await executeClientTool(params);
+      expect(calledWith).toBeUndefined();
+      expect(result.details).toMatchObject({
+        status: "error",
+        tool: "search",
+        error: expect.stringContaining("client tool arguments"),
+      });
+      expect(result.terminate).not.toBe(true);
+    },
+  );
 
   it("falls back to empty object for empty string", async () => {
     const { calledWith } = await executeClientTool("");
@@ -206,9 +450,52 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(calledWith).toStrictEqual({});
   });
 
-  it("falls back to empty object for a JSON array string", async () => {
-    const { calledWith } = await executeClientTool("[1,2,3]");
-    expect(calledWith).toStrictEqual({});
+  it.each([null, undefined, "", {}])(
+    "rejects missing required client arguments without reserving a completed call: %s",
+    async (params) => {
+      const clientTool = makeClientTool("search");
+      clientTool.function.parameters = {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      };
+      const reserve = vi.fn();
+      const complete = vi.fn();
+      const discard = vi.fn();
+      const [definition] = toClientToolDefinitions([clientTool], { reserve, complete, discard });
+      const result = await expectDefined(definition, "client tool definition").execute(
+        "call-required-client-args",
+        params,
+        undefined,
+        undefined,
+        extensionContext,
+      );
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("query"),
+      });
+      expect(result.terminate).not.toBe(true);
+      expect(complete).not.toHaveBeenCalled();
+      expect(discard).toHaveBeenCalledWith("call-required-client-args", "search");
+    },
+  );
+
+  it("keeps absent arguments valid for a parameterless client tool", async () => {
+    const clientTool = makeClientTool("ping");
+    clientTool.function.parameters = { type: "object", properties: {} };
+    const complete = vi.fn();
+    const [definition] = toClientToolDefinitions([clientTool], { complete });
+    const result = await expectDefined(definition, "client tool definition").execute(
+      "call-parameterless-client-tool",
+      undefined,
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(complete).toHaveBeenCalledWith("call-parameterless-client-tool", "ping", {});
+    expect(result.terminate).toBe(true);
   });
 
   it("handles nested JSON string correctly", async () => {

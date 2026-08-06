@@ -1,6 +1,7 @@
 // Config path docs tests validate documented config path references.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const DOCS_WITH_CONFIG_PATH_EXAMPLES = [
@@ -18,7 +19,7 @@ function findUnquotedBracketPathExamples(markdown: string, docPath: string): str
       continue;
     }
 
-    const pathArg = match[1];
+    const pathArg = expectDefined(match[1], "match[1] test invariant");
     if (pathArg.includes("[") && !pathArg.startsWith("'") && !pathArg.startsWith('"')) {
       failures.push(`${docPath}:${index + 1}: ${pathArg}`);
     }

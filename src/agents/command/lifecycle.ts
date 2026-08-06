@@ -1,0 +1,165 @@
+import { emitAgentEvent } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  type AgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
+import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
+import {
+  resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
+} from "../run-termination.js";
+import type { AgentAttemptLifecycleState } from "./attempt-callbacks.js";
+import type { AgentAttemptResult } from "./runtime-loaders.js";
+
+const log = createSubsystemLogger("agents/agent-command");
+
+function resolveTerminalLogLevel(
+  outcome: AgentRunTerminalOutcome,
+): "info" | "warn" | "error" | undefined {
+  if (!outcome.stopReason || outcome.stopReason === "end_turn") {
+    return undefined;
+  }
+  if (outcome.reason === "completed") {
+    return "info";
+  }
+  return outcome.status === "timeout" ? "warn" : "error";
+}
+
+export function resolveAgentRunLifecycleEndLogLevel(meta: {
+  aborted?: unknown;
+  error?: unknown;
+  stopReason?: unknown;
+  livenessState?: unknown;
+  timeoutPhase?: unknown;
+  providerStarted?: unknown;
+}): "info" | "warn" | "error" | undefined {
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "end", data: meta });
+  return resolveTerminalLogLevel(outcome);
+}
+
+export function applyAgentRunAbortMetadata<T extends { meta: object }>(
+  result: T,
+  signal: AbortSignal | undefined,
+): T {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted !== true) {
+    return result;
+  }
+  return {
+    ...result,
+    meta: {
+      ...result.meta,
+      ...abortFields,
+    },
+  };
+}
+
+export function createAgentCommandLifecycle(params: {
+  runId: string;
+  lifecycleGeneration: () => string;
+  startedAt: number;
+  abortSignal?: AbortSignal;
+  state: AgentAttemptLifecycleState;
+}) {
+  let lifecycleFinishingEmitted = false;
+  const resolveResultError = (runResult: AgentAttemptResult, includeErrorPayload: boolean) =>
+    params.state.lifecycleError ??
+    (includeErrorPayload
+      ? runResult.payloads?.find(
+          (payload) => payload.isError === true && typeof payload.text === "string",
+        )?.text
+      : undefined) ??
+    (runResult.meta.error ? "Agent run failed" : undefined);
+  const emitTerminalPhase = (
+    phase: "finishing" | "end" | "error",
+    terminal: EmbeddedAgentRunEntryTerminal,
+    error?: string,
+    fallbackExhausted?: boolean,
+  ) => {
+    const { aborted, yielded, replayInvalid, terminalReply } = terminal.metadata;
+    const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
+    emitAgentEvent({
+      runId: params.runId,
+      lifecycleGeneration: params.lifecycleGeneration(),
+      stream: "lifecycle",
+      data: {
+        phase,
+        startedAt: params.startedAt,
+        endedAt: Date.now(),
+        aborted: typeof aborted === "boolean" ? aborted : false,
+        stopReason,
+        ...(yielded === true ? { yielded } : {}),
+        ...(replayInvalid === true ? { replayInvalid } : {}),
+        ...(livenessState ? { livenessState } : {}),
+        ...(timeoutPhase ? { timeoutPhase } : {}),
+        ...(providerStarted !== undefined ? { providerStarted } : {}),
+        ...(error ? { error: formatErrorMessage(error) } : {}),
+        ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
+        ...(terminalReply ? { terminalReply } : {}),
+        ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+      },
+    });
+  };
+
+  return {
+    emitFinishing(terminal: EmbeddedAgentRunEntryTerminal) {
+      if (
+        params.state.lifecycleEnded ||
+        params.state.lifecycleFinishing ||
+        lifecycleFinishingEmitted
+      ) {
+        return;
+      }
+      lifecycleFinishingEmitted = true;
+      params.state.lifecycleFinishing = true;
+      emitTerminalPhase("finishing", terminal);
+    },
+    emitEnd(terminal: EmbeddedAgentRunEntryTerminal) {
+      if (params.state.lifecycleEnded) {
+        return;
+      }
+      params.state.lifecycleEnded = true;
+      const stopReason = terminal.outcome.stopReason;
+      const logLevel = resolveTerminalLogLevel(terminal.outcome);
+      if (logLevel) {
+        log[logLevel](`[agent] run ${params.runId} ended with stopReason=${stopReason}`);
+      }
+      emitTerminalPhase("end", terminal);
+    },
+    resolveResultError,
+    emitResultError(
+      runResult: AgentAttemptResult,
+      fallbackExhausted: boolean,
+      terminal: EmbeddedAgentRunEntryTerminal,
+    ) {
+      if (params.state.lifecycleEnded) {
+        return;
+      }
+      params.state.lifecycleEnded = true;
+      const error =
+        resolveResultError(runResult, fallbackExhausted) ??
+        (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
+      emitTerminalPhase("error", terminal, error, fallbackExhausted);
+    },
+    emitPostTurnError(error: unknown) {
+      if (params.state.lifecycleEnded) {
+        return;
+      }
+      params.state.lifecycleEnded = true;
+      emitAgentEvent({
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration(),
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: params.startedAt,
+          endedAt: Date.now(),
+          error: formatErrorMessage(error),
+          ...resolveAgentRunErrorLifecycleFields(error, params.abortSignal),
+        },
+      });
+    },
+  };
+}

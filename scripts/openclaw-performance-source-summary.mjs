@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
@@ -255,11 +255,51 @@ function validateExtensionMemoryArtifact(extensionMemory, filePath) {
   if (!Array.isArray(extensionMemory?.topByDeltaMb) || extensionMemory.topByDeltaMb.length === 0) {
     throw new Error(`[source-performance] missing extension memory rows: ${filePath}`);
   }
+  if (
+    !finiteNumber(extensionMemory?.baseline?.maxRssMb) ||
+    !finiteNumber(extensionMemory?.combined?.maxRssMb)
+  ) {
+    throw new Error(`[source-performance] incomplete extension memory context: ${filePath}`);
+  }
   for (const entry of extensionMemory.topByDeltaMb) {
     if (!finiteNumber(entry?.maxRssMb) || !finiteNumber(entry?.deltaFromBaselineMb)) {
       throw new Error(
         `[source-performance] incomplete extension memory metrics for ${entry?.dir ?? "unknown"}: ${filePath}`,
       );
+    }
+  }
+}
+
+function validateSqlitePerfArtifact(sqlitePerf, filePath) {
+  if (sqlitePerf?.profile !== "smoke") {
+    throw new Error(`[source-performance] invalid SQLite perf profile: ${filePath}`);
+  }
+  if (sqlitePerf?.integrity?.state !== "ok") {
+    throw new Error(`[source-performance] SQLite integrity check did not pass: ${filePath}`);
+  }
+  if (
+    !Array.isArray(sqlitePerf?.integrity?.agent) ||
+    sqlitePerf.integrity.agent.length === 0 ||
+    sqlitePerf.integrity.agent.some((entry) => entry !== "ok")
+  ) {
+    throw new Error(`[source-performance] SQLite agent integrity check did not pass: ${filePath}`);
+  }
+  if (
+    !isNonNegativeInteger(sqlitePerf?.rows?.stateRows) ||
+    sqlitePerf.rows.stateRows <= 0 ||
+    !isNonNegativeInteger(sqlitePerf?.rows?.agentCacheEntries) ||
+    sqlitePerf.rows.agentCacheEntries <= 0 ||
+    !finiteNumber(sqlitePerf?.timingsMs?.total) ||
+    !finiteNumber(sqlitePerf?.walBytes?.stateBefore) ||
+    sqlitePerf?.walBytes?.stateAfter !== 0 ||
+    !Array.isArray(sqlitePerf?.queries) ||
+    sqlitePerf.queries.length === 0
+  ) {
+    throw new Error(`[source-performance] incomplete SQLite perf metrics: ${filePath}`);
+  }
+  for (const entry of sqlitePerf.queries) {
+    if (!finiteNumber(entry?.p50Ms) || !finiteNumber(entry?.p95Ms) || !finiteNumber(entry?.rows)) {
+      throw new Error(`[source-performance] incomplete SQLite query metrics: ${filePath}`);
     }
   }
 }
@@ -284,6 +324,7 @@ function loadSourceArtifacts(sourceDir, { required = false } = {}) {
   const startupPath = path.join(sourceDir, "gateway-cpu", "gateway-startup-bench.json");
   const cliPath = path.join(sourceDir, "cli-startup.json");
   const extensionMemoryPath = path.join(sourceDir, "extension-memory.json");
+  const sqlitePerfPath = path.join(sourceDir, "sqlite-perf-smoke.json");
   const artifacts = {
     startup: required
       ? readRequiredJson(startupPath, "gateway startup artifact")
@@ -292,12 +333,16 @@ function loadSourceArtifacts(sourceDir, { required = false } = {}) {
     extensionMemory: required
       ? readRequiredJson(extensionMemoryPath, "extension memory artifact")
       : readJsonIfExists(extensionMemoryPath),
+    sqlitePerf: readJsonIfExists(sqlitePerfPath),
     mockHelloSummaries: loadMockHelloSummaries(sourceDir, { required }),
   };
   if (required) {
     validateStartupArtifact(artifacts.startup, startupPath);
     validateCliArtifact(artifacts.cli, cliPath);
     validateExtensionMemoryArtifact(artifacts.extensionMemory, extensionMemoryPath);
+    if (artifacts.sqlitePerf) {
+      validateSqlitePerfArtifact(artifacts.sqlitePerf, sqlitePerfPath);
+    }
   }
   return artifacts;
 }
@@ -321,7 +366,7 @@ function buildTraceRows(startup) {
   const rows = [];
   for (const result of startup?.results ?? []) {
     const traceEntries = Object.entries(result.summary?.startupTrace ?? {})
-      .filter(([, stats]) => typeof stats?.p50 === "number")
+      .filter(([name, stats]) => isStartupTraceDuration(name) && typeof stats?.p50 === "number")
       .toSorted((a, b) => (b[1].p50 ?? 0) - (a[1].p50 ?? 0))
       .slice(0, 5);
     for (const [name, stats] of traceEntries) {
@@ -329,6 +374,14 @@ function buildTraceRows(startup) {
     }
   }
   return rows;
+}
+
+function isStartupTraceDuration(name) {
+  if (name.endsWith(".total") || name.startsWith("memory.")) {
+    return false;
+  }
+  const metricName = name.slice(name.lastIndexOf(".") + 1);
+  return !metricName.endsWith("Count") && !metricName.endsWith("Mb");
 }
 
 function buildMockHelloRows(summaries) {
@@ -463,6 +516,49 @@ function buildExtensionMemoryRows(extensionMemory) {
     ]);
 }
 
+function buildExtensionMemoryContextRows(extensionMemory) {
+  const baselineMb = extensionMemory?.baseline?.maxRssMb;
+  const combinedMb = extensionMemory?.combined?.maxRssMb;
+  const totalEntries = extensionMemory?.counts?.totalEntries;
+  return [
+    [
+      "empty Node process",
+      formatMb(baselineMb),
+      formatMb(0),
+      extensionMemory?.baseline?.status ?? "unknown",
+    ],
+    [
+      finiteNumber(totalEntries)
+        ? `all ${totalEntries} bundled plugins`
+        : "all selected bundled plugins",
+      formatMb(combinedMb),
+      finiteNumber(baselineMb) && finiteNumber(combinedMb)
+        ? formatMb(combinedMb - baselineMb)
+        : "n/a",
+      extensionMemory?.combined?.status ?? "unknown",
+    ],
+  ];
+}
+
+function buildSqlitePerfRows(sqlitePerf) {
+  if (!sqlitePerf) {
+    return [];
+  }
+  const maxQueryP95 = Math.max(...sqlitePerf.queries.map((entry) => entry.p95Ms));
+  return [
+    [
+      sqlitePerf.profile ?? "unknown",
+      String(sqlitePerf.rows?.stateRows ?? "n/a"),
+      String(sqlitePerf.rows?.agentCacheEntries ?? "n/a"),
+      sqlitePerf.integrity?.state ?? "n/a",
+      formatBytesAsMb(sqlitePerf.walBytes?.stateBefore),
+      formatBytesAsMb(sqlitePerf.walBytes?.stateAfter),
+      formatMs(maxQueryP95),
+      formatMs(sqlitePerf.timingsMs?.total),
+    ],
+  ];
+}
+
 function buildMemoryDeltaRows(current, baseline) {
   if (!baseline) {
     return [];
@@ -540,8 +636,14 @@ export function buildMarkdown(sourceDir, baselineSourceDir) {
     ),
     "## Bundled Plugin Import Memory",
     "",
+    "Per-plugin rows are isolated cold imports and are not additive. The combined row measures all selected bundled-plugin entrypoints in one process.",
+    "",
     ...table(
-      ["plugin", "max RSS", "delta from empty process", "status"],
+      ["measurement", "max RSS", "delta from empty process", "status"],
+      buildExtensionMemoryContextRows(current.extensionMemory),
+    ),
+    ...table(
+      ["plugin", "isolated max RSS", "isolated delta from empty process", "status"],
       buildExtensionMemoryRows(current.extensionMemory),
     ),
     "## Startup Hotspots",
@@ -568,6 +670,21 @@ export function buildMarkdown(sourceDir, baselineSourceDir) {
     ...table(
       ["case", "command", "duration p50", "duration p95", "RSS p95", "exits"],
       buildCliRows(current.cli),
+    ),
+    "## SQLite State Smoke",
+    "",
+    ...table(
+      [
+        "profile",
+        "state rows",
+        "agent rows",
+        "integrity",
+        "WAL before",
+        "WAL after",
+        "query p95 max",
+        "total",
+      ],
+      buildSqlitePerfRows(current.sqlitePerf),
     ),
     "## Observations",
     "",
@@ -596,7 +713,7 @@ function isCliEntry() {
 if (isCliEntry()) {
   main().catch(
     /** @param {unknown} error */ (error) => {
-      console.error(error instanceof Error ? error.stack : String(error));
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },
   );

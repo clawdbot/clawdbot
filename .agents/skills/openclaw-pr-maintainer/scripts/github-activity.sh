@@ -4,6 +4,14 @@ set -euo pipefail
 repo="openclaw/openclaw"
 months="12"
 include_global="0"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(git -C "$script_dir/../../../.." rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$repo_root" ]; then
+  repo_root="$(cd "$script_dir/../../../.." && pwd)"
+fi
+
+# shellcheck disable=SC1091
+source "$repo_root/scripts/lib/plain-gh.sh"
 
 usage() {
   printf 'Usage: %s [--repo owner/repo] [--months N] [--global] <github-login> [login...]\n' "$0"
@@ -16,6 +24,10 @@ die() {
 
 need() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+gh() {
+  gh_plain "$@"
 }
 
 date_utc_relative_months() {
@@ -131,7 +143,8 @@ done
   exit 2
 }
 
-need gh
+OPENCLAW_GH_BIN="$(resolve_plain_gh_bin)" || die "missing required command: gh"
+export OPENCLAW_GH_BIN
 need jq
 
 since_ts=$(date_utc_relative_months "$months")

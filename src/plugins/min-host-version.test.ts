@@ -1,11 +1,6 @@
 // Verifies plugin minimum host version compatibility checks.
 import { describe, expect, it } from "vitest";
-import {
-  checkMinHostVersion,
-  MIN_HOST_VERSION_FORMAT,
-  parseMinHostVersionRequirement,
-  validateMinHostVersion,
-} from "./min-host-version.js";
+import { checkMinHostVersion, parseMinHostVersionRequirement } from "./min-host-version.js";
 
 const MIN_HOST_REQUIREMENT = {
   raw: ">=2026.3.22",
@@ -40,22 +35,8 @@ function expectHostCheckResult(params: {
   ).toEqual(params.expected);
 }
 
-function expectInvalidMinHostVersion(minHostVersion: string | number) {
-  expect(validateMinHostVersion(minHostVersion)).toBe(MIN_HOST_VERSION_FORMAT);
-  expectHostCheckResult({
-    currentVersion: "2026.3.22",
-    minHostVersion,
-    expected: {
-      ok: false,
-      kind: "invalid",
-      error: MIN_HOST_VERSION_FORMAT,
-    },
-  });
-}
-
 describe("min-host-version", () => {
   it("accepts empty metadata", () => {
-    expect(validateMinHostVersion(undefined)).toBeNull();
     expect(parseMinHostVersionRequirement(undefined)).toBeNull();
     expectValidHostCheck("2026.3.22");
   });
@@ -88,13 +69,6 @@ describe("min-host-version", () => {
       },
     });
   });
-
-  it.each(["2026.3.22", 123, ">=2026.3.22 garbage"] as const)(
-    "rejects invalid floor syntax and host checks: %p",
-    (minHostVersion) => {
-      expectInvalidMinHostVersion(minHostVersion);
-    },
-  );
 
   it.each([
     {

@@ -9,6 +9,7 @@ import {
 import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
+  isValidSecretRef,
   validateExecSecretRefId,
 } from "./ref-contract.js";
 
@@ -50,5 +51,21 @@ describe("exec secret ref id validation", () => {
       ok: false,
       reason: "traversal-segment",
     });
+  });
+});
+
+describe("secret ref validation", () => {
+  it("rejects non-canonical refs with extra properties", () => {
+    expect(isValidSecretRef({ source: "env", provider: "default", id: "OPENAI_API_KEY" })).toBe(
+      true,
+    );
+    expect(
+      isValidSecretRef({
+        source: "env",
+        provider: "default",
+        id: "OPENAI_API_KEY",
+        extra: "x",
+      } as never),
+    ).toBe(false);
   });
 });

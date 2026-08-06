@@ -13,15 +13,17 @@ OpenCode exposes two hosted catalogs in OpenClaw:
 | **Zen** | `opencode/...`    | `opencode`       |
 | **Go**  | `opencode-go/...` | `opencode-go`    |
 
-Both catalogs use the same OpenCode API key. OpenClaw keeps the runtime provider ids
-split so upstream per-model routing stays correct, but onboarding and docs treat them
-as one OpenCode setup.
+Both catalogs share one OpenCode API key (`OPENCODE_API_KEY`, alias
+`OPENCODE_ZEN_API_KEY`). OpenClaw keeps the runtime provider ids split so
+upstream per-model routing stays correct, but onboarding and docs treat them as
+one OpenCode setup.
 
 ## Getting started
 
 <Tabs>
   <Tab title="Zen catalog">
-    **Best for:** the curated OpenCode multi-model proxy (Claude, GPT, Gemini).
+    **Best for:** the curated OpenCode multi-model proxy (Claude, GPT, Gemini, GLM,
+    DeepSeek, Kimi, MiniMax, Qwen).
 
     <Steps>
       <Step title="Run onboarding">
@@ -37,7 +39,7 @@ as one OpenCode setup.
       </Step>
       <Step title="Set a Zen model as the default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode/claude-opus-4-6"
+        openclaw config set agents.defaults.model.primary "opencode/gpt-5.6-sol"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -50,9 +52,15 @@ as one OpenCode setup.
   </Tab>
 
   <Tab title="Go catalog">
-    **Best for:** the OpenCode-hosted Kimi, GLM, and MiniMax lineup.
+    **Best for:** the OpenCode-hosted Kimi, GLM, MiniMax, Qwen, and DeepSeek lineup.
 
     <Steps>
+      <Step title="Install the Go catalog plugin">
+        ```bash
+        openclaw plugins install @openclaw/opencode-go-provider
+        openclaw gateway restart
+        ```
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice opencode-go
@@ -84,18 +92,24 @@ as one OpenCode setup.
 ```json5
 {
   env: { OPENCODE_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "opencode/gpt-5.6-sol" } } },
 }
 ```
 
-## Built-in catalogs
+## Provider catalogs
 
 ### Zen
 
-| Property         | Value                                                                   |
-| ---------------- | ----------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                              |
-| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3-pro` |
+| Property         | Value                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                                        |
+| Example models   | `opencode/gpt-5.6-sol`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle` |
+
+Run `openclaw models list --provider opencode` for the full current list, which
+also includes the currently promoted free-tier rows `opencode/big-pickle`,
+`opencode/deepseek-v4-flash-free`, `opencode/laguna-s-2.1-free`,
+`opencode/ling-3.0-flash-free`, `opencode/mimo-v2.5-free`,
+`opencode/nemotron-3-ultra-free`, and `opencode/north-mini-code-free`.
 
 ### Go
 
@@ -104,11 +118,13 @@ as one OpenCode setup.
 | Runtime provider | `opencode-go`                                                            |
 | Example models   | `opencode-go/kimi-k2.6`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
 
+See [OpenCode Go](/providers/opencode-go) for the full Go model table.
+
 ## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="API key aliases">
-    `OPENCODE_ZEN_API_KEY` is also supported as an alias for `OPENCODE_API_KEY`.
+    `OPENCODE_ZEN_API_KEY` is also accepted as an alias for `OPENCODE_API_KEY`.
   </Accordion>
 
   <Accordion title="Shared credentials">
@@ -116,9 +132,10 @@ as one OpenCode setup.
     providers. You do not need to onboard each catalog separately.
   </Accordion>
 
-  <Accordion title="Billing and dashboard">
-    You sign in to OpenCode, add billing details, and copy your API key. Billing
-    and catalog availability are managed from the OpenCode dashboard.
+  <Accordion title="Getting an API key">
+    Create an OpenCode account and generate an API key at
+    [opencode.ai/auth](https://opencode.ai/auth). Billing and catalog
+    availability are managed from the OpenCode dashboard.
   </Accordion>
 
   <Accordion title="Gemini replay behavior">
@@ -132,14 +149,12 @@ as one OpenCode setup.
   </Accordion>
 </AccordionGroup>
 
-<Tip>
-Entering one OpenCode key during setup stores credentials for both the Zen and
-Go runtime providers, so you only need to onboard once.
-</Tip>
-
 ## Related
 
 <CardGroup cols={2}>
+  <Card title="OpenCode Go" href="/providers/opencode-go" icon="server">
+    Full Go catalog reference.
+  </Card>
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>

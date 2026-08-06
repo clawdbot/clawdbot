@@ -64,24 +64,79 @@ write_output() {
   fi
 }
 
+lower_sha() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 resolve_unique_remote_ref() {
   local refspec
-  local -a matches=()
   for refspec in "$@"; do
     [[ -n "$refspec" ]] || continue
-    mapfile -t matches < <(
-      git ls-remote "$REMOTE_URL" "$refspec" | awk '{print $1}' | awk '!seen[$0]++'
-    )
-    if [[ "${#matches[@]}" -eq 0 ]]; then
+    local raw=""
+    local stderr_file=""
+    local status=0
+    stderr_file="$(mktemp)"
+    set +e
+    raw="$(git ls-remote "$REMOTE_URL" "$refspec" 2>"$stderr_file")"
+    status="$?"
+    set -e
+    if [[ "$status" -ne 0 ]]; then
+      local stderr=""
+      stderr="$(cat "$stderr_file")"
+      rm -f "$stderr_file"
+      if [[ "$refspec" == *"^{}" && "$stderr" == *"fatal: no tag message?"* ]]; then
+        continue
+      fi
+      [[ -z "$stderr" ]] || printf '%s\n' "$stderr" >&2
+      return 3
+    fi
+    rm -f "$stderr_file"
+    local match=""
+    local match_count=0
+    local line=""
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      match_count=$((match_count + 1))
+      if [[ "$match_count" -eq 1 ]]; then
+        match="$line"
+      fi
+    done < <(printf '%s\n' "$raw" | awk 'NF {print $1}' | awk '!seen[$0]++')
+    if [[ "$match_count" -eq 0 ]]; then
       continue
     fi
-    if [[ "${#matches[@]}" -ne 1 ]]; then
+    if [[ "$match_count" -ne 1 ]]; then
       return 2
     fi
-    printf '%s\n' "${matches[0]}"
+    printf '%s\n' "$match"
     return 0
   done
   return 1
+}
+
+read_remote_matches() {
+  local output_name="$1"
+  shift
+  local output=""
+  local status=0
+  eval "$output_name=()"
+  set +e
+  output="$(resolve_unique_remote_ref "$@")"
+  status="$?"
+  set -e
+  case "$status" in
+    0)
+      eval "$output_name=(\"\$output\")"
+      ;;
+    1)
+      ;;
+    2)
+      echo "Ref resolved to multiple remote matches." >&2
+      exit 1
+      ;;
+    *)
+      exit 1
+      ;;
+  esac
 }
 
 REF="$(trim "$REF")"
@@ -96,11 +151,11 @@ if [[ -n "$EXPECTED_SHA" ]] && [[ ! "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; the
 fi
 
 if [[ "$REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
-  if [[ -n "$EXPECTED_SHA" ]] && [[ "${REF,,}" != "${EXPECTED_SHA,,}" ]]; then
+  if [[ -n "$EXPECTED_SHA" ]] && [[ "$(lower_sha "$REF")" != "$(lower_sha "$EXPECTED_SHA")" ]]; then
     echo "Ref SHA ${REF} does not match expected SHA ${EXPECTED_SHA}." >&2
     exit 1
   fi
-  write_output sha "${REF,,}"
+  write_output sha "$(lower_sha "$REF")"
   write_output ref_kind sha
   write_output fast false
   write_output fallback true
@@ -109,14 +164,14 @@ fi
 
 declare -a matches=()
 if [[ "$REF" == refs/heads/* ]]; then
-  mapfile -t matches < <(resolve_unique_remote_ref "$REF" || true)
+  read_remote_matches matches "$REF"
 elif [[ "$REF" == refs/tags/* ]]; then
-  mapfile -t matches < <(resolve_unique_remote_ref "${REF}^{}" "$REF" || true)
+  read_remote_matches matches "${REF}^{}" "$REF"
 elif [[ "$REF" == refs/* ]]; then
-  mapfile -t matches < <(resolve_unique_remote_ref "$REF" || true)
+  read_remote_matches matches "$REF"
 else
-  mapfile -t branch_matches < <(resolve_unique_remote_ref "refs/heads/${REF}" || true)
-  mapfile -t tag_matches < <(resolve_unique_remote_ref "refs/tags/${REF}^{}" "refs/tags/${REF}" || true)
+  read_remote_matches branch_matches "refs/heads/${REF}"
+  read_remote_matches tag_matches "refs/tags/${REF}^{}" "refs/tags/${REF}"
   match_count=$(( ${#branch_matches[@]} + ${#tag_matches[@]} ))
   if [[ "$match_count" -eq 1 ]]; then
     if [[ "${#branch_matches[@]}" -eq 1 ]]; then
@@ -133,8 +188,8 @@ else
 fi
 
 if [[ "${#matches[@]}" -eq 1 ]]; then
-  resolved="${matches[0],,}"
-  if [[ -n "$EXPECTED_SHA" ]] && [[ "$resolved" != "${EXPECTED_SHA,,}" ]]; then
+  resolved="$(lower_sha "${matches[0]}")"
+  if [[ -n "$EXPECTED_SHA" ]] && [[ "$resolved" != "$(lower_sha "$EXPECTED_SHA")" ]]; then
     echo "Ref ${REF} resolved to ${resolved}, expected ${EXPECTED_SHA}." >&2
     exit 1
   fi

@@ -18,6 +18,7 @@
       "provider": "synthetic",
       "method": "api-key",
       "choiceId": "synthetic-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Synthetic API key",
       "groupId": "synthetic",
       "groupLabel": "Synthetic",

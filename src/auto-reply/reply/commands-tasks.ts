@@ -1,6 +1,5 @@
 // Implements task-list commands that route through the current session agent.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { logVerbose } from "../../globals.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
@@ -14,6 +13,7 @@ import {
   formatTaskStatusTitle,
 } from "../../tasks/task-status.js";
 import type { ReplyPayload } from "../types.js";
+import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const MAX_VISIBLE_TASKS = 5;
@@ -111,7 +111,7 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
   return lines.join("\n");
 }
 
-export async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const agentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -124,28 +124,14 @@ export async function buildTasksReply(params: HandleCommandsParams): Promise<Rep
   };
 }
 
-export const handleTasksCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/tasks" && !normalized.startsWith("/tasks ")) {
-    return null;
-  }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /tasks from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
-  }
-  if (normalized !== "/tasks") {
-    return {
-      shouldContinue: false,
-      reply: { text: "Usage: /tasks" },
-    };
-  }
-  return {
-    shouldContinue: false,
-    reply: await buildTasksReply(params),
-  };
-};
+export const handleTasksCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: "/tasks",
+    match: (body) => matchCommandPrefix(body, "/tasks"),
+    silentUnauthorized: true,
+  },
+  async (params) =>
+    params.command.commandBodyNormalized === "/tasks"
+      ? { shouldContinue: false, reply: await buildTasksReply(params) }
+      : commandReply("Usage: /tasks"),
+);

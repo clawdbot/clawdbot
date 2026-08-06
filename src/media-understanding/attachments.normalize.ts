@@ -1,9 +1,15 @@
 // Attachment normalization converts message context media fields into typed
 // attachment records and classifies media kind from MIME or filename.
-import { getFileExtension, isAudioFileName, kindFromMime } from "@openclaw/media-core/mime";
+import type { MediaKind } from "@openclaw/media-core/constants";
+import { kindFromMime, mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MsgContext } from "../auto-reply/templating.js";
+import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
+import {
+  isGenericBinaryMediaContentType,
+  isImageMediaFact,
+  normalizeMediaFacts,
+} from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
 /** Normalizes a local attachment path while rejecting remote file URLs and Windows UNC paths. */
@@ -27,92 +33,57 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
   return value;
 }
 
-/** Flattens legacy single-value and array media fields into indexed attachment records. */
+/** Converts ordered media facts into indexed attachment records. */
 export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  const urlsFromArray = Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : undefined;
-  const typesFromArray = Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : undefined;
-  const transcribedIndexes = new Set(
-    Array.isArray(ctx.MediaTranscribedIndexes)
-      ? ctx.MediaTranscribedIndexes.filter((index) => Number.isInteger(index) && index >= 0)
-      : [],
-  );
-  const resolveMime = (count: number, index: number) => {
-    const typeHint = normalizeOptionalString(typesFromArray?.[index]);
-    if (typeHint) {
-      return typeHint;
-    }
-    return count === 1 ? ctx.MediaType : undefined;
-  };
-
-  if (pathsFromArray && pathsFromArray.length > 0) {
-    // Array fields are authoritative for multi-attachment messages; the legacy
-    // single URL remains a per-item fallback for older channel payloads.
-    const count = pathsFromArray.length;
-    const urls = urlsFromArray && urlsFromArray.length > 0 ? urlsFromArray : undefined;
-    return pathsFromArray
-      .map((value, index) => ({
-        path: normalizeOptionalString(value),
-        url: urls?.[index] ?? ctx.MediaUrl,
-        mime: resolveMime(count, index),
+  return normalizeMediaFacts(ctx.media)
+    .map((fact, index) => {
+      const attachment: MediaAttachment = {
+        path: normalizeOptionalString(fact.path),
+        url: normalizeOptionalString(fact.url),
+        mime: normalizeOptionalString(fact.contentType),
         index,
-        alreadyTranscribed: transcribedIndexes.has(index),
-      }))
-      .filter((entry) => Boolean(entry.path ?? normalizeOptionalString(entry.url)));
-  }
-
-  if (urlsFromArray && urlsFromArray.length > 0) {
-    const count = urlsFromArray.length;
-    return urlsFromArray
-      .map((value, index) => ({
-        path: undefined,
-        url: normalizeOptionalString(value),
-        mime: resolveMime(count, index),
-        index,
-        alreadyTranscribed: transcribedIndexes.has(index),
-      }))
-      .filter((entry) => Boolean(entry.url));
-  }
-
-  const pathValue = normalizeOptionalString(ctx.MediaPath);
-  const url = normalizeOptionalString(ctx.MediaUrl);
-  if (!pathValue && !url) {
-    return [];
-  }
-  return [
-    {
-      path: pathValue || undefined,
-      url: url || undefined,
-      mime: ctx.MediaType,
-      index: 0,
-      alreadyTranscribed: transcribedIndexes.has(0),
-    },
-  ];
+        alreadyTranscribed: fact.transcribed === true,
+      };
+      if (fact.kind) {
+        attachment.kind = fact.kind;
+      }
+      if (fact.workspaceDir) {
+        attachment.workspaceDir = fact.workspaceDir;
+      }
+      return attachment;
+    })
+    .filter((entry) => Boolean(entry.path ?? entry.url));
 }
 
-/** Classifies an attachment by MIME first, then by filename/URL extension fallback. */
-export function resolveAttachmentKind(
-  attachment: MediaAttachment,
-): "image" | "audio" | "video" | "document" | "unknown" {
-  const kind = kindFromMime(attachment.mime);
-  if (kind === "image" || kind === "audio" || kind === "video") {
-    return kind;
-  }
-
-  const ext = getFileExtension(attachment.path ?? attachment.url);
-  if (!ext) {
-    return "unknown";
-  }
-  if ([".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"].includes(ext)) {
-    return "video";
-  }
-  if (isAudioFileName(attachment.path ?? attachment.url)) {
-    return "audio";
-  }
-  if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"].includes(ext)) {
+/** Classifies an attachment by authoritative kind, MIME, then canonical filename metadata. */
+export function resolveAttachmentKind(attachment: MediaAttachment): Exclude<MediaKind, "sticker"> {
+  if (
+    isImageMediaFact({
+      path: attachment.path,
+      url: attachment.url,
+      contentType: attachment.mime,
+      kind: attachment.kind,
+    })
+  ) {
     return "image";
   }
-  return "unknown";
+  if (attachment.kind === "audio" || attachment.kind === "video") {
+    return attachment.kind;
+  }
+  if (attachment.kind === "document") {
+    return "unknown";
+  }
+  const mime = normalizeMimeType(attachment.mime);
+  const kind = kindFromMime(mime);
+  if (kind === "audio" || kind === "video") {
+    return kind;
+  }
+  if (mime && !isGenericBinaryMediaContentType(mime)) {
+    return "unknown";
+  }
+
+  const inferredKind = kindFromMime(mimeTypeFromFilePath(attachment.path ?? attachment.url));
+  return inferredKind === "audio" || inferredKind === "video" ? inferredKind : "unknown";
 }
 
 /** Returns true when the attachment is classified as video media. */

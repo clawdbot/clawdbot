@@ -1,5 +1,6 @@
-// Qqbot plugin module implements finalize behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Qqbot plugin module implements finalize behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
@@ -7,10 +8,24 @@ import { applyQQBotAccountConfig, resolveQQBotAccount } from "../config.js";
 
 type SetupPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
 type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["runtime"];
+type SetupOptions = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["options"];
 
 function isQQBotAccountConfigured(cfg: OpenClawConfig, accountId: string): boolean {
   const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
   return Boolean(account.appId && account.clientSecret);
+}
+
+async function reportQQBotLinkFailure(
+  params: { prompter: SetupPrompter; runtime: SetupRuntime },
+  error: unknown,
+): Promise<void> {
+  params.runtime.error(`QQ Bot 绑定失败: ${String(error)}`);
+  await params.prompter.note(
+    ["绑定失败，您可以稍后手动配置。", `文档: ${formatDocsLink("/channels/qqbot", "qqbot")}`].join(
+      "\n",
+    ),
+    "QQ Bot",
+  );
 }
 
 async function linkViaQrCode(params: {
@@ -18,11 +33,19 @@ async function linkViaQrCode(params: {
   accountId: string;
   prompter: SetupPrompter;
   runtime: SetupRuntime;
+  beforePersistentEffect?: () => Promise<void>;
 }): Promise<OpenClawConfig> {
+  let connector: typeof import("@tencent-connect/qqbot-connector");
   try {
-    const { qrConnect } = await import("@tencent-connect/qqbot-connector");
+    connector = await import("@tencent-connect/qqbot-connector");
+  } catch (error) {
+    await reportQQBotLinkFailure(params, error);
+    return params.cfg;
+  }
 
-    const accounts: { appId: string; appSecret: string }[] = await qrConnect({
+  await params.beforePersistentEffect?.();
+  try {
+    const accounts: { appId: string; appSecret: string }[] = await connector.qrConnect({
       source: "openclaw",
     });
 
@@ -33,8 +56,7 @@ async function linkViaQrCode(params: {
 
     let next = params.cfg;
 
-    for (let i = 0; i < accounts.length; i++) {
-      const { appId, appSecret } = accounts[i];
+    for (const [i, { appId, appSecret }] of accounts.entries()) {
       // use current account id for first account, and use app id for subsequent accounts
       const targetAccountId = i === 0 ? params.accountId : appId;
 
@@ -45,7 +67,8 @@ async function linkViaQrCode(params: {
     }
 
     if (accounts.length === 1) {
-      params.runtime.log(`✔ QQ Bot 绑定成功！(AppID: ${accounts[0].appId})`);
+      const account = expectDefined(accounts.at(0), "single linked QQ Bot account");
+      params.runtime.log(`✔ QQ Bot 绑定成功！(AppID: ${account.appId})`);
     } else {
       const idList = accounts.map((a) => a.appId).join(", ");
       params.runtime.log(`✔ ${accounts.length} 个 QQ Bot 绑定成功！(AppID: ${idList})`);
@@ -53,14 +76,7 @@ async function linkViaQrCode(params: {
 
     return next;
   } catch (error) {
-    params.runtime.error(`QQ Bot 绑定失败: ${String(error)}`);
-    await params.prompter.note(
-      [
-        "绑定失败，您可以稍后手动配置。",
-        `文档: ${formatDocsLink("/channels/qqbot", "qqbot")}`,
-      ].join("\n"),
-      "QQ Bot",
-    );
+    await reportQQBotLinkFailure(params, error);
     return params.cfg;
   }
 }
@@ -95,6 +111,7 @@ export async function finalizeQQBotSetup(params: {
   forceAllowFrom: boolean;
   prompter: SetupPrompter;
   runtime: SetupRuntime;
+  options?: SetupOptions;
 }): Promise<{ cfg: OpenClawConfig }> {
   const accountId = params.accountId.trim() || DEFAULT_ACCOUNT_ID;
   let next = params.cfg;
@@ -127,6 +144,7 @@ export async function finalizeQQBotSetup(params: {
       accountId,
       prompter: params.prompter,
       runtime: params.runtime,
+      beforePersistentEffect: params.options?.beforePersistentEffect,
     });
   } else if (mode === "manual") {
     next = await linkViaManualInput({

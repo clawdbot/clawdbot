@@ -35,6 +35,7 @@ describe("buildBotLogsResult", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -58,5 +59,40 @@ describe("buildBotLogsResult", () => {
     expect(path.basename(second.filePath)).toBe("bot-logs-2026-05-05T10-11-12-2.txt");
     expect(fs.readFileSync(first.filePath, "utf8")).toContain("line 1");
     expect(fs.readFileSync(second.filePath, "utf8")).toContain("line 2");
+  });
+
+  it("completes short fs.readSync tail windows before selecting lines", () => {
+    const logDir = path.join(tempHome, ".openclaw", "logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    const logFile = path.join(logDir, "gateway.log");
+    const lines = Array.from(
+      { length: 40 },
+      (_, index) => `line ${String(index + 1).padStart(2, "0")}`,
+    );
+    const contents = `${lines.join("\n")}\n`;
+    fs.writeFileSync(logFile, contents, "utf8");
+
+    const realReadSync = fs.readSync.bind(fs) as typeof fs.readSync;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: number | null,
+    ) => {
+      return realReadSync(fd, buffer, offset, Math.min(length, 7), position);
+    }) as typeof fs.readSync);
+
+    const result = buildBotLogsResult();
+
+    expect(readSpy.mock.calls.length).toBeGreaterThan(1);
+    expect(typeof result).toBe("object");
+    if (!result || typeof result === "string") {
+      throw new Error("expected file upload result");
+    }
+    const exportedLogs = fs.readFileSync(result.filePath, "utf8");
+    expect(exportedLogs).toContain("line 01");
+    expect(exportedLogs).toContain("line 40");
+    expect(exportedLogs).not.toContain("\0");
   });
 });

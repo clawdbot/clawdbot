@@ -12,7 +12,7 @@ function pathFor(platform: NodeJS.Platform) {
 // "not logged in", even though the operator HOME has a valid hosts.yml.
 // See https://github.com/openclaw/openclaw/issues/78063.
 
-export type GhConfigDiscoveryEnv = {
+type GhConfigDiscoveryEnv = {
   HOME?: string;
   XDG_CONFIG_HOME?: string;
   GH_CONFIG_DIR?: string;
@@ -32,7 +32,7 @@ export type GhConfigDiscoveryInput = {
   candidateOperatorHomes?: readonly string[];
 };
 
-export type GhConfigDirMismatch = {
+type GhConfigDirMismatch = {
   // The directory `gh` would actually consult given the current process env.
   effectiveConfigDir: string;
   // The directory that contains the operator's real `hosts.yml`.

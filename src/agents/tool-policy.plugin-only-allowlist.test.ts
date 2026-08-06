@@ -75,6 +75,40 @@ describe("analyzeAllowlistByToolType", () => {
     expect(policy.unknownAllowlist).toEqual(["apply_patch"]);
   });
 
+  it("recognizes declared plugin tools before they are materialized", () => {
+    const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
+    const policy = analyzeAllowlistByToolType({ allow: ["llm-task"] }, emptyPlugins, coreTools, {
+      pluginToolNames: ["llm-task"],
+    });
+    expect(policy.policy?.allow).toEqual(["llm-task"]);
+    expect(policy.pluginOnlyAllowlist).toBe(true);
+    expect(policy.unknownAllowlist).toStrictEqual([]);
+  });
+
+  it("recognizes declared MCP server namespace allowlists before tools are materialized", () => {
+    const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
+    const policy = analyzeAllowlistByToolType(
+      { allow: ["paperless__*", "home-assistant__search"] },
+      emptyPlugins,
+      coreTools,
+      { mcpServerNames: ["paperless", "Home Assistant"] },
+    );
+    expect(policy.pluginOnlyAllowlist).toBe(true);
+    expect(policy.unknownAllowlist).toStrictEqual([]);
+  });
+
+  it("still reports undeclared MCP namespace allowlist typos", () => {
+    const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
+    const policy = analyzeAllowlistByToolType(
+      { allow: ["papreless__*"] },
+      emptyPlugins,
+      coreTools,
+      { mcpServerNames: ["paperless"] },
+    );
+    expect(policy.pluginOnlyAllowlist).toBe(false);
+    expect(policy.unknownAllowlist).toStrictEqual(["papreless__*"]);
+  });
+
   it("ignores empty plugin ids when building groups", () => {
     const groups = buildPluginToolGroups({
       tools: [{ name: "lobster" }],

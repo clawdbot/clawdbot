@@ -3,8 +3,9 @@ import {
   drainPendingDeliveries as coreDrainPendingDeliveries,
   type DeliverFn,
 } from "../infra/outbound/delivery-queue.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-type OutboundDeliverRuntimeModule = typeof import("../infra/outbound/deliver-runtime.js");
 type DrainPendingDeliveriesOptions = Omit<
   Parameters<typeof coreDrainPendingDeliveries>[0],
   "deliver"
@@ -13,12 +14,9 @@ type DrainPendingDeliveriesOptions = Omit<
   deliver?: DeliverFn;
 };
 
-let outboundDeliverRuntimePromise: Promise<OutboundDeliverRuntimeModule> | null = null;
-
-async function loadOutboundDeliverRuntime(): Promise<OutboundDeliverRuntimeModule> {
-  outboundDeliverRuntimePromise ??= import("../infra/outbound/deliver-runtime.js");
-  return await outboundDeliverRuntimePromise;
-}
+const loadOutboundDeliverRuntime = createLazyRuntimeModule(
+  () => import("../infra/outbound/deliver-runtime.js"),
+);
 
 /**
  * Drain queued outbound payloads after a channel reconnect or transport recovery.
@@ -26,10 +24,13 @@ async function loadOutboundDeliverRuntime(): Promise<OutboundDeliverRuntimeModul
  * loaded lazily so importing this SDK subpath does not eagerly bind send internals.
  */
 export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions): Promise<void> {
-  const deliver =
-    opts.deliver ?? (await loadOutboundDeliverRuntime()).deliverOutboundPayloadsInternal;
-  await coreDrainPendingDeliveries({
-    ...opts,
-    deliver,
+  await runWithGatewayIndependentRootWorkAdmission(async () => {
+    // Keep lazy resolution and draining in one lease so suspension cannot split the handoff.
+    const deliver =
+      opts.deliver ?? (await loadOutboundDeliverRuntime()).deliverOutboundPayloadsInternal;
+    await coreDrainPendingDeliveries({
+      ...opts,
+      deliver,
+    });
   });
 }

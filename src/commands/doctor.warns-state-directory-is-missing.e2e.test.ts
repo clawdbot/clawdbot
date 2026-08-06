@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   callGateway,
   createDoctorRuntime,
@@ -133,19 +134,22 @@ describe("doctor command", () => {
     terminalNoteMock.mockClear();
   });
 
-  it("warns when the state directory is missing", async () => {
+  it("reports when the state directory was missing at doctor start", async () => {
     mockDoctorConfigSnapshot();
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
-    process.env.OPENCLAW_STATE_DIR = missingDir;
-    await doctorCommand(createDoctorRuntime(), {
-      nonInteractive: true,
-      workspaceSuggestions: false,
+    await withEnvAsync({ OPENCLAW_STATE_DIR: missingDir }, async () => {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
     });
 
-    const stateNote = requireTerminalNote({ messageIncludes: "state directory missing" });
-    expect(String(stateNote[0])).toContain("CRITICAL");
+    requireTerminalNote({
+      title: "State integrity",
+      messageIncludes: "State directory was missing at doctor start",
+    });
   });
 
   it("routes browser readiness through health contributions and degrades gracefully when browser facade is unavailable", async () => {
@@ -194,7 +198,7 @@ describe("doctor command", () => {
     }
   });
 
-  it("warns about opencode provider overrides", async () => {
+  it("warns about active OpenCode provider overrides", async () => {
     mockDoctorConfigSnapshot({
       config: {
         models: {
@@ -871,7 +875,7 @@ describe("doctor command", () => {
     expect(skippedGatewayHealth).toBe(false);
   });
 
-  it("keeps gateway health probes when env password wins over an exec password ref", async () => {
+  it("skips password-mode probes when configured password is an exec SecretRef", async () => {
     mockDoctorConfigSnapshot({
       config: {
         gateway: {
@@ -899,6 +903,7 @@ describe("doctor command", () => {
     const previousPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     process.env.OPENCLAW_GATEWAY_PASSWORD = "fallback-password";
     try {
+      callGateway.mockClear();
       await doctorCommand(createDoctorRuntime(), {
         nonInteractive: true,
         workspaceSuggestions: false,
@@ -911,15 +916,12 @@ describe("doctor command", () => {
       }
     }
 
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
+    expect(callGateway).not.toHaveBeenCalled();
+    requireTerminalNote({
+      title: "Gateway",
+      messageIncludes:
+        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
     });
-    expect(skippedGatewayHealth).toBe(false);
   });
 
   it("keeps remote gateway health probes when env token wins over an exec password ref", async () => {
@@ -1121,3 +1123,4 @@ describe("doctor command", () => {
     expect(warned).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

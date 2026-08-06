@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const defaultPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function readPackageRootValue(value, optionName) {
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;

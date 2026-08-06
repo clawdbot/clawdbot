@@ -90,4 +90,18 @@ describe("channel doctor contract api fast path", () => {
       artifactBasename: "contract-api.js",
     });
   });
+
+  it("does not fall back to the broad contract-api artifact when the doctor artifact is missing", () => {
+    const api = loadBundledChannelDoctorContractApi("missing");
+
+    expect(api).toBeUndefined();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "doctor-contract-api.js",
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "contract-api.js",
+    });
+  });
 });

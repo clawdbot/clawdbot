@@ -5,7 +5,7 @@ import type { WebSocketServer } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { rawDataToString } from "../infra/ws.js";
 
-export type MinimalGatewayRequestFrame = {
+type MinimalGatewayRequestFrame = {
   type?: string;
   id?: string;
   method?: string;
@@ -28,7 +28,7 @@ export function sendMinimalGatewayConnectChallenge(ws: WebSocket, nonce = "test-
     JSON.stringify({
       type: "event",
       event: "connect.challenge",
-      payload: { nonce },
+      payload: { nonce, ts: Date.now() },
     }),
   );
 }

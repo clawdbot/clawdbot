@@ -349,18 +349,6 @@ extension ChannelsSettings {
         }
     }
 
-    var enabledChannels: [ChannelItem] {
-        self.orderedChannels.filter { self.channelEnabled($0) }
-    }
-
-    var availableChannels: [ChannelItem] {
-        self.orderedChannels.filter { !self.channelEnabled($0) }
-    }
-
-    func ensureSelection() {
-        self.ensureSelection(in: self.orderedChannels)
-    }
-
     func ensureSelection(in orderedChannels: [ChannelItem]) {
         guard let selected = self.selectedChannel else {
             self.selectedChannel = orderedChannels.first

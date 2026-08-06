@@ -1,6 +1,10 @@
 // Scans packaged dist JavaScript for relative imports and missing closure entries.
+import { createRequire } from "node:module";
 import path from "node:path";
+import { visitModuleSpecifiers } from "./guard-inventory-utils.mjs";
 
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
 
 function normalizePackagePath(value) {
@@ -9,6 +13,10 @@ function normalizePackagePath(value) {
 
 function stripSpecifierSuffix(value) {
   return value.replace(/[?#].*$/u, "");
+}
+
+function hasJavaScriptFileExtension(value) {
+  return /\.(?:cjs|js|mjs)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
 }
 
 function resolveDistImportPath(importerPath, specifier) {
@@ -22,90 +30,30 @@ function resolveDistImportPath(importerPath, specifier) {
   return path.posix.normalize(path.posix.join(path.posix.dirname(importerPath), stripped));
 }
 
-function findStatementStart(source, index) {
-  return (
-    Math.max(
-      source.lastIndexOf(";", index),
-      source.lastIndexOf("{", index),
-      source.lastIndexOf("}", index),
-      source.lastIndexOf("\n", index),
-      source.lastIndexOf("\r", index),
-    ) + 1
-  );
-}
-
-function isImportSpecifierContext(source, index) {
-  const dynamicPrefix = source.slice(Math.max(0, index - 32), index);
-  if (/\bimport\s*\(\s*$/u.test(dynamicPrefix)) {
-    return true;
-  }
-  const statementPrefix = source.slice(findStatementStart(source, index), index).trimStart();
-  return (
-    /^(?:import|export)\b[\s\S]*\bfrom\s*$/u.test(statementPrefix) ||
-    /^import\s*$/u.test(statementPrefix)
-  );
-}
-
-function collectImportSpecifiers(source) {
+function collectImportSpecifiers(source, importerPath) {
   const specifiers = [];
-  let inBlockComment = false;
-  let inLineComment = false;
-  for (let index = 0; index < source.length; index += 1) {
-    if (inBlockComment) {
-      if (source[index] === "*" && source[index + 1] === "/") {
-        inBlockComment = false;
-        index += 1;
+  const sourceFile = ts.createSourceFile(
+    importerPath,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    ts.ScriptKind.JS,
+  );
+  visitModuleSpecifiers(
+    ts,
+    sourceFile,
+    ({ kind, specifier }) => {
+      if (
+        specifier.startsWith(".") &&
+        (kind !== "import-meta-url" ||
+          (hasJavaScriptFileExtension(specifier) &&
+            resolveDistImportPath(importerPath, specifier)?.startsWith("dist/")))
+      ) {
+        specifiers.push(specifier);
       }
-      continue;
-    }
-    if (inLineComment) {
-      if (source[index] === "\n" || source[index] === "\r") {
-        inLineComment = false;
-      }
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "*") {
-      inBlockComment = true;
-      index += 1;
-      continue;
-    }
-    if (source[index] === "/" && source[index + 1] === "/") {
-      inLineComment = true;
-      index += 1;
-      continue;
-    }
-
-    const quote = source[index];
-    if (quote !== '"' && quote !== "'") {
-      continue;
-    }
-
-    let cursor = index + 1;
-    let value = "";
-    while (cursor < source.length) {
-      const char = source[cursor];
-      if (char === "\\") {
-        value += source.slice(cursor, cursor + 2);
-        cursor += 2;
-        continue;
-      }
-      if (char === quote) {
-        break;
-      }
-      value += char;
-      cursor += 1;
-    }
-    if (cursor >= source.length) {
-      break;
-    }
-
-    if (value.startsWith(".")) {
-      if (isImportSpecifierContext(source, index)) {
-        specifiers.push(value);
-      }
-    }
-    index = cursor;
-  }
+    },
+    { includeCommonJs: true, includeImportMetaUrl: true },
+  );
   return specifiers;
 }
 
@@ -135,7 +83,7 @@ export function collectPackageDistImports(params) {
       continue;
     }
     const source = params.readText(importerPath);
-    for (const specifier of collectImportSpecifiers(source)) {
+    for (const specifier of collectImportSpecifiers(source, importerPath)) {
       const importedPath = resolveDistImportPath(importerPath, specifier);
       if (!importedPath) {
         continue;

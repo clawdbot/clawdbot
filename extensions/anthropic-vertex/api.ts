@@ -3,12 +3,17 @@
  * and lazy stream factories without eagerly importing the Vertex SDK runtime.
  */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
   buildAnthropicVertexProvider,
 } from "./provider-catalog.js";
+export {
+  mergeImplicitAnthropicVertexProvider,
+  resolveImplicitAnthropicVertexProvider,
+} from "./provider-catalog-runtime.js";
 export {
   hasAnthropicVertexAvailableAuth,
   hasAnthropicVertexCredentials,
@@ -18,44 +23,8 @@ export {
   resolveAnthropicVertexRegion,
   resolveAnthropicVertexRegionFromBaseUrl,
 } from "./region.js";
-import { buildAnthropicVertexProvider } from "./provider-catalog.js";
-import { hasAnthropicVertexAvailableAuth } from "./region.js";
 
-let streamRuntimeModulePromise: Promise<typeof import("./stream-runtime.js")> | null = null;
-
-const loadStreamRuntimeModule = async () => {
-  streamRuntimeModulePromise ??= import("./stream-runtime.js");
-  return await streamRuntimeModulePromise;
-};
-
-/** Merge an implicit Anthropic Vertex provider with explicit user config. */
-export function mergeImplicitAnthropicVertexProvider(params: {
-  existing?: ReturnType<typeof buildAnthropicVertexProvider>;
-  implicit: ReturnType<typeof buildAnthropicVertexProvider>;
-}) {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
-  };
-}
-
-/** Resolve an implicit Anthropic Vertex provider when ADC credentials are available. */
-export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.ProcessEnv }) {
-  const env = params?.env ?? process.env;
-  if (!hasAnthropicVertexAvailableAuth(env)) {
-    return null;
-  }
-
-  return buildAnthropicVertexProvider({ env });
-}
+const loadStreamRuntimeModule = createLazyRuntimeModule(() => import("./stream-runtime.js"));
 
 /** Create a lazy Anthropic Vertex stream function for a known project/region/base URL. */
 export function createAnthropicVertexStreamFn(

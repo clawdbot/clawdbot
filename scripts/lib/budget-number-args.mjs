@@ -25,11 +25,13 @@ export function budgetFloatFlag(flag, key) {
         return null;
       }
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${flag} requires a value`);
       }
       return {
+        flag,
         nextIndex: index + 1,
+        repeatable: false,
         apply(target) {
           const parsed = parseBudgetNumber(value, flag);
           if (parsed === null) {

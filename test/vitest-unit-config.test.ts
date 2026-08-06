@@ -6,8 +6,6 @@ import {
   createUnitVitestConfig,
   createUnitVitestConfigWithOptions,
   loadExtraExcludePatternsFromEnv,
-  loadIncludePatternsFromEnv,
-  resolveDefaultUnitCoverageIncludePatterns,
 } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
@@ -21,27 +19,6 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
 
 afterEach(() => {
   patternFiles.cleanup();
-});
-
-describe("loadIncludePatternsFromEnv", () => {
-  it("returns null when no include file is configured", () => {
-    expect(loadIncludePatternsFromEnv({})).toBeNull();
-  });
-
-  it("loads include patterns from a JSON file", () => {
-    const filePath = patternFiles.writePatternFile("include.json", [
-      "src/infra/update-runner.test.ts",
-      42,
-      "",
-      "ui/src/ui/views/chat.test.ts",
-    ]);
-
-    expect(
-      loadIncludePatternsFromEnv({
-        OPENCLAW_VITEST_INCLUDE_FILE: filePath,
-      }),
-    ).toEqual(["src/infra/update-runner.test.ts", "ui/src/ui/views/chat.test.ts"]);
-  });
 });
 
 describe("loadExtraExcludePatternsFromEnv", () => {
@@ -173,18 +150,13 @@ describe("unit vitest config", () => {
     );
     const testConfig = requireTestConfig(unitConfig);
     const coverageInclude = testConfig.coverage?.include;
+    expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
+    expect(coverageInclude).toContain("src/commitments/store.ts");
     expect(coverageInclude).toContain("src/commitments/runtime.ts");
     expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
     expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");
     expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
-  });
-
-  it("derives default coverage includes from non-fast unit tests with sibling source files", () => {
-    const coverageInclude = resolveDefaultUnitCoverageIncludePatterns();
-    expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
-    expect(coverageInclude).toContain("src/commitments/store.ts");
-    expect(coverageInclude).toContain("src/tools/planner.ts");
   });
 
   it("leaves coverage include filters unset for explicit unit include lists", () => {

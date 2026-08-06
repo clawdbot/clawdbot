@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Memory Wiki plugin module implements import insights behavior.
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown } from "./markdown.js";
@@ -58,14 +60,6 @@ function normalizeFiniteInt(value: unknown): number {
     return 0;
   }
   return Math.max(0, Math.floor(value));
-}
-
-function normalizeTimestamp(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function humanizeLabelSuffix(label: string): string {
@@ -208,7 +202,7 @@ function shortenSentence(value: string, maxLength = 180): string {
   if (compact.length <= maxLength) {
     return compact;
   }
-  return `${compact.slice(0, maxLength - 1).trimEnd()}…`;
+  return `${truncateUtf16Safe(compact, maxLength - 1).trimEnd()}…`;
 }
 
 function extractCorrectionSignals(turns: TranscriptTurn[]): string[] {
@@ -347,6 +341,8 @@ export async function listMemoryWikiImportInsights(
       const lastUserLine = exposeImportContent
         ? extractDigestField(digestLines, "Last user line")
         : undefined;
+      const createdAt = normalizeOptionalString(parsed.frontmatter.createdAt);
+      const updatedAt = normalizeOptionalString(parsed.frontmatter.updatedAt);
       return [
         {
           pagePath: page.relativePath,
@@ -380,12 +376,8 @@ export async function listMemoryWikiImportInsights(
           candidateSignals,
           correctionSignals,
           preferenceSignals,
-          ...(normalizeTimestamp(parsed.frontmatter.createdAt)
-            ? { createdAt: normalizeTimestamp(parsed.frontmatter.createdAt) }
-            : {}),
-          ...(normalizeTimestamp(parsed.frontmatter.updatedAt)
-            ? { updatedAt: normalizeTimestamp(parsed.frontmatter.updatedAt) }
-            : {}),
+          ...(createdAt ? { createdAt } : {}),
+          ...(updatedAt ? { updatedAt } : {}),
         } satisfies MemoryWikiImportInsightItem,
       ];
     })

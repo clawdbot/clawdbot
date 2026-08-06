@@ -16,6 +16,20 @@ vi.mock("./proxy.js", () => ({
   makeProxyFetch,
 }));
 
+// readResponseWithLimit requires a real Response body; pass-through so existing plain-object
+// fetch mocks continue to work. The size-cap behavior is verified by the proof script.
+vi.mock("openclaw/plugin-sdk/response-limit-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/response-limit-runtime")>();
+  return {
+    ...actual,
+    readResponseWithLimit: async (response: Response) => {
+      const data = await response.json();
+      return Buffer.from(JSON.stringify(data));
+    },
+  };
+});
+
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
   const timeoutMs = 5000;
@@ -216,6 +230,7 @@ describe("probeTelegram retry logic", () => {
       can_read_all_group_messages: false,
       can_manage_bots: false,
       supports_inline_queries: false,
+      supports_join_request_queries: false,
       can_connect_to_business: false,
       has_main_web_app: false,
       has_topics_enabled: false,
@@ -299,6 +314,39 @@ describe("probeTelegram retry logic", () => {
     expect(resolveTelegramTransport).toHaveBeenCalledTimes(2);
   });
 
+  it("closes evicted cached probe transports", async () => {
+    const fetchMock = installFetchMock();
+    const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
+    resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) => {
+      const close = vi.fn(async () => undefined);
+      closeSpies.push(close);
+      return {
+        fetch: proxyFetch ?? fetch,
+        sourceFetch: proxyFetch ?? fetch,
+        forceFallback: forceFallbackMock,
+        close,
+      };
+    });
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    for (let i = 0; i < 65; i += 1) {
+      mockGetMeSuccess(fetchMock);
+      mockGetWebhookInfoSuccess(fetchMock);
+      await probeTelegram(`${token}-cache-${i}`, timeoutMs, {
+        accountId: `account-${i}`,
+        network: {
+          autoSelectFamily: true,
+          dnsResultOrder: "ipv4first",
+        },
+      });
+    }
+
+    expect(resolveTelegramTransport).toHaveBeenCalledTimes(65);
+    expect(closeSpies[0]).toHaveBeenCalledTimes(1);
+    expect(closeSpies.slice(1).every((close) => close.mock.calls.length === 0)).toBe(true);
+  });
+
   it("reuses probe fetcher cache across token rotation when accountId is stable", async () => {
     const fetchMock = installFetchMock();
     vi.stubEnv("VITEST", "");
@@ -362,7 +410,7 @@ describe("probeTelegram retry logic", () => {
 
       const result = await probePromise;
       expect(result.ok).toBe(true);
-      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error");
+      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error", timeoutError);
       expect(fetchMock).toHaveBeenCalledTimes(3); // 1 failed + 1 getMe success + 1 webhook
     } finally {
       vi.useRealTimers();

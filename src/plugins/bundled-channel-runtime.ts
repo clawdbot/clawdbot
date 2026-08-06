@@ -1,6 +1,7 @@
 /** Loads bundled channel plugin runtime entries and setup metadata. */
 import fs from "node:fs";
 import path from "node:path";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-metadata.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
@@ -49,7 +50,7 @@ function resolveBundledMetadataScope(params?: {
     env: {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: overrideDir,
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      ...(isVitestRuntimeEnv() ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" } : {}),
     },
   };
 }
@@ -119,20 +120,4 @@ export function resolveBundledChannelGeneratedPath(
   scanDir?: string,
 ): string | null {
   return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir);
-}
-
-/** Resolves the source workspace path for a bundled channel plugin id. */
-export function resolveBundledChannelWorkspacePath(params: {
-  rootDir: string;
-  scanDir?: string;
-  pluginId: string;
-}): string | null {
-  return (
-    listBundledChannelPluginMetadata({
-      rootDir: params.rootDir,
-      ...(params.scanDir ? { scanDir: params.scanDir } : {}),
-      includeChannelConfigs: false,
-      includeSyntheticChannelConfigs: false,
-    }).find((metadata) => metadata.manifest.id === params.pluginId)?.rootDir ?? null
-  );
 }

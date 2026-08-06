@@ -11,6 +11,7 @@ import {
   HEARTBEAT_TRANSCRIPT_PROMPT,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
@@ -92,6 +93,18 @@ describe("isHeartbeatOkResponse", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
+    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
+  ])("matches acknowledgements with hidden %s blocks", (_label, thinkingBlock) => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
+      }),
+    ).toBe(true);
+  });
+
   it("preserves meaningful or non-text responses", () => {
     expect(
       isHeartbeatOkResponse({
@@ -157,11 +170,27 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ]);
   });
 
+  it.each([
+    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
+    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
+  ])("removes no-op heartbeat pairs with hidden %s blocks", (_label, thinkingBlock) => {
+    const nextUserMessage = { role: "user", content: "What time is it?" };
+    const messages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+      {
+        role: "assistant",
+        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
+      },
+      nextUserMessage,
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+      nextUserMessage,
+    ]);
+  });
+
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
-    for (const deliveryHint of [
-      "Delivery: to send a message, use the `message` tool.",
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-    ]) {
+    for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
       const messages = [
         {
           role: "user",

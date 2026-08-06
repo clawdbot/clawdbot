@@ -12,11 +12,11 @@ Adds Groq model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/groq-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/groq-provider`
 
 ## Surface
 
-providers: groq; contracts: mediaUnderstandingProviders
+providers: `groq`; contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 

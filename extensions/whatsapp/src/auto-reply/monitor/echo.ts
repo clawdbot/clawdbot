@@ -1,15 +1,17 @@
 // Whatsapp plugin module implements echo behavior.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 export type EchoTracker = {
   rememberText: (
     text: string | undefined,
     opts: {
       combinedBody?: string;
       combinedBodySessionKey?: string;
+      conversationId?: string;
       logVerboseMessage?: boolean;
     },
   ) => void;
-  has: (key: string) => boolean;
-  forget: (key: string) => void;
+  has: (key: string, conversationId?: string) => boolean;
+  forget: (key: string, conversationId?: string) => void;
   buildCombinedKey: (params: { sessionKey: string; combinedBody: string }) => string;
 };
 
@@ -22,6 +24,11 @@ export function createEchoTracker(params: {
 
   const buildCombinedKey = (p: { sessionKey: string; combinedBody: string }) =>
     `combined:${p.sessionKey}:${p.combinedBody}`;
+
+  // Native message echoes belong to one conversation; combined keys already
+  // contain their session scope and must remain directly addressable.
+  const buildTextKey = (text: string, conversationId?: string) =>
+    conversationId ? `${conversationId}\0${text}` : text;
 
   const trim = () => {
     while (recentlySent.size > maxItems) {
@@ -37,7 +44,7 @@ export function createEchoTracker(params: {
     if (!text) {
       return;
     }
-    recentlySent.add(text);
+    recentlySent.add(buildTextKey(text, opts.conversationId));
     if (opts.combinedBody && opts.combinedBodySessionKey) {
       recentlySent.add(
         buildCombinedKey({
@@ -48,7 +55,7 @@ export function createEchoTracker(params: {
     }
     if (opts.logVerboseMessage) {
       params.logVerbose?.(
-        `Added to echo detection set (size now: ${recentlySent.size}): ${text.slice(0, 50)}...`,
+        `Added to echo detection set (size now: ${recentlySent.size}): ${truncateUtf16Safe(text, 50)}...`,
       );
     }
     trim();
@@ -56,9 +63,9 @@ export function createEchoTracker(params: {
 
   return {
     rememberText,
-    has: (key) => recentlySent.has(key),
-    forget: (key) => {
-      recentlySent.delete(key);
+    has: (key, conversationId) => recentlySent.has(buildTextKey(key, conversationId)),
+    forget: (key, conversationId) => {
+      recentlySent.delete(buildTextKey(key, conversationId));
     },
     buildCombinedKey,
   };

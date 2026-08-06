@@ -48,7 +48,7 @@ internal fun isLoopbackGatewayHost(
   return isMappedIpv4 && address[12] == 127.toByte()
 }
 
-/** Allows cleartext only for loopback and private/link-local network ranges. */
+/** Allows cleartext only for loopback, `.local`, and private/link-local network ranges. */
 internal fun isLocalCleartextGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
@@ -62,6 +62,10 @@ internal fun isLocalCleartextGatewayHost(
   if (host.endsWith(".")) {
     host = host.dropLast(1)
   }
+  if (host.isEmpty()) return false
+  if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
+  if (isMdnsLocalHostname(host)) return true
+
   val zoneIndex = host.indexOf('%')
   if (zoneIndex >= 0) {
     // Link-local cleartext policy is about the address range; strip the
@@ -69,7 +73,6 @@ internal fun isLocalCleartextGatewayHost(
     host = host.substring(0, zoneIndex)
   }
   if (host.isEmpty()) return false
-  if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
 
   parseIpv4Address(host)?.let { ipv4 ->
     val first = ipv4[0].toInt() and 0xff
@@ -125,6 +128,20 @@ private fun parseIpv4Address(host: String): ByteArray? {
     bytes[index] = value.toByte()
   }
   return bytes
+}
+
+private fun isMdnsLocalHostname(host: String): Boolean {
+  if (host.length > 253) return false
+  if (!host.endsWith(".local")) return false
+  val labels = host.split('.')
+  if (labels.size < 2 || labels.last() != "local") return false
+  return labels.dropLast(1).all(::isDnsHostnameLabel)
+}
+
+private fun isDnsHostnameLabel(label: String): Boolean {
+  if (label.isEmpty() || label.length > 63) return false
+  if (label.first() == '-' || label.last() == '-') return false
+  return label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
 }
 
 /** Cheap prefilter before handing potential IPv6 literals to InetAddress. */

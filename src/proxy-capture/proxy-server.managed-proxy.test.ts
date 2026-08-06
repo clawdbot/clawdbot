@@ -5,11 +5,22 @@ import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DebugProxySettings } from "./env.js";
+import { startDebugProxyServer } from "./proxy-server.js";
+import { closeDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function cleanupTestDirs(): Promise<void> {
+  closeDebugProxyCaptureStore();
+  closeOpenClawStateDatabaseForTest();
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
   if (!testRoot) {
     return;
   }
@@ -18,16 +29,17 @@ async function cleanupTestDirs(): Promise<void> {
   await rm(root, { recursive: true, force: true });
 }
 
-async function makeSettings() {
+async function makeSettings(): Promise<DebugProxySettings> {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
   const certDir = join(testRoot, "certs");
   await mkdir(certDir, { recursive: true });
   await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
   await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
+  process.env.OPENCLAW_STATE_DIR = testRoot;
   return {
     enabled: true,
     required: false,
-    dbPath: ":memory:",
+    dbPath: join(testRoot, "capture.sqlite"),
     blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-managed-proxy-test",
@@ -35,7 +47,10 @@ async function makeSettings() {
   };
 }
 
-async function connectThroughProxy(proxyUrl: string): Promise<string> {
+async function connectThroughProxy(
+  proxyUrl: string,
+  connectTarget = "example.com:443",
+): Promise<string> {
   const target = new URL(proxyUrl);
   const socket = new Socket();
   let data = "";
@@ -47,7 +62,7 @@ async function connectThroughProxy(proxyUrl: string): Promise<string> {
     socket.once("error", reject);
     socket.connect(Number(target.port), target.hostname, resolve);
   });
-  socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
+  socket.write(`CONNECT ${connectTarget} HTTP/1.1\r\nHost: ${connectTarget}\r\n\r\n`);
   await new Promise<void>((resolve) => {
     socket.once("end", resolve);
   });
@@ -156,35 +171,25 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     await cleanupTestDirs();
   });
 
-  it("allows direct upstreams when managed proxy mode is inactive", () => {
-    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
-  });
-
-  it("rejects direct upstreams while managed proxy mode is active", () => {
-    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
-
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).toThrow(
-      /Debug proxy direct upstream forwarding is disabled/,
-    );
-  });
-
-  it("uses shared truthy parsing for managed proxy mode", () => {
-    process.env["OPENCLAW_PROXY_ACTIVE"] = "true";
-
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).toThrow(
-      /Debug proxy direct upstream forwarding is disabled/,
-    );
-  });
-
-  it("allows direct upstreams with explicit diagnostic override", () => {
+  it("allows HTTP upstreams with the explicit diagnostic override", async () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY"] = "1";
+    const origin = await startCanaryOrigin();
+    const server = await startDebugProxyServer({ settings: await makeSettings() });
+    try {
+      const response = await requestThroughProxy(server.proxyUrl, origin.url);
 
-    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
+      expect(response).toContain("200 OK");
+      expect(response).toContain("ok");
+      expect(origin.requestCount()).toBe(1);
+    } finally {
+      await server.stop();
+      await origin.stop();
+    }
   });
 
   it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {
-    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "true";
     const server = await startDebugProxyServer({ settings: await makeSettings() });
     try {
       const response = await connectThroughProxy(server.proxyUrl);
@@ -196,6 +201,33 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
       await server.stop();
     }
   });
+
+  it("accepts bracketed IPv6 CONNECT targets before applying upstream policy", async () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    const server = await startDebugProxyServer({ settings: await makeSettings() });
+    try {
+      const response = await connectThroughProxy(server.proxyUrl, "[::1]:8443");
+
+      expect(response).toContain("403 Forbidden");
+      expect(response).not.toContain("400 Bad Request");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it.each(["[::1]:99999", "api.openai.com:1e3", "api.openai.com:0x50"])(
+    "rejects invalid CONNECT target %s",
+    async (connectTarget) => {
+      const server = await startDebugProxyServer({ settings: await makeSettings() });
+      try {
+        const response = await connectThroughProxy(server.proxyUrl, connectTarget);
+
+        expect(response).toContain("400 Bad Request");
+      } finally {
+        await server.stop();
+      }
+    },
+  );
 
   it("rejects absolute-form HTTP proxy requests before opening direct upstreams while managed proxy mode is active", async () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";

@@ -1,5 +1,7 @@
 // Feishu plugin module implements channel behavior.
 import {
+  assertFeishuChatMember as assertFeishuChatMemberImpl,
+  buildFeishuDirectChatMembers as buildFeishuDirectChatMembersImpl,
   getChatInfo as getChatInfoImpl,
   getChatMembers as getChatMembersImpl,
   getFeishuMemberInfo as getFeishuMemberInfoImpl,
@@ -28,6 +30,8 @@ import {
 } from "./send.js";
 
 export const feishuChannelRuntime = {
+  assertFeishuChatMember: assertFeishuChatMemberImpl,
+  buildFeishuDirectChatMembers: buildFeishuDirectChatMembersImpl,
   listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveImpl,
   listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveImpl,
   feishuOutbound: { ...feishuOutboundImpl },

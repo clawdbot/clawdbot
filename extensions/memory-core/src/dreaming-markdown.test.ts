@@ -160,6 +160,117 @@ describe("dreaming markdown storage", () => {
     expect(content).toContain("# Deep Sleep");
     expect(content).toContain("- Promoted: durable preference");
 
-    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
+    const dreamsContent = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreamsContent).toContain("## Deep Sleep");
+    expect(dreamsContent).toContain("<!-- openclaw:dreaming:deep:start -->");
+    expect(dreamsContent).toContain("- Promoted: durable preference");
+  });
+
+  it("writes the deep summary to DREAMS.md without a separate report in inline mode", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+
+    const reportPath = await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Ranked 3 candidate(s) for durable promotion."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs: Date.parse("2026-04-05T10:00:00Z"),
+      timezone: "UTC",
+    });
+
+    expect(reportPath).toBeUndefined();
+    await expectPathMissing(path.join(workspaceDir, "memory", "dreaming", "deep", "2026-04-05.md"));
+    const dreamsContent = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(dreamsContent).toContain("## Deep Sleep");
+    expect(dreamsContent).toContain("- Ranked 3 candidate(s) for durable promotion.");
+  });
+
+  it("replaces the managed deep summary while preserving the diary block", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "",
+        "---",
+        "",
+        "*April 4, 2026, 3:00 AM*",
+        "",
+        "The old diary entry stays.",
+        "",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+        "## Deep Sleep",
+        "<!-- openclaw:dreaming:deep:start -->",
+        "- Old summary.",
+        "<!-- openclaw:dreaming:deep:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- New summary."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs,
+      timezone,
+    });
+
+    const dreamsContent = await fs.readFile(dreamsPath, "utf-8");
+    expect(dreamsContent).toContain("The old diary entry stays.");
+    expect(dreamsContent).toContain("- New summary.");
+    expect(dreamsContent).not.toContain("- Old summary.");
+  });
+
+  it("reuses existing lowercase dreams.md for deep summaries", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const lowercasePath = path.join(workspaceDir, "dreams.md");
+    await fs.writeFile(lowercasePath, "# Existing dreams\n", "utf-8");
+
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Lowercase target."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs,
+      timezone,
+    });
+
+    const dreamsContent = await fs.readFile(lowercasePath, "utf-8");
+    expect(dreamsContent).toContain("# Existing dreams");
+    expect(dreamsContent).toContain("- Lowercase target.");
+  });
+
+  it("refuses to overwrite a symlinked DREAMS.md for deep summaries", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
+    const targetPath = path.join(workspaceDir, "outside.txt");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(targetPath, "outside\n", "utf-8");
+    await fs.symlink(targetPath, dreamsPath);
+
+    await expect(
+      writeDeepDreamingReport({
+        workspaceDir,
+        bodyLines: ["- Do not escape workspace."],
+        storage: {
+          mode: "inline",
+          separateReports: false,
+        },
+        nowMs,
+        timezone,
+      }),
+    ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
+    await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
   });
 });

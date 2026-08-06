@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Generate Plugin Sdk Api Baseline script supports OpenClaw repository automation.
 import path from "node:path";
-import { writePluginSdkApiBaselineStatefile } from "../src/plugin-sdk/api-baseline.ts";
+import { writePluginSdkApiBaselineArtifacts } from "../src/plugin-sdk/api-baseline.ts";
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
@@ -15,19 +15,15 @@ if (checkOnly === writeMode) {
 const repoRoot = process.cwd();
 
 async function main(): Promise<void> {
-  const result = await writePluginSdkApiBaselineStatefile({
-    repoRoot,
-    check: checkOnly,
-  });
-
+  const result = await writePluginSdkApiBaselineArtifacts({ repoRoot, check: checkOnly });
   if (checkOnly) {
     if (result.changed) {
       console.error(
         [
-          "Plugin SDK API baseline drift detected.",
-          `Hash mismatch: ${path.relative(repoRoot, result.hashPath)}`,
-          "If this Plugin SDK surface change is intentional, run `pnpm plugin-sdk:api:gen` and commit the updated hash file.",
-          "If not intentional, treat this as API drift and fix the plugin-sdk exports or metadata first.",
+          "Plugin SDK API contract drift detected.",
+          `Manifest mismatch: ${path.relative(repoRoot, result.hashPath)}`,
+          "If this Plugin SDK surface change is intentional, run `pnpm plugin-sdk:api:gen` and commit the updated manifest.",
+          "If not intentional, fix the plugin-sdk exports or metadata first.",
         ].join("\n"),
       );
       process.exit(1);

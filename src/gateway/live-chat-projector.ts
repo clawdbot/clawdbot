@@ -1,3 +1,4 @@
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Gateway live chat projector.
 // Converts streaming assistant events into display-safe live chat text.
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
@@ -11,15 +12,33 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   isSuppressedControlReplyLeadFragment,
   isSuppressedControlReplyText,
+  stripSuppressedControlReplyToken,
 } from "./control-reply-text.js";
 
-export const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
+const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
+
+/** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
+export function resolveAssistantLiveChatInput(
+  data: unknown,
+): { text: string; delta: string } | undefined {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const record = data as { text?: unknown; delta?: unknown };
+  if (typeof record.text !== "string" && typeof record.delta !== "string") {
+    return undefined;
+  }
+  return {
+    text: typeof record.text === "string" ? record.text : "",
+    delta: typeof record.delta === "string" ? record.delta : "",
+  };
+}
 
 function capLiveAssistantBuffer(text: string): string {
   if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
     return text;
   }
-  return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
+  return sliceUtf16Safe(text, -MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
 /** Merges assistant full-text and delta events into a capped live buffer. */
@@ -46,18 +65,9 @@ export function resolveMergedAssistantText(params: {
   return capLiveAssistantBuffer(previousText);
 }
 
-/** Removes runtime-only context/directive tags from live assistant event text. */
-export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
-  text: string;
-  delta: string;
-} {
-  return {
-    text: stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(params.text).text),
-    delta:
-      typeof params.delta === "string"
-        ? stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(params.delta).text)
-        : "",
-  };
+/** Removes runtime-only context/directive tags from the merged live assistant buffer. */
+export function normalizeLiveAssistantBufferedText(text: string): string {
+  return stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
 }
 
 /** Projects buffered assistant text into display text or a suppressed/pending state. */
@@ -78,9 +88,13 @@ export function projectLiveAssistantBufferedText(
   if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(rawText)) {
     return { text: rawText, suppress: true, pendingLeadFragment: true };
   }
-  const text = startsWithSilentToken(rawText, SILENT_REPLY_TOKEN)
-    ? stripLeadingSilentToken(rawText, SILENT_REPLY_TOKEN)
-    : rawText;
+  const withoutTrailingControlToken = stripSuppressedControlReplyToken(rawText);
+  if (!withoutTrailingControlToken) {
+    return { text: "", suppress: true, pendingLeadFragment: false };
+  }
+  const text = startsWithSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
+    ? stripLeadingSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
+    : withoutTrailingControlToken;
   if (!text || isSuppressedControlReplyText(text)) {
     return { text: "", suppress: true, pendingLeadFragment: false };
   }

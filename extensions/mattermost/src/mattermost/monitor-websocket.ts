@@ -1,12 +1,13 @@
 // Mattermost plugin module implements monitor websocket behavior.
 import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import WebSocket from "ws";
+import WebSocket, { type ClientOptions } from "ws";
 import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
@@ -14,8 +15,10 @@ import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
 
 export type MattermostEventPayload = {
   event?: string;
+  status?: string;
+  seq_reply?: number;
   data?: {
-    post?: string | MattermostPost;
+    post?: unknown;
     reaction?: string | Record<string, unknown>;
     channel_id?: string;
     channel_name?: string;
@@ -31,7 +34,7 @@ export type MattermostEventPayload = {
   };
 };
 
-export type MattermostWebSocketLike = {
+type MattermostWebSocketLike = {
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: WebSocket.RawData) => void | Promise<void>): void;
   on(event: "pong", listener: (data: Buffer) => void): void;
@@ -43,12 +46,25 @@ export type MattermostWebSocketLike = {
   terminate(): void;
 };
 
-export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+type MattermostWebSocketClientOptions = Pick<ClientOptions, "handshakeTimeout" | "maxPayload">;
+
+export type MattermostWebSocketFactory = (
+  url: string,
+  options: MattermostWebSocketClientOptions,
+) => MattermostWebSocketLike;
+// Mattermost events can include double-encoded post props plus server/plugin metadata.
+// Keep channel-compatible headroom while bounding ws's 100 MiB default before parsing.
+const MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+// A TCP peer can accept without completing the HTTP upgrade; ws has no default deadline.
+const MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
+  status: z.string().optional(),
+  seq_reply: z.number().optional(),
   data: z
     .object({
-      post: z.union([z.string(), MattermostPostSchema]).optional(),
+      // Durable ingress validates the post only after claiming the raw envelope.
+      post: z.unknown().optional(),
       reaction: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
       channel_id: z.string().optional(),
       channel_name: z.string().optional(),
@@ -67,18 +83,18 @@ const MattermostEventPayloadSchema = z.object({
     .optional(),
 }) as z.ZodType<MattermostEventPayload>;
 
-function parseMattermostEventPayload(raw: string): MattermostEventPayload | null {
+export function parseMattermostEventPayload(raw: string): MattermostEventPayload | null {
   return safeParseJsonWithSchema(MattermostEventPayloadSchema, raw);
 }
 
-function parseMattermostPost(value: unknown): MattermostPost | null {
+export function parseMattermostPost(value: unknown): MattermostPost | null {
   if (typeof value === "string") {
     return safeParseJsonWithSchema(MattermostPostSchema, value);
   }
   return safeParseWithSchema(MattermostPostSchema, value);
 }
 
-export class WebSocketClosedBeforeOpenError extends Error {
+class WebSocketClosedBeforeOpenError extends Error {
   constructor(
     public readonly code: number,
     public readonly reason?: string,
@@ -95,7 +111,7 @@ type CreateMattermostConnectOnceOpts = {
   statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
   runtime: RuntimeEnv;
   nextSeq: () => number;
-  onPosted: (post: MattermostPost, payload: MattermostEventPayload) => Promise<void>;
+  onPosted: (rawEvent: string) => Promise<void>;
   onReaction?: (payload: MattermostEventPayload) => Promise<void>;
   webSocketFactory?: MattermostWebSocketFactory;
   /**
@@ -111,27 +127,13 @@ type CreateMattermostConnectOnceOpts = {
   pongTimeoutMs?: number;
 };
 
-const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
+const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url, options) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-  return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
+  return new WebSocket(url, {
+    ...options,
+    ...(agent ? { agent } : {}),
+  }) as MattermostWebSocketLike;
 };
-
-function parsePostedPayload(
-  payload: MattermostEventPayload,
-): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  if (payload.event !== "posted") {
-    return null;
-  }
-  const postData = payload.data?.post;
-  if (!postData) {
-    return null;
-  }
-  const post = parseMattermostPost(postData);
-  if (!post) {
-    return null;
-  }
-  return { payload, post };
-}
 
 export function createMattermostConnectOnce(
   opts: CreateMattermostConnectOnceOpts,
@@ -142,7 +144,10 @@ export function createMattermostConnectOnce(
   const pongTimeoutMs = opts.pongTimeoutMs ?? 10_000;
   return async () => {
     const flowId = randomUUID();
-    const ws = webSocketFactory(opts.wsUrl);
+    const ws = webSocketFactory(opts.wsUrl, {
+      maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
+      handshakeTimeout: MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
+    });
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
     const getBotUpdateAt = opts.getBotUpdateAt;
@@ -158,6 +163,7 @@ export function createMattermostConnectOnce(
         let protocolPingTimer: ReturnType<typeof setTimeout> | undefined;
         let protocolPongTimer: ReturnType<typeof setTimeout> | undefined;
         let initialUpdateAt: number | undefined;
+        let authenticationSeq: number | undefined;
 
         const clearTimers = () => {
           if (healthCheckTimer !== undefined) {
@@ -292,11 +298,11 @@ export function createMattermostConnectOnce(
           });
           opts.statusSink?.({
             connected: true,
-            lastConnectedAt: Date.now(),
-            lastError: null,
+            lifecycle: "starting",
           });
+          authenticationSeq = opts.nextSeq();
           const authPayload = JSON.stringify({
-            seq: opts.nextSeq(),
+            seq: authenticationSeq,
             action: "authentication_challenge",
             data: { token: opts.botToken },
           });
@@ -344,6 +350,11 @@ export function createMattermostConnectOnce(
             return;
           }
 
+          if (payload.status === "OK" && payload.seq_reply === authenticationSeq) {
+            opts.statusSink?.(channelReadyPatch());
+            return;
+          }
+
           if (payload.event === "reaction_added" || payload.event === "reaction_removed") {
             if (!opts.onReaction) {
               return;
@@ -359,14 +370,17 @@ export function createMattermostConnectOnce(
           if (payload.event !== "posted") {
             return;
           }
-          const parsed = parsePostedPayload(payload);
-          if (!parsed) {
-            return;
-          }
           try {
-            await opts.onPosted(parsed.post, parsed.payload);
+            await opts.onPosted(raw);
           } catch (err) {
-            opts.runtime.error?.(`mattermost handler failed: ${String(err)}`);
+            // Durable admission failed after retries: this post is lost and the
+            // websocket cannot nack or replay. Tear the connection down loudly
+            // so the outage is operator-visible instead of silently dropping
+            // every subsequent post against a broken store.
+            opts.runtime.error?.(
+              `mattermost durable admission failed; terminating websocket: ${String(err)}`,
+            );
+            ws.terminate();
           }
         });
 
@@ -384,6 +398,7 @@ export function createMattermostConnectOnce(
           const message = reasonToString(reason);
           opts.statusSink?.({
             connected: false,
+            lifecycle: "recovering",
             lastDisconnect: {
               at: Date.now(),
               status: code,
@@ -408,6 +423,8 @@ export function createMattermostConnectOnce(
           });
           opts.runtime.error?.(`mattermost websocket error: ${String(err)}`);
           opts.statusSink?.({
+            connected: false,
+            lifecycle: "recovering",
             lastError: String(err),
           });
           try {

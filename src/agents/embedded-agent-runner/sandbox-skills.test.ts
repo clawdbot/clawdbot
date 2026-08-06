@@ -9,6 +9,7 @@ import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-ru
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 
@@ -95,8 +96,32 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
+  it("maps materialized read paths while preserving original file identities", () => {
+    expect(
+      mapSandboxSkillUsagePaths({
+        paths: [
+          {
+            readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
+            skillFile: "/agent-workspace/skills/demo/SKILL.md",
+            skillName: "demo",
+            skillSource: "workspace",
+          },
+        ],
+        skillsWorkspaceDir: "/state/sandbox-skills",
+        skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
+      }),
+    ).toEqual([
+      {
+        readPath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        skillFile: "/agent-workspace/skills/demo/SKILL.md",
+        skillName: "demo",
+        skillSource: "workspace",
+      },
+    ]);
+  });
+
   it("rebuilds sandbox prompts from materialized skill paths", async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     try {
       const effectiveWorkspace = path.join(root, "workspace");
       const materializedWorkspace = path.join(root, "state", "sandbox-skills");
@@ -160,7 +185,9 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       });
 
       expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
-      expect(prompt.replaceAll("\\", "/")).not.toContain(materializedWorkspace.replaceAll("\\", "/"));
+      expect(prompt.replaceAll("\\", "/")).not.toContain(
+        materializedWorkspace.replaceAll("\\", "/"),
+      );
       expect(prompt).not.toContain(hostSkillPath);
       expect(prompt).not.toContain("plugin-skills");
       expect(prompt.replaceAll("\\", "/")).not.toContain("/skills/canvas/SKILL.md");

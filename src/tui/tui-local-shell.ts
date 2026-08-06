@@ -1,7 +1,11 @@
 // Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
-import type { Component, SelectItem } from "@earendil-works/pi-tui";
+import { StringDecoder } from "node:string_decoder";
+import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalShellDeps = {
   chatLog: {
@@ -10,8 +14,8 @@ type LocalShellDeps = {
   tui: {
     requestRender: () => void;
   };
-  openOverlay: (component: Component) => void;
-  closeOverlay: () => void;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
   createSelector?: (
     items: SelectItem[],
     maxVisible: number,
@@ -20,7 +24,7 @@ type LocalShellDeps = {
     onCancel?: () => void;
   };
   spawnCommand?: typeof spawn;
-  getCwd?: () => string;
+  getCwd?: () => string | undefined;
   env?: NodeJS.ProcessEnv;
   maxOutputChars?: number;
 };
@@ -30,7 +34,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let localExecAllowed = false;
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const spawnCommand = deps.spawnCommand ?? spawn;
-  const getCwd = deps.getCwd ?? (() => process.cwd());
+  const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
   const maxChars = deps.maxOutputChars ?? 40_000;
 
@@ -56,8 +60,8 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         ],
         2,
       );
-      selector.onSelect = (item) => {
-        deps.closeOverlay();
+      selector.onSelect = (item: SelectItem) => {
+        deps.closeOverlay(overlayHandle);
         if (item.value === "yes") {
           localExecAllowed = true;
           deps.chatLog.addSystem("local shell: enabled for this session");
@@ -69,12 +73,12 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         deps.tui.requestRender();
       };
       selector.onCancel = () => {
-        deps.closeOverlay();
+        deps.closeOverlay(overlayHandle);
         deps.chatLog.addSystem("local shell: cancelled");
         deps.tui.requestRender();
         resolve(false);
       };
-      deps.openOverlay(selector);
+      const overlayHandle: OverlayHandle = deps.openOverlay(selector);
       deps.tui.requestRender();
     });
   };
@@ -98,12 +102,22 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       return;
     }
 
+    // A shell command's meaning depends on its directory; never retarget it implicitly.
+    const cwd = getCwd();
+    if (!cwd) {
+      deps.chatLog.addSystem(
+        "local shell: working directory was deleted; cd to an existing directory first",
+      );
+      deps.tui.requestRender();
+      return;
+    }
+
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
     const appendWithCap = (text: string, chunk: string) => {
       const combined = text + chunk;
-      return combined.length > maxChars ? combined.slice(-maxChars) : combined;
+      return combined.length > maxChars ? sliceUtf16Safe(combined, -maxChars) : combined;
     };
 
     await new Promise<void>((resolve) => {
@@ -111,38 +125,50 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
         // and is gated behind an explicit in-session approval prompt.
         shell: true,
-        cwd: getCwd(),
+        cwd,
         env: { ...env, OPENCLAW_SHELL: "tui-local" },
       });
 
       let stdout = "";
       let stderr = "";
+      let error: Error | undefined;
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
+      // Pipe errors are incidental; close owns completion after any recorded spawn error.
+      const ignoreOutputStreamError = () => {};
+      child.stdout.on("error", ignoreOutputStreamError);
+      child.stderr.on("error", ignoreOutputStreamError);
       child.stdout.on("data", (buf) => {
-        stdout = appendWithCap(stdout, buf.toString("utf8"));
+        stdout = appendWithCap(stdout, stdoutDecoder.write(buf));
       });
       child.stderr.on("data", (buf) => {
-        stderr = appendWithCap(stderr, buf.toString("utf8"));
+        stderr = appendWithCap(stderr, stderrDecoder.write(buf));
       });
 
       child.on("close", (code, signal) => {
-        const combined = (stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""))
-          .slice(0, maxChars)
-          .trimEnd();
+        stdout = appendWithCap(stdout, stdoutDecoder.end());
+        stderr = appendWithCap(stderr, stderrDecoder.end());
+        // Keep the tail (consistent with the streaming appendWithCap above) so a
+        // large stdout cannot evict stderr: the failure reason (FATAL etc.) at the
+        // end is what the operator needs most when output overflows the cap.
+        const combined = sliceUtf16Safe(
+          stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""),
+          -maxChars,
+        ).trimEnd();
 
         if (combined) {
           for (const lineLocal of combined.split("\n")) {
             deps.chatLog.addSystem(`[local] ${lineLocal}`);
           }
         }
-        deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
+        const status = error ? `error: ${formatTuiErrorMessage(error)}` : `exit ${code ?? "?"}`;
+        deps.chatLog.addSystem(`[local] ${status}${signal ? ` (signal ${signal})` : ""}`);
         deps.tui.requestRender();
         resolve();
       });
 
       child.on("error", (err) => {
-        deps.chatLog.addSystem(`[local] error: ${String(err)}`);
-        deps.tui.requestRender();
-        resolve();
+        error = err;
       });
     });
   };

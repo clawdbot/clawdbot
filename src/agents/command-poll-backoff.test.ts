@@ -2,35 +2,12 @@
 import { describe, expect, it } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
-  calculateBackoffMs,
-  getCommandPollSuggestion,
   pruneStaleCommandPolls,
   recordCommandPoll,
   resetCommandPollCount,
 } from "./command-poll-backoff.js";
 
 describe("command-poll-backoff", () => {
-  describe("calculateBackoffMs", () => {
-    it("returns 5s for first poll", () => {
-      expect(calculateBackoffMs(0)).toBe(5000);
-    });
-
-    it("returns 10s for second poll", () => {
-      expect(calculateBackoffMs(1)).toBe(10000);
-    });
-
-    it("returns 30s for third poll", () => {
-      expect(calculateBackoffMs(2)).toBe(30000);
-    });
-
-    it("returns 60s for fourth and subsequent polls (capped)", () => {
-      expect(calculateBackoffMs(3)).toBe(60000);
-      expect(calculateBackoffMs(4)).toBe(60000);
-      expect(calculateBackoffMs(10)).toBe(60000);
-      expect(calculateBackoffMs(100)).toBe(60000);
-    });
-  });
-
   describe("recordCommandPoll", () => {
     it("returns 5s on first no-output poll", () => {
       const state: SessionState = {
@@ -91,30 +68,6 @@ describe("command-poll-backoff", () => {
 
       expect(state.commandPollCounts?.get("cmd-1")?.count).toBe(1); // 2 polls = index 1
       expect(state.commandPollCounts?.get("cmd-2")?.count).toBe(0); // 1 poll = index 0
-    });
-  });
-
-  describe("getCommandPollSuggestion", () => {
-    it("returns undefined for untracked command", () => {
-      const state: SessionState = {
-        lastActivity: Date.now(),
-        state: "processing",
-        queueDepth: 0,
-      };
-      expect(getCommandPollSuggestion(state, "unknown")).toBeUndefined();
-    });
-
-    it("returns current backoff for tracked command", () => {
-      const state: SessionState = {
-        lastActivity: Date.now(),
-        state: "processing",
-        queueDepth: 0,
-      };
-
-      recordCommandPoll(state, "cmd-123", false);
-      recordCommandPoll(state, "cmd-123", false);
-
-      expect(getCommandPollSuggestion(state, "cmd-123")).toBe(10000);
     });
   });
 

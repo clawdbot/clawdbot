@@ -36,10 +36,131 @@ function createElementProgram(): Command {
   return program;
 }
 
+function getLastActionBody(): Record<string, unknown> | undefined {
+  return (mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as { body?: Record<string, unknown> })
+    ?.body;
+}
+
 describe("browser element commands", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it.each([
+    {
+      name: "click",
+      argv: [
+        "browser",
+        "click",
+        " ref-1 ",
+        "--target-id",
+        "tab-1",
+        "--double",
+        "--button",
+        "right",
+        "--modifiers",
+        "Shift, Alt",
+      ],
+      expectedBody: {
+        kind: "click",
+        ref: "ref-1",
+        targetId: "tab-1",
+        doubleClick: true,
+        button: "right",
+        modifiers: ["Shift", "Alt"],
+      },
+    },
+    {
+      name: "click-coords",
+      argv: [
+        "browser",
+        "click-coords",
+        "12.5",
+        "42",
+        "--target-id",
+        "tab-2",
+        "--double",
+        "--button",
+        "middle",
+        "--delay-ms",
+        "25",
+      ],
+      expectedBody: {
+        kind: "clickCoords",
+        x: 12.5,
+        y: 42,
+        targetId: "tab-2",
+        doubleClick: true,
+        button: "middle",
+        delayMs: 25,
+      },
+    },
+    {
+      name: "type",
+      argv: ["browser", "type", "input-1", "hello", "--submit", "--slowly", "--target-id", "tab-2"],
+      expectedBody: {
+        kind: "type",
+        ref: "input-1",
+        text: "hello",
+        submit: true,
+        slowly: true,
+        targetId: "tab-2",
+      },
+    },
+    {
+      name: "press",
+      argv: ["browser", "press", "Enter", "--target-id", "tab-3"],
+      expectedBody: { kind: "press", key: "Enter", targetId: "tab-3" },
+    },
+    {
+      name: "hover",
+      argv: ["browser", "hover", "node-1", "--target-id", "tab-4"],
+      expectedBody: { kind: "hover", ref: "node-1", targetId: "tab-4" },
+    },
+    {
+      name: "scrollintoview",
+      argv: ["browser", "scrollintoview", "node-2", "--target-id", "tab-5"],
+      expectedBody: { kind: "scrollIntoView", ref: "node-2", targetId: "tab-5" },
+    },
+    {
+      name: "drag",
+      argv: ["browser", "drag", "start-1", "end-1", "--target-id", "tab-6"],
+      expectedBody: {
+        kind: "drag",
+        startRef: "start-1",
+        endRef: "end-1",
+        targetId: "tab-6",
+      },
+    },
+    {
+      name: "select",
+      argv: ["browser", "select", "select-1", "alpha", "beta", "--target-id", "tab-7"],
+      expectedBody: {
+        kind: "select",
+        ref: "select-1",
+        values: ["alpha", "beta"],
+        targetId: "tab-7",
+      },
+    },
+  ])("sends the expected $name action body", async ({ argv, expectedBody }) => {
+    const program = createElementProgram();
+
+    await program.parseAsync(argv, { from: "user" });
+
+    expect(getLastActionBody()).toMatchObject(expectedBody);
+  });
+
+  it("rejects a blank required ref before dispatch", async () => {
+    const program = createElementProgram();
+
+    await expect(program.parseAsync(["browser", "click", "   "], { from: "user" })).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    const capture = getBrowserCliRuntimeCapture();
+    expect(capture.runtimeErrors.join("\n")).toContain("ref is required");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
   it("rejects non-decimal coordinate values before dispatch", async () => {

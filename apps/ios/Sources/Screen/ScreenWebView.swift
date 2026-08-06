@@ -125,7 +125,7 @@ final class ScreenWebViewCoordinator: NSObject {
 
 // MARK: - Navigation Delegate
 
-/// Handles navigation policy to intercept openclaw:// deep links from canvas
+/// Handles navigation policy to intercept OpenClaw deep links from canvas.
 @MainActor
 private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
     weak var controller: ScreenController?
@@ -140,8 +140,8 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
             return
         }
 
-        // Intercept openclaw:// deep links.
-        if url.scheme?.lowercased() == "openclaw" {
+        let scheme = url.scheme?.lowercased()
+        if scheme == "openclaw" || scheme == "openclaw-debug" {
             decisionHandler(.cancel)
             self.controller?.onDeepLink?(url)
             return

@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
@@ -108,5 +109,14 @@ describe("resolveHighSignalLiveModelLimit", () => {
         defaultLimit: 5,
       }),
     ).toBe(0);
+  });
+});
+
+describe("live model priorities", () => {
+  it("includes the always-thinking Moonshot K3 route", () => {
+    expect(listPrioritizedHighSignalLiveModelRefs()).toContainEqual({
+      provider: "moonshot",
+      id: "kimi-k3",
+    });
   });
 });

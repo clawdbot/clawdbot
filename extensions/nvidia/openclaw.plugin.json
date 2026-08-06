@@ -1,5 +1,6 @@
 {
   "id": "nvidia",
+  "icon": "https://cdn.simpleicons.org/nvidia",
   "activation": {
     "onStartup": false
   },
@@ -27,10 +28,11 @@
         "models": [
           {
             "id": "nvidia/nemotron-3-ultra-550b-a55b",
-            "name": "NVIDIA Nemotron 3 Ultra 550B",
+            "name": "Nemotron 3 Ultra 550B",
             "input": ["text"],
-            "contextWindow": 1000000,
-            "maxTokens": 16384,
+            "reasoning": true,
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
             "cost": {
               "input": 0,
               "output": 0,
@@ -43,9 +45,10 @@
           },
           {
             "id": "nvidia/nemotron-3-super-120b-a12b",
-            "name": "NVIDIA Nemotron 3 Super 120B",
+            "name": "Nemotron 3 Super 120B",
             "input": ["text"],
-            "contextWindow": 262144,
+            "reasoning": true,
+            "contextWindow": 1000000,
             "maxTokens": 8192,
             "cost": {
               "input": 0,
@@ -58,11 +61,30 @@
             }
           },
           {
-            "id": "moonshotai/kimi-k2.5",
-            "name": "Kimi K2.5",
+            "id": "z-ai/glm-5.2",
+            "name": "GLM 5.2",
             "input": ["text"],
-            "contextWindow": 262144,
+            "reasoning": true,
+            "contextWindow": 202752,
             "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "moonshotai/kimi-k2.6",
+            "name": "Kimi K2.6",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 262144,
+            "maxTokens": 65536,
             "cost": {
               "input": 0,
               "output": 0,
@@ -74,9 +96,10 @@
             }
           },
           {
-            "id": "minimaxai/minimax-m2.7",
-            "name": "Minimax M2.7",
-            "input": ["text"],
+            "id": "minimaxai/minimax-m3",
+            "name": "Minimax M3",
+            "input": ["text", "image"],
+            "reasoning": true,
             "contextWindow": 196608,
             "maxTokens": 8192,
             "cost": {
@@ -88,6 +111,63 @@
             "compat": {
               "requiresStringContent": true
             }
+          },
+          {
+            "id": "deepseek-ai/deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 262144,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "qwen/qwen3.5-397b-a17b",
+            "name": "Qwen3.5 397B A17B",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "NVIDIA retired this model and no longer lists it in its model catalog."
+          },
+          {
+            "id": "moonshotai/kimi-k2.5",
+            "name": "Kimi K2.5",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use moonshotai/kimi-k2.6 for new NVIDIA setups.",
+            "replacedBy": "moonshotai/kimi-k2.6"
           },
           {
             "id": "z-ai/glm-5.1",
@@ -102,27 +182,12 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
-            }
-          },
-          {
-            "id": "minimaxai/minimax-m2.5",
-            "name": "MiniMax M2.5",
-            "input": ["text"],
-            "contextWindow": 196608,
-            "maxTokens": 8192,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "codeMode": "capable"
             },
             "status": "deprecated",
-            "statusReason": "Shipped compatibility row; use minimaxai/minimax-m2.7 for new NVIDIA setups.",
-            "replacedBy": "minimaxai/minimax-m2.7"
+            "statusReason": "Still available by exact reference; use z-ai/glm-5.2 for new NVIDIA setups.",
+            "replacedBy": "z-ai/glm-5.2"
           },
           {
             "id": "z-ai/glm5",
@@ -140,14 +205,34 @@
               "requiresStringContent": true
             },
             "status": "deprecated",
-            "statusReason": "Shipped compatibility row; use z-ai/glm-5.1 for new NVIDIA setups.",
-            "replacedBy": "z-ai/glm-5.1"
+            "statusReason": "Still available by exact reference; use z-ai/glm-5.2 for new NVIDIA setups.",
+            "replacedBy": "z-ai/glm-5.2"
+          },
+          {
+            "id": "minimaxai/minimax-m2.7",
+            "name": "Minimax M2.7",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 204800,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use minimaxai/minimax-m3 for new NVIDIA setups.",
+            "replacedBy": "minimaxai/minimax-m3"
           }
         ]
       }
     },
     "discovery": {
-      "nvidia": "static"
+      "nvidia": "refreshable"
     }
   },
   "setup": {
@@ -163,6 +248,7 @@
       "provider": "nvidia",
       "method": "api-key",
       "choiceId": "nvidia-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "NVIDIA API key",
       "groupId": "nvidia",
       "groupLabel": "NVIDIA",

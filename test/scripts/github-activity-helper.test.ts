@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { writeNodeBackedJq } from "./test-helpers.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const helperPath = path.join(
@@ -25,6 +26,7 @@ function runHelper(args: string[]) {
   const logPath = path.join(dir, "gh.log");
   const ghPath = path.join(binDir, "gh");
   mkdirSync(binDir);
+  writeNodeBackedJq(binDir);
   writeFileSync(
     ghPath,
     `#!/usr/bin/env bash
@@ -58,6 +60,7 @@ exit 64
     env: {
       ...process.env,
       FAKE_GH_LOG: logPath,
+      OPENCLAW_GH_BIN: ghPath,
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
     },
   });

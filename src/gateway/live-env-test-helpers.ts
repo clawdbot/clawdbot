@@ -1,7 +1,7 @@
 /**
  * Environment snapshot helpers for live gateway tests.
  */
-import { setTestEnvValue } from "../test-utils/env.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 const COMMON_LIVE_ENV_NAMES = [
   "OPENCLAW_AGENT_RUNTIME",
@@ -32,7 +32,7 @@ export function snapshotLiveEnv(extraNames: readonly string[] = []): LiveEnvSnap
 export function restoreLiveEnv(snapshot: LiveEnvSnapshot): void {
   for (const [name, value] of Object.entries(snapshot)) {
     if (value === undefined) {
-      delete process.env[name];
+      deleteTestEnvValue(name);
     } else {
       setTestEnvValue(name, value);
     }

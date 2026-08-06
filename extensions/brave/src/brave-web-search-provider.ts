@@ -3,6 +3,7 @@
  * lazy-loads HTTP execution only when a search is run.
  */
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SearchConfigRecord,
   WebSearchProviderPlugin,
@@ -15,14 +16,9 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildBraveWebSearchProviderBase } from "../web-search-shared.js";
 
-type BraveWebSearchRuntime = typeof import("./brave-web-search-provider.runtime.js");
-
-let braveWebSearchRuntimePromise: Promise<BraveWebSearchRuntime> | undefined;
-
-function loadBraveWebSearchRuntime(): Promise<BraveWebSearchRuntime> {
-  braveWebSearchRuntimePromise ??= import("./brave-web-search-provider.runtime.js");
-  return braveWebSearchRuntimePromise;
-}
+const loadBraveWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./brave-web-search-provider.runtime.js"),
+);
 
 const BraveSearchSchema = {
   type: "object",
@@ -86,9 +82,13 @@ function createBraveToolDefinition(
         ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
         : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
     parameters: BraveSearchSchema,
-    execute: async (args) => {
+    execute: async (args, context) => {
+      context?.signal?.throwIfAborted();
       const { executeBraveSearch } = await loadBraveWebSearchRuntime();
-      return await executeBraveSearch(args, searchConfig, { diagnosticsEnabled });
+      return await executeBraveSearch(args, searchConfig, {
+        diagnosticsEnabled,
+        signal: context?.signal,
+      });
     },
   };
 }

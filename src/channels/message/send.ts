@@ -43,13 +43,13 @@ export type DurableMessageBatchSendParams = Omit<
   previousReceipt?: MessageReceipt;
 };
 
-export type DurableMessageSuppressionReason =
+type DurableMessageSuppressionReason =
   | OutboundPayloadDeliverySuppressionReason
   | "no_visible_result";
 
-export type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
+type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
 
-export type DurableMessagePayloadDeliveryOutcome =
+type DurableMessagePayloadDeliveryOutcome =
   | {
       index: number;
       status: "sent";
@@ -104,7 +104,58 @@ export type DurableMessageBatchSendResult =
       payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
     };
 
-export type DurableMessageDeliveryOutcome = DurableMessageBatchSendResult;
+export type SerializedDurableMessagePayloadOutcome =
+  | { index: number; status: "sent"; resultCount: number }
+  | {
+      index: number;
+      status: "suppressed";
+      reason: DurableMessageSuppressionReason;
+      hookEffect?: {
+        cancelReason?: string;
+        metadata?: Record<string, unknown>;
+      };
+    }
+  | {
+      index: number;
+      status: "failed";
+      error: string;
+      sentBeforeError: boolean;
+      stage: DurableMessageFailureStage;
+    };
+
+export function serializeDurableMessagePayloadOutcomes(
+  outcomes: DurableMessageBatchSendResult["payloadOutcomes"],
+  options?: {
+    /** Internal diagnostics may retain hook metadata; model-facing JSON results must omit it. */
+    includeHookEffect?: boolean;
+  },
+): SerializedDurableMessagePayloadOutcome[] | undefined {
+  if (!outcomes || outcomes.length === 0) {
+    return undefined;
+  }
+  return outcomes.map((outcome): SerializedDurableMessagePayloadOutcome => {
+    if (outcome.status === "sent") {
+      return { index: outcome.index, status: "sent", resultCount: outcome.results.length };
+    }
+    if (outcome.status === "suppressed") {
+      return {
+        index: outcome.index,
+        status: "suppressed",
+        reason: outcome.reason,
+        ...(options?.includeHookEffect === true && outcome.hookEffect
+          ? { hookEffect: outcome.hookEffect }
+          : {}),
+      };
+    }
+    return {
+      index: outcome.index,
+      status: "failed",
+      error: formatErrorMessage(outcome.error),
+      sentBeforeError: outcome.sentBeforeError,
+      stage: outcome.stage,
+    };
+  });
+}
 
 const neverAbortedSignal = new AbortController().signal;
 
@@ -136,6 +187,8 @@ function toDurablePayloadOutcomes(
 
 export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   durability?: Exclude<MessageDurabilityPolicy, "disabled">;
+  /** Runs after the durable queue intent exists and before platform delivery starts. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   preview?: LiveMessageState<ReplyPayload>;
   onPreviewUpdate?: (
     rendered: RenderedMessageBatch<ReplyPayload>,
@@ -164,6 +217,7 @@ export async function withDurableMessageSendContext<T>(
     attempt,
     durability,
     onDeleteReceipt,
+    onDeliveryIntent,
     onEditReceipt,
     onCommitReceipt,
     onPreviewUpdate,
@@ -215,7 +269,9 @@ export async function withDurableMessageSendContext<T>(
           },
           onDeliveryIntent: (intent) => {
             deliveryIntent = intent;
-            ctx.intent = toDurableMessageIntent(intent, rendered);
+            const durableIntent = toDurableMessageIntent(intent, rendered);
+            ctx.intent = durableIntent;
+            onDeliveryIntent?.(durableIntent);
           },
         });
         const receipt = createMessageReceiptFromOutboundResults({

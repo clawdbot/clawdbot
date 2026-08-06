@@ -19,6 +19,38 @@ Use for Tideclaw/OpenClaw alpha/nightly release automation, manual alpha trigger
 - Forward-port PRs contain only reusable fixes needed to make nightly/release checks pass. They must not contain alpha version bumps, release notes, changelog release entries, tags, generated artifacts, or state-file updates.
 - Keep only alpha/nightly branches from the last 3 days, plus any branch with an active run, open PR, or release tag.
 - Never run broad env/token dumps. For GitHub writes on the Tideclaw host, use the Tideclaw `gh` write wrapper below.
+- When an alpha, beta, or repair branch needs to discover or reuse backports
+  beyond its pinned base, complete the self-contained audit below before
+  mutating the candidate. Starting an alpha directly from the current pinned
+  `origin/main` does not create a backport audit by itself.
+
+## Audit Nightly Backports
+
+For any backport discovery, pin the exact release baseline and source main SHA.
+Start from the last accepted audit cursor or, when none exists, their merge
+base. Enumerate every non-patch-equivalent source commit, reconcile authorized
+public and private advisories, and record the bounds, counts, filters,
+applicability results, decisions, exclusions, dependencies, and blocked items
+in the existing alpha state file.
+
+Titles are signals, never gates. Classify the complete inventory, inspect every
+security- or reliability-signalled production diff, and separately review
+conventional `fix`, `perf`, and `doctor` commits in execution, authentication,
+sandboxing, networking, persistence, delivery, gateway, configuration, plugin,
+and major-channel paths. Mechanically try each such diff against a detached
+baseline worktree and record whether it is clean, conflicted,
+empty/already-covered, or failed. A clean patch is triage evidence, not an
+automatic backport.
+
+For every proposed item, inspect the complete change, baseline behavior,
+callers, callees, siblings, tests, dependency contracts, security impact, and
+publication surface. Collapse overlapping or dependent commits to the smallest
+final fix. Exclude features, migrations, new configuration or runtime
+requirements, and broad redesigns unless a maintainer explicitly approves them.
+Present the complete categorized set for approval before changing the candidate;
+then keep provenance in that state file, run focused proof and release
+validation, and dispatch npm preflight only after the canonical branch/tag has
+the exact final version and SHA.
 
 ## Identity
 
@@ -37,8 +69,10 @@ This is good for auditability if commits are clearly machine-authored and gated 
 - Branch name: `tideclaw/alpha/YYYY-MM-DD-HHMMZ`
 - Base: current `origin/main` SHA at trigger time.
 - State file: resolve from `$release-private` on the Tideclaw host.
-- Release tag: `vYYYY.M.D-alpha.N`
+- Release tag: `vYYYY.M.PATCH-alpha.N`
 - npm dist-tag: `alpha`
+
+`PATCH` is a sequential monthly release-train number, never the calendar day. Determine the alpha train from stable and beta releases; ignore alpha-only patch numbers when choosing the next train. Use one greater than the highest stable/beta patch for the month, then increment only `alpha.N` for repeated nightlies on that train. If a beta exists on that next patch, move alpha to the following train. Legacy alpha-only tags with inflated patch numbers do not advance beta/stable numbering.
 
 Do not reuse old alpha branches for a new run. If rerunning the same base SHA, create a new timestamped branch and record why.
 
@@ -98,7 +132,7 @@ Tideclaw may run beta releases from `#releases` or mentioned `#maintainers` comm
 Accepted shapes:
 
 ```text
-@Tideclaw beta release from vYYYY.M.D-alpha.N
+@Tideclaw beta release from vYYYY.M.PATCH-alpha.N
 @Tideclaw beta release from tideclaw/alpha/YYYY-MM-DD-HHMMZ
 @Tideclaw beta release from latest proven alpha
 ```
@@ -110,7 +144,7 @@ Rules:
 3. Verify the source alpha first: GitHub release, npm `alpha` package, release CI, recorded state file, and branch/tag SHA.
 4. Create a fresh beta branch `tideclaw/beta/YYYY-MM-DD-HHMMZ` from the proven alpha source, not directly from a moving `main`.
 5. Reuse/squash only stabilization fixes already proven on alpha. Do not import unrelated alpha release mechanics unless the beta release docs require them.
-6. Compute beta as `vYYYY.M.D-beta.N`, matching npm `--tag beta`.
+6. Compute beta as `vYYYY.M.PATCH-beta.N`, matching npm `--tag beta`. Ignore alpha-only patch numbers when selecting the beta train.
 7. Run beta release validation/preflight/full release CI and fix failures on the beta branch.
 8. Publish beta only after green beta gates. Use GitHub Actions/OIDC, never direct npm publish from the host.
 9. Final Discord summary must include source alpha, beta tag/version, branch, fix commits, workflow run IDs, npm/GitHub proof, and any skipped/blocked reason.
@@ -134,7 +168,11 @@ git for-each-ref refs/remotes/origin/tideclaw/alpha --format='%(refname:short) %
 git log --no-merges --reverse --format='%H%x09%s' origin/main..origin/tideclaw/alpha/YYYY-MM-DD-HHMMZ
 ```
 
-5. Cherry-pick only real stabilization fixes that still apply to the new alpha branch. Prefer commits recorded as `fixCommitShas` in the state file.
+5. Cherry-pick only real stabilization fixes that still apply to the new alpha
+   branch. When this is discovery rather than reuse of an already approved
+   state-file fix, apply the nightly backport audit before
+   selecting it; a clean cherry-pick or a benign title is not approval. Prefer
+   commits recorded as `fixCommitShas` in the state file.
 6. Skip version bumps, changelog release entries, tag artifacts, generated release notes, state-file-only commits, and one-off debug instrumentation.
 7. If a cherry-pick conflicts, inspect whether current main already contains an equivalent fix. If not, resolve minimally and keep the commit message clear.
 8. Record reused commit SHAs separately from newly authored fix SHAs in the alpha state and final Discord summary.
@@ -165,7 +203,7 @@ git push -u origin "$BRANCH"
 
 After local proof:
 
-1. Compute the next `vYYYY.M.D-alpha.N` from existing git tags, npm versions, and GitHub releases.
+1. Compute the next `vYYYY.M.PATCH-alpha.N` from existing git tags, npm versions, and GitHub releases. Select `PATCH` from stable/beta trains, not the date or the highest alpha-only patch. Reuse the same alpha train and increment `alpha.N` until that patch has a beta; after a beta exists, use the following patch for new alpha builds.
 2. Make the alpha branch package version and release metadata match that tag, commit it, and push the branch.
 3. Run release validation from the alpha branch, using GitHub CLI, not browser/fetch tools. On the Tideclaw host, bare `gh` is a read-only Codex sandbox wrapper; use `/usr/local/bin/gh-tideclaw-write` for write-capable commands such as `workflow run`, `run cancel`, and publish dispatch:
 
@@ -197,13 +235,17 @@ git tag -a "$TAG" "$SHA" -m "openclaw ${TAG#v}"
 git push origin "$TAG"
 ```
 
-8. Dispatch the publish wrapper from the same alpha branch. Use the successful npm preflight run ID and full release validation run ID from the same head SHA:
+8. Dispatch the publish wrapper from the same alpha branch. Use the successful npm preflight run ID and the full release validation run ID plus exact attempt from the same head SHA:
 
 ```bash
+FULL_RELEASE_VALIDATION_RUN_ATTEMPT="$(gh api \
+  "repos/openclaw/openclaw/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}" \
+  --jq .run_attempt)"
 "$GH" workflow run openclaw-release-publish.yml --repo openclaw/openclaw --ref "$BRANCH" \
   -f tag="$TAG" \
   -f preflight_run_id="$NPM_PREFLIGHT_RUN_ID" \
   -f full_release_validation_run_id="$FULL_RELEASE_VALIDATION_RUN_ID" \
+  -f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
   -f npm_dist_tag=alpha \
   -f plugin_publish_scope=all-publishable \
   -f publish_openclaw_npm=true \

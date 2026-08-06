@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
 /**
  * Dependency evidence reports generated for release artifacts.
@@ -292,7 +293,7 @@ function runEvidenceReports({ rootDir, outputDir, baseRef, execFileSyncImpl }) {
 /**
  * Generates dependency evidence reports, manifest, and summaries for a release.
  */
-export async function generateDependencyReleaseEvidence({
+async function generateDependencyReleaseEvidence({
   rootDir = process.cwd(),
   outputDir,
   releaseRef,
@@ -379,12 +380,21 @@ export async function generateDependencyReleaseEvidence({
   return { manifest, counts, outputDir };
 }
 
-function readOptionValue(argv, index, optionName, { allowEmpty = false } = {}) {
-  const value = argv[index + 1];
-  if (value === undefined || value.startsWith("--") || (!allowEmpty && value === "")) {
-    throw new Error(`Expected ${optionName} <value>.`);
-  }
-  return value;
+function usage() {
+  return `Usage: node scripts/generate-dependency-release-evidence.mjs --output-dir <dir> --release-ref <ref> --npm-dist-tag <tag> [options]
+
+Generates release dependency evidence reports and summary artifacts.
+
+Options:
+  --root <dir>                  Repository root
+  --output-dir <dir>            Evidence artifact directory
+  --release-ref <ref>           Release tag or SHA under validation
+  --npm-dist-tag <tag>          npm dist-tag being validated
+  --base-ref <ref>              Dependency change comparison base
+  --github-output <path>        GitHub Actions output file
+  --github-step-summary <path>  GitHub Actions step summary file
+  -h, --help                    Show this help
+`;
 }
 
 export function parseArgs(argv) {
@@ -397,56 +407,46 @@ export function parseArgs(argv) {
     githubOutput: process.env.GITHUB_OUTPUT,
     githubStepSummary: process.env.GITHUB_STEP_SUMMARY,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--root") {
-      options.rootDir = readOptionValue(argv, index, arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--output-dir") {
-      options.outputDir = readOptionValue(argv, index, arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--release-ref") {
-      options.releaseRef = readOptionValue(argv, index, arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--npm-dist-tag") {
-      options.npmDistTag = readOptionValue(argv, index, arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--base-ref") {
-      options.baseRef = readOptionValue(argv, index, arg);
-      index += 1;
-      continue;
-    }
-    if (arg === "--github-output") {
-      options.githubOutput = readOptionValue(argv, index, arg, { allowEmpty: true });
-      index += 1;
-      continue;
-    }
-    if (arg === "--github-step-summary") {
-      options.githubStepSummary = readOptionValue(argv, index, arg, { allowEmpty: true });
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unsupported argument: ${arg}`);
-  }
-  return options;
+  const helpIndex = argv.findIndex((arg) => arg === "-h" || arg === "--help");
+  const parsed = parseFlagArgs(
+    helpIndex === -1 ? argv : argv.slice(0, helpIndex),
+    options,
+    [
+      ["--root", "rootDir", false],
+      ["--output-dir", "outputDir", false],
+      ["--release-ref", "releaseRef", false],
+      ["--npm-dist-tag", "npmDistTag", false],
+      ["--base-ref", "baseRef", false],
+      ["--github-output", "githubOutput", true],
+      ["--github-step-summary", "githubStepSummary", true],
+    ].map(([flag, key, allowEmpty]) =>
+      stringFlag(flag, key, {
+        allowEmpty,
+        allowInline: false,
+        missingValueMessage: `Expected ${flag} <value>.`,
+        rejectShortOptions: true,
+      }),
+    ),
+    {
+      duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
+      onUnhandledArg(arg) {
+        throw new Error(`Unsupported argument: ${arg}`);
+      },
+    },
+  );
+  return helpIndex === -1 ? parsed : { ...parsed, help: true };
 }
 
 /**
  * Runs the dependency release evidence generator CLI.
  */
 export async function main(argv = process.argv.slice(2)) {
-  await generateDependencyReleaseEvidence(parseArgs(argv));
+  const options = parseArgs(argv);
+  if (options.help) {
+    process.stdout.write(usage());
+    return 0;
+  }
+  await generateDependencyReleaseEvidence(options);
   return 0;
 }
 
@@ -456,7 +456,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.exitCode = exitCode;
     },
     /** @param {unknown} error */ (error) => {
-      process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     },
   );

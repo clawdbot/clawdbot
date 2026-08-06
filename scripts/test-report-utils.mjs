@@ -1,5 +1,6 @@
 // Shared helpers for running Vitest JSON reports and reading duration data.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +60,10 @@ function validateVitestJsonReport(reportPath) {
   return null;
 }
 
+function defaultVitestJsonReportPath(prefix) {
+  return path.join(os.tmpdir(), `${prefix}-${process.pid}-${Date.now()}-${randomUUID()}.json`);
+}
+
 /**
  * Runs Vitest with the JSON reporter unless an existing report was supplied.
  */
@@ -67,7 +72,7 @@ export function runVitestJsonReport({
   reportPath = "",
   prefix = "openclaw-vitest-report",
 }) {
-  const resolvedReportPath = reportPath || path.join(os.tmpdir(), `${prefix}-${Date.now()}.json`);
+  const resolvedReportPath = reportPath || defaultVitestJsonReportPath(prefix);
 
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
     const run = spawnSync(

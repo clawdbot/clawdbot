@@ -18,6 +18,15 @@ export function makeTempDir(): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")));
 }
 
+/** Create an executable file in a test bin directory. */
+export function makeExecutable(dir: string, name: string): string {
+  const fileName = process.platform === "win32" ? `${name}.exe` : name;
+  const exe = path.join(dir, fileName);
+  fs.writeFileSync(exe, "");
+  fs.chmodSync(exe, 0o755);
+  return exe;
+}
+
 /** Build a minimal executable resolution for command-policy tests. */
 export function makeMockExecutableResolution(params: {
   rawExecutable: string;

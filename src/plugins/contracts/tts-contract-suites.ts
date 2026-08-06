@@ -1,35 +1,29 @@
 // TTS contract suites provide reusable text-to-speech plugin contract assertions.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
   createEmptyPluginRegistry,
   pluginRegistrationContractRegistry,
   setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
-import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../../llm/types.js";
-import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
+} from "../../plugin-sdk/plugin-test-runtime.js";
+import { withEnv, withEnvAsync, withServer } from "../../plugin-sdk/test-env.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
 type TtsCoreModule = typeof import("openclaw/plugin-sdk/speech-core");
 type SummarizeTextDeps = NonNullable<Parameters<TtsCoreModule["summarizeText"]>[1]>;
 
-const speechCoreRuntimeApiModuleId = resolveWorkspacePackagePublicModuleUrl({
-  packageName: "@openclaw/speech-core",
-  artifactBasename: "runtime-api.js",
-});
-
 let ttsRuntime: TtsRuntimeModule;
-let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
-let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
-let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
+let completeWithPreparedSimpleCompletionModel: SummarizeTextDeps["completeWithPreparedSimpleCompletionModel"];
+let prepareSimpleCompletionModelMock: SummarizeTextDeps["prepareSimpleCompletionModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
-let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
-let ensureCustomApiRegisteredMock: ReturnType<typeof vi.fn>;
-let prepareModelForSimpleCompletionMock: SummarizeTextDeps["prepareModelForSimpleCompletion"];
 let summarizeTextCore: TtsCoreModule["summarizeText"];
 let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
 let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
@@ -78,24 +72,24 @@ vi.mock("openclaw/plugin-sdk/llm", () => {
     createAssistantMessageEventStream: vi.fn(),
     getApiProvider,
     getModel: vi.fn(),
-    registerApiProvider: vi.fn(),
     streamSimple: vi.fn(),
   };
 });
 
-function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
+function createResolvedModel(provider: string, modelId: string) {
   return {
     model: {
       provider,
       id: modelId,
       name: modelId,
-      api,
+      api: "openai-completions",
+      baseUrl: "https://example.test/v1",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128000,
       maxTokens: 8192,
-    },
+    } satisfies Model<"openai-completions">,
     authStorage: { profiles: {} },
     modelRegistry: { find: vi.fn() },
   };
@@ -143,26 +137,22 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
 
 function createSummarizeTextDeps() {
   return {
-    completeSimple,
-    getApiKeyForModel: getApiKeyForModelMock,
-    prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+    completeWithPreparedSimpleCompletionModel,
+    prepareSimpleCompletionModel: prepareSimpleCompletionModelMock,
     requireApiKey: requireApiKeyMock,
-    resolveModelAsync: resolveModelAsyncMock,
   };
 }
 
 function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
   return asLegacyTtsConfig({
-    messages: {
-      tts: {
-        provider: "openai",
-        providers: {
-          openai: {
-            apiKey: "test-key",
-            model,
-            voice: "alloy",
-            instructions: "Speak warmly",
-          },
+    tts: {
+      provider: "openai",
+      providers: {
+        openai: {
+          apiKey: "test-key",
+          model,
+          voice: "alloy",
+          instructions: "Speak warmly",
         },
       },
     },
@@ -171,6 +161,20 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 
 function createAudioBuffer(length = 2): Buffer {
   return Buffer.from(new Uint8Array(length).fill(1));
+}
+
+async function withHangingSpeechServer(
+  run: (baseUrl: string, getRequestCount: () => number) => Promise<void>,
+): Promise<void> {
+  let requestCount = 0;
+  await withServer(
+    (_req, _res) => {
+      requestCount += 1;
+    },
+    async (baseUrl) => {
+      await run(`${baseUrl}/v1`, () => requestCount);
+    },
+  );
 }
 
 async function withMockedSpeechFetch(
@@ -192,6 +196,29 @@ async function withMockedSpeechFetch(
 
 function resolveBaseUrl(rawValue: unknown, fallback: string): string {
   return typeof rawValue === "string" && rawValue.trim() ? rawValue.replace(/\/+$/u, "") : fallback;
+}
+
+async function requestTestOpenAISpeech(params: {
+  baseUrl: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+}): Promise<void> {
+  const requestUrl = `${params.baseUrl}/audio/speech`;
+  const { response, release } = await fetchWithSsrFGuard({
+    url: requestUrl,
+    init: {
+      method: "POST",
+      body: JSON.stringify(params.body),
+    },
+    timeoutMs: params.timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
+    auditContext: "tts-contract-openai",
+  });
+  try {
+    await response.body?.cancel().catch(() => {});
+  } finally {
+    await release();
+  }
 }
 
 function resolveTestProviderConfig(
@@ -272,15 +299,16 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
     isConfigured: ({ providerConfig }) =>
       typeof (providerConfig as Record<string, unknown> | undefined)?.apiKey === "string" ||
       typeof process.env.OPENAI_API_KEY === "string",
-    synthesize: async ({ text, providerConfig, providerOverrides }) => {
+    synthesize: async ({ text, providerConfig, providerOverrides, timeoutMs }) => {
       const config = providerConfig as Record<string, unknown> | undefined;
-      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
-        method: "POST",
-        body: JSON.stringify({
+      await requestTestOpenAISpeech({
+        baseUrl: resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1"),
+        body: {
           input: text,
           model: providerOverrides?.model ?? config?.model ?? "gpt-4o-mini-tts",
           voice: providerOverrides?.voice ?? config?.voice ?? "alloy",
-        }),
+        },
+        timeoutMs,
       });
       return {
         audioBuffer: createAudioBuffer(1),
@@ -289,7 +317,7 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
         voiceCompatible: true,
       };
     },
-    synthesizeTelephony: async ({ text, providerConfig }) => {
+    synthesizeTelephony: async ({ text, providerConfig, timeoutMs }) => {
       const config = providerConfig as Record<string, unknown> | undefined;
       const configuredModel = typeof config?.model === "string" ? config.model : undefined;
       const model = configuredModel ?? "tts-1";
@@ -297,14 +325,15 @@ function buildTestOpenAISpeechProvider(): SpeechProviderPlugin {
         typeof config?.instructions === "string" ? config.instructions : undefined;
       const instructions =
         model === "gpt-4o-mini-tts" ? configuredInstructions || undefined : undefined;
-      await fetch(`${resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1")}/audio/speech`, {
-        method: "POST",
-        body: JSON.stringify({
+      await requestTestOpenAISpeech({
+        baseUrl: resolveBaseUrl(config?.baseUrl, "https://api.openai.com/v1"),
+        body: {
           input: text,
           model,
           voice: config?.voice ?? "alloy",
           instructions,
-        }),
+        },
+        timeoutMs,
       });
       return {
         audioBuffer: createAudioBuffer(2),
@@ -417,20 +446,19 @@ function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
   };
 }
 
-async function loadTtsRuntime(): Promise<TtsRuntimeModule> {
-  ttsRuntimePromise ??= import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>;
-  return await ttsRuntimePromise;
-}
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 
-async function loadTtsCore(): Promise<TtsCoreModule> {
-  ttsCorePromise ??= import("openclaw/plugin-sdk/speech-core");
-  return await ttsCorePromise;
-}
+const loadTtsCore = createLazyRuntimeModule(() => import("../../plugin-sdk/speech-core.js"));
 
-function createPrepareModelForSimpleCompletionMock(): SummarizeTextDeps["prepareModelForSimpleCompletion"] {
-  return vi.fn(
-    ({ model }: Parameters<SummarizeTextDeps["prepareModelForSimpleCompletion"]>[0]) => model,
-  ) as SummarizeTextDeps["prepareModelForSimpleCompletion"];
+function createPrepareSimpleCompletionModelMock(): SummarizeTextDeps["prepareSimpleCompletionModel"] {
+  return vi.fn(async ({ provider, modelId }) => ({
+    model: createResolvedModel(provider, modelId).model,
+    auth: {
+      apiKey: "test-api-key",
+      source: "test",
+      mode: "api-key" as const,
+    },
+  })) as SummarizeTextDeps["prepareSimpleCompletionModel"];
 }
 
 async function setupTtsRuntime() {
@@ -452,7 +480,6 @@ async function setupTtsRuntime() {
 }
 
 function setupTestSpeechProviderRegistry() {
-  prepareModelForSimpleCompletionMock = createPrepareModelForSimpleCompletionMock();
   const registry = createEmptyPluginRegistry();
   registry.speechProviders = [
     { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
@@ -464,8 +491,7 @@ function setupTestSpeechProviderRegistry() {
 }
 
 function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
-  const rawConfig =
-    typeof cfg.messages?.tts === "object" && cfg.messages?.tts !== null ? cfg.messages.tts : {};
+  const rawConfig = typeof cfg.tts === "object" && cfg.tts !== null ? cfg.tts : {};
   return {
     auto: "off",
     mode: rawConfig.mode ?? "final",
@@ -485,7 +511,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
     },
     providerConfigs: {},
     personas: {},
-    prefsPath: typeof rawConfig.prefsPath === "string" ? rawConfig.prefsPath : undefined,
+    prefsPath: undefined,
     maxTextLength: typeof rawConfig.maxTextLength === "number" ? rawConfig.maxTextLength : 4096,
     timeoutMs: typeof rawConfig.timeoutMs === "number" ? rawConfig.timeoutMs : 30_000,
     rawConfig,
@@ -495,29 +521,13 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("openclaw/plugin-sdk/llm"));
-  getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
+  completeWithPreparedSimpleCompletionModel = vi.fn();
+  prepareSimpleCompletionModelMock = createPrepareSimpleCompletionModelMock();
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
-  resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];
-  ensureCustomApiRegisteredMock = vi.fn();
-  prepareModelForSimpleCompletionMock = createPrepareModelForSimpleCompletionMock();
-  vi.mocked(completeSimple).mockResolvedValue(
+  vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
     mockAssistantMessage([{ type: "text", text: "Summary" }]),
   );
-  vi.mocked(getApiKeyForModelMock).mockResolvedValue({
-    apiKey: "test-api-key",
-    source: "test",
-    mode: "api-key",
-  });
   vi.mocked(requireApiKeyMock).mockImplementation((auth: { apiKey?: string }) => auth.apiKey ?? "");
-  vi.mocked(resolveModelAsyncMock).mockImplementation(
-    async (provider: string, modelId: string) =>
-      createResolvedModel(provider, modelId) as unknown as Awaited<
-        ReturnType<typeof resolveModelAsyncMock>
-      >,
-  );
-  vi.mocked(ensureCustomApiRegisteredMock).mockReset();
-  prepareModelForSimpleCompletionMock = createPrepareModelForSimpleCompletionMock();
 }
 
 async function setupTtsContractTest() {
@@ -538,7 +548,7 @@ export function describeTtsConfigContract() {
     describe("resolveEdgeOutputFormat", () => {
       const baseCfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-        messages: { tts: {} },
+        tts: {},
       };
 
       it.each([
@@ -551,10 +561,8 @@ export function describeTtsConfigContract() {
           name: "override",
           cfg: {
             ...baseCfg,
-            messages: {
-              tts: {
-                edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
-              },
+            tts: {
+              edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
             },
           } as unknown as OpenClawConfig,
           expected: "audio-24khz-96kbitrate-mono-mp3",
@@ -729,12 +737,10 @@ export function describeTtsConfigContract() {
                   },
                 },
               },
-              messages: {
-                tts: {
-                  providers: {
-                    microsoft: {
-                      enabled: false,
-                    },
+              tts: {
+                providers: {
+                  microsoft: {
+                    enabled: false,
                   },
                 },
               },
@@ -753,13 +759,11 @@ export function describeTtsConfigContract() {
         const config = resolveTtsConfig(
           asLegacyOpenClawConfig({
             agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-            messages: {
-              tts: {
-                provider: "edge",
-                providers: {
-                  edge: {
-                    enabled: true,
-                  },
+            tts: {
+              provider: "edge",
+              providers: {
+                edge: {
+                  enabled: true,
                 },
               },
             },
@@ -774,7 +778,7 @@ export function describeTtsConfigContract() {
     describe("resolveTtsConfig – openai.baseUrl", () => {
       const baseCfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-        messages: { tts: {} },
+        tts: {},
       };
 
       it.each([
@@ -794,9 +798,7 @@ export function describeTtsConfigContract() {
           name: "config wins over env",
           cfg: {
             ...baseCfg,
-            messages: {
-              tts: { ...baseCfg.messages!.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
-            },
+            tts: { ...baseCfg.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
           } as unknown as OpenClawConfig,
           env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
           expected: "http://my-server:9000/v1",
@@ -805,11 +807,9 @@ export function describeTtsConfigContract() {
           name: "config slash trimming",
           cfg: {
             ...baseCfg,
-            messages: {
-              tts: {
-                ...baseCfg.messages!.tts,
-                openai: { baseUrl: "http://my-server:9000/v1///" },
-              },
+            tts: {
+              ...baseCfg.tts,
+              openai: { baseUrl: "http://my-server:9000/v1///" },
             },
           } as unknown as OpenClawConfig,
           env: { OPENAI_TTS_BASE_URL: undefined },
@@ -855,7 +855,7 @@ export function describeTtsSummarizationContract() {
 
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-      messages: { tts: {} },
+      tts: {},
     };
 
     async function runSummarizeText(params?: {
@@ -879,7 +879,7 @@ export function describeTtsSummarizationContract() {
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue(
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
@@ -893,46 +893,62 @@ export function describeTtsSummarizationContract() {
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimple).toHaveBeenCalledTimes(1);
+      expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = mockCallAt(vi.mocked(completeSimple), 0);
+      const callArgs = mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0);
       expect(
-        (callArgs[1] as { messages?: Array<{ role?: string }> } | undefined)?.messages?.[0]?.role,
+        (callArgs[0] as { context?: { messages?: Array<{ role?: string }> } } | undefined)?.context
+          ?.messages?.[0]?.role,
       ).toBe("user");
-      expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
-      expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
-      expect(getApiKeyForModelMock).toHaveBeenCalledTimes(1);
+      expect(
+        (callArgs[0] as { options?: { maxTokens?: number } } | undefined)?.options?.maxTokens,
+      ).toBe(250);
+      expect(
+        (callArgs[0] as { options?: { temperature?: number } } | undefined)?.options?.temperature,
+      ).toBe(0.3);
+      expect(requireApiKeyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: "test-api-key" }),
+        "openai",
+      );
     });
 
     it("uses summaryModel override when configured", async () => {
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-        messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
+        tts: { summaryModel: "openai/gpt-4.1-mini" },
       };
       await runSummarizeText({ cfg });
 
-      expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(prepareSimpleCompletionModelMock).toHaveBeenCalledWith({
+        cfg,
+        provider: "openai",
+        modelId: "gpt-4.1-mini",
+        useAsyncModelResolution: true,
+      });
     });
 
     it("keeps native completion APIs for direct summarization", async () => {
-      vi.mocked(resolveModelAsyncMock).mockResolvedValue({
-        ...createResolvedModel("local-summary", "demo-model", "openai-completions"),
+      vi.mocked(prepareSimpleCompletionModelMock).mockResolvedValue({
         model: {
-          ...createResolvedModel("local-summary", "demo-model", "openai-completions").model,
+          ...createResolvedModel("local-summary", "demo-model").model,
           baseUrl: "http://127.0.0.1:4000/v1",
         },
-      } as never);
+        auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
+      });
 
       await runSummarizeText();
 
       expect(
-        (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
+        (
+          mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0)[0] as
+            | { model?: { api?: string } }
+            | undefined
+        )?.model?.api,
       ).toBe("openai-completions");
-      expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -960,7 +976,7 @@ export function describeTtsSummarizationContract() {
         message: mockAssistantMessage([{ type: "text", text: "   " }]),
       },
     ] as const)("throws when summary output is missing or empty: $name", async (testCase) => {
-      vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(testCase.message);
       await expect(runSummarizeText({ text: "text" }), testCase.name).rejects.toThrow(
         "No summary returned",
       );
@@ -1033,10 +1049,8 @@ export function describeTtsProviderRuntimeContract() {
           const result = await ttsRuntime.synthesizeSpeech({
             text: "hello fallback",
             cfg: {
-              messages: {
-                tts: {
-                  provider: "openai",
-                },
+              tts: {
+                provider: "openai",
               },
             },
           });
@@ -1109,10 +1123,8 @@ export function describeTtsProviderRuntimeContract() {
           const result = await ttsRuntime.textToSpeechTelephony({
             text: "hello telephony fallback",
             cfg: {
-              messages: {
-                tts: {
-                  provider: "primary-throws",
-                },
+              tts: {
+                provider: "primary-throws",
               },
             },
           });
@@ -1143,6 +1155,42 @@ export function describeTtsProviderRuntimeContract() {
         });
       });
 
+      it("cancels the discarded speech response body after synthesize", async () => {
+        await withIsolatedSpeechProviderEnvAsync({}, async () => {
+          let sawConnectionClose = false;
+          await withServer(
+            (_req, res) => {
+              res.writeHead(200, { "content-type": "audio/mpeg" });
+              res.write(Buffer.alloc(16));
+              res.on("close", () => {
+                sawConnectionClose = true;
+              });
+              // Intentionally never res.end(): an unread body must still be
+              // released by the caller, not left pinning the connection.
+            },
+            async (baseUrl) => {
+              const result = await ttsRuntime.synthesizeSpeech({
+                text: "hello cancel",
+                cfg: asLegacyOpenClawConfig({
+                  agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+                  tts: {
+                    provider: "openai",
+                    providers: {
+                      openai: {
+                        baseUrl: `${baseUrl}/v1`,
+                        apiKey: "fixture-api-key",
+                      },
+                    },
+                  },
+                }),
+              });
+              expect(result.success).toBe(true);
+              await vi.waitFor(() => expect(sawConnectionClose).toBe(true), { timeout: 5_000 });
+            },
+          );
+        });
+      });
+
       it("does not double-prefix textToSpeech failure messages", async () => {
         const failingProvider: SpeechProviderPlugin = {
           id: "openai",
@@ -1163,10 +1211,8 @@ export function describeTtsProviderRuntimeContract() {
         const result = await ttsRuntime.textToSpeech({
           text: "hello",
           cfg: {
-            messages: {
-              tts: {
-                provider: "openai",
-              },
+            tts: {
+              provider: "openai",
             },
           },
           disableFallback: true,
@@ -1220,6 +1266,77 @@ export function describeTtsProviderRuntimeContract() {
         },
       );
     });
+
+    it.each([
+      {
+        name: "ordinary synthesis",
+        run: async (cfg: OpenClawConfig, timeoutMs: number) =>
+          await ttsRuntime.textToSpeech({
+            text: "Hello from the timeout contract.",
+            cfg,
+            disableFallback: true,
+            timeoutMs,
+          }),
+      },
+      {
+        name: "telephony synthesis",
+        run: async (cfg: OpenClawConfig, timeoutMs: number) =>
+          await ttsRuntime.textToSpeechTelephony({
+            text: "Hello from the telephony timeout contract.",
+            cfg,
+            timeoutMs,
+          }),
+      },
+    ] as const)(
+      "aborts stalled OpenAI $name within the caller timeout",
+      { timeout: 2_000 },
+      async (testCase) => {
+        await withHangingSpeechServer(async (baseUrl, getRequestCount) => {
+          const registry = createEmptyPluginRegistry();
+          registry.speechProviders = [
+            { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
+          ];
+          setActivePluginRegistry(registry);
+          const cfg = asLegacyTtsConfig({
+            tts: {
+              provider: "openai",
+              providers: {
+                openai: {
+                  apiKey: "test-api-key",
+                  baseUrl,
+                  model: "gpt-4o-mini-tts",
+                  voice: "alloy",
+                },
+              },
+            },
+          });
+          const timeoutMs = 100;
+          const startedAt = Date.now();
+          let watchdog: ReturnType<typeof setTimeout> | undefined;
+
+          try {
+            const result = await Promise.race([
+              testCase.run(cfg, timeoutMs),
+              new Promise<never>((_, reject) => {
+                watchdog = setTimeout(
+                  () => reject(new Error(`${testCase.name} did not time out`)),
+                  1_000,
+                );
+              }),
+            ]);
+
+            expect(result.success).toBe(false);
+            expect(result.error).toMatch(/aborted|timeout|timed out/i);
+            expect(Date.now() - startedAt).toBeLessThan(1_000);
+            expect(getRequestCount()).toBe(1);
+          } finally {
+            if (watchdog) {
+              clearTimeout(watchdog);
+            }
+          }
+        });
+      },
+    );
   });
 }
 
@@ -1230,13 +1347,11 @@ export function describeTtsAutoApplyContract() {
 
     const baseCfg: OpenClawConfig = asLegacyOpenClawConfig({
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-      messages: {
-        tts: {
-          auto: "inbound",
-          provider: "openai",
-          providers: {
-            openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
-          },
+      tts: {
+        auto: "inbound",
+        provider: "openai",
+        providers: {
+          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
         },
       },
     });
@@ -1255,10 +1370,7 @@ export function describeTtsAutoApplyContract() {
 
     const taggedCfg: OpenClawConfig = {
       ...baseCfg,
-      messages: {
-        ...baseCfg.messages!,
-        tts: { ...baseCfg.messages!.tts, auto: "tagged" },
-      },
+      tts: { ...baseCfg.tts, auto: "tagged" },
     };
 
     async function expectAutoTtsOutcome(params: {
@@ -1342,3 +1454,4 @@ export function describeTtsAutoApplyContract() {
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

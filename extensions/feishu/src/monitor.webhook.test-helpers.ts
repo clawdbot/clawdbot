@@ -28,7 +28,7 @@ export async function getFreePort(): Promise<number> {
   return address.port;
 }
 
-async function waitUntilServerReady(url: string): Promise<void> {
+export async function waitUntilServerReady(url: string): Promise<void> {
   for (let i = 0; i < WEBHOOK_READY_MAX_ATTEMPTS; i += 1) {
     try {
       const { response, release } = await fetchWithSsrFGuard({

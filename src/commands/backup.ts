@@ -7,7 +7,6 @@ import {
 } from "../infra/backup-create.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-export type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
 
 type BackupVerifyRuntime = typeof import("./backup-verify.js");
 

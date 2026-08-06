@@ -6,18 +6,37 @@ import {
 import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import {
   channelRouteTargetsMatchExact,
   stringifyRouteThreadId,
   type ChannelRouteTargetInput,
 } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  type ReplyDeliveryContext,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
+type MessagingToolDedupeRouteParams = {
+  config?: OpenClawConfig;
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  originatingThreadId?: string | number;
+  replyToId?: string;
+  replyToIsExplicit?: boolean;
+  replyDelivery?: ReplyDeliveryContext;
+  accountId?: string;
+};
+
 /** Removes text payloads already sent by message tools. */
-export function filterMessagingToolDuplicates(params: {
+function filterMessagingToolDuplicates(params: {
   payloads: ReplyPayload[];
   sentTexts: string[];
 }): ReplyPayload[] {
@@ -25,12 +44,11 @@ export function filterMessagingToolDuplicates(params: {
   if (sentTexts.length === 0) {
     return payloads;
   }
-  return payloads.filter((payload) => {
-    if (payload.mediaUrl || payload.mediaUrls?.length) {
-      return true;
-    }
-    return !isMessagingToolDuplicate(payload.text ?? "", sentTexts);
-  });
+  return payloads.filter(
+    (payload) =>
+      Boolean(payload.mediaUrl || payload.mediaUrls?.length) ||
+      !isMessagingToolDuplicate(payload.text ?? "", sentTexts),
+  );
 }
 
 /** Removes media payload URLs already sent by message tools. */
@@ -44,7 +62,7 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
   const sentSet = new Set<string>();
   for (const sentMediaUrl of sentMediaUrls) {
-    const normalized = normalizeMediaForDedupe(sentMediaUrl);
+    const normalized = normalizeMediaReferenceForComparison(sentMediaUrl);
     if (normalized) {
       sentSet.add(normalized);
     }
@@ -54,18 +72,24 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
 
   let nextPayloads: ReplyPayload[] | undefined;
-  for (let index = 0; index < payloads.length; index++) {
-    const payload = payloads[index];
+  for (const [index, payload] of payloads.entries()) {
+    // Delivery operations apply to the message created by this payload. Keep
+    // its content intact so dedupe cannot silently skip the operation.
+    if (hasEnabledDeliveryOperation(payload)) {
+      if (nextPayloads) {
+        nextPayloads.push(payload);
+      }
+      continue;
+    }
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
+    const stripSingle = mediaUrl && sentSet.has(normalizeMediaReferenceForComparison(mediaUrl));
 
     let filteredUrls: string[] | undefined;
     let strippedMediaUrls = false;
     if (mediaUrls?.length) {
-      for (let mediaIndex = 0; mediaIndex < mediaUrls.length; mediaIndex++) {
-        const url = mediaUrls[mediaIndex];
-        if (sentSet.has(normalizeMediaForDedupe(url))) {
+      for (const [mediaIndex, url] of mediaUrls.entries()) {
+        if (sentSet.has(normalizeMediaReferenceForComparison(url))) {
           strippedMediaUrls = true;
           if (!filteredUrls) {
             filteredUrls = mediaUrls.slice(0, mediaIndex);
@@ -85,9 +109,15 @@ export function filterMessagingToolMediaDuplicates(params: {
       continue;
     }
 
-    const nextPayload = Object.assign({}, payload, {
-      mediaUrl: stripSingle ? undefined : mediaUrl,
-      mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
+    const nextMediaUrl = stripSingle ? undefined : mediaUrl;
+    const nextMediaUrls = filteredUrls?.length ? filteredUrls : undefined;
+    const nextPayload = copyReplyPayloadMetadata(payload, {
+      ...payload,
+      mediaUrl: nextMediaUrl,
+      mediaUrls: nextMediaUrls,
+      ...(payload.audioAsVoice === true && !nextMediaUrl && !nextMediaUrls
+        ? { audioAsVoice: undefined }
+        : {}),
     });
     if (!nextPayloads) {
       nextPayloads = payloads.slice(0, index);
@@ -98,23 +128,9 @@ export function filterMessagingToolMediaDuplicates(params: {
   return nextPayloads ?? payloads;
 }
 
-function normalizeMediaForDedupe(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file://")) {
-    return trimmed;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol === "file:") {
-      return decodeURIComponent(parsed.pathname || "");
-    }
-  } catch {
-    // Keep fallback below for non-URL-like inputs.
-  }
-  return trimmed.replace(/^file:\/\//i, "");
+export function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
+  const pin = payload.delivery?.pin;
+  return pin === true || (typeof pin === "object" && pin.enabled);
 }
 
 function normalizeProviderForComparison(value?: string): string | undefined {
@@ -122,15 +138,10 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  const normalizedChannel = normalizeAnyChannelId(trimmed);
-  if (normalizedChannel) {
-    return normalizedChannel;
-  }
-  return lowered;
+  return normalizeAnyChannelId(trimmed) || normalizeLowercaseStringOrEmpty(trimmed);
 }
 
-function normalizeThreadIdForComparison(value?: string): string | undefined {
+function normalizeThreadIdForComparison(value?: string | number | null): string | undefined {
   return stringifyRouteThreadId(value);
 }
 
@@ -151,10 +162,7 @@ function resolveTargetProviderForComparison(params: {
   targetProvider?: string;
 }): string {
   const targetProvider = normalizeProviderForComparison(params.targetProvider);
-  if (!targetProvider || targetProvider === "message") {
-    return params.currentProvider;
-  }
-  return targetProvider;
+  return targetProvider && targetProvider !== "message" ? targetProvider : params.currentProvider;
 }
 
 type MessagingToolDedupeRouteTarget = ChannelRouteTargetInput & {
@@ -197,23 +205,54 @@ function targetsMatchForDedupe(params: {
   return params.targetKey === params.originTarget;
 }
 
-/** Returns true when message-tool route evidence says source replies should be deduped. */
-export function shouldDedupeMessagingToolRepliesForRoute(params: {
-  messageProvider?: string;
-  messagingToolSentTargets?: MessagingToolSend[];
-  originatingTo?: string;
+function resolveOriginThreadIdForPayload(params: {
+  provider: string;
+  config?: OpenClawConfig;
   accountId?: string;
-}): boolean {
+  originatingThreadId?: string | number;
+  replyToId?: string;
+  replyToIsExplicit?: boolean;
+  replyDelivery?: ReplyDeliveryContext;
+}): string | undefined {
+  const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
+  if (originThreadId && !params.replyToIsExplicit) {
+    return originThreadId;
+  }
+  const replyToId = normalizeThreadIdForComparison(params.replyToId);
+  const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
+  if (!replyToId || !params.config || !resolveReplyTransport) {
+    return originThreadId;
+  }
+  const transport = resolveReplyTransport({
+    cfg: params.config,
+    accountId: params.accountId,
+    threadId: originThreadId,
+    replyToId,
+    replyToIsExplicit: params.replyToIsExplicit,
+    replyDelivery: params.replyDelivery,
+  });
+  if (transport?.threadId != null) {
+    return normalizeThreadIdForComparison(transport.threadId) ?? originThreadId;
+  }
+  // An explicit null means the provider transports its conversation thread
+  // through replyToId. Undefined reply ids remain native message references.
+  if (transport?.threadId === null) {
+    return normalizeThreadIdForComparison(transport.replyToId);
+  }
+  return originThreadId;
+}
+
+/** Returns true when message-tool route evidence says source replies should be deduped. */
+export function shouldDedupeMessagingToolRepliesForRoute(
+  params: MessagingToolDedupeRouteParams,
+): boolean {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
 }
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */
-export function getMatchingMessagingToolReplyTargets(params: {
-  messageProvider?: string;
-  messagingToolSentTargets?: MessagingToolSend[];
-  originatingTo?: string;
-  accountId?: string;
-}): MessagingToolSend[] {
+function getMatchingMessagingToolReplyTargets(
+  params: MessagingToolDedupeRouteParams,
+): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
     return [];
@@ -224,6 +263,15 @@ export function getMatchingMessagingToolReplyTargets(params: {
   if (sentTargets.length === 0) {
     return [];
   }
+  const originThreadId = resolveOriginThreadIdForPayload({
+    provider,
+    config: params.config,
+    accountId: originAccount,
+    originatingThreadId: params.originatingThreadId,
+    replyToId: params.replyToId,
+    replyToIsExplicit: params.replyToIsExplicit,
+    replyDelivery: params.replyDelivery,
+  });
   return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
@@ -242,6 +290,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
       provider,
       rawTarget: originRawTarget,
       accountId: routeAccount,
+      threadId: originThreadId,
     });
     if (!originRoute) {
       return false;
@@ -250,13 +299,25 @@ export function getMatchingMessagingToolReplyTargets(params: {
       provider: targetProvider,
       rawTarget: targetRaw,
       accountId: routeAccount,
-      threadId: target.threadId,
+      threadId: target.threadId ?? (target.threadImplicit ? originThreadId : undefined),
     });
     if (!targetRoute) {
       return false;
     }
     if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {
       return true;
+    }
+    // For providers without a thread-aware suppression matcher (e.g. Slack), a
+    // structured thread id on either side means the routes are NOT the same
+    // conversation, so do not fall back to channel-only matching (which would
+    // collapse distinct threads together and suppress a real reply). Providers
+    // that encode the thread/topic inside the target string carry their own
+    // matcher and must still run it.
+    const hasPluginThreadMatcher = Boolean(
+      getChannelPlugin(provider)?.outbound?.targetsMatchForReplySuppression,
+    );
+    if (!hasPluginThreadMatcher && (originRoute.threadId != null || targetRoute.threadId != null)) {
+      return false;
     }
     return targetsMatchForDedupe({
       provider,
@@ -268,7 +329,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
 }
 
 /** Dedupe decision plus route-specific evidence used by final payload filtering. */
-export type MessagingToolPayloadDedupeDecision = {
+type MessagingToolPayloadDedupeDecision = {
   shouldDedupePayloads: boolean;
   matchingRoute: boolean;
   routeSentTexts: string[];
@@ -278,18 +339,13 @@ export type MessagingToolPayloadDedupeDecision = {
 };
 
 /** Resolves whether and how to dedupe final payloads against message-tool sends. */
-export function resolveMessagingToolPayloadDedupe(params: {
-  messageProvider?: string;
-  messagingToolSentTargets?: MessagingToolSend[];
-  originatingTo?: string;
-  accountId?: string;
-}): MessagingToolPayloadDedupeDecision {
+export function resolveMessagingToolPayloadDedupe(
+  params: MessagingToolDedupeRouteParams,
+): MessagingToolPayloadDedupeDecision {
   const sentTargets = params.messagingToolSentTargets ?? [];
   const matchingTargets = getMatchingMessagingToolReplyTargets({
-    messageProvider: params.messageProvider,
+    ...params,
     messagingToolSentTargets: sentTargets,
-    originatingTo: params.originatingTo,
-    accountId: params.accountId,
   });
   const matchingRoute = matchingTargets.length > 0;
   const routeSentTexts = matchingTargets.flatMap((target) =>
@@ -310,13 +366,98 @@ export function resolveMessagingToolPayloadDedupe(params: {
       Array.isArray(target.mediaUrls) &&
       target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim())),
   );
+  const allTargetsMatchRoute = matchingRoute && matchingTargets.length === sentTargets.length;
 
   return {
     shouldDedupePayloads: matchingRoute || sentTargets.length === 0,
     matchingRoute,
     routeSentTexts,
     routeSentMediaUrls,
-    useGlobalSentTextEvidenceFallback: matchingRoute && !hasTargetTextEvidence,
-    useGlobalSentMediaUrlEvidenceFallback: matchingRoute && !hasTargetMediaUrlEvidence,
+    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && !hasTargetTextEvidence,
+    useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && !hasTargetMediaUrlEvidence,
   };
+}
+
+type FilterMessagingToolReplyPayloadParams = Omit<
+  MessagingToolDedupeRouteParams,
+  "replyToId" | "replyToIsExplicit" | "replyDelivery"
+> & {
+  payload: ReplyPayload;
+  sentMediaUrls?: string[];
+  sentTexts?: string[];
+};
+
+/** Applies route-scoped media and text dedupe in the same order for every reply owner. */
+export function filterMessagingToolReplyPayload(
+  params: FilterMessagingToolReplyPayloadParams & {
+    normalizeSentMediaUrls: (sentMediaUrls: string[]) => Promise<string[]>;
+  },
+): Promise<ReplyPayload[]>;
+export function filterMessagingToolReplyPayload(
+  params: FilterMessagingToolReplyPayloadParams,
+): ReplyPayload[];
+export function filterMessagingToolReplyPayload(
+  params: FilterMessagingToolReplyPayloadParams & {
+    normalizeSentMediaUrls?: (sentMediaUrls: string[]) => Promise<string[]>;
+  },
+): ReplyPayload[] | Promise<ReplyPayload[]> {
+  const metadata = getReplyPayloadMetadata(params.payload);
+  const decision = resolveMessagingToolPayloadDedupe({
+    ...params,
+    replyToId: params.payload.replyToId,
+    replyToIsExplicit: Boolean(
+      metadata?.replyToIdExplicit || params.payload.replyToTag || params.payload.replyToCurrent,
+    ),
+    replyDelivery: metadata?.replyDelivery,
+  });
+  if (!decision.shouldDedupePayloads) {
+    const payloads = [params.payload];
+    return params.normalizeSentMediaUrls ? Promise.resolve(payloads) : payloads;
+  }
+  const sentMediaUrls =
+    decision.matchingRoute && !decision.useGlobalSentMediaUrlEvidenceFallback
+      ? decision.routeSentMediaUrls
+      : (params.sentMediaUrls ?? []);
+  const sentTexts =
+    decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
+      ? decision.routeSentTexts
+      : (params.sentTexts ?? []);
+  const filterPayload = (normalizedSentMediaUrls: string[]) =>
+    filterMessagingToolDuplicates({
+      payloads: filterMessagingToolMediaDuplicates({
+        payloads: [params.payload],
+        sentMediaUrls: normalizedSentMediaUrls,
+      }),
+      sentTexts,
+    });
+  return params.normalizeSentMediaUrls
+    ? params.normalizeSentMediaUrls(sentMediaUrls).then(filterPayload)
+    : filterPayload(sentMediaUrls);
+}
+
+/** True when a message-tool send visibly delivered to the source conversation.
+ * Route matching keeps cross-provider or unrelated-target tool sends from
+ * counting as the source reply. */
+export function hasSourceRoutedMessagingToolDelivery(
+  params: Omit<
+    MessagingToolDedupeRouteParams,
+    "replyToId" | "replyToIsExplicit" | "replyDelivery"
+  > & {
+    messagingToolSentTexts?: string[];
+    messagingToolSentMediaUrls?: string[];
+  },
+): boolean {
+  const decision = resolveMessagingToolPayloadDedupe(params);
+  if (!decision.matchingRoute) {
+    return false;
+  }
+  return (
+    decision.routeSentTexts.length > 0 ||
+    decision.routeSentMediaUrls.length > 0 ||
+    // Legacy runtimes record aggregate evidence without per-target content.
+    (decision.useGlobalSentTextEvidenceFallback &&
+      (params.messagingToolSentTexts?.length ?? 0) > 0) ||
+    (decision.useGlobalSentMediaUrlEvidenceFallback &&
+      (params.messagingToolSentMediaUrls?.length ?? 0) > 0)
+  );
 }

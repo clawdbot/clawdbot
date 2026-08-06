@@ -1,4 +1,4 @@
-// Builds install policy context for plugin install checks.
+// Builds payloads for the plugin-runtime before_install lifecycle hook.
 import type {
   PluginHookBeforeInstallBuiltinScan,
   PluginHookBeforeInstallContext,
@@ -16,7 +16,7 @@ import type {
  * Keep all payload shaping here so partner feedback lands in one place instead
  * of drifting across individual install codepaths.
  */
-export type BeforeInstallHookPayloadParams = {
+type BeforeInstallHookPayloadParams = {
   targetType: PluginInstallTargetType;
   targetName: string;
   origin?: string;

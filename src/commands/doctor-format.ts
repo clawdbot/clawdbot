@@ -11,6 +11,7 @@ import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
 import {
   getSystemdCgroupHygieneSummary,
   isSystemdCgroupHygieneRisk,
+  isSystemdStartLimitHit,
   type GatewayServiceRuntime,
 } from "../daemon/service-runtime.js";
 import {
@@ -55,7 +56,7 @@ export function buildGatewayRuntimeHints(
   if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
     hints.push(
       ...renderSystemdUnavailableHints({
-        wsl: isWSLEnv(),
+        wsl: isWSLEnv(env),
         kind: classifySystemdUnavailableDetail(runtime.detail),
         container,
       }),
@@ -79,6 +80,21 @@ export function buildGatewayRuntimeHints(
     }
     return hints;
   }
+  if (runtime.missingGuiSession && platform === "darwin") {
+    hints.push(
+      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+    );
+    hints.push(
+      `Sign in to the macOS desktop as this user, then run: ${formatCliCommand("openclaw gateway restart", env)}`,
+    );
+    hints.push(
+      "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
+    );
+    if (fileLog) {
+      hints.push(`File logs: ${fileLog}`);
+    }
+    return hints;
+  }
   if (runtime.missingSupervision && platform === "darwin") {
     hints.push(
       `LaunchAgent installed but not loaded. Run: ${formatCliCommand("openclaw gateway restart", env)}`,
@@ -89,7 +105,16 @@ export function buildGatewayRuntimeHints(
     return hints;
   }
   if (runtime.status === "stopped") {
-    hints.push("Service is loaded but not running (likely exited immediately).");
+    if (platform === "linux" && isSystemdStartLimitHit(runtime)) {
+      // start-limit-hit means systemd gave up restarting after repeated crashes;
+      // a plain "exited immediately" hint would hide that recovery needs a restart.
+      hints.push(
+        "systemd stopped restarting the gateway after repeated crashes.",
+        `Recover with: ${formatCliCommand("openclaw gateway restart", env)}, then inspect logs if it keeps crashing.`,
+      );
+    } else {
+      hints.push("Service is loaded but not running (likely exited immediately).");
+    }
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }

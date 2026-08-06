@@ -1,12 +1,56 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/ios-team-id.sh [--require-canonical]
+
+Prints an Apple Developer Team ID for iOS signing.
+
+Default behavior:
+- return IOS_DEVELOPMENT_TEAM when set
+- prefer the canonical OpenClaw iOS team when available in Xcode
+- otherwise fall back to a local Xcode team for local development builds
+
+Options:
+  --require-canonical  fail unless the resolved team is FWJYW4S8P8
+EOF
+}
+
+canonical_team="FWJYW4S8P8"
+require_canonical="0"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --require-canonical)
+      require_canonical="1"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+canonical_team="${canonical_team//$'\r'/}"
+
 if [[ -n "${IOS_DEVELOPMENT_TEAM:-}" ]]; then
-  printf '%s\n' "${IOS_DEVELOPMENT_TEAM}"
+  explicit_team="${IOS_DEVELOPMENT_TEAM//$'\r'/}"
+  if [[ "$require_canonical" == "1" && "$explicit_team" != "$canonical_team" ]]; then
+    echo "Resolved iOS Team ID '${explicit_team}' is not the canonical OpenClaw iOS team '${canonical_team}'." >&2
+    exit 1
+  fi
+  printf '%s\n' "$explicit_team"
   exit 0
 fi
 
-preferred_team="${IOS_PREFERRED_TEAM_ID:-${OPENCLAW_IOS_DEFAULT_TEAM_ID:-Y5PE65HELJ}}"
+preferred_team="${IOS_PREFERRED_TEAM_ID:-}"
 preferred_team_name="${IOS_PREFERRED_TEAM_NAME:-}"
 allow_keychain_fallback="${IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK:-0}"
 prefer_non_free_team="${IOS_PREFER_NON_FREE_TEAM:-1}"
@@ -53,7 +97,8 @@ append_team() {
   team_names+=("$candidate_name")
 }
 
-load_teams_from_xcode_preferences() {
+load_teams_from_xcode_team_key() {
+  local key="$1"
   local plist_path="${HOME}/Library/Preferences/com.apple.dt.Xcode.plist"
   [[ -f "$plist_path" ]] || return 0
   [[ -n "$python_cmd" ]] || return 0
@@ -62,7 +107,7 @@ load_teams_from_xcode_preferences() {
     [[ -z "$team_id" ]] && continue
     append_team "$team_id" "${is_free:-0}" "${team_name:-}"
   done < <(
-    plutil -extract IDEProvisioningTeams json -o - "$plist_path" 2>/dev/null \
+    plutil -extract "$key" json -o - "$plist_path" 2>/dev/null \
       | "$python_cmd" -c '
 import json
 import sys
@@ -89,6 +134,11 @@ for teams in data.values():
         print(f"{team_id}\t{is_free}\t{team_name}")
 '
   )
+}
+
+load_teams_from_xcode_preferences() {
+  load_teams_from_xcode_team_key IDEProvisioningTeamByIdentifier
+  load_teams_from_xcode_team_key IDEProvisioningTeams
 }
 
 load_teams_from_legacy_defaults_key() {
@@ -156,6 +206,12 @@ if [[ ${#team_ids[@]} -eq 0 && "$allow_keychain_fallback" == "1" ]]; then
 fi
 
 if [[ ${#team_ids[@]} -eq 0 ]]; then
+  if [[ "$require_canonical" == "1" ]]; then
+    echo "Canonical OpenClaw iOS Team ID '${canonical_team}' is not available in Xcode on this machine." >&2
+    echo "Sign into the Apple Developer account that owns the canonical team, or set IOS_DEVELOPMENT_TEAM=${canonical_team}." >&2
+    exit 1
+  fi
+
   if has_xcode_account; then
     echo "An Apple account is signed in to Xcode, but no Team ID could be resolved." >&2
     echo "" >&2
@@ -178,11 +234,26 @@ if [[ ${#team_ids[@]} -eq 0 ]]; then
 fi
 
 for i in "${!team_ids[@]}"; do
-  if [[ "${team_ids[$i]}" == "$preferred_team" ]]; then
+  if [[ "${team_ids[$i]}" == "$canonical_team" ]]; then
     printf '%s\n' "${team_ids[$i]}"
     exit 0
   fi
 done
+
+if [[ "$require_canonical" == "1" ]]; then
+  echo "Canonical OpenClaw iOS Team ID '${canonical_team}' is not available in Xcode on this machine." >&2
+  echo "Sign into the Apple Developer account that owns the canonical team, or set IOS_DEVELOPMENT_TEAM=${canonical_team}." >&2
+  exit 1
+fi
+
+if [[ -n "$preferred_team" ]]; then
+  for i in "${!team_ids[@]}"; do
+    if [[ "${team_ids[$i]}" == "$preferred_team" ]]; then
+      printf '%s\n' "${team_ids[$i]}"
+      exit 0
+    fi
+  done
+fi
 
 if [[ -n "$preferred_team_name" ]]; then
   preferred_team_name_lc="$(printf '%s' "$preferred_team_name" | tr '[:upper:]' '[:lower:]')"

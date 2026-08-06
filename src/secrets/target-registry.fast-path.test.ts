@@ -18,7 +18,24 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
               targetType: "channels.googlechat.serviceAccount",
               configFile: "openclaw.json",
               pathPattern: "channels.googlechat.serviceAccount",
-              refPathPattern: "channels.googlechat.serviceAccountRef",
+              secretShape: "secret_input",
+              expectedResolvedValue: "string",
+              includeInPlan: true,
+              includeInConfigure: true,
+              includeInAudit: true,
+            },
+          ],
+        };
+      }
+      if (dirName === "telegram" && artifactBasename === "secret-contract-api.js") {
+        return {
+          secretTargetRegistryEntries: [
+            {
+              id: "channels.telegram.botToken",
+              targetType: "channels.telegram.botToken",
+              configFile: "openclaw.json",
+              pathPattern: "channels.telegram.botToken",
+              refPathPattern: "channels.telegram.botTokenRef",
               secretShape: "sibling_ref",
               expectedResolvedValue: "string",
               includeInPlan: true,
@@ -43,7 +60,11 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
 }));
 
-import { resolveConfigSecretTargetByPath } from "./target-registry.js";
+import {
+  discoverConfigSecretTargetsByIds,
+  resolveConfigSecretTargetByPath,
+  resolvePlanTargetAgainstRegistry,
+} from "./target-registry.js";
 
 describe("secret target registry fast path", () => {
   beforeEach(() => {
@@ -58,11 +79,55 @@ describe("secret target registry fast path", () => {
       throw new Error("expected googlechat service account target");
     }
     expect(target.entry.id).toBe("channels.googlechat.serviceAccount");
-    expect(target.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
+    expect(target.refPathSegments).toBeUndefined();
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "googlechat",
       artifactBasename: "secret-contract-api.js",
     });
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers selected core config targets without loading plugin metadata", () => {
+    const targets = discoverConfigSecretTargetsByIds(
+      {
+        gateway: { auth: { token: "test-token" } },
+        channels: { telegram: { botToken: "ignored-token" } },
+      },
+      ["gateway.auth.token"],
+    );
+
+    expect(targets.map((target) => target.entry.id)).toEqual(["gateway.auth.token"]);
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers selected configured channel targets without loading plugin metadata", () => {
+    const targets = discoverConfigSecretTargetsByIds(
+      { channels: { telegram: { botToken: "test-token" } } },
+      ["channels.telegram.botToken"],
+    );
+
+    expect(targets.map((target) => target.entry.id)).toContain("channels.telegram.botToken");
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves channel plan targets without loading plugin metadata", () => {
+    const target = resolvePlanTargetAgainstRegistry({
+      type: "channels.telegram.botToken",
+      pathSegments: ["channels", "telegram", "botToken"],
+    });
+
+    expect(target?.entry.id).toBe("channels.telegram.botToken");
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves auth-profile plan targets without loading plugin metadata", () => {
+    const target = resolvePlanTargetAgainstRegistry({
+      type: "auth-profiles.api_key.key",
+      pathSegments: ["profiles", "openai:default", "key"],
+    });
+
+    expect(target?.entry.id).toBe("auth-profiles.api_key.key");
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,11 @@
 // MCP loopback tool schema projection.
 // Converts gateway-scoped tools into MCP tools/list-compatible schemas.
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+
+const MCP_LOOPBACK_LOG_PREFIX = "mcp-loopback";
 
 // MCP loopback schema projection adapts gateway tool definitions into MCP
 // tools/list entries. It flattens provider-hostile union schemas into object
@@ -57,14 +59,80 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
   }
 }
 
-function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknown> {
+function readLiteralSchemaValues(schema: Record<string, unknown>): unknown[] | undefined {
+  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+  if (Object.hasOwn(schema, "const")) {
+    if (!enumValues) {
+      return [schema.const];
+    }
+    return enumValues.some((value) => isDeepStrictEqual(value, schema.const)) ? [schema.const] : [];
+  }
+  return enumValues;
+}
+
+function uniqueLiteralValues(values: unknown[]): unknown[] {
+  return values.filter(
+    (value, index) =>
+      values.findIndex((candidate) => isDeepStrictEqual(candidate, value)) === index,
+  );
+}
+
+const SCHEMA_ANNOTATION_KEYS = new Set([
+  "$comment",
+  "default",
+  "deprecated",
+  "description",
+  "example",
+  "examples",
+  "readOnly",
+  "title",
+  "writeOnly",
+]);
+
+function readLiteralValidationConstraints(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(schema).filter(
+      ([key]) => key !== "const" && key !== "enum" && !SCHEMA_ANNOTATION_KEYS.has(key),
+    ),
+  );
+}
+
+function mergeLiteralSchemas(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const existingValues = readLiteralSchemaValues(existing);
+  const incomingValues = readLiteralSchemaValues(incoming);
+  if (existingValues === undefined || incomingValues === undefined) {
+    return undefined;
+  }
+  const existingConstraints = readLiteralValidationConstraints(existing);
+  const incomingConstraints = readLiteralValidationConstraints(incoming);
+  if (!isDeepStrictEqual(existingConstraints, incomingConstraints)) {
+    return undefined;
+  }
+  const values = uniqueLiteralValues([...existingValues, ...incomingValues]);
+  if (values.length === 0) {
+    return undefined;
+  }
+  const merged: Record<string, unknown> = { ...existing, enum: values };
+  delete merged.const;
+  return merged;
+}
+
+function flattenUnionSchema(
+  raw: Record<string, unknown>,
+  toolName: string,
+): Record<string, unknown> {
   // MCP clients vary in union-schema support. Merge only safe object variants
   // and keep common required fields so generated forms remain usable.
   const variants = (raw.anyOf ?? raw.oneOf) as unknown[] | undefined;
   if (!Array.isArray(variants) || variants.length === 0) {
     return raw;
   }
-  const mergedProps: Record<string, unknown> = {};
+  const mergedProps = Object.create(null) as Record<string, unknown>;
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
     if (variant === true) {
@@ -78,10 +146,12 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
     if (props) {
       for (const [key, schema] of Object.entries(props)) {
         if (!isPropertySchema(schema)) {
-          logWarn(`mcp loopback: malformed schema definition for "${key}", ignoring that variant`);
+          warnSchemaOnce(
+            `${MCP_LOOPBACK_LOG_PREFIX}: malformed schema definition for "${toolName}.${key}", ignoring that variant`,
+          );
           continue;
         }
-        if (!(key in mergedProps)) {
+        if (!Object.hasOwn(mergedProps, key)) {
           mergedProps[key] = schema;
           continue;
         }
@@ -98,32 +168,29 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
         if (incoming === false) {
           continue;
         }
+        if (areSchemaValuesEquivalent(existing, incoming)) {
+          continue;
+        }
         if (!isRecord(existing) || !isRecord(incoming)) {
           if (existing !== incoming) {
-            logWarn(
-              `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
+            warnSchemaOnce(
+              `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
             );
           }
           continue;
         }
-        if (Array.isArray(existing.enum) && Array.isArray(incoming.enum)) {
-          mergedProps[key] = {
-            ...existing,
-            enum: uniqueValues([...(existing.enum as unknown[]), ...(incoming.enum as unknown[])]),
-          };
+        if (isDeepStrictEqual(existing, incoming)) {
           continue;
         }
-        if ("const" in existing && "const" in incoming && existing.const !== incoming.const) {
-          const merged: Record<string, unknown> = {
-            ...existing,
-            enum: [existing.const, incoming.const],
-          };
-          delete merged.const;
-          mergedProps[key] = merged;
+        // A prior const merge becomes an enum. Treat both as one literal family
+        // so later union variants cannot silently disappear based on ordering.
+        const mergedLiterals = mergeLiteralSchemas(existing, incoming);
+        if (mergedLiterals) {
+          mergedProps[key] = mergedLiterals;
           continue;
         }
-        logWarn(
-          `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
+        warnSchemaOnce(
+          `${MCP_LOOPBACK_LOG_PREFIX}: conflicting schema definitions for "${toolName}.${key}", keeping the first variant`,
         );
       }
     }
@@ -134,7 +201,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
   const required =
     requiredSets.length > 0
       ? [...(requiredSets[0] ?? [])].filter(
-          (key) => key in mergedProps && requiredSets.every((set) => set.has(key)),
+          (key) => Object.hasOwn(mergedProps, key) && requiredSets.every((set) => set.has(key)),
         )
       : [];
   const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = raw;
@@ -143,6 +210,74 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
 
 function isPropertySchema(value: unknown): value is boolean | Record<string, unknown> {
   return typeof value === "boolean" || isRecord(value);
+}
+
+function rememberSchemaPair(
+  left: object,
+  right: object,
+  seen: WeakMap<object, WeakSet<object>>,
+): boolean {
+  const existing = seen.get(left);
+  if (existing?.has(right)) {
+    return true;
+  }
+  const next = existing ?? new WeakSet<object>();
+  next.add(right);
+  if (!existing) {
+    seen.set(left, next);
+  }
+  return false;
+}
+
+function areSchemaValuesEquivalent(
+  left: unknown,
+  right: unknown,
+  seen = new WeakMap<object, WeakSet<object>>(),
+): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    if (rememberSchemaPair(left, right, seen)) {
+      return true;
+    }
+    return left.every((value, index) => areSchemaValuesEquivalent(value, right[index], seen));
+  }
+  if (!isRecord(left) || !isRecord(right)) {
+    return false;
+  }
+  if (rememberSchemaPair(left, right, seen)) {
+    return true;
+  }
+  const leftKeys = Object.keys(left).toSorted();
+  const rightKeys = Object.keys(right).toSorted();
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  return leftKeys.every(
+    (key, index) =>
+      key === rightKeys[index] && areSchemaValuesEquivalent(left[key], right[key], seen),
+  );
+}
+
+// Loopback schemas are rebuilt on every cache miss (per session/owner context and
+// after TTL expiry), so raw logWarn would repeat the same field warning endlessly.
+// Dedupe on the full message: distinct (tool, field, reason) still each warn once,
+// but rebuilds collapse to one line. Named per tool.field so a conflict in one tool
+// no longer suppresses a genuinely different conflict on the same field name in
+// another tool. Bounded by the process-stable universe of loopback tool + field
+// names (gateway tool metadata does not change without restart or explicit reload).
+const emittedSchemaWarnings = new Set<string>();
+
+function warnSchemaOnce(message: string) {
+  if (emittedSchemaWarnings.has(message)) {
+    return;
+  }
+  emittedSchemaWarnings.add(message);
+  logWarn(message);
 }
 
 /** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
@@ -157,7 +292,7 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
       return [];
     }
     if (raw.anyOf || raw.oneOf) {
-      raw = flattenUnionSchema(raw);
+      raw = flattenUnionSchema(raw, name);
     }
     if (raw.type !== "object") {
       raw.type = "object";

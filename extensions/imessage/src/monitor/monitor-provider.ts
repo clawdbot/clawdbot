@@ -1,19 +1,22 @@
 // Imessage provider module implements model/runtime integration.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
+  formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
+  type ChannelInboundTurnPlan,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
-  deliverInboundReplyWithMessageSendContext,
+  bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
+  resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -21,14 +24,12 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
-import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -44,12 +45,18 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
+import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
+import type { IMessageApprovalGatewayRuntime } from "../approval-resolver.js";
+import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
+import { resolveIMessageHomeDir } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import {
@@ -61,48 +68,68 @@ import {
   imessageRpcSupportsMethod,
   probeIMessage,
 } from "../probe.js";
+import {
+  hasIMessageQuestionReactionTarget,
+  maybeResolveIMessageQuestionReaction,
+} from "../question-reactions.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
-import {
-  combineIMessagePayloads,
-  hasIMessageBalloonMetadata,
-  shouldCombineIMessagePayloadBucket,
-} from "./coalesce.js";
+import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
-import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
+import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
+import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
   warnGroupAllowlistMisconfigOnce,
 } from "./group-allowlist-warnings.js";
 import {
+  IMESSAGE_RECOVERY_MAX_AGE_MS,
+  IMESSAGE_RECOVERY_MAX_ROWS,
+  IMESSAGE_STALE_INBOUND_THRESHOLD_MS,
+  isStaleIMessageBacklog,
+} from "./inbound-dedupe.js";
+import {
+  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
+  mergeIMessageGroupAllowFromWithLegacyChatTargets,
+  rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
+import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
-import { parseIMessageNotification } from "./parse-notification.js";
+import { createPollCommentFolder } from "./poll-comment.js";
+import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
+import {
+  advanceIMessageRecoveryCursor,
+  loadIMessageRecoveryCursor,
+  resolveIMessageRecoveryCursorDbIdentity,
+} from "./recovery-cursor.js";
+import { detectRemoteHostFromCliPath } from "./remote-host.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
-import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+// Host-private context installed through the generic channel runtime registry.
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 const APPROVAL_REACTION_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
-function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
-  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
 }
 
 function isIMessagePluginPayloadAttachment(attachment: {
@@ -120,58 +147,74 @@ function isIMessagePluginPayloadAttachment(attachment: {
   );
 }
 
-async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
-  try {
-    const expanded = cliPath.startsWith("~")
-      ? cliPath.replace(/^~/, process.env.HOME ?? "")
-      : cliPath;
-    const content = await fs.readFile(expanded, "utf8");
-
-    const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
-    if (userHostMatch) {
-      return userHostMatch[1];
+function resolveIMessageInboundMediaInput(params: {
+  messageText: string;
+  attachments: IMessageAttachment[];
+  effectiveAttachmentRoots: readonly string[];
+  logVerbose?: (message: string) => void;
+}) {
+  // Apple rich-link previews are opaque plugin payloads; the useful URL stays
+  // in message text. Treating them as media creates phantom attachments and
+  // incorrectly bypasses text-only inbound debounce.
+  const mediaCandidates = params.attachments.filter(
+    (entry) => !isIMessagePluginPayloadAttachment(entry),
+  );
+  const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
+    const contentType = attachment.mime_type?.trim() || undefined;
+    return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+  });
+  const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
+    const fact = mediaFacts[index] ?? { kind: "unknown" as const };
+    const attachmentPath = attachment.original_path?.trim();
+    if (!attachmentPath || attachment.missing) {
+      return fact;
     }
-
-    const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
-    return hostOnlyMatch?.[1];
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      logVerbose(
-        `imessage: failed to inspect cliPath ${cliPath} for remoteHost detection: ${String(err)}`,
+    if (
+      !isInboundPathAllowed({ filePath: attachmentPath, roots: params.effectiveAttachmentRoots })
+    ) {
+      params.logVerbose?.(
+        `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
       );
+      return fact;
     }
-    return undefined;
-  }
+    return { ...fact, path: attachmentPath };
+  });
+  return {
+    bodyText: params.messageText,
+    mediaFacts,
+    mediaCandidates,
+    rawMediaAttachments,
+  };
 }
 
-function resolveLocalMessagesHomeDir(): string | undefined {
-  const home = process.env.HOME?.trim();
-  if (home) {
-    return home;
-  }
-  try {
-    return os.homedir().trim() || undefined;
-  } catch {
-    return undefined;
-  }
+function formatIMessageInboundMediaBody(params: {
+  messageText: string;
+  unavailableCount: number;
+}): string {
+  return formatInboundMediaUnavailableText({
+    body: params.messageText,
+    notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
+  });
 }
 
 function resolveLocalMessagesDbPath(dbPath: string): string {
   if (!dbPath.startsWith("~")) {
     return dbPath;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
 }
 
+// Local chat.db path to read MAX(ROWID) from for the startup since_rowid. Only
+// available when the gateway can read the DB directly (no remote bridge). On a
+// remote `cliPath`, returns undefined and the startup window relies on imsg's
+// own self-fence (see watch.subscribe comment).
 function resolveIMessageWatchSourceDbPath(params: {
-  catchupEnabled: boolean;
   cliPath: string;
   dbPath?: string;
   remoteHost?: string;
 }): string | undefined {
-  if (params.catchupEnabled || params.remoteHost) {
+  if (params.remoteHost) {
     return undefined;
   }
   const configured = params.dbPath?.trim();
@@ -182,7 +225,7 @@ function resolveIMessageWatchSourceDbPath(params: {
   if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
     return undefined;
   }
-  const home = resolveLocalMessagesHomeDir();
+  const home = resolveIMessageHomeDir();
   return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
 }
 
@@ -195,12 +238,14 @@ async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<num
       }
     | undefined;
   try {
-    const { DatabaseSync } = await import("node:sqlite");
-    database = new DatabaseSync(resolvedDbPath, { readOnly: true });
+    database = openNodeSqliteDatabase(resolvedDbPath, { readOnly: true });
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }
       | undefined;
-    return typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid) ? row.maxRowid : null;
+    if (typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid)) {
+      return row.maxRowid;
+    }
+    return row?.maxRowid === null ? 0 : null;
   } catch (err) {
     logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
     return null;
@@ -240,6 +285,68 @@ function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   );
 }
 
+const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
+  "agent echo in self-chat",
+  "echo",
+  "from me",
+  "reflected assistant content",
+  "self-chat echo",
+]);
+const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
+
+function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
+  return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
+}
+
+function describeIMessageInboundDropDiagnostic(params: {
+  accountId: string;
+  reason: string;
+  message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
+}): string | null {
+  if (!IMESSAGE_DIAGNOSTIC_DROP_REASONS.has(params.reason)) {
+    return null;
+  }
+  const messageId =
+    typeof params.message.id === "number" || typeof params.message.id === "string"
+      ? String(params.message.id)
+      : "unknown";
+  return (
+    `imessage: dropped inbound message account=${params.accountId} reason=${JSON.stringify(
+      params.reason,
+    )} ` +
+    `chat_id=${params.message.chat_id ?? "unknown"} group=${params.message.is_group === true} ` +
+    `message_id=${messageId} guid=${params.message.guid ? "present" : "missing"} ` +
+    `created_at=${params.message.created_at ?? "unknown"}`
+  );
+}
+
+function describeIMessageWatchSubscribeStartupFailure(params: {
+  accountId: string;
+  attempt: number;
+  maxAttempts: number;
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+  includeAttachments: boolean;
+  probeTimeoutMs: number;
+  watchSinceRowid: number | null;
+  error: unknown;
+  retryDelayMs?: number;
+}): string {
+  const retry = params.retryDelayMs !== undefined ? ` retry_in_ms=${params.retryDelayMs}` : "";
+  return (
+    `imessage: watch.subscribe startup failed attempt=${params.attempt}/${params.maxAttempts} ` +
+    `account=${params.accountId} cliPath=${params.cliPath} ` +
+    `dbPath=${params.dbPath ? "configured" : "default"} remoteHost=${
+      params.remoteHost ? "configured" : "none"
+    } ` +
+    `timeoutMs=${params.probeTimeoutMs} since_rowid=${params.watchSinceRowid ?? "none"} ` +
+    `attachments=${params.includeAttachments} include_reactions=true${retry}: ${String(
+      params.error,
+    )}`
+  );
+}
+
 async function waitForWatchSubscribeRetryDelay(params: {
   ms: number;
   abortSignal?: AbortSignal;
@@ -268,6 +375,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     cfg,
     accountId: opts.accountId,
   });
+  const approvalGatewayRuntime =
+    opts.channelRuntime?.runtimeContexts.get<IMessageApprovalGatewayRuntime>({
+      channelId: "imessage",
+      accountId: accountInfo.accountId,
+      capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+    });
   const imessageCfg = accountInfo.config;
   const historyLimit = Math.max(
     0,
@@ -299,9 +412,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });
+  // Mirror the runtime gate's effective sender allowlist so the startup
+  // warning fires only for configs where every group message actually drops.
+  const effectiveGroupAllowFrom = mergeIMessageGroupAllowFromWithLegacyChatTargets({
+    groupAllowFrom,
+    allowFrom,
+    allowLegacyConversationTargets: allowLegacyConversationAllowFromForGroup,
+  });
   warnGroupAllowlistMisconfigOnce({
     groupPolicy,
-    groups: imessageCfg.groups,
+    hasGroupAllowFrom: effectiveGroupAllowFrom.length > 0,
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });
@@ -340,41 +460,102 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(`imessage: detected remoteHost=${remoteHost} from cliPath`);
     }
   }
-  const watchSourceDbPath = resolveIMessageWatchSourceDbPath({
-    catchupEnabled: catchupCfg.enabled,
+  let staleBacklogSuppressed = 0;
+  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
+
+  // Downtime recovery. We pass the persisted recovery cursor (the last durably
+  // admitted rowid) to watch.subscribe as since_rowid so imsg replays the rows
+  // that landed while the gateway was down — over the same RPC client, so this
+  // works for remote SSH `cliPath` setups too — then tails live. GUID tombstones
+  // reject anything already completed.
+  //
+  // `recoveryBoundaryRowid` (M) is the local MAX(ROWID) at startup, read before
+  // the transport probe. It is only available when the gateway can read chat.db
+  // (not a remote bridge). When present it (a) caps the replay span to the most
+  // recent IMESSAGE_RECOVERY_MAX_ROWS, and (b) splits the age fence: rows at or
+  // below M are replay (delivered up to IMESSAGE_RECOVERY_MAX_AGE_MS old), rows
+  // above M are live (the tighter fence where #89237's Push-flush backlog
+  // appears). Without it (remote) the replay is uncapped and every row uses the
+  // live fence, so recovery still delivers recently-missed messages and still
+  // suppresses old backlog, just with the narrower live window.
+  const watchSourceDbPath = resolveIMessageWatchSourceDbPath({ cliPath, dbPath, remoteHost });
+  const recoveryBoundaryRowid = watchSourceDbPath
+    ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
+    : null;
+  // Scope the cursor to the resolved database so a dbPath/remoteHost change
+  // starts from the new DB's watermark instead of a stale high-water (#99638).
+  const recoveryCursorDbIdentity = resolveIMessageRecoveryCursorDbIdentity({
     cliPath,
     dbPath,
     remoteHost,
   });
-  const watchStartupRowidWatermark = watchSourceDbPath
-    ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
-    : null;
+  const recoveryCursorRowid = loadIMessageRecoveryCursor(
+    accountInfo.accountId,
+    recoveryCursorDbIdentity,
+    { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
+  );
+  const reconciledWatchSinceRowid = catchupCfg.enabled
+    ? null
+    : recoveryCursorRowid !== null
+      ? recoveryBoundaryRowid !== null
+        ? Math.max(recoveryCursorRowid, recoveryBoundaryRowid - IMESSAGE_RECOVERY_MAX_ROWS)
+        : recoveryCursorRowid
+      : recoveryBoundaryRowid;
+  // imsg reserves cursor 0 for a subscribe-time MAX(ROWID) self-fence. Use the
+  // exclusive cursor before SQLite's first generated ROWID instead.
+  const watchSinceRowid = reconciledWatchSinceRowid === 0 ? -1 : reconciledWatchSinceRowid;
 
-  // When `coalesceSameSenderDms` is enabled and the user has not set an
-  // explicit inbound debounce for this channel, widen the window to 2500 ms.
-  // Apple's split-send for `<command> <URL>` arrives ~0.8-2.0 s apart on most
-  // setups, so the legacy 0 ms default would flush the command alone before
-  // the URL row reaches the debouncer.
-  const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
-  const inboundCfg = cfg.messages?.inbound;
-  const hasExplicitInboundDebounce =
-    typeof inboundCfg?.debounceMs === "number" ||
-    typeof inboundCfg?.byChannel?.imessage === "number";
-  const debounceMsOverride =
-    coalesceSameSenderDms && !hasExplicitInboundDebounce ? 2500 : undefined;
+  let latestAdvancedRecoveryCursorRowid = recoveryCursorRowid ?? -1;
+  const durableRecoveryCursorRowids = new Set<number>();
+  const failedRecoveryCursorRowids = new Set<number>();
 
-  // Session capability latch: flips true once any inbound row from this imsg
-  // build carries balloon metadata. The coalesce flush gate needs a build-level
-  // (not per-bucket) signal because imsg omits `balloon_bundle_id` for plain
-  // rows, so a bucket of plain text looks identical on old and new builds.
-  let imsgEmitsBalloonMetadata = false;
+  function minSetValue(values: ReadonlySet<number>): number | null {
+    let min: number | null = null;
+    for (const value of values) {
+      min = min === null ? value : Math.min(min, value);
+    }
+    return min;
+  }
+
+  function advanceRecoveryCursorAfterDurableEnqueue(rowid: number): void {
+    if (catchupCfg.enabled) {
+      return;
+    }
+    failedRecoveryCursorRowids.delete(rowid);
+    durableRecoveryCursorRowids.add(rowid);
+    const maxDurableRowid = Math.max(...durableRecoveryCursorRowids);
+    const holdFloor = minSetValue(failedRecoveryCursorRowids);
+    const nextCursorRowid =
+      holdFloor !== null && maxDurableRowid >= holdFloor ? holdFloor - 1 : maxDurableRowid;
+
+    if (nextCursorRowid >= 0 && nextCursorRowid > latestAdvancedRecoveryCursorRowid) {
+      advanceIMessageRecoveryCursor(
+        accountInfo.accountId,
+        recoveryCursorDbIdentity,
+        nextCursorRowid,
+      );
+      latestAdvancedRecoveryCursorRowid = nextCursorRowid;
+      for (const durableRowid of durableRecoveryCursorRowids) {
+        if (durableRowid <= nextCursorRowid) {
+          durableRecoveryCursorRowids.delete(durableRowid);
+        }
+      }
+    }
+  }
+
+  function holdRecoveryCursorBeforeFailedEnqueue(rowid: number | null): void {
+    if (catchupCfg.enabled || rowid === null || rowid <= latestAdvancedRecoveryCursorRowid) {
+      return;
+    }
+    failedRecoveryCursorRowids.add(rowid);
+  }
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<{
     message: IMessagePayload;
+    ingressLifecycle?: IMessageIngressLifecycle;
   }>({
     cfg,
     channel: "imessage",
-    debounceMsOverride,
     buildKey: (entry) => {
       const msg = entry.message;
       const sender = msg.sender?.trim();
@@ -385,14 +566,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         msg.chat_id != null
           ? `chat:${msg.chat_id}`
           : (msg.chat_guid ?? msg.chat_identifier ?? "unknown");
-
-      // With coalesceSameSenderDms enabled, DMs key on chat:sender so Apple's
-      // split text row and URL-balloon row land in the same bucket. The flush
-      // path still requires imsg's structural balloon metadata before merging.
-      // Group chats keep the legacy key to preserve multi-user turn structure.
-      if (coalesceSameSenderDms && msg.is_group !== true) {
-        return `imessage:${accountInfo.accountId}:dm:${conversationId}:${sender}`;
-      }
 
       return `imessage:${accountInfo.accountId}:${conversationId}:${sender}`;
     },
@@ -406,15 +579,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         return false;
       }
 
-      // Hold opt-in DMs long enough for a following URL-balloon row to arrive.
-      // The flush gate (shouldCombineIMessagePayloadBucket) decides merge vs.
-      // separate: it merges precisely on imsg's balloon marker, and falls back
-      // to a legacy merge only when the build emits no balloon metadata at all.
-      if (coalesceSameSenderDms) {
-        return msg.is_group !== true;
-      }
-
-      // Legacy gate: text-only, no control commands, no media.
+      // General same-sender inbound debounce: text-only, no control commands,
+      // no media. Off by default unless messages.inbound is configured.
       return shouldDebounceTextInbound({
         text: msg.text,
         cfg,
@@ -423,31 +589,48 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         ),
       });
     },
-    onFlush: async (entries) => {
-      if (entries.length === 0) {
-        return;
-      }
-      if (entries.length === 1) {
-        await handleMessageNow(entries[0].message);
-        return;
-      }
+    onFlush: (entries, createFlush) => {
+      const { lifecycle, settle, abandon } = fanInChannelIngressLifecycles(
+        entries.flatMap((entry) => (entry.ingressLifecycle ? [entry.ingressLifecycle] : [])),
+      );
+      return createFlush({
+        lifecycle,
+        dispatch: async (admissionLifecycle) => {
+          if (entries.length === 0) {
+            return;
+          }
+          try {
+            if (admissionLifecycle.abortSignal.aborted) {
+              await abandon();
+              return;
+            }
+            if (entries.length === 1) {
+              await handleMessageNow(
+                expectDefined(entries[0], "single iMessage dispatch entry").message,
+                admissionLifecycle,
+              );
+              await settle();
+              return;
+            }
 
-      const messages = entries.map((e) => e.message);
-      if (!shouldCombineIMessagePayloadBucket(messages, imsgEmitsBalloonMetadata)) {
-        for (const message of messages) {
-          await handleMessageNow(message);
-        }
-        return;
-      }
-
-      const combined = combineIMessagePayloads(messages);
-      if (shouldLogVerbose()) {
-        const text = combined.text ?? "";
-        const preview = text.slice(0, 50);
-        const ellipsis = text.length > 50 ? "..." : "";
-        logVerbose(`[imessage] coalesced ${entries.length} messages: "${preview}${ellipsis}"`);
-      }
-      await handleMessageNow(combined);
+            const messages = entries.map((entry) => entry.message);
+            const combined = combineIMessagePayloads(messages);
+            if (shouldLogVerbose()) {
+              const text = combined.text ?? "";
+              const preview = sliceUtf16Safe(text, 0, 50);
+              const ellipsis = text.length > 50 ? "..." : "";
+              logVerbose(
+                `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
+              );
+            }
+            await handleMessageNow(combined, admissionLifecycle);
+            await settle();
+          } catch (err) {
+            await abandon();
+            runtime.error?.(`imessage: inbound dispatch failed: ${String(err)}`);
+          }
+        },
+      });
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);
@@ -536,80 +719,83 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
   async function handleMessageNow(
     message: IMessagePayload,
-    options: { advanceCatchupCursor?: boolean } = {},
+    ingressLifecycle?: IMessageIngressLifecycle,
   ) {
-    await handleMessageNowInner(message);
-    if (options.advanceCatchupCursor !== false) {
-      await maybeAdvanceLiveCatchupCursor(message);
-    }
+    await handleMessageNowInner(message, ingressLifecycle);
   }
 
-  async function handleMessageNowInner(rawMessage: IMessagePayload) {
+  // iMessage delivers a poll's comment as a separate inline reply to the poll
+  // balloon; fold it into the poll so the agent votes once instead of also
+  // replying to the caption in prose (a redundant restatement of the vote).
+  const pollCommentFolder = createPollCommentFolder();
+
+  function resolveIMessageInboundBodyText(message: IMessagePayload) {
+    // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
+    // decoded poll (question/options/votes) so the agent sees the actual poll.
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll, message.sender) : null;
+    const messageText = (pollBody ?? message.text ?? "").trim();
+    const attachments = includeAttachments ? (message.attachments ?? []) : [];
+    const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
+    const mediaInput = resolveIMessageInboundMediaInput({
+      messageText,
+      attachments,
+      effectiveAttachmentRoots,
+      logVerbose,
+    });
+    return {
+      messageText,
+      ...mediaInput,
+      effectiveAttachmentRoots,
+    };
+  }
+
+  async function handleMessageNowInner(
+    rawMessage: IMessagePayload,
+    ingressLifecycle?: IMessageIngressLifecycle,
+  ) {
     const message = await repairMessageConversationAnchor(rawMessage);
     if (!message) {
       return;
     }
 
-    const messageText = (message.text ?? "").trim();
-
-    const attachments = includeAttachments ? (message.attachments ?? []) : [];
-    const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
-    const validAttachments = attachments.filter((entry) => {
-      if (isIMessagePluginPayloadAttachment(entry)) {
-        // Apple rich-link previews arrive as opaque .pluginPayloadAttachment
-        // files. The useful URL remains in message.text/attributedBody; treating
-        // the preview blob as media creates noisy phantom attachments and can
-        // keep split-send URL previews out of the text debounce path.
-        return false;
-      }
-      const attachmentPath = entry?.original_path?.trim();
-      if (!attachmentPath || entry?.missing) {
-        return false;
-      }
-      if (isInboundPathAllowed({ filePath: attachmentPath, roots: effectiveAttachmentRoots })) {
-        return true;
-      }
-      logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
-      return false;
-    });
-    const rawMediaAttachments = validAttachments.flatMap((a) => {
-      const attachmentPath = a.original_path?.trim();
-      return attachmentPath
-        ? [{ path: attachmentPath, contentType: a.mime_type ?? undefined }]
-        : [];
-    });
-    const placeholderMediaType = rawMediaAttachments[0]?.contentType;
-    const kind = kindFromMime(placeholderMediaType ?? undefined);
-    const placeholder = kind
-      ? `<media:${kind}>`
-      : validAttachments.length
-        ? "<media:attachment>"
-        : "";
-    const bodyText = messageText || placeholder;
-
-    // Approval reaction shortcut: if the inbound tapback resolves a pending
-    // approval prompt, route it through the gateway and skip the normal
-    // dispatch pipeline. This bypasses reactionNotifications gating so
-    // approvals still work when general reaction surfacing is off, and it
-    // bypasses allowFrom/dmPolicy because the approval-reactions module
-    // enforces its own actor authorization via channels.imessage.allowFrom.
-    if (
-      await maybeResolveIMessageApprovalReaction({
-        cfg,
-        accountId: accountInfo.accountId,
-        message,
-        bodyText,
-        logVerboseMessage: logVerbose,
-      })
+    // Remember native polls so a caption reply that lands WITH the poll is
+    // recognized and folded. The poll balloon (rendered with options + a vote
+    // cue) is still delivered; only the near-simultaneous comment is dropped so
+    // the agent votes without also answering it as a standalone question. A
+    // deliberate later inline reply to the poll falls outside the window and is
+    // delivered normally.
+    const pollFoldAtMs = message.created_at ? Date.parse(message.created_at) : Number.NaN;
+    if (message.poll) {
+      pollCommentFolder.rememberPoll(message.guid, pollFoldAtMs, message.sender);
+    } else if (
+      message.reply_to_guid != null &&
+      pollCommentFolder.isPollComment(message.reply_to_guid, pollFoldAtMs, message.sender)
     ) {
+      logVerbose(
+        "imessage: folding poll comment (inline reply sent with a poll) into the poll; not delivering standalone",
+      );
       return;
     }
+
+    const {
+      messageText,
+      bodyText,
+      mediaFacts,
+      mediaCandidates,
+      rawMediaAttachments,
+      effectiveAttachmentRoots,
+    } = resolveIMessageInboundBodyText(message);
 
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
+    const isQuestionReaction = hasIMessageQuestionReactionTarget({
+      accountId: accountInfo.accountId,
+      message,
+      bodyText,
+    });
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -617,6 +803,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       opts,
       messageText,
       bodyText,
+      mediaFacts,
       allowFrom,
       groupAllowFrom,
       allowLegacyConversationAllowFromForGroup,
@@ -627,7 +814,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
-      reactionNotifications: imessageCfg.reactionNotifications,
+      reactionNotifications: isQuestionReaction ? "all" : imessageCfg.reactionNotifications,
       logVerbose,
     });
 
@@ -648,6 +835,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         decision.reason === "from me";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
+      }
+      const diagnostic = describeIMessageInboundDropDiagnostic({
+        accountId: accountInfo.accountId,
+        reason: decision.reason,
+        message,
+      });
+      if (diagnostic) {
+        const throttleKey = `${rateLimitKey}:${decision.reason}`;
+        const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
+          decision.reason,
+        );
+        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.check(throttleKey)) {
+          runtime.log?.(warn(diagnostic));
+        }
       }
       // Surface the silent-allowlist drop once per chat. Without this, operators
       // who set groupPolicy="allowlist" without populating
@@ -678,6 +879,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       await createChannelPairingChallengeIssuer({
         channel: "imessage",
+        accountId: accountInfo.accountId,
         upsertPairingRequest: async ({ id, meta }) =>
           await upsertChannelPairingRequest({
             channel: "imessage",
@@ -714,6 +916,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     if (decision.kind === "reaction") {
+      if (
+        await maybeResolveIMessageQuestionReaction({
+          cfg,
+          accountId: accountInfo.accountId,
+          message,
+          bodyText,
+          senderId: decision.senderNormalized,
+          logDebug: logVerbose,
+        })
+      ) {
+        return;
+      }
       enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
     }
@@ -721,20 +935,109 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
-    const stagedAttachments = remoteHost
-      ? []
-      : await stageIMessageAttachments(validAttachments, {
+    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
+    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
+    if (privateApiStatus?.available === true) {
+      // Surface a single warning per restart when the bridge is up but we
+      // had to gate off typing/read because the imsg build pre-dates the
+      // capability list. Otherwise the user sees no typing bubble / no
+      // "Read" receipt with no visible reason.
+      if (!supportsTyping || !supportsRead) {
+        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
+      }
+    }
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg, decision.route.agentId);
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      sessionKey: decision.route.sessionKey,
+      channel: "imessage",
+      chatType: decision.isGroup ? "group" : "direct",
+    });
+    const shouldUseDirectToolTypingOptions =
+      !decision.isGroup &&
+      sendPolicy !== "deny" &&
+      (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingTarget = shouldStartDirectTyping
+      ? buildDirectIMessageReplyTarget({
+          cfg,
+          accountId: decision.route.accountId,
+          sender: decision.sender,
+        })
+      : undefined;
+    let stopEarlyDirectTyping: (() => void) | undefined;
+    if (earlyDirectTypingTarget) {
+      // Start channel-native feedback before the expensive history/context/model
+      // path. Use a short-lived client so a slow typing RPC cannot block the
+      // monitor client's watch stream. Stop is sequenced after start so fast
+      // command replies cannot leave a late true after typing:false.
+      const earlyDirectTypingStarted = sendIMessageTyping(earlyDirectTypingTarget, true, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).then(
+        () => true,
+        (err: unknown) => {
+          logTypingFailure({
+            log: (msg) => logVerbose(msg),
+            channel: "imessage",
+            action: "start",
+            target: earlyDirectTypingTarget,
+            error: err,
+          });
+          return false;
+        },
+      );
+      let earlyTypingStopQueued = false;
+      stopEarlyDirectTyping = () => {
+        if (earlyTypingStopQueued) {
+          return;
+        }
+        earlyTypingStopQueued = true;
+        void earlyDirectTypingStarted
+          .then(async (started) => {
+            if (!started) {
+              return;
+            }
+            await sendIMessageTyping(earlyDirectTypingTarget, false, {
+              cfg,
+              accountId: accountInfo.accountId,
+            });
+          })
+          .catch((err: unknown) => {
+            logTypingFailure({
+              log: (msg) => logVerbose(msg),
+              channel: "imessage",
+              action: "stop",
+              target: earlyDirectTypingTarget,
+              error: err,
+            });
+          });
+      };
+    }
+    const staged = remoteHost
+      ? {
+          attachments: rawMediaAttachments,
+          unavailableCount: rawMediaAttachments.filter((attachment) => !attachment.path).length,
+        }
+      : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
           allowedRoots: effectiveAttachmentRoots,
           deps: { logVerbose },
         });
-    const mediaAttachments = remoteHost ? rawMediaAttachments : stagedAttachments;
-    const firstAttachment = mediaAttachments[0];
-    const mediaPath = firstAttachment?.path ?? undefined;
-    const mediaType = firstAttachment?.contentType ?? undefined;
-    // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
-    const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
+    const mediaAttachments = staged.attachments;
+    const unavailableCount = staged.unavailableCount;
+    const contextDecision =
+      unavailableCount > 0
+        ? {
+            ...decision,
+            agentBodyText: formatIMessageInboundMediaBody({
+              messageText,
+              unavailableCount,
+            }),
+          }
+        : decision;
     const previousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey: decision.route.sessionKey,
@@ -759,7 +1062,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
-      decision,
+      decision: contextDecision,
       message,
       previousTimestamp,
       remoteHost,
@@ -767,10 +1070,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       dmHistory,
       media: {
-        path: mediaPath,
-        type: mediaType,
-        paths: mediaPaths,
-        types: mediaTypes,
+        facts: mediaAttachments,
       },
     });
 
@@ -789,31 +1089,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
-    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
-    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
-    if (privateApiStatus?.available === true) {
-      // Surface a single warning per restart when the bridge is up but we
-      // had to gate off typing/read because the imsg build pre-dates the
-      // capability list. Otherwise the user sees no typing bubble / no
-      // "Read" receipt with no visible reason.
-      if (!supportsTyping || !supportsRead) {
-        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
-      }
-    }
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
 
     if (supportsRead && sendReadReceipts && typingTarget) {
-      try {
-        await markIMessageChatRead(typingTarget, {
-          cfg,
-          accountId: accountInfo.accountId,
-          client: getActiveClient(),
-        });
-      } catch (err) {
+      // Read receipts are best-effort channel UI. Do not put them on the
+      // critical path before model dispatch; slow private-API reads otherwise
+      // make accepted iMessage turns feel stuck before the agent starts. Use
+      // a short-lived client so a stuck read cannot block monitor-client typing.
+      void markIMessageChatRead(typingTarget, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).catch((err: unknown) => {
         runtime.error?.(`imessage: mark read failed: ${String(err)}`);
-      }
+      });
     }
 
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -865,47 +1154,36 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           : undefined,
     });
 
-    const {
-      dispatcher,
-      replyOptions: typingReplyOptions,
-      markDispatchIdle,
-    } = createReplyDispatcherWithTyping({
+    const dispatcherOptions = {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
-      deliver: async (payload, info) => {
+    };
+    const delivery: ChannelInboundTurnPlan["delivery"] = {
+      durable: ctxPayload.To
+        ? {
+            to: ctxPayload.To,
+            deps: {
+              imessage: createIMessageEchoCachingSend({
+                accountId: accountInfo.accountId,
+                sentMessageCache,
+              }),
+            },
+          }
+        : false,
+      observeMessageSent: true,
+      deliver: async (payload: Parameters<typeof deliverIMessageReply>[0]["payload"]) => {
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
-          return;
+          return {
+            visibleReplySent: false,
+            suppression: { reason: "no_visible_result" },
+          } as const;
         }
-        const durable = await deliverInboundReplyWithMessageSendContext({
+        return await deliverIMessageReply({
           cfg,
-          channel: "imessage",
-          accountId: accountInfo.accountId,
-          agentId: decision.route.agentId,
-          ctxPayload,
           payload,
-          info,
-          to: target,
-          deps: {
-            imessage: createIMessageEchoCachingSend({
-              client: getActiveClient(),
-              accountId: accountInfo.accountId,
-              sentMessageCache,
-            }),
-          },
-        });
-        if (durable.status === "failed") {
-          throw durable.error;
-        }
-        if (durable.status === "handled_visible" || durable.status === "handled_no_send") {
-          return;
-        }
-        await deliverReplies({
-          cfg,
-          replies: [payload],
           target,
-          client: getActiveClient(),
           accountId: accountInfo.accountId,
           runtime,
           maxBytes: mediaMaxBytes,
@@ -916,39 +1194,37 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       onError: (err, info) => {
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
-    });
+    };
     let directTypingController: IMessageTypingController | undefined;
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
-      sessionKey: decision.route.sessionKey,
-      channel: "imessage",
-      chatType: decision.isGroup ? "group" : "direct",
-    });
-    const shouldStartToolTyping =
-      !decision.isGroup &&
-      sendPolicy !== "deny" &&
-      (configuredTypingMode === undefined || configuredTypingMode === "instant");
-    const directToolTypingOptions = shouldStartToolTyping
+    const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
           // visible tool-progress message. The suppress flag is what lets
           // dispatch forward this callback even when verbose progress is off;
           // allowProgress covers message_tool_only source delivery. Keep this on
-          // the direct instant/default path so configured typingMode values still
-          // decide when typing can begin.
+          // the direct instant/default path even when older imsg builds do not
+          // report native typing support.
           suppressDefaultToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
-            typingReplyOptions.onTypingController?.(typing);
           },
-          onToolStart: async () => {
+          // Keep the channel-owned progress lane present even when private-API
+          // typing is unavailable. Fast-mode notices are then consumed here
+          // instead of falling back to a durable iMessage bubble.
+          onToolResult: async () => {
             await directTypingController?.startTypingLoop();
           },
+          ...(supportsTyping
+            ? {
+                onToolStart: async () => {
+                  await directTypingController?.startTypingLoop();
+                },
+              }
+            : {}),
         } as const)
       : {};
+    const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route: decision.route,
       sessionKey: decision.route.sessionKey,
@@ -968,12 +1244,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           raw: decision,
         }),
         resolveTurn: () => ({
+          cfg,
           channel: "imessage",
           accountId: decision.route.accountId,
-          routeSessionKey: decision.route.sessionKey,
-          storePath,
+          route: {
+            agentId: decision.route.agentId,
+            sessionKey: decision.route.sessionKey,
+          },
           ctxPayload,
-          recordInboundSession,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget
@@ -1008,73 +1286,187 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          onPreDispatchFailure: () =>
-            settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => markDispatchIdle(),
-            }),
-          runDispatch: async () => {
-            try {
-              return await dispatchInboundMessage({
-                ctx: ctxPayload,
-                cfg,
-                dispatcher,
-                replyOptions: {
-                  ...typingReplyOptions,
-                  disableBlockStreaming:
-                    typeof accountInfo.config.blockStreaming === "boolean"
-                      ? !accountInfo.config.blockStreaming
-                      : undefined,
-                  onModelSelected,
-                  ...directToolTypingOptions,
-                },
-              });
-            } finally {
-              markDispatchIdle();
-            }
+          delivery,
+          dispatcherOptions: {
+            ...dispatcherOptions,
+            onSettled: () => stopEarlyDirectTyping?.(),
+          },
+          replyOptions: {
+            ...(ingressLifecycle ? bindIngressLifecycleToReplyOptions(ingressLifecycle) : {}),
+            disableBlockStreaming:
+              typeof configuredBlockStreaming === "boolean" ? !configuredBlockStreaming : undefined,
+            onModelSelected,
+            ...directToolTypingOptions,
           },
         }),
+        onFinalize: () => stopEarlyDirectTyping?.(),
       },
     });
   }
 
-  const handleMessage = async (raw: unknown) => {
-    const message = parseIMessageNotification(raw);
-    if (!message) {
-      // A malformed RPC notification means imsg shipped a payload shape
-      // we do not understand — almost always a real bridge bug. Surface
-      // the keys so an operator can correlate without leaking content.
-      const shape =
-        raw && typeof raw === "object" && !Array.isArray(raw)
-          ? Object.keys(raw as Record<string, unknown>)
-              .toSorted()
-              .join(",")
-          : typeof raw;
-      runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
-      return;
-    }
-    // Latch build capability from any row that carries balloon metadata so the
-    // coalesce flush gate can trust a missing URL marker on later plain buckets.
-    if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
-      imsgEmitsBalloonMetadata = true;
-    }
-    if (
-      watchStartupRowidWatermark !== null &&
+  const suppressStaleIngress = (
+    message: IMessagePayload,
+    receivedAt: number,
+    provenance?: { catchup?: boolean },
+  ): boolean => {
+    const isRecoveryReplay =
+      recoveryCursorRowid !== null &&
+      recoveryBoundaryRowid !== null &&
       typeof message.id === "number" &&
-      Number.isFinite(message.id) &&
-      message.id <= watchStartupRowidWatermark
-    ) {
-      logVerbose(
-        `imessage: dropping stale watch notification at or before startup rowid account=${accountInfo.accountId}`,
-      );
-      return;
+      message.id <= recoveryBoundaryRowid;
+    const staleThresholdMs = isRecoveryReplay
+      ? IMESSAGE_RECOVERY_MAX_AGE_MS
+      : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
+    if (provenance?.catchup || !isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
+      return false;
     }
-    const repairedMessage = await repairMessageConversationAnchor(message);
-    if (!repairedMessage) {
-      return;
-    }
-    await inboundDebouncer.enqueue({ message: repairedMessage });
+    staleBacklogSuppressed += 1;
+    runtime.log?.(
+      warn(
+        `imessage: suppressed stale inbound backlog account=${accountInfo.accountId} ` +
+          `sent=${message.created_at ?? "unknown"} recovery=${isRecoveryReplay} ` +
+          `(${staleBacklogSuppressed} suppressed since start)`,
+      ),
+    );
+    return true;
   };
+
+  const maybeHandleApprovalControl = async (message: IMessagePayload): Promise<boolean> => {
+    if (
+      await maybeResolveIMessageApprovalPollVote({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+        gatewayRuntime: approvalGatewayRuntime,
+      })
+    ) {
+      return true;
+    }
+    return await maybeResolveIMessageApprovalReaction({
+      cfg,
+      accountId: accountInfo.accountId,
+      message,
+      bodyText: resolveIMessageInboundBodyText(message).bodyText,
+      gatewayRuntime: approvalGatewayRuntime,
+      logVerboseMessage: logVerbose,
+    });
+  };
+
+  const resolveApprovalControlConversation = (message: IMessagePayload) => {
+    const sender = normalizeIMessageHandle((message.sender ?? "").trim());
+    const destination = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
+    const receivedSenderIsLocalFallback =
+      message.is_from_me !== true && Boolean(sender) && sender === destination;
+    const actorHandle =
+      (receivedSenderIsLocalFallback ? "" : sender) ||
+      (message.is_from_me === true ? destination : "");
+    return actorHandle
+      ? buildIMessageApprovalConversationKeyForInbound({
+          chatGuid: message.chat_guid,
+          chatIdentifier: message.chat_identifier,
+          chatId: message.chat_id,
+          isGroup: message.is_group,
+          actorHandle,
+        })
+      : null;
+  };
+
+  const ingress = createIMessageDurableIngress({
+    accountId: accountInfo.accountId,
+    runtime,
+    dispatchPriority: async (message, lifecycle, receivedAt, provenance) => {
+      const bodyText = (message.text ?? "").trim();
+      const isApprovalCommand = /^\/approve(?:@[^\s]+)?(?:\s|$)/i.test(bodyText);
+      const isCandidate =
+        isApprovalCommand ||
+        message.poll?.kind === "vote" ||
+        Boolean(resolveIMessageReactionContext(message, bodyText));
+      if (!isCandidate) {
+        return undefined;
+      }
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
+        return { kind: "completed" };
+      }
+      const repairedMessage = await repairMessageConversationAnchor(message);
+      if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      if (isApprovalCommand) {
+        // Resolve approval commands through the ordinary authenticated command
+        // pipeline, but ahead of the chat lane containing the run they release.
+        await handleMessageNowInner(repairedMessage);
+        return { kind: "completed" };
+      }
+      const conversation = resolveApprovalControlConversation(repairedMessage);
+      while (true) {
+        if (await maybeHandleApprovalControl(repairedMessage)) {
+          return { kind: "completed" };
+        }
+        if (!conversation) {
+          return undefined;
+        }
+        const waited = await iMessageApprovalControlBindings.wait({
+          accountId: accountInfo.accountId,
+          conversation,
+          abortSignal: lifecycle.abortSignal,
+        });
+        if (!waited) {
+          // The binding may have completed between the ownership check and
+          // window lookup. Close that check-then-wait race before queueing.
+          return (await maybeHandleApprovalControl(repairedMessage))
+            ? { kind: "completed" }
+            : undefined;
+        }
+      }
+    },
+    dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
+      // Age fence with two windows, split on the recovery boundary:
+      //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
+      //    imsg emits from since_rowid — deliver them up to the wider recovery
+      //    age, suppressing only ancient history.
+      //  - rows above it are genuinely live — suppress at the tighter live
+      //    threshold, which is where #89237's Push-flush backlog (old send date,
+      //    fresh rowid) appears.
+      // Logged at default level so suppressed traffic is never silent (#89237).
+      // Catchup rows are operator-requested history: the catchup query's own
+      // maxAge window is their age gate. Running them through the live fence
+      // would suppress AND tombstone rows older than 15 minutes — losing
+      // messages the operator explicitly asked to replay.
+      if (suppressStaleIngress(message, receivedAt, provenance)) {
+        // Returning completes the durable GUID claim. A later restart cannot
+        // reinterpret this live-fence suppression under the wider replay fence.
+        // Accepted overlap: a legacy-catchup redelivery of this GUID stays
+        // tombstone-blocked, so Push-flush backlog suppressed here is not
+        // recoverable via catchup either. The window is narrow (downtime
+        // backlog + catchup enabled) and preferring it over releasable
+        // suppressions keeps restart replay deterministic.
+        return { kind: "completed" };
+      }
+      const repairedMessage = await repairMessageConversationAnchor(message);
+      if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      // A candidate can arrive during the narrow send-to-binding window. If it
+      // initially proved unowned and waited in the chat lane, recheck before
+      // rendering it as ordinary inbound content.
+      if (await maybeHandleApprovalControl(repairedMessage)) {
+        return { kind: "completed" };
+      }
+      await inboundDebouncer.enqueue({
+        message: repairedMessage,
+        ingressLifecycle,
+      });
+      // Debounce owns the claim until its eventual flush adopts or abandons.
+      return { kind: "deferred" };
+    },
+    onDurableEnqueue: async (facts) => {
+      advanceRecoveryCursorAfterDurableEnqueue(facts.rowid);
+      await maybeAdvanceLiveCatchupCursor({ id: facts.rowid, created_at: facts.createdAt });
+    },
+    onDurableEnqueueFailure: (rowid) => {
+      holdRecoveryCursorBeforeFailedEnqueue(rowid);
+    },
+  });
 
   await waitForTransportReady({
     label: "imsg rpc",
@@ -1107,8 +1499,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime,
       onNotification: (msg) => {
         if (msg.method === "message") {
-          void handleMessage(msg.params).catch((err: unknown) => {
-            runtime.error?.(`imessage: handler failed: ${String(err)}`);
+          void ingress.receive(msg.params).catch((err: unknown) => {
+            runtime.error?.(`imessage: durable admission failed: ${String(err)}`);
           });
         } else if (msg.method === "error") {
           runtime.error?.(
@@ -1142,18 +1534,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         client: attemptClient,
         getSubscriptionId: () => attemptSubscriptionId,
       });
+      // since_rowid = the recovery cursor (last durably admitted rowid, capped),
+      // captured before the transport-ready probe, so imsg replays messages that
+      // landed while the gateway was down and during the startup window instead
+      // of self-fencing them at subscribe-time MAX(ROWID). When unavailable
+      // (remote bridge) imsg self-fences at the current MAX(ROWID)
+      // (MessageWatcher.start: `if cursor == 0 { cursor = maxRowID() }`), so it
+      // tails new rows only. The replay's age is bounded by the recovery age
+      // window in handleMessage; backlog Apple writes *after* subscribe (fresh
+      // rowid, old send date) is handled by the live age fence.
       const result = await attemptClient.request<{ subscription?: number }>(
         "watch.subscribe",
         {
           attachments: includeAttachments,
           include_reactions: true,
-          ...(watchStartupRowidWatermark !== null
-            ? { since_rowid: watchStartupRowidWatermark }
-            : {}),
+          ...(watchSinceRowid !== null ? { since_rowid: watchSinceRowid } : {}),
         },
         { timeoutMs: probeTimeoutMs },
       );
       attemptSubscriptionId = result?.subscription ?? null;
+      opts.statusSink?.(channelReadyPatch());
       client = attemptClient;
       detachAbortHandler = attemptDetachAbortHandler;
       keepAttemptClient = true;
@@ -1162,15 +1562,53 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (abort?.aborted) {
         return;
       }
-      const shouldRetry =
-        attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
+      const retriable = isRetriableWatchSubscribeStartupError(err);
+      const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
       if (!shouldRetry) {
-        runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
+        opts.statusSink?.({
+          connected: false,
+          lifecycle: retriable ? "recovering" : "blocked",
+          terminalDisconnect: retriable ? undefined : true,
+          lastError: String(err),
+        });
+        runtime.error?.(
+          danger(
+            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
+              accountId: accountInfo.accountId,
+              attempt,
+              maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
+              cliPath,
+              dbPath,
+              remoteHost,
+              includeAttachments,
+              probeTimeoutMs,
+              watchSinceRowid,
+              error: err,
+            })}`,
+          ),
+        );
         throw err;
       }
+      opts.statusSink?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: String(err),
+      });
       runtime.log?.(
         warn(
-          `imessage: watch.subscribe startup failed (attempt ${attempt}/${WATCH_SUBSCRIBE_MAX_ATTEMPTS}): ${String(err)}; retrying`,
+          describeIMessageWatchSubscribeStartupFailure({
+            accountId: accountInfo.accountId,
+            attempt,
+            maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
+            cliPath,
+            dbPath,
+            remoteHost,
+            includeAttachments,
+            probeTimeoutMs,
+            watchSinceRowid,
+            error: err,
+            retryDelayMs: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
+          }),
         ),
       );
       // Tear down the failed client before waiting so a slow subscribe attempt
@@ -1198,6 +1636,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   if (!activeClient) {
     return;
   }
+  ingress.start();
 
   // Register the iMessage approval native runtime context with the gateway so
   // proactive exec/plugin approval prompts can be delivered through the
@@ -1227,6 +1666,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         cfg,
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
+        gatewayRuntime: approvalGatewayRuntime,
         logVerboseMessage: logVerbose,
       });
     } catch (err) {
@@ -1243,11 +1683,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }, APPROVAL_REACTION_DISCOVERY_INTERVAL_MS);
   void pollApprovalReactions(true);
 
-  // Catchup runs once between watch.subscribe and the live dispatch loop.
-  // Anything that arrives during the catchup pass itself flows through
-  // `handleMessage` -> `handleMessageNow`; the inbound-dedupe cache absorbs
-  // any overlap with replayed rows. Disabled by default — opt-in via
-  // `channels.imessage.catchup.enabled`. See issue #78649.
+  // Legacy opt-in catchup remains the compatibility path for users who
+  // explicitly enabled it, including remote SSH setups where the gateway
+  // cannot read chat.db for the always-on local startup cursor.
   if (catchupCfg.enabled && !abort?.aborted) {
     startupCatchupInProgress = true;
     try {
@@ -1256,12 +1694,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         accountId: accountInfo.accountId,
         config: catchupCfg,
         includeAttachments,
-        // Catchup bypasses the inbound debouncer so each row is awaited
-        // serially and dispatch failure can hold the cursor. Split-sends
-        // from before the gateway gap therefore arrive as separate turns
-        // rather than coalesced. Live notifications continue to flow through
-        // the debouncer.
-        dispatchPayload: (message) => handleMessageNow(message, { advanceCatchupCursor: false }),
+        // Legacy history rows enter the same durable GUID queue as watch rows.
+        // A watch/catchup overlap is therefore rejected before either copy can
+        // dispatch, replacing the retired standalone GUID guard.
+        dispatchPayload: async (_message, rawEnvelope) => {
+          await ingress.receive(rawEnvelope, { catchup: true });
+        },
+        observeSkippedFromMePayload: (message) => {
+          const { bodyText } = resolveIMessageInboundBodyText(message);
+          rememberIMessageSkippedFromMeForSelfChatDedupe({
+            accountId: accountInfo.accountId,
+            message,
+            bodyText,
+            selfChatCache,
+          });
+        },
         runtime,
       });
       liveCatchupCursorAdvanceEnabled =
@@ -1273,8 +1720,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
     } catch (err) {
       pendingLiveCatchupCursorAdvances.length = 0;
-      // Catchup is opt-in recovery — surface the error but do not block the
-      // monitor. The live dispatch loop is already up and running.
       runtime.error?.(`imessage catchup: pass failed: ${String(err)}`);
     } finally {
       startupCatchupInProgress = false;
@@ -1295,5 +1740,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     approvalContextLease?.dispose();
     detachAbortHandler();
     await activeClient.stop();
+    await ingress.stop();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

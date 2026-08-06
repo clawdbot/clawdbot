@@ -1,13 +1,22 @@
 // Zalouser tests cover monitor.account scope plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send-mocks.js";
-import { testing } from "./monitor.js";
+import "./monitor.send.test-mocks.js";
 import "./zalo-js.test-mocks.js";
-import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
+import {
+  createRawZalouserMessageFromNormalized,
+  waitForZalouserIngressVerdict,
+  withZalouserIngressTestQueue,
+} from "./ingress.test-support.js";
+import { monitorZalouserProvider } from "./monitor.js";
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
+
+type ZaloJsModule = typeof import("./zalo-js.js");
+type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -95,11 +104,31 @@ describe("zalouser monitor pairing account scoping", () => {
       raw: { source: "test" },
     };
 
-    await testing.processMessage({
-      message,
-      account,
-      config,
-      runtime: createZalouserRuntimeEnv(),
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      let resolveListener: ((params: ListenerParams) => void) | undefined;
+      const listenerReady = new Promise<ListenerParams>((resolve) => {
+        resolveListener = resolve;
+      });
+      startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
+        resolveListener?.(listenerParams);
+        return { stop: vi.fn() };
+      });
+      const run = monitorZalouserProvider({
+        account,
+        config,
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        ingressQueue,
+      });
+      try {
+        const listenerParams = await listenerReady;
+        await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
+        await waitForZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
+      } finally {
+        abortController.abort();
+        await run;
+      }
     });
 
     expect(readAllowFromStore).toHaveBeenCalledOnce();
@@ -119,5 +148,50 @@ describe("zalouser monitor pairing account scoping", () => {
     expect(pairingRequest.id).toBe("attacker");
     expect(pairingRequest.accountId).toBe("beta");
     expect(sendMessageZalouserMock).toHaveBeenCalled();
+  });
+});
+
+describe("zalouser monitor lifecycle", () => {
+  it("publishes ready after the listener starts", async () => {
+    setZalouserRuntime({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime);
+    startZaloListenerMock.mockResolvedValueOnce({ stop: vi.fn() });
+    const statusSink = vi.fn();
+
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      const run = monitorZalouserProvider({
+        account: {
+          accountId: "default",
+          enabled: true,
+          profile: "default",
+          authenticated: true,
+          config: {},
+        },
+        config: {},
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        statusSink,
+        ingressQueue,
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(statusSink).toHaveBeenCalledWith({
+            running: true,
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        });
+      } finally {
+        abortController.abort();
+        await run;
+      }
+    });
   });
 });

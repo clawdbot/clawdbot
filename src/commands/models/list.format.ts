@@ -1,13 +1,31 @@
 /** Formatting helpers for model-list terminal tables. */
+import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
-export { maskApiKey } from "../../utils/mask-api-key.js";
+
+const TRUNCATED_SUFFIX = "...";
+
+/** Formats token counts as compact decimal-K labels. */
+export const formatTokenK = (value?: number | null) => {
+  if (!value || !Number.isFinite(value)) {
+    return "-";
+  }
+  // Provider context windows use decimal K, so 200000 must stay "200k".
+  if (value < 1000) {
+    return `${Math.round(value)}`;
+  }
+  return `${Math.round(value / 1000)}k`;
+};
 
 /** Enables rich formatting only for non-machine-readable output. */
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   isRichTerminal() && !opts?.json && !opts?.plain;
 
-/** Pads a table cell to a fixed width. */
-export const pad = (value: string, size: number) => value.padEnd(size);
+/** Pads a table cell to a fixed terminal visible width. */
+export const pad = (value: string, size: number) => {
+  const remaining = size - visibleWidth(value);
+  return remaining > 0 ? `${value}${" ".repeat(remaining)}` : value;
+};
 
 /** Applies terminal color based on a model-list tag. */
 export const formatTag = (tag: string, rich: boolean) => {
@@ -38,13 +56,14 @@ export const formatTag = (tag: string, rich: boolean) => {
   return theme.muted(tag);
 };
 
-/** Truncates model-list cells with an ASCII ellipsis. */
+/** Truncates model-list cells to terminal visible width with an ASCII ellipsis. */
 export const truncate = (value: string, max: number) => {
-  if (value.length <= max) {
-    return value;
+  const sanitized = sanitizeTerminalText(value);
+  if (visibleWidth(sanitized) <= max) {
+    return sanitized;
   }
-  if (max <= 3) {
-    return value.slice(0, max);
+  if (max <= TRUNCATED_SUFFIX.length) {
+    return truncateToVisibleWidth(sanitized, max);
   }
-  return `${value.slice(0, max - 3)}...`;
+  return `${truncateToVisibleWidth(sanitized, max - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
 };

@@ -14,22 +14,22 @@ describe("poll params", () => {
   });
 
   it.each([{ key: "pollAnonymous" }, { key: "pollPublic" }])(
-    "treats channel-extra $key=true as poll creation intent",
+    "does not treat channel-extra $key=true as poll creation intent",
     ({ key }) => {
       expect(
         hasPollCreationParams({
           [key]: true,
         }),
-      ).toBe(true);
+      ).toBe(false);
     },
   );
 
-  it("treats non-zero finite numeric channel-extra poll params as poll creation intent", () => {
-    expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "+60" })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "-5" })).toBe(true);
+  it("does not treat channel-extra poll metadata as poll creation intent", () => {
+    expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: "+60" })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationSeconds: "-5" })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: Infinity })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: "60abc" })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: "0x10" })).toBe(false);
@@ -64,8 +64,8 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ pollOption: ["Yes", "No"], pollMulti: true })).toBe(true);
   });
 
-  it("treats string-encoded boolean poll params as poll creation intent when true", () => {
-    expect(hasPollCreationParams({ pollPublic: "true" })).toBe(true);
+  it("does not treat string-encoded channel-extra booleans as poll creation intent", () => {
+    expect(hasPollCreationParams({ pollPublic: "true" })).toBe(false);
     expect(hasPollCreationParams({ pollAnonymous: "false" })).toBe(false);
   });
 
@@ -76,8 +76,8 @@ describe("poll params", () => {
   it("detects snake_case poll fields as poll creation intent", () => {
     expect(hasPollCreationParams({ poll_question: "Lunch?" })).toBe(true);
     expect(hasPollCreationParams({ poll_option: ["Pizza", "Sushi"] })).toBe(true);
-    expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(true);
-    expect(hasPollCreationParams({ poll_public: "true" })).toBe(true);
+    expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(false);
+    expect(hasPollCreationParams({ poll_public: "true" })).toBe(false);
   });
 
   it("ignores poll vote params when deciding whether send should become poll", () => {

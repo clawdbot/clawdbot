@@ -2,7 +2,11 @@
 import { spawn } from "node:child_process";
 import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import {
+  buildCmdExeCommandLine,
+  resolvePathEnvKey,
+  resolveWindowsCmdExePath,
+} from "./windows-cmd-helpers.mjs";
 
 function getPortableBasename(value) {
   return value.split(/[/\\]/).at(-1) ?? value;
@@ -55,6 +59,49 @@ function isFile(value) {
   }
 }
 
+function findExecutableOnPath(command, envPath, platform, env, cwd) {
+  if (typeof envPath !== "string" || envPath.length === 0) {
+    return null;
+  }
+  const extensions =
+    platform === "win32"
+      ? (
+          env[Object.keys(env).find((key) => key.toLowerCase() === "pathext") ?? "PATHEXT"] ??
+          ".COM;.EXE;.BAT;.CMD"
+        )
+          .split(";")
+          .filter(Boolean)
+          .map((extension) => extension.toLowerCase())
+      : [""];
+  const pathDelimiter = platform === "win32" ? ";" : path.delimiter;
+  for (const directory of envPath.split(pathDelimiter)) {
+    if (!directory) {
+      continue;
+    }
+    const resolvedDirectory = path.isAbsolute(directory) ? directory : path.resolve(cwd, directory);
+    for (const extension of extensions) {
+      const candidate = path.join(resolvedDirectory, `${command}${extension}`);
+      if (platform === "win32" ? isFile(candidate) : isExecutableFile(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function createWindowsRunner(command, args, comSpec) {
+  const extension = getPortableExtension(command);
+  if (extension === ".cmd" || extension === ".bat") {
+    return {
+      command: comSpec,
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command, args, shell: false };
+}
+
 function isNodeRunnablePnpmExecPath(value) {
   if (!isPnpmExecPath(value)) {
     return false;
@@ -78,7 +125,10 @@ export function resolvePnpmRunner(params = {}) {
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
-  const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+  const env = params.env ?? process.env;
+  const comSpec = params.comSpec ?? (platform === "win32" ? resolveWindowsCmdExePath(env) : "");
+  const envPath = env[platform === "win32" ? resolvePathEnvKey(env) : "PATH"];
+  const cwd = params.cwd ?? process.cwd();
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
     if (isNodeRunnablePnpmExecPath(npmExecPath)) {
@@ -114,13 +164,22 @@ export function resolvePnpmRunner(params = {}) {
     }
   }
 
+  const pnpmPath = findExecutableOnPath("pnpm", envPath, platform, env, cwd);
+  if (pnpmPath) {
+    return platform === "win32"
+      ? createWindowsRunner(pnpmPath, pnpmArgs, comSpec)
+      : { command: pnpmPath, args: pnpmArgs, shell: false };
+  }
+  const corepackPath = findExecutableOnPath("corepack", envPath, platform, env, cwd);
+  if (corepackPath) {
+    const args = ["pnpm", ...pnpmArgs];
+    return platform === "win32"
+      ? createWindowsRunner(corepackPath, args, comSpec)
+      : { command: corepackPath, args, shell: false };
+  }
+
   if (platform === "win32") {
-    return {
-      command: comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine("pnpm.cmd", pnpmArgs)],
-      shell: false,
-      windowsVerbatimArguments: true,
-    };
+    return createWindowsRunner("pnpm.cmd", pnpmArgs, comSpec);
   }
 
   return {
@@ -134,7 +193,8 @@ export function resolvePnpmRunner(params = {}) {
  * Creates a spawn-ready pnpm invocation with standard options.
  */
 export function createPnpmRunnerSpawnSpec(params = {}) {
-  const runner = resolvePnpmRunner(params);
+  const env = params.env ?? process.env;
+  const runner = resolvePnpmRunner({ ...params, env });
   return {
     command: runner.command,
     args: runner.args,

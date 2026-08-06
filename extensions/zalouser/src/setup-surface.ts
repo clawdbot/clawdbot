@@ -1,3 +1,4 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 // Zalouser plugin module implements setup surface behavior.
 import {
   addWildcardAllowFrom,
@@ -65,18 +66,10 @@ function setZalouserDmPolicy(
 ): OpenClawConfig {
   const resolvedAccountId = normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID;
   const resolved = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-  return setZalouserAccountScopedConfig(
-    cfg,
-    resolvedAccountId,
-    {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-    },
-    {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-    },
-  );
+  return setZalouserAccountScopedConfig(cfg, resolvedAccountId, {
+    dmPolicy: policy,
+    ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
+  });
 }
 
 function setZalouserGroupPolicy(
@@ -179,6 +172,7 @@ async function promptZalouserAllowFrom(params: {
     const resolvedEntries = await resolveZaloAllowFromEntries({
       profile: resolved.profile,
       entries: parts,
+      credentialPersistence: "read-only",
     });
 
     const unresolved = resolvedEntries.filter((item) => !item.resolved).map((item) => item.input);
@@ -209,28 +203,16 @@ async function promptZalouserAllowFrom(params: {
   }
 }
 
-const zalouserDmPolicy: ChannelSetupDmPolicy = {
+const zalouserDmPolicy = createChannelDmPolicy({
   label: "Zalo Personal",
   channel,
-  policyKey: "channels.zalouser.dmPolicy",
-  allowFromKey: "channels.zalouser.allowFrom",
-  resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultZalouserAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.dmPolicy`,
-          allowFromKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.zalouser.dmPolicy",
-          allowFromKey: "channels.zalouser.allowFrom",
-        },
-  getCurrent: (cfg, accountId) =>
+  resolveAccount: (cfg, accountId) =>
     resolveZalouserAccountSync({
       cfg,
       accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
-    }).config.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy, accountId) =>
-    setZalouserDmPolicy(cfg, accountId ?? resolveDefaultZalouserAccountId(cfg), policy),
+    }),
+  applyPatch: ({ cfg, account, patch }) =>
+    setZalouserAccountScopedConfig(cfg, account.accountId, patch, patch),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const id =
       accountId && normalizeAccountId(accountId)
@@ -242,7 +224,7 @@ const zalouserDmPolicy: ChannelSetupDmPolicy = {
       accountId: id,
     });
   },
-};
+});
 
 async function promptZalouserQuickstartDmPolicy(params: {
   cfg: OpenClawConfig;
@@ -305,7 +287,11 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       const ids = accountId ? [accountId] : listZalouserAccountIds(cfg);
       for (const resolvedAccountId of ids) {
         const account = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-        if (await checkZcaAuthenticated(account.profile)) {
+        if (
+          await checkZcaAuthenticated(account.profile, {
+            credentialPersistence: "read-only",
+          })
+        ) {
           return true;
         }
       }
@@ -323,7 +309,9 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
   prepare: async ({ cfg, accountId, prompter, options }) => {
     let next = cfg;
     const account = resolveZalouserAccountSync({ cfg: next, accountId });
-    const alreadyAuthenticated = await checkZcaAuthenticated(account.profile);
+    const alreadyAuthenticated = await checkZcaAuthenticated(account.profile, {
+      credentialPersistence: "read-only",
+    });
 
     if (!alreadyAuthenticated) {
       await noteZalouserHelp(prompter);
@@ -333,7 +321,14 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       });
 
       if (wantsLogin) {
-        const start = await startZaloQrLogin({ profile: account.profile, timeoutMs: 35_000 });
+        await options?.beforePersistentEffect?.();
+        const start = await startZaloQrLogin({
+          profile: account.profile,
+          timeoutMs: 35_000,
+          ...(options?.beforePersistentEffect
+            ? { beforeCredentialPersistence: options.beforePersistentEffect }
+            : {}),
+        });
         if (start.qrDataUrl) {
           const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
           await prompter.note(
@@ -370,11 +365,16 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
         initialValue: true,
       });
       if (!keepSession) {
+        await options?.beforePersistentEffect?.();
         await logoutZaloProfile(account.profile);
+        await options?.beforePersistentEffect?.();
         const start = await startZaloQrLogin({
           profile: account.profile,
           force: true,
           timeoutMs: 35_000,
+          ...(options?.beforePersistentEffect
+            ? { beforeCredentialPersistence: options.beforePersistentEffect }
+            : {}),
         });
         if (start.qrDataUrl) {
           const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
@@ -444,6 +444,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
         const resolved = await resolveZaloGroupsByEntries({
           profile: updatedAccount.profile,
           entries,
+          credentialPersistence: "read-only",
         });
         const resolvedIds = resolved
           .filter((entry) => entry.resolved && entry.id)

@@ -1,19 +1,51 @@
 /**
  * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
- * OpenClaw stream options into Anthropic Messages payload policy.
+ * OpenClaw stream options for the shared Anthropic Messages transport.
  */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
+import { GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
+  clampThinkingLevel,
   stream as streamDefault,
   type Model,
+  type ModelThinkingLevel,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import {
-  applyAnthropicPayloadPolicyToParams,
-  resolveAnthropicPayloadPolicy,
-} from "openclaw/plugin-sdk/provider-stream-shared";
-import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+  requiresClaudeMandatoryAdaptiveThinking,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { EnvHttpProxyAgent, fetch as undiciFetch } from "undici";
+import {
+  resolveAnthropicVertexAdcCredentials,
+  resolveAnthropicVertexClientRegion,
+  resolveAnthropicVertexProjectId,
+} from "./region.js";
+
+const GOOGLE_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+
+// Proxy settings are process-stable. Reuse one dispatcher so auth requests do
+// not leak sockets while avoiding gaxios's broken node-fetch dynamic import.
+let googleAuthDispatcher: EnvHttpProxyAgent | undefined;
+
+const googleAuthFetch: typeof globalThis.fetch = (input, init) => {
+  googleAuthDispatcher ??= new EnvHttpProxyAgent();
+  const fetchInit = { ...init } as Parameters<typeof undiciFetch>[1] & { agent?: unknown };
+  delete fetchInit.agent;
+  fetchInit.dispatcher = googleAuthDispatcher;
+  return undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    fetchInit,
+  ) as unknown as ReturnType<typeof globalThis.fetch>;
+};
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {
   client?: unknown;
@@ -26,6 +58,7 @@ type AnthropicVertexEffort = NonNullable<AnthropicVertexTransportOptions["effort
 type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
 type AnthropicVertexClientOptions = {
   baseURL?: string;
+  googleAuth: GoogleAuth;
   projectId?: string;
   region: string;
 };
@@ -33,53 +66,69 @@ type AnthropicVertexClientOptions = {
 /** Injectable dependencies for Anthropic Vertex stream tests. */
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
+  GoogleAuth: new (options?: GoogleAuthOptions) => GoogleAuth;
   streamAnthropic: typeof streamDefault;
 };
 
 const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
+  GoogleAuth,
   streamAnthropic: streamDefault,
 };
 
 function isClaudeOpus47OrNewerModel(modelId: string): boolean {
-  return (
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("opus-4-7") ||
-    modelId.includes("opus-4.7")
-  );
+  return supportsClaudeNativeXhighEffort({ id: modelId });
 }
 
-function isClaudeOpus46Model(modelId: string): boolean {
-  return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
+function isClaudeFable5Model(modelId: string): boolean {
+  return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
+}
+
+function isClaudeSonnet5Model(modelId: string): boolean {
+  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
+}
+
+function isClaudeOpus5Model(modelId: string): boolean {
+  return resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined;
+}
+
+function isClaudeMythos5Model(modelId: string): boolean {
+  return resolveClaudeMythos5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    isClaudeOpus47OrNewerModel(modelId) ||
-    isClaudeOpus46Model(modelId) ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.6")
-  );
+  return supportsClaudeAdaptiveThinking({ id: modelId });
 }
 
 function mapAnthropicAdaptiveEffort(
-  reasoning: string,
+  reasoning: ModelThinkingLevel,
+  model: Model<"anthropic-messages">,
   modelId: string,
 ): AnthropicVertexAdaptiveEffort {
+  const clampModel =
+    typeof model.params?.canonicalModelId === "string" ? { ...model, reasoning: true } : model;
+  const resolvedReasoning = clampThinkingLevel(clampModel, reasoning);
+  const mapped = model.thinkingLevelMap?.[resolvedReasoning];
+  if (typeof mapped === "string") {
+    return mapped as AnthropicVertexAdaptiveEffort;
+  }
   const effortMap: Record<string, AnthropicVertexAdaptiveEffort> = {
+    off: "low",
     minimal: "low",
     low: "low",
     medium: "medium",
     high: "high",
-    xhigh: isClaudeOpus47OrNewerModel(modelId)
+    xhigh: isClaudeFable5Model(modelId)
       ? "xhigh"
-      : isClaudeOpus46Model(modelId)
+      : isClaudeOpus47OrNewerModel(modelId) || isClaudeMythos5Model(modelId)
+        ? "xhigh"
+        : "high",
+    max:
+      supportsClaudeNativeMaxEffort({ id: modelId }) || isClaudeMythos5Model(modelId)
         ? "max"
         : "high",
-    max: isClaudeOpus47OrNewerModel(modelId) ? "max" : "high",
   };
-  return effortMap[reasoning] ?? "high";
+  return effortMap[resolvedReasoning] ?? "high";
 }
 
 function resolveAnthropicVertexMaxTokens(params: {
@@ -105,36 +154,6 @@ function resolveAnthropicVertexMaxTokens(params: {
   return requested ?? modelMax;
 }
 
-function createAnthropicVertexOnPayload(params: {
-  model: { api: string; baseUrl?: string; provider: string };
-  cacheRetention: ProviderStreamOptions["cacheRetention"] | undefined;
-  onPayload: ProviderStreamOptions["onPayload"] | undefined;
-}): NonNullable<ProviderStreamOptions["onPayload"]> {
-  const policy = resolveAnthropicPayloadPolicy({
-    provider: params.model.provider,
-    api: params.model.api,
-    baseUrl: params.model.baseUrl,
-    cacheRetention: params.cacheRetention,
-    enableCacheControl: true,
-  });
-
-  function applyPolicy(payload: unknown): unknown {
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      applyAnthropicPayloadPolicyToParams(payload as Record<string, unknown>, policy);
-    }
-    return payload;
-  }
-
-  return async (payload, model) => {
-    const shapedPayload = applyPolicy(payload);
-    const nextPayload = await params.onPayload?.(shapedPayload, model);
-    if (nextPayload === undefined || nextPayload === shapedPayload) {
-      return shapedPayload;
-    }
-    return applyPolicy(nextPayload);
-  };
-}
-
 /**
  * Create a StreamFn that routes through OpenClaw's generic model stream with an
  * injected `AnthropicVertex` client.  All streaming, message conversion, and
@@ -146,16 +165,31 @@ export function createAnthropicVertexStreamFn(
   region: string,
   baseURL?: string,
   deps: AnthropicVertexStreamDeps = defaultAnthropicVertexStreamDeps,
+  env: NodeJS.ProcessEnv = process.env,
 ): StreamFn {
+  // GoogleAuth carries clientOptions into file-backed ADC clients. Keep the
+  // proxy-aware transport provider-local; a window shim changes detection globally.
+  const adcConfig = resolveAnthropicVertexAdcCredentials(env);
+  const googleAuth = new deps.GoogleAuth({
+    scopes: [GOOGLE_CLOUD_PLATFORM_SCOPE],
+    ...(adcConfig ? { credentials: adcConfig } : {}),
+    clientOptions: {
+      transporterOptions: { fetchImplementation: googleAuthFetch },
+    },
+  });
   const client = new deps.AnthropicVertex({
+    googleAuth,
     region,
     ...(baseURL ? { baseURL } : {}),
     ...(projectId ? { projectId } : {}),
   });
 
   return (model, context, options) => {
-    const transportModel = model as Model<"anthropic-messages"> & {
-      api: string;
+    // Simple completions use a synthetic registry API to select this plugin.
+    // The shared Anthropic transport must receive its canonical API or it recurses.
+    const transportModel = (
+      model.api === "anthropic-messages" ? model : { ...model, api: "anthropic-messages" as const }
+    ) as Model<"anthropic-messages"> & {
       baseUrl?: string;
       provider: string;
     };
@@ -163,7 +197,28 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const temperature = isClaudeOpus47OrNewerModel(model.id) ? undefined : options?.temperature;
+    const contractModelId = resolveClaudeModelIdentity(model);
+    // Sonnet 5 and Opus 5 default thinking on when the caller omits reasoning.
+    const adaptiveDefaultClaude5 =
+      isClaudeSonnet5Model(contractModelId) || isClaudeOpus5Model(contractModelId);
+    const mandatoryAdaptiveThinking = requiresClaudeMandatoryAdaptiveThinking({
+      id: contractModelId,
+    });
+    const requestedReasoning = options?.reasoning;
+    const reasoning =
+      requestedReasoning === "off" && mandatoryAdaptiveThinking
+        ? "low"
+        : (requestedReasoning ??
+          (mandatoryAdaptiveThinking || adaptiveDefaultClaude5 ? "high" : undefined));
+    const adaptiveThinking =
+      mandatoryAdaptiveThinking ||
+      Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));
+    const temperature =
+      adaptiveThinking ||
+      isClaudeOpus47OrNewerModel(contractModelId) ||
+      isClaudeMythos5Model(contractModelId)
+        ? undefined
+        : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {
       client,
       ...(temperature !== undefined ? { temperature } : {}),
@@ -172,30 +227,40 @@ export function createAnthropicVertexStreamFn(
       cacheRetention: options?.cacheRetention,
       sessionId: options?.sessionId,
       headers: options?.headers,
-      onPayload: createAnthropicVertexOnPayload({
-        model: transportModel,
-        cacheRetention: options?.cacheRetention,
-        onPayload: options?.onPayload,
-      }),
+      // The shared anthropic-messages transport already splits the system prompt
+      // cache boundary and budgets all cache_control markers; re-applying the
+      // payload policy here marked the uncached suffix and breached the 4-marker cap.
+      onPayload: options?.onPayload,
       maxRetryDelayMs: options?.maxRetryDelayMs,
       metadata: options?.metadata,
     };
 
-    if (options?.reasoning) {
-      if (supportsAdaptiveThinking(model.id)) {
+    if (reasoning === "off") {
+      opts.thinkingEnabled = false;
+    } else if (reasoning) {
+      if (supportsAdaptiveThinking(contractModelId)) {
         opts.thinkingEnabled = true;
         opts.effort = mapAnthropicAdaptiveEffort(
-          options.reasoning,
-          model.id,
+          reasoning,
+          transportModel,
+          contractModelId,
         ) as AnthropicVertexEffort;
       } else {
-        opts.thinkingEnabled = true;
-        const budgets = options.thinkingBudgets;
-        opts.thinkingBudgetTokens =
-          (budgets && options.reasoning in budgets
-            ? budgets[options.reasoning as keyof typeof budgets]
+        const budgets = options?.thinkingBudgets;
+        const thinkingBudgetTokens =
+          (budgets && reasoning in budgets
+            ? budgets[reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
+        const requestMaxTokens = opts.maxTokens ?? transportModel.maxTokens;
+        opts.thinkingEnabled =
+          thinkingBudgetTokens >= 1024 && thinkingBudgetTokens < requestMaxTokens;
+        if (opts.thinkingEnabled) {
+          opts.thinkingBudgetTokens = thinkingBudgetTokens;
+        }
       }
+    } else if (mandatoryAdaptiveThinking) {
+      opts.thinkingEnabled = true;
+      opts.effort = "high";
     } else {
       opts.thinkingEnabled = false;
     }
@@ -241,5 +306,6 @@ export function createAnthropicVertexStreamFnForModel(
     }),
     resolveAnthropicVertexSdkBaseUrl(model.baseUrl),
     deps,
+    env,
   );
 }

@@ -70,11 +70,18 @@ describe("whatsapp config schema", () => {
     });
   });
 
+  it("accepts the experimental call action opt-in", () => {
+    const res = expectWhatsAppConfigValid({ actions: { calls: true } });
+
+    if (res.success) {
+      expect(res.data.actions?.calls).toBe(true);
+    }
+  });
+
   it("keeps inherited account defaults unset at account scope", () => {
     const res = expectWhatsAppConfigValid({
       dmPolicy: "allowlist",
       groupPolicy: "open",
-      debounceMs: 250,
       allowFrom: ["+15550001111"],
       accounts: {
         work: {
@@ -88,10 +95,8 @@ describe("whatsapp config schema", () => {
     }
     expect(res.data.dmPolicy).toBe("allowlist");
     expect(res.data.groupPolicy).toBe("open");
-    expect(res.data.debounceMs).toBe(250);
     expect(res.data.accounts?.work?.dmPolicy).toBeUndefined();
     expect(res.data.accounts?.work?.groupPolicy).toBeUndefined();
-    expect(res.data.accounts?.work?.debounceMs).toBeUndefined();
   });
 
   it("accepts allowlist accounts inheriting allowFrom from accounts.default", () => {

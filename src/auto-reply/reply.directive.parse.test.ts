@@ -70,6 +70,12 @@ describe("directive parsing", () => {
     expect(res.fastMode).toBe(true);
   });
 
+  it("matches auto fast directive", () => {
+    const res = extractFastDirective("/fast auto please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.fastMode).toBe("auto");
+  });
+
   it("parses default thinking and fast directives as override clears", () => {
     const think = parseInlineDirectives("/think default");
     expect(think.hasThinkDirective).toBe(true);
@@ -213,6 +219,24 @@ describe("directive parsing", () => {
     expect(think.thinkLevel).toBe("high");
   });
 
+  it("keeps --persist as ordinary text for inline directives", () => {
+    const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini --persist now");
+    expect(model.cleaned).toBe("please sync --persist now");
+    expect(model.hasModelDirective).toBe(true);
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+
+    const think = parseInlineDirectives("/think high --persist");
+    expect(think.cleaned).toBe("--persist");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBe("high");
+  });
+
+  it("keeps --persist in ordinary messages", () => {
+    const parsed = parseInlineDirectives("please keep --persist in this text");
+
+    expect(parsed.cleaned).toBe("please keep --persist in this text");
+  });
+
   it("preserves spacing when stripping think directives before paths", () => {
     const res = extractThinkDirective("thats not /think high/tmp/hello");
     expect(res.hasDirective).toBe(true);
@@ -281,5 +305,137 @@ describe("directive parsing", () => {
     const res = extractReplyToTag("line 1\nline 2 [[reply_to_current]]\n\nline 3", "msg-2");
     expect(res.replyToId).toBe("msg-2");
     expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
+  });
+});
+
+describe("level directive preserves message text after an invalid level", () => {
+  it("keeps the message when /verbose is followed by prose", () => {
+    const res = parseInlineDirectives("/verbose explain quantum computing");
+    expect(res.hasVerboseDirective).toBe(true);
+    expect(res.verboseLevel).toBeUndefined();
+    expect(res.rawVerboseLevel).toBeUndefined();
+    expect(res.cleaned).toBe("explain quantum computing");
+  });
+
+  it("keeps the next line when /verbose is on its own line", () => {
+    const res = extractVerboseDirective("/verbose\nSummarize this document");
+    expect(res.hasDirective).toBe(true);
+    expect(res.verboseLevel).toBeUndefined();
+    expect(res.cleaned).toBe("Summarize this document");
+  });
+
+  it("keeps the message when /think is followed by prose", () => {
+    const res = extractThinkDirective("/think about my deployment plan");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("about my deployment plan");
+  });
+
+  it("still consumes a valid level argument", () => {
+    const res = extractThinkDirective("/think high");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBe("high");
+    expect(res.cleaned).toBe("");
+  });
+
+  it("still consumes off so it persists rather than clears", () => {
+    const elevated = extractElevatedDirective("hello there /elevated off");
+    expect(elevated.elevatedLevel).toBe("off");
+    expect(elevated.cleaned).toBe("hello there");
+  });
+
+  it("still reports a single unrecognized trailing token", () => {
+    const res = extractElevatedDirective("/elevated maybe");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBeUndefined();
+    expect(res.rawLevel).toBe("maybe");
+  });
+});
+
+describe("native directive commands own their complete argument boundary", () => {
+  it.each([
+    {
+      command: "think" as const,
+      body: "/think about my deployment plan",
+      rawKey: "rawThinkLevel" as const,
+      invalidArgument: "about",
+      trailingArguments: "my deployment plan",
+    },
+    {
+      command: "verbose" as const,
+      body: "/verbose explain quantum computing",
+      rawKey: "rawVerboseLevel" as const,
+      invalidArgument: "explain",
+      trailingArguments: "quantum computing",
+    },
+    {
+      command: "trace" as const,
+      body: "/trace banana please",
+      rawKey: "rawTraceLevel" as const,
+      invalidArgument: "banana",
+      trailingArguments: "please",
+    },
+    {
+      command: "fast" as const,
+      body: "/fast bananas please",
+      rawKey: "rawFastMode" as const,
+      invalidArgument: "bananas",
+      trailingArguments: "please",
+    },
+    {
+      command: "reasoning" as const,
+      body: "/reasoning nonsense please",
+      rawKey: "rawReasoningLevel" as const,
+      invalidArgument: "nonsense",
+      trailingArguments: "please",
+    },
+    {
+      command: "elevated" as const,
+      body: "/elevated perhaps explain",
+      rawKey: "rawElevatedLevel" as const,
+      invalidArgument: "perhaps",
+      trailingArguments: "explain",
+    },
+  ])(
+    "preserves the invalid first argument for native /$command",
+    ({ body, command, invalidArgument, rawKey, trailingArguments }) => {
+      const parsed = parseInlineDirectives(body, { nativeCommand: command });
+
+      expect(parsed[rawKey]).toBe(invalidArgument);
+      expect(parsed.cleaned).toBe(trailingArguments);
+      expect(parsed.nativeCommand).toEqual({
+        name: command,
+        unconsumedArguments: trailingArguments,
+      });
+    },
+  );
+
+  it("retains unexpected arguments after a valid native queue mode", () => {
+    const parsed = parseInlineDirectives("/queue collect please help", {
+      nativeCommand: "queue",
+    });
+
+    expect(parsed.queueMode).toBe("collect");
+    expect(parsed.nativeCommand).toEqual({
+      name: "queue",
+      unconsumedArguments: "please help",
+    });
+  });
+
+  it("does not interpret another directive inside native command arguments", () => {
+    const parsed = parseInlineDirectives("/queue /think high", { nativeCommand: "queue" });
+
+    expect(parsed.hasQueueDirective).toBe(true);
+    expect(parsed.rawQueueMode).toBe("/think");
+    expect(parsed.hasThinkDirective).toBe(false);
+  });
+
+  it("preserves the existing prose interpretation for ordinary inline directives", () => {
+    const parsed = parseInlineDirectives("/think about my deployment plan");
+
+    expect(parsed.rawThinkLevel).toBeUndefined();
+    expect(parsed.nativeCommand).toBeUndefined();
+    expect(parsed.cleaned).toBe("about my deployment plan");
   });
 });

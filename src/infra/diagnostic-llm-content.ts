@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 /** Per-field policy for diagnostic traces that may include model-visible content. */
 export type DiagnosticModelContentCapturePolicy = {
   /** Capture chat/message payloads sent to a model. */
@@ -26,8 +28,19 @@ const NO_MODEL_CONTENT_CAPTURE: DiagnosticModelContentCapturePolicy = Object.fre
   anyModelContent: false,
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+// Clone captured content so private diagnostic payloads never alias live runtime
+// objects (tool params/results, model messages) that callers keep mutating.
+export function cloneDiagnosticContentValue(value: unknown): unknown {
+  try {
+    return structuredClone(value);
+  } catch {
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
+    } catch {
+      return String(value);
+    }
+  }
 }
 
 function withDerivedFields(
@@ -70,15 +83,5 @@ export function resolveDiagnosticModelContentCapturePolicy(
       toolDefinitions: true,
     });
   }
-  if (!isRecord(captureContent) || captureContent.enabled !== true) {
-    return NO_MODEL_CONTENT_CAPTURE;
-  }
-  return withDerivedFields({
-    inputMessages: captureContent.inputMessages === true,
-    outputMessages: captureContent.outputMessages === true,
-    toolInputs: captureContent.toolInputs === true,
-    toolOutputs: captureContent.toolOutputs === true,
-    systemPrompt: captureContent.systemPrompt === true,
-    toolDefinitions: captureContent.toolDefinitions === true,
-  });
+  return NO_MODEL_CONTENT_CAPTURE;
 }

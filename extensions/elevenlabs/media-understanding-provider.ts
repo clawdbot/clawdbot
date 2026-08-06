@@ -55,6 +55,7 @@ export async function transcribeElevenLabsAudio(
     headers,
     body: form,
     timeoutMs: req.timeoutMs,
+    ...(req.signal ? { signal: req.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

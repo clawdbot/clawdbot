@@ -1,11 +1,13 @@
-// Implements docs link/search output for `openclaw docs`.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { RuntimeEnv } from "../runtime.js";
+// Implements docs link/search output for `openclaw docs`.
+import { readResponseWithLimit } from "../infra/http-body.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 const SEARCH_API = "https://docs.openclaw.ai/api/search";
 const SEARCH_TIMEOUT_MS = 30_000;
+const DOCS_SEARCH_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 
 type DocResult = {
   title: string;
@@ -73,9 +75,20 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
       signal: controller.signal,
     });
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`HTTP ${response.status}`);
     }
-    const payload = (await response.json()) as DocsSearchResponse;
+    const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) => new Error(`Docs search response exceeds ${maxBytes} bytes`),
+    });
+    let payload: DocsSearchResponse;
+    try {
+      payload = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      ) as DocsSearchResponse;
+    } catch (cause) {
+      throw new Error("Docs search response is malformed JSON", { cause });
+    }
     return parseDocsSearchResults(payload.results);
   } finally {
     clearTimeout(timeout);
@@ -106,9 +119,21 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
 }
 
 /** Search hosted docs, or print the docs homepage when no query is provided. */
-export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEnv) {
+export async function docsSearchCommand(
+  queryParts: string[],
+  runtime: RuntimeEnv,
+  options: { json?: boolean } = {},
+) {
   const query = queryParts.join(" ").trim();
   if (!query) {
+    if (options.json) {
+      writeRuntimeJson(runtime, {
+        query: null,
+        url: "https://docs.openclaw.ai/",
+        results: [],
+      });
+      return;
+    }
     const docs = formatDocsLink("/", "docs.openclaw.ai");
     if (isRich()) {
       runtime.log(`${theme.muted("Docs:")} ${docs}`);
@@ -127,6 +152,11 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
     const message = error instanceof Error ? error.message : String(error);
     runtime.error(`Docs search failed: ${message}`);
     runtime.exit(1);
+    return;
+  }
+
+  if (options.json) {
+    writeRuntimeJson(runtime, { query, results });
     return;
   }
 

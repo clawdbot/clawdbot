@@ -8,11 +8,15 @@ export type GatewayServiceEnv = Record<string, string | undefined>;
 export type GatewayServiceInstallArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: (message: string) => void;
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
+  // Verified before a config rewrite; Windows uses this to bridge a transient
+  // listener gap while replacing a Startup-folder fallback.
+  startupFallbackTakeoverRuntime?: GatewayServiceRuntime;
 };
 
 export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
@@ -26,12 +30,58 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  warn?: (message: string) => void;
+  onMutation?: (mutation: GatewayLifecycleMutation) => void;
+};
+
+export type GatewayLifecycleMutationMode =
+  | "enable"
+  | "bootstrap"
+  | "kickstart"
+  | "bootout"
+  | "disable"
+  | "disable-stop"
+  | "disable-bootout"
+  | "handoff-kickstart"
+  | "handoff-reload"
+  | "systemctl-start"
+  | "systemctl-stop"
+  | "systemctl-restart"
+  | "startup-entry-start"
+  | "startup-entry-stop"
+  | "startup-entry-restart"
+  | "schtasks-start"
+  | "schtasks-stop"
+  | "schtasks-end"
+  | "schtasks-restart"
+  | "sigterm"
+  | "sigusr1"
+  | "rpc"
+  | "launchd-bootstrap"
+  | "service-repair"
+  | "scheduled"
+  | "deferred"
+  | "coalesced"
+  | "reload"
+  | "start-after-exit";
+
+export type GatewayLifecycleMutation = {
+  mode: GatewayLifecycleMutationMode;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
 
 export type GatewayServiceEnvArgs = {
   env?: GatewayServiceEnv;
+  // Bounds service-manager probes (e.g. `systemctl`) so a wedged daemon socket
+  // cannot hang status reads indefinitely. Only status read paths set this;
+  // control/install paths leave it unset to preserve their existing behavior.
+  timeoutMs?: number;
+};
+
+/** Options for read-only service inspection that should fail soft under a deadline. */
+export type GatewayServiceReadOptions = {
+  timeoutMs?: number;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
@@ -55,13 +105,17 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "temporary-program" | "version-mismatch";
+  code: "missing-program" | "port-mismatch" | "temporary-program" | "version-mismatch";
   message: string;
 };
 
 export type GatewayServiceStartResult =
+  | {
+      outcome: "already-running";
+      state: GatewayServiceState;
+      issues: GatewayServiceStartRepairIssue[];
+    }
   | { outcome: "started"; state: GatewayServiceState }
-  | { outcome: "scheduled"; state: GatewayServiceState }
   | { outcome: "missing-install"; state: GatewayServiceState }
   | {
       outcome: "repair-required";

@@ -15,6 +15,8 @@ export type NotifySubscription = {
   messageThreadId?: string | number;
   mode: "persistent" | "once";
   addedAtMs: number;
+  /** Unique for new arms; absent only on subscriptions imported from legacy state. */
+  armId?: string;
 };
 
 export type NotifySeenRequest = {
@@ -81,7 +83,7 @@ export function normalizeLegacyNotifyState(raw: unknown): LegacyNotifyStateFile 
   return { subscribers, notifiedRequestIds };
 }
 
-export function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
+function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
   if (typeof messageThreadId === "number" && Number.isFinite(messageThreadId)) {
     return String(Math.trunc(messageThreadId));
   }

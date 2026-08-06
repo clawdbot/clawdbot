@@ -4,15 +4,26 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
+import {
+  stream,
+  type Model,
+  type SimpleStreamOptions,
+  type ThinkingLevel,
+} from "openclaw/plugin-sdk/llm";
+import {
+  requiresClaudeDefaultSampling,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { buildGuardedModelFetch } from "openclaw/plugin-sdk/provider-transport-runtime";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
 type MantleAnthropicStream = typeof stream;
-type AnthropicStreamClient = Anthropic;
 
 /** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
-export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
+function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
   if (trimmed.endsWith("/anthropic")) {
     return trimmed;
@@ -23,8 +34,77 @@ export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   return `${trimmed}/anthropic`;
 }
 
-function requiresDefaultSampling(modelId: string): boolean {
-  return modelId.includes("claude-opus-4-7");
+function isClaudeOpus5Model(model: Model): boolean {
+  return resolveClaudeOpus5ModelIdentity(model) !== undefined;
+}
+
+function isClaudeSonnet5Model(model: Model): boolean {
+  return resolveClaudeSonnet5ModelIdentity(model) !== undefined;
+}
+
+function requiresDefaultSampling(model: Model): boolean {
+  return requiresClaudeDefaultSampling(model);
+}
+
+function isClaudeMythosPreviewModel(model: Model): boolean {
+  return [model.id, model.name, model.params?.canonicalModelId]
+    .filter((value): value is string => typeof value === "string")
+    .some((value) =>
+      /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(
+        value
+          .trim()
+          .toLowerCase()
+          .replace(/[\s_.:]+/g, "-"),
+      ),
+    );
+}
+
+function isClaudeMythos5Model(model: Model): boolean {
+  return resolveClaudeMythos5ModelIdentity(model) !== undefined;
+}
+
+function requiresClaudeMythosAdaptiveThinking(model: Model): boolean {
+  return isClaudeMythos5Model(model) || isClaudeMythosPreviewModel(model);
+}
+
+function resolveMantleReasoning(
+  model: Model,
+  options: SimpleStreamOptions | undefined,
+): NonNullable<SimpleStreamOptions["reasoning"]> | undefined {
+  if (model.id.includes("claude-opus-4-7")) {
+    return undefined;
+  }
+  const opus5 = isClaudeOpus5Model(model);
+  const sonnet5 = isClaudeSonnet5Model(model);
+  const mythosPreview = isClaudeMythosPreviewModel(model);
+  const mandatoryMythos = isClaudeMythos5Model(model) || mythosPreview;
+  const reasoning =
+    options?.reasoning ?? (mandatoryMythos || opus5 || sonnet5 ? "high" : undefined);
+  if (opus5) {
+    return reasoning === "minimal" ? "low" : reasoning;
+  }
+  if (sonnet5) {
+    return reasoning === "off" || reasoning === "minimal" ? "low" : reasoning;
+  }
+  if (!mandatoryMythos) {
+    return reasoning;
+  }
+  if (reasoning === "off" || reasoning === "minimal") {
+    return "low";
+  }
+  return mythosPreview && (reasoning === "xhigh" || reasoning === "max") ? "high" : reasoning;
+}
+
+function mapModernClaudeEffort(
+  reasoning: NonNullable<SimpleStreamOptions["reasoning"]>,
+): "low" | "medium" | "high" | "xhigh" | "max" {
+  if (reasoning === "minimal" || reasoning === "low") {
+    return "low";
+  }
+  if (reasoning === "medium" || reasoning === "xhigh" || reasoning === "max") {
+    return reasoning;
+  }
+  return "high";
 }
 
 function mergeHeaders(
@@ -45,8 +125,12 @@ function buildMantleAnthropicBaseOptions(
   apiKey: string,
 ) {
   return {
-    temperature: requiresDefaultSampling(model.id) ? undefined : options?.temperature,
-    maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32_000),
+    ...(requiresDefaultSampling(model) ? {} : { temperature: options?.temperature }),
+    maxTokens:
+      options?.maxTokens ||
+      (isClaudeOpus5Model(model) || isClaudeSonnet5Model(model) || isClaudeMythos5Model(model)
+        ? model.maxTokens
+        : Math.min(model.maxTokens, 32_000)),
     signal: options?.signal,
     apiKey,
     cacheRetention: options?.cacheRetention,
@@ -60,7 +144,7 @@ function buildMantleAnthropicBaseOptions(
 function adjustMaxTokensForThinking(
   baseMaxTokens: number,
   modelMaxTokens: number,
-  reasoningLevel: NonNullable<SimpleStreamOptions["reasoning"]>,
+  reasoningLevel: ThinkingLevel,
   customBudgets?: SimpleStreamOptions["thinkingBudgets"],
 ): { maxTokens: number; thinkingBudget: number } {
   const defaultBudgets = {
@@ -104,12 +188,17 @@ export function createMantleAnthropicStreamFn(deps?: {
         model.headers,
         options?.headers,
       ),
+      fetch: buildGuardedModelFetch(model),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
     // Plugin package deps can give this plugin a distinct physical SDK copy.
     // The client API is the same, but the SDK class private field makes types nominal.
-    const streamClient = client as unknown as AnthropicStreamClient;
-    if (!options?.reasoning || requiresDefaultSampling(model.id)) {
+    const streamClient = client as unknown as Anthropic;
+    const reasoning = resolveMantleReasoning(model, options);
+    const opus5 = isClaudeOpus5Model(model);
+    const sonnet5 = isClaudeSonnet5Model(model);
+    const mythos5 = isClaudeMythos5Model(model);
+    if (!reasoning || reasoning === "off") {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
         client: streamClient,
@@ -117,18 +206,33 @@ export function createMantleAnthropicStreamFn(deps?: {
       });
     }
 
+    if (opus5 || sonnet5 || mythos5) {
+      return streamFn(model as Model<"anthropic-messages">, context, {
+        ...base,
+        client: streamClient,
+        thinkingEnabled: true,
+        effort: opus5 || sonnet5 ? mapModernClaudeEffort(reasoning) : reasoning,
+      });
+    }
+
     const adjusted = adjustMaxTokensForThinking(
       base.maxTokens || 0,
       model.maxTokens,
-      options.reasoning,
-      options.thinkingBudgets,
+      reasoning,
+      options?.thinkingBudgets,
     );
+    const adaptiveThinking = requiresClaudeMythosAdaptiveThinking(model);
+    const thinkingEnabled = adaptiveThinking || adjusted.thinkingBudget >= 1024;
     return streamFn(model as Model<"anthropic-messages">, context, {
       ...base,
       client: streamClient,
       maxTokens: adjusted.maxTokens,
-      thinkingEnabled: true,
-      thinkingBudgetTokens: adjusted.thinkingBudget,
+      thinkingEnabled,
+      ...(adaptiveThinking
+        ? { effort: reasoning }
+        : thinkingEnabled
+          ? { thinkingBudgetTokens: adjusted.thinkingBudget }
+          : {}),
     });
   };
 }

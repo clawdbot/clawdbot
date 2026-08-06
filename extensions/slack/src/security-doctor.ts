@@ -1,22 +1,7 @@
 // Slack plugin module implements security doctor behavior.
-export function isSlackMutableAllowEntry(raw: string): boolean {
-  const text = raw.trim();
-  if (!text || text === "*") {
-    return false;
-  }
+import { buildMutableAllowEntryDetector } from "openclaw/plugin-sdk/channel-policy";
 
-  const mentionMatch = text.match(/^<@([A-Z0-9]+)>$/i);
-  if (mentionMatch && /^[A-Z0-9]{8,}$/i.test(mentionMatch[1] ?? "")) {
-    return false;
-  }
-
-  const withoutPrefix = text.replace(/^(slack|user):/i, "").trim();
-  if (/^[UWBCGDT][A-Z0-9]{2,}$/.test(withoutPrefix)) {
-    return false;
-  }
-  if (/^[A-Z0-9]{8,}$/i.test(withoutPrefix)) {
-    return false;
-  }
-
-  return true;
-}
+export const isSlackMutableAllowEntry = buildMutableAllowEntryDetector({
+  stableIdPattern:
+    /^(?:(?:(?:[sS][lL][aA][cC][kK]|[uU][sS][eE][rR]):)?(?:[UWBCGDT][A-Z0-9]{2,}|[A-Za-z0-9]{8,})|<@[A-Za-z0-9]{8,}>)$/,
+});
