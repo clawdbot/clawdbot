@@ -217,7 +217,6 @@ describe("production lint suppressions", () => {
         "src/infra/exec-approvals-effective.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/infra/session-delivery-queue-recovery.ts|eslint/no-underscore-dangle|1",
         "src/node-host/invoke.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
