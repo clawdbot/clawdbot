@@ -694,6 +694,22 @@ describe("compaction-safeguard summary budgets", () => {
     }
   });
 
+  it("keeps the first line when a tail cut already lands on a boundary", () => {
+    const { sliceTailAtLineBoundary } = testing;
+    const text = "aaa\nbbb\nccc";
+
+    // Cut at index 4, i.e. immediately after a newline: "bbb" is whole and must
+    // survive. Dropping through the first newline regardless would lose it.
+    expect(sliceTailAtLineBoundary(text, 7)).toBe("bbb\nccc");
+    // Cut at index 5, inside "bbb": that partial line goes.
+    expect(sliceTailAtLineBoundary(text, 6)).toBe("ccc");
+    // No boundary at all in the kept span: the whole slice is one fragment.
+    expect(sliceTailAtLineBoundary(text, 2)).toBe("");
+    // Budget at or above the text keeps everything; non-positive keeps nothing.
+    expect(sliceTailAtLineBoundary(text, text.length)).toBe(text);
+    expect(sliceTailAtLineBoundary(text, 0)).toBe("");
+  });
+
   it("never exceeds the cap, down to a one-character budget", () => {
     const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
     const suffix =

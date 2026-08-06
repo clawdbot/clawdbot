@@ -585,14 +585,27 @@ function capWithMarker(text: string, maxChars: number, marker: string): string {
 }
 
 /**
- * Drops a leading partial line after a tail slice. Rendered turns are one per
- * line, so a character-boundary cut can restart mid-message and leave a
- * fragment that reads as a complete turn. No boundary at all means the whole
- * slice is one such fragment, so nothing survives.
+ * Tail slice that starts on a message boundary. Rendered turns are one per line,
+ * so a raw character cut can restart mid-message and leave a fragment that reads
+ * as a complete turn. A cut already landing on a boundary keeps its first line;
+ * otherwise the partial line goes. No boundary at all means the whole slice is
+ * one fragment, so nothing survives. Slicing and aligning live together because
+ * only here are both the source and the cut position known.
  */
-function dropLeadingPartialLine(text: string): string {
-  const lineBreak = text.indexOf("\n");
-  return lineBreak >= 0 ? text.slice(lineBreak + 1) : "";
+function sliceTailAtLineBoundary(text: string, budget: number): string {
+  if (budget <= 0) {
+    return "";
+  }
+  if (text.length <= budget) {
+    return text;
+  }
+  const kept = sliceUtf16Safe(text, -budget);
+  const cutIndex = text.length - kept.length;
+  if (cutIndex === 0 || text.charCodeAt(cutIndex - 1) === 10) {
+    return kept;
+  }
+  const lineBreak = kept.indexOf("\n");
+  return lineBreak >= 0 ? kept.slice(lineBreak + 1) : "";
 }
 
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
@@ -643,8 +656,8 @@ function capCompactionSummaryPreservingSuffix(
     return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
   }
   // Suffix keeps its tail (workspace rules, diagnostics) over its head.
-  const rawKept = sliceUtf16Safe(suffix, -(suffixBudget - SUFFIX_TRUNCATED_MARKER.length));
-  return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${dropLeadingPartialLine(rawKept)}`;
+  const keptSuffix = sliceTailAtLineBoundary(suffix, suffixBudget - SUFFIX_TRUNCATED_MARKER.length);
+  return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${keptSuffix}`;
 }
 
 function resolveSummaryReserveTokens(
@@ -837,7 +850,7 @@ function boundRawSplitTurn(lines: string): string {
     return lines;
   }
   const budget = MAX_CONTEXT_SECTION_CHARS - SUFFIX_TRUNCATED_MARKER.length;
-  const kept = budget > 0 ? dropLeadingPartialLine(sliceUtf16Safe(lines, -budget)) : "";
+  const kept = sliceTailAtLineBoundary(lines, budget);
   return `${SUFFIX_TRUNCATED_MARKER}${kept}`;
 }
 
@@ -1358,6 +1371,7 @@ const testing = {
   auditSummaryQuality,
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
+  sliceTailAtLineBoundary,
   formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,

@@ -18,6 +18,7 @@ type CompactionSafeguardTestApi = {
   auditSummaryQuality: CallableFunction;
   capCompactionSummary: CallableFunction;
   capCompactionSummaryPreservingSuffix: CallableFunction;
+  sliceTailAtLineBoundary: CallableFunction;
   formatFileOperations: CallableFunction;
   computeAdaptiveChunkRatio: CallableFunction;
   isOversizedForSummary: CallableFunction;
