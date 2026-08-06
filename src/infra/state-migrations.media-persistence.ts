@@ -498,6 +498,23 @@ function parseArchiveContent(content: string, filePath: string): TranscriptEvent
   });
 }
 
+function recoverTerminalNulArchiveTail(content: string): {
+  content: string;
+  recovered: boolean;
+} {
+  if (!content.endsWith("\0")) {
+    return { content, recovered: false };
+  }
+  let tailStart = content.length;
+  while (tailStart > 0 && content.charCodeAt(tailStart - 1) === 0) {
+    tailStart -= 1;
+  }
+  if (tailStart === 0) {
+    return { content, recovered: false };
+  }
+  return { content: content.slice(0, tailStart), recovered: true };
+}
+
 function serializeArchiveEvents(
   events: readonly TranscriptEvent[],
   trailingNewline: boolean,
@@ -514,18 +531,23 @@ function migrateTranscriptArchive(
 ): boolean {
   const source = readArchiveSourceSnapshot(filePath);
   const content = readSessionArchiveContentSync(filePath);
-  const events = parseArchiveContent(content, filePath);
-  let changed = false;
+  const recoveredContent = recoverTerminalNulArchiveTail(content);
+  const archiveContent = recoveredContent.content;
+  const events = parseArchiveContent(archiveContent, filePath);
+  let transformedArchive = false;
   const transformed = events.map((event) => {
     const result = transformTranscriptEvent(event);
-    changed ||= result.changed;
+    transformedArchive ||= result.changed;
     return result.event;
   });
-  if (!changed) {
+  if (!recoveredContent.recovered && !transformedArchive) {
     return false;
   }
   assertEventIdentitiesUnchanged(events, transformed, filePath);
-  const rewritten = serializeArchiveEvents(transformed, content.endsWith("\n"));
+  // Recovery removes only the corrupt suffix; preserve valid JSONL bytes when no media changes.
+  const rewritten = transformedArchive
+    ? serializeArchiveEvents(transformed, archiveContent.endsWith("\n"))
+    : archiveContent;
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const encoded = compressed
     ? encodeSessionArchiveContent(rewritten)
