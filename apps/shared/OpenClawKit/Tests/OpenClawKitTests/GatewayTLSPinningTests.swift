@@ -200,6 +200,23 @@ struct GatewayTLSPinningTests {
             params: mismatch) == .reject)
     }
 
+    @Test func `server trust evaluator rejects a different system-trusted certificate after pinning`() throws {
+        let trust = try gatewayTLSTestTrust(systemTrusted: true)
+        let pinnedFingerprint = SHA256.hash(data: Data("previous certificate".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: pinnedFingerprint,
+            allowTOFU: false,
+            storeKey: "profile:pinned")
+
+        #expect(GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: "gateway.example",
+            port: 443,
+            params: params) == .reject)
+    }
+
     @Test func `server trust evaluator claims trusted first use`() throws {
         try self.withFakeKeychain { _ in
             let trust = try gatewayTLSTestTrust(systemTrusted: true)
