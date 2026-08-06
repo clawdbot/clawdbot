@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -59,6 +60,7 @@ describe("subagent registry persistence resume", () => {
   });
 
   afterEach(async () => {
+    __setFsSafeTestHooksForTest(undefined);
     closeSeedStateDatabase();
     registryStateDbModule.closeOpenClawStateDatabaseForTest();
     mod.testing.setDepsForTest();
@@ -68,6 +70,66 @@ describe("subagent registry persistence resume", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
     }
+  });
+
+  it("resumes a replacement after stale orphan attachment cleanup settles", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const attachmentsRootDir = path.join(tempStateDir, "attachments");
+    const attachmentsDir = path.join(attachmentsRootDir, "orphan");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+    const runId = "run-replaced-during-orphan-cleanup";
+    const orphan: SubagentRunRecord = {
+      runId,
+      childSessionKey: "agent:main:subagent:orphan-replaced",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "remove orphan attachments",
+      cleanup: "delete",
+      createdAt: 100,
+      execution: { status: "terminal", startedAt: 110, endedAt: 120, outcome: { status: "ok" } },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "orphan", capturedAt: 120 },
+      delivery: { status: "delivered", deliveredAt: 120 },
+      attachmentsRootDir,
+      attachmentsDir,
+    };
+    let releaseRemoval!: () => void;
+    const removalReleased = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    let cleanupStarted!: () => void;
+    const cleanupStartedPromise = new Promise<void>((resolve) => {
+      cleanupStarted = resolve;
+    });
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation: async (operation) => {
+        if (operation === "remove") {
+          cleanupStarted();
+          await removalReleased;
+        }
+      },
+    });
+
+    mod.addSubagentRunForTests(orphan);
+    mod.resumeSubagentRun(runId);
+    await cleanupStartedPromise;
+
+    mod.addSubagentRunForTests({
+      ...orphan,
+      childSessionKey: "agent:main:subagent:replacement",
+      task: "resume replacement",
+      cleanup: "keep",
+      execution: { status: "running", startedAt: 200 },
+      attachmentsRootDir: undefined,
+      attachmentsDir: undefined,
+    });
+    releaseRemoval();
+
+    await vi.waitFor(() => expect(callGatewayModule.callGateway).toHaveBeenCalled(), {
+      timeout: 1_000,
+      interval: 10,
+    });
   });
 
   it("resumes a persisted run from canonical SQLite state", async () => {

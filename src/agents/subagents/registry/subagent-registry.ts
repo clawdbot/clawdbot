@@ -103,6 +103,9 @@ export function scheduleSubagentRegistrySweep(params?: { delayMs?: number }) {
 }
 
 const resumedRuns = new Set<string>();
+// Rooted cleanup can outlive its registry row. Track the exact claimant so a
+// stale completion cannot release or strand a replacement with the same id.
+const orphanReconciliationClaims = new Map<string, SubagentRunRecord>();
 
 const completionRuntime = createSubagentRegistryCompletionRuntime({
   runs: subagentRuns,
@@ -224,6 +227,7 @@ function reconcileOrphanedRunInBackground(params: {
   entry: SubagentRunRecord;
   reason: NonNullable<ReturnType<typeof resolveSubagentRunOrphanReason>>;
 }) {
+  orphanReconciliationClaims.set(params.runId, params.entry);
   resumedRuns.add(params.runId);
   void runWithGatewayIndependentRootWorkAdmission(async () => {
     const removed = await reconcileOrphanedRun({
@@ -233,11 +237,17 @@ function reconcileOrphanedRunInBackground(params: {
       resumedRuns,
     });
     if (removed) {
+      if (orphanReconciliationClaims.get(params.runId) === params.entry) {
+        orphanReconciliationClaims.delete(params.runId);
+      }
       persistSubagentRuns(params.runId);
       return;
     }
-    if (subagentRuns.get(params.runId) === params.entry) {
-      resumedRuns.delete(params.runId);
+    if (releaseOrphanReconciliationClaim(params.runId, params.entry)) {
+      if (subagentRuns.get(params.runId) !== params.entry) {
+        resumeSubagentRun(params.runId);
+        return;
+      }
       scheduleSubagentRegistrySweep();
     }
   }).catch((error: unknown) => {
@@ -246,11 +256,23 @@ function reconcileOrphanedRunInBackground(params: {
       childSessionKey: params.entry.childSessionKey,
       error,
     });
-    if (subagentRuns.get(params.runId) === params.entry) {
-      resumedRuns.delete(params.runId);
+    if (releaseOrphanReconciliationClaim(params.runId, params.entry)) {
+      if (subagentRuns.get(params.runId) !== params.entry) {
+        resumeSubagentRun(params.runId);
+        return;
+      }
       scheduleSubagentRegistrySweep({ delayMs: GATEWAY_ADMISSION_RETRY_DELAY_MS });
     }
   });
+}
+
+function releaseOrphanReconciliationClaim(runId: string, entry: SubagentRunRecord): boolean {
+  if (orphanReconciliationClaims.get(runId) !== entry) {
+    return false;
+  }
+  orphanReconciliationClaims.delete(runId);
+  resumedRuns.delete(runId);
+  return true;
 }
 
 export function resumeSubagentRun(runId: string) {
@@ -556,6 +578,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumeRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
+  orphanReconciliationClaims.clear();
   pendingLifecycle.clearAll();
   resetSubagentRegistryRuntimeLoadersForTests();
   contextCleanup.reset();
