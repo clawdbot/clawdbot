@@ -455,7 +455,7 @@ vi.mock("./ingress.js", () => ({
         stop: vi.fn(async () => {
           stopped = true;
           hoisted.callOrder.push("ingress-stop");
-          await Promise.all([...inFlight]);
+          await Promise.all(inFlight);
         }),
         waitForIdle: vi.fn(async () => {}),
         waitForAdmissions: vi.fn(async () => {}),
