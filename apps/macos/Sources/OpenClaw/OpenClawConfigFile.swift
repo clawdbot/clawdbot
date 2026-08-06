@@ -455,7 +455,9 @@ extension OpenClawConfigFile {
         var meta = root["meta"] as? [String: Any] ?? [:]
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "macos-app"
         meta["lastTouchedVersion"] = version
-        meta["lastTouchedAt"] = ISO8601DateFormatter().string(from: Date())
+        // Machine-state timestamps moved to SQLite. Keeping this retired config key makes the
+        // matching CLI reject the app's config before the Gateway can start.
+        meta.removeValue(forKey: "lastTouchedAt")
         root["meta"] = meta
     }
 
