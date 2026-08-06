@@ -7,6 +7,7 @@ import {
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
@@ -38,6 +39,7 @@ function createServiceContext(params: {
     params.service?.pluginId === params.service?.service.id &&
     (params.service?.service.id === "diagnostics-otel" ||
       params.service?.service.id === "diagnostics-prometheus");
+  const isOtelExporter = isDiagnosticsExporter && params.service.service.id === "diagnostics-otel";
   const grantsInternalDiagnostics =
     isDiagnosticsExporter &&
     (params.service?.origin === "bundled" || params.service?.trustedOfficialInstall === true);
@@ -60,7 +62,10 @@ function createServiceContext(params: {
       ? {
           internalDiagnostics: {
             emit: emitTrustedDiagnosticEventWithPrivateData,
-            onEvent: onTrustedInternalDiagnosticEvent,
+            onEvent: isOtelExporter
+              ? (listener) =>
+                  onTrustedInternalDiagnosticEvent(markTrustedOtelDiagnosticListener(listener))
+              : onTrustedInternalDiagnosticEvent,
             registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
           },
         }
