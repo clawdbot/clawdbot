@@ -6136,7 +6136,6 @@ describe("QmdMemoryManager", () => {
       } | null;
     };
 
-    // 第一次搜索：索引为空，使用 QMD 文件提示回退
     inner.db = {
       prepare: () => ({
         all: () => [],
@@ -6158,7 +6157,6 @@ describe("QmdMemoryManager", () => {
       },
     ]);
 
-    // 第二次搜索：索引恢复后，应该使用索引中的记录而不是缓存的回退位置
     inner.db = {
       prepare: () => ({
         all: () => [{ collection: "workspace-main", path: "indexed/path.md" }],

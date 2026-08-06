@@ -98,8 +98,8 @@ export class QmdDocumentResolver {
         return dbLocation;
       }
     }
-    // 当索引查询无结果或无匹配时，使用 QMD 文件提示回退
-    // 不要缓存 hint-derived 位置，以便索引恢复时可以重新建立权威路径
+    // Keep hint-only locations out of the docid cache so a recovered index row
+    // can become authoritative on the next lookup.
     return this.resolveDocLocationFromHints(normalizedHints);
   }
 
