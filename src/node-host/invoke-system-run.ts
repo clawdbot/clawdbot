@@ -1075,9 +1075,14 @@ async function executeSystemRunPhase(
   if (opts.signal?.aborted) {
     return;
   }
+  const execEnv: Record<string, string> = {
+    ...(phase.env ?? process.env),
+    OPENCLAW_AGENT_ID: phase.agentId ?? "",
+    OPENCLAW_SESSION_KEY: phase.sessionKey === "node" ? "" : phase.sessionKey,
+  };
   const result = await (opts.signal
-    ? opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs, opts.signal)
-    : opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs));
+    ? opts.runCommand(execArgv, phase.cwd, execEnv, phase.timeoutMs, opts.signal)
+    : opts.runCommand(execArgv, phase.cwd, execEnv, phase.timeoutMs));
   if (opts.signal?.aborted) {
     return;
   }

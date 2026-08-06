@@ -19,6 +19,9 @@ const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
+const execSpawnEnvCapture = vi.hoisted(() => ({
+  env: undefined as NodeJS.ProcessEnv | undefined,
+}));
 
 const parseShellSingleQuoted = (input: string) => {
   if (!input.startsWith("'")) {
@@ -83,8 +86,13 @@ vi.mock("../process/supervisor/index.js", () => ({
     }) => {
       const command = unwrapSnapshotEvalCommand(input.ptyCommand ?? input.argv?.at(-1) ?? "");
       const env = input.env ?? {};
+      execSpawnEnvCapture.env = input.env;
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
+      } else if (command.includes("OPENCLAW_AGENT_ID")) {
+        input.onStdout?.(env.OPENCLAW_AGENT_ID ?? "");
+      } else if (command.includes("OPENCLAW_SESSION_KEY")) {
+        input.onStdout?.(env.OPENCLAW_SESSION_KEY ?? "");
       } else if (command.includes("SSLKEYLOGFILE")) {
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
       } else if (command.includes("$PATH")) {
@@ -187,6 +195,7 @@ describe("exec PATH login shell merge", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv([...ENV_KEYS]);
+    execSpawnEnvCapture.env = undefined;
     process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
@@ -277,6 +286,126 @@ describe("exec PATH login shell merge", () => {
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
     expect(value).toBe("exec");
+  });
+
+  it("sets OPENCLAW_AGENT_ID from agent defaults", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "main",
+    });
+    const result = await tool.execute("call-openclaw-agent", {
+      command: 'printf "%s" "${OPENCLAW_AGENT_ID:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("main");
+  });
+
+  it("sets OPENCLAW_SESSION_KEY from agent defaults", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:main",
+    });
+    const result = await tool.execute("call-openclaw-session", {
+      command: 'printf "%s" "${OPENCLAW_SESSION_KEY:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("agent:main:main");
+  });
+
+  it("user env cannot override OPENCLAW_AGENT_ID", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "main",
+    });
+    const result = await tool.execute("call-agent-override", {
+      command: 'printf "%s" "${OPENCLAW_AGENT_ID:-}"',
+      env: { OPENCLAW_AGENT_ID: "hacked" },
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    // Trusted agentId overrides user-provided env.
+    expect(value).toBe("main");
+  });
+
+  it("user env cannot override OPENCLAW_SESSION_KEY", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:main",
+    });
+    const result = await tool.execute("call-session-override", {
+      command: 'printf "%s" "${OPENCLAW_SESSION_KEY:-}"',
+      env: { OPENCLAW_SESSION_KEY: "hacked-session" },
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    // Trusted sessionKey overrides user-provided env.
+    expect(value).toBe("agent:main:main");
+  });
+
+  it("injects OPENCLAW_AGENT_ID as a present empty string when no agent is bound", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    await tool.execute("call-agent-present", {
+      command: "echo ok",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+
+    // Assert on the env object itself so "present but empty" is distinguished
+    // from "absent" (shell output would render both as empty).
+    const env = execSpawnEnvCapture.env;
+    expect(env).toBeDefined();
+    expect(Object.hasOwn(env ?? {}, "OPENCLAW_AGENT_ID")).toBe(true);
+    expect(env?.OPENCLAW_AGENT_ID).toBe("");
+  });
+
+  it("injects OPENCLAW_SESSION_KEY as a present empty string when no session is bound", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    await tool.execute("call-session-present", {
+      command: "echo ok",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+
+    const env = execSpawnEnvCapture.env;
+    expect(env).toBeDefined();
+    expect(Object.hasOwn(env ?? {}, "OPENCLAW_SESSION_KEY")).toBe(true);
+    expect(env?.OPENCLAW_SESSION_KEY).toBe("");
   });
 
   it("throws security violation when env.PATH is provided", async () => {
