@@ -17,6 +17,7 @@ const messageCreateMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
 
 const emptyConfig: ClawdbotConfig = {};
+const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const validPngImage = Buffer.from(
   "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de",
   "hex",
@@ -59,6 +60,11 @@ function mockResolvedFeishuAccount() {
     appSecret: "app_secret",
     domain: "feishu",
   });
+}
+
+function expectMediaTimeoutClientConfigured(): void {
+  const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
+  expect(options.httpTimeoutMs).toBe(FEISHU_MEDIA_HTTP_TIMEOUT_MS);
 }
 
 function mockCallArg<T>(
