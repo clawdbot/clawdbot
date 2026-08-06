@@ -74,10 +74,39 @@ export function createAgentIdentityConfig(params: {
   });
 }
 
-export function normalizeIdentityForFile(
-  identity: IdentityConfig | undefined,
-): IdentityConfig | undefined {
-  return identity ? compactIdentityConfig(identity) : undefined;
+function normalizeClearableIdentityValue(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  // Explicit empty or null clears the stored field; omission preserves it.
+  if (value === null) {
+    return "";
+  }
+  return typeof value === "string" ? sanitizeAgentIdentityLine(value) : undefined;
+}
+
+/**
+ * Build the identity patch for `agents.update`. Explicit empty/null clears the
+ * field (mirroring `model: null`); omitted fields keep their stored values.
+ */
+export function buildAgentIdentityUpdatePatch(params: {
+  name?: string;
+  emoji?: unknown;
+  avatar?: unknown;
+}): IdentityConfig | undefined {
+  const patch: IdentityConfig = {};
+  if (params.name) {
+    patch.name = sanitizeAgentIdentityLine(params.name);
+  }
+  const emoji = normalizeClearableIdentityValue(params.emoji);
+  if (emoji !== undefined) {
+    patch.emoji = emoji;
+  }
+  const avatar = normalizeClearableIdentityValue(params.avatar);
+  if (avatar !== undefined) {
+    patch.avatar = avatar;
+  }
+  return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
 function normalizeIdentityValue(value: string): string {
@@ -223,6 +252,19 @@ export function mergeIdentityMarkdownContent(
 
   for (const [field, label] of WRITABLE_IDENTITY_FIELDS) {
     const value = identity[field]?.trim();
+    if (value === "") {
+      // Explicit empty removes the stored line; duplicated labels all go.
+      const clearedIndexes = nextLines.reduce<number[]>((indexes, line, index) => {
+        if (matchesIdentityLabel(line, label)) {
+          indexes.push(index);
+        }
+        return indexes;
+      }, []);
+      for (const clearedIndex of clearedIndexes.toReversed()) {
+        nextLines.splice(clearedIndex, 1);
+      }
+      continue;
+    }
     if (!value) {
       continue;
     }

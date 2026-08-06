@@ -1065,6 +1065,77 @@ describe("agents.update", () => {
     );
   });
 
+  it("clears emoji on empty string and removes its IDENTITY.md line", async () => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: "",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
+    expectRecordFields(configOptions.identity, { emoji: "" });
+    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "IDENTITY.md",
+    });
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "",
+      ].join("\n"),
+    );
+    const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+    const agents = expectRecordFields(persisted.agents, {});
+    const [agent] = agents.list as MockAgentEntry[];
+    expect(agent?.identity).toEqual({ name: "Current Agent", theme: "steady", emoji: "" });
+  });
+
+  it("clears emoji on null like model: null", async () => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: null,
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
+      identity: { emoji: "" },
+    });
+    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "IDENTITY.md",
+    });
+    expect(write.data).not.toContain("- Emoji:");
+  });
+
+  it("clears avatar while keeping the emoji line", async () => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      avatar: "",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "IDENTITY.md",
+    });
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "- Emoji: 🐢",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("syncs existing identity into a new workspace even without identity params", async () => {
     mocks.ensureAgentWorkspace.mockResolvedValueOnce({
       dir: "/resolved/new/workspace",

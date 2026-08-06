@@ -41,9 +41,8 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
 import {
-  createAgentIdentityConfig,
+  buildAgentIdentityUpdatePatch,
   mergeIdentityMarkdownContent,
-  normalizeIdentityForFile,
   sanitizeAgentIdentityLine,
 } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
@@ -939,7 +938,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? sanitizeAgentIdentityLine(params.name.trim())
         : undefined;
 
-    const identity = createAgentIdentityConfig({
+    const identity = buildAgentIdentityUpdatePatch({
       name: safeName,
       emoji: params.emoji,
       avatar: params.avatar,
@@ -965,7 +964,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
       });
     }
 
-    const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
+    // Raw identity keeps explicit empty tombstones so cleared fields are removed.
+    const persistedIdentity = resolveAgentIdentity(nextConfig, agentId);
     if (persistedIdentity && (workspaceDir || hasIdentityFields)) {
       const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
       const previousWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);

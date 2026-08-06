@@ -173,6 +173,18 @@ describe("AgentsUpdateParamsSchema", () => {
     expectAccepted(AgentsUpdateParamsSchema, { agentId: "work" }, { agentId: "work", model: null });
     expectRejected(AgentsUpdateParamsSchema, { agentId: "work", model: "" });
   });
+
+  it("accepts empty and null emoji/avatar clears alongside string values", () => {
+    expectAccepted(
+      AgentsUpdateParamsSchema,
+      { agentId: "work", emoji: "" },
+      { agentId: "work", emoji: null },
+      { agentId: "work", avatar: "avatars/patch.png" },
+      { agentId: "work", avatar: "" },
+      { agentId: "work", avatar: null },
+    );
+    expectRejected(AgentsUpdateParamsSchema, { agentId: "work", emoji: 3 });
+  });
 });
 
 describe("ModelsListParamsSchema", () => {

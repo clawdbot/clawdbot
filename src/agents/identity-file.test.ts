@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildAgentIdentityUpdatePatch,
   loadAgentIdentityFromFile,
   loadAgentIdentityFromWorkspace,
   mergeIdentityMarkdownContent,
@@ -137,6 +138,70 @@ Fluent in over six million error messages.
     });
 
     expect(merged).toBe("- Name: New Name\n");
+  });
+
+  it("removes lines for explicitly cleared fields while keeping richer sections", () => {
+    const content = `
+# IDENTITY.md - Agent Identity
+
+- **Name:** C-3PO
+- **Creature:** Flustered Protocol Droid
+- **Vibe:** Anxious, detail-obsessed
+- **Emoji:** 🤖
+- **Avatar:** avatars/c3po.png
+
+## Role
+
+Fluent in over six million error messages.
+`;
+
+    const merged = mergeIdentityMarkdownContent(content, {
+      emoji: "",
+      avatar: "",
+    });
+
+    expect(merged).not.toContain("- Emoji:");
+    expect(merged).not.toContain("- Avatar:");
+    expect(merged).toContain("- **Name:** C-3PO");
+    expect(merged).toContain("- **Creature:** Flustered Protocol Droid");
+    expect(merged).toContain("## Role");
+  });
+
+  it("removes every duplicate line for a cleared field", () => {
+    const merged = mergeIdentityMarkdownContent("- Emoji: 🙂\n- Emoji: 🦀\n", { emoji: "" });
+
+    expect(merged.match(/Emoji:/g)).toBeNull();
+    expect(merged.trim()).toBe("");
+  });
+});
+
+describe("buildAgentIdentityUpdatePatch", () => {
+  it("omits the patch entirely when nothing is supplied", () => {
+    expect(buildAgentIdentityUpdatePatch({})).toBeUndefined();
+  });
+
+  it("includes non-empty identity values", () => {
+    expect(
+      buildAgentIdentityUpdatePatch({
+        name: "Patch Agent",
+        emoji: "🦀",
+        avatar: "avatars/patch.png",
+      }),
+    ).toEqual({ name: "Patch Agent", emoji: "🦀", avatar: "avatars/patch.png" });
+  });
+
+  it("clears fields on explicit empty or null and preserves omitted fields", () => {
+    expect(buildAgentIdentityUpdatePatch({ emoji: "" })).toEqual({ emoji: "" });
+    expect(buildAgentIdentityUpdatePatch({ emoji: null })).toEqual({ emoji: "" });
+    expect(buildAgentIdentityUpdatePatch({ avatar: "  " })).toEqual({ avatar: "" });
+    expect(buildAgentIdentityUpdatePatch({ emoji: "🦀" })).toEqual({ emoji: "🦀" });
+    expect(buildAgentIdentityUpdatePatch({ emoji: "  🦀  " })).toEqual({ emoji: "🦀" });
+  });
+
+  it("sanitizes names like the create path", () => {
+    expect(buildAgentIdentityUpdatePatch({ name: "  Patch   Agent  " })).toEqual({
+      name: "Patch Agent",
+    });
   });
 });
 

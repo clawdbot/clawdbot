@@ -126,8 +126,8 @@ export const AgentsUpdateParamsSchema = closedObject({
   name: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  emoji: Type.Optional(Type.String()),
-  avatar: Type.Optional(Type.String()),
+  emoji: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 
 /** Result returned after updating an agent. */
