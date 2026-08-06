@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.6.34",
+  "version": "2026.6.35",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/codex",
-      "version": "2026.6.34",
+      "version": "2026.6.35",
       "dependencies": {
         "@openai/codex": "0.146.0",
         "typebox": "1.1.39",

@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/firecrawl-plugin",
-  "version": "2026.6.34",
+  "version": "2026.6.35",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/firecrawl-plugin",
-      "version": "2026.6.34",
+      "version": "2026.6.35",
       "dependencies": {
         "typebox": "1.1.39"
       }

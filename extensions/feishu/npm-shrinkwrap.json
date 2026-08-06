@@ -1,19 +1,19 @@
 {
   "name": "@openclaw/feishu",
-  "version": "2026.6.34",
+  "version": "2026.6.35",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/feishu",
-      "version": "2026.6.34",
+      "version": "2026.6.35",
       "dependencies": {
         "@larksuiteoapi/node-sdk": "1.66.0",
         "typebox": "1.1.39",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.34"
+        "openclaw": ">=2026.6.35"
       },
       "peerDependenciesMeta": {
         "openclaw": {
