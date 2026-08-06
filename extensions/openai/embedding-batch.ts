@@ -135,9 +135,6 @@ async function readOpenAiBatchOutputLines(
     ensureLineLimit();
     return params.onLine(line);
   };
-  const emitParsedLine = (line: string): boolean =>
-    emitOutputLine(parseOpenAiBatchOutputLine(line));
-
   const reader = response.body?.getReader();
   if (!reader) {
     const text = await readProviderTextResponse(response, "openai.batch-file-content", {
