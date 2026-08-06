@@ -30,6 +30,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     activeTrustedParentContext,
     exportedInternalOrTrustedContext,
     trackTrustedSpan,
+    getTrackedInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
     addRunAttrs,
@@ -96,18 +97,22 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     metadata: DiagnosticEventMetadata,
   ) => {
     if (!tracesEnabled || !metadata.trusted) {
-      return;
+      return undefined;
+    }
+    const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
+    if (trackedSpan) {
+      return trackedSpan.spanContext();
     }
     const spanAttrs = toolExecutionBaseAttrs(evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
-    trackTrustedSpan(
+    return trackTrustedSpan(
       evt,
       metadata,
       spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {
         parentContext: activeTrustedParentContext(evt, metadata),
         startTimeMs: evt.ts,
       }),
-    );
+    ).spanContext();
   };
 
   const recordToolExecutionCompleted = (

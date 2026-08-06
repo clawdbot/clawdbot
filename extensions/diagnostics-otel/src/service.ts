@@ -1,5 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
-import { metrics, trace } from "@opentelemetry/api";
+import { metrics, trace, type SpanContext } from "@opentelemetry/api";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
@@ -13,7 +13,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import type { OpenClawPluginService } from "../api.js";
+import type { DiagnosticTraceContext, OpenClawPluginService } from "../api.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
@@ -83,21 +83,32 @@ function createStartupRollbackError(startupError: unknown, cleanupError: unknown
   );
 }
 
+function diagnosticTraceContextFromSpanContext(spanContext: SpanContext): DiagnosticTraceContext {
+  return {
+    traceId: spanContext.traceId,
+    spanId: spanContext.spanId,
+    traceFlags: spanContext.traceFlags.toString(16).padStart(2, "0"),
+  };
+}
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
   let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
   let unsubscribe: (() => void) | null = null;
+  let unregisterTracePropagationBridge: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
+    const currentUnregisterTracePropagationBridge = unregisterTracePropagationBridge;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
     unsubscribe = null;
+    unregisterTracePropagationBridge = null;
     logProvider = null;
     sdk = null;
     stopActiveTrustedSpans = null;
@@ -108,7 +119,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         await Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.())))
       ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
     // Preserve cleanup -> provider flush -> handler removal while attempting every step per phase.
-    const failures = await settle(currentUnsubscribe, currentStopActiveTrustedSpans);
+    const failures = await settle(
+      currentUnregisterTracePropagationBridge,
+      currentUnsubscribe,
+      currentStopActiveTrustedSpans,
+    );
     failures.push(
       ...(await settle(
         currentLogProvider ? () => currentLogProvider.shutdown() : null,
@@ -397,6 +412,29 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           recordSecurityEvent,
         }),
       );
+      if (tracesActive) {
+        // Model/tool starts are queued while their lifecycle parents dispatch
+        // synchronously. Prepare these child spans before outbound propagation,
+        // then let the queued recorder reuse them instead of exporting duplicates.
+        unregisterTracePropagationBridge =
+          ctx.internalDiagnostics?.registerTracePropagationBridge?.({
+            shouldPrepareEvent(event) {
+              return event.type === "model.call.started" || event.type === "tool.execution.started";
+            },
+            prepareEvent(event, metadata) {
+              if (event.type === "model.call.started") {
+                recorders.recordModelCallStarted(event, metadata);
+              } else if (event.type === "tool.execution.started") {
+                recorders.recordToolExecutionStarted(event, metadata);
+              }
+            },
+            resolveTraceContext(traceContext) {
+              const spanContext =
+                diagnosticsTrace.exportedSpanContextForDiagnosticTraceContext(traceContext);
+              return spanContext ? diagnosticTraceContextFromSpanContext(spanContext) : undefined;
+            },
+          }) ?? null;
+      }
 
       unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
         const otlpError = findOtlpExporterError(reason);

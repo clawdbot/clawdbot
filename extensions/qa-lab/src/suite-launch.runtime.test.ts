@@ -127,6 +127,7 @@ describe("qa suite runtime launcher", () => {
             status: "pass",
             steps: [],
           })),
+          startedScenarioIds: scenarioIds,
           watchUrl: "http://127.0.0.1:43124",
         };
       },
@@ -439,6 +440,15 @@ describe("qa suite runtime launcher", () => {
     expect(
       result.result.scenarios.find((scenario) => scenario.name === "thread-isolation [matrix]"),
     ).toMatchObject({ status: "fail" });
+    expect(result.observedCells).toEqual(
+      expect.arrayContaining([
+        { scenarioId: "channel-chat-baseline", executionKind: "flow", channel: null },
+        { scenarioId: "telegram-help-command", executionKind: "flow", channel: "telegram" },
+        { scenarioId: "matrix-restart-resume", executionKind: "flow", channel: "matrix" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "slack" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
+      ]),
+    );
   });
 
   it("uses one eligible channel outside profile execution", async () => {
@@ -689,6 +699,7 @@ describe("qa suite runtime launcher", () => {
     expect(evidence.entries).toMatchObject([
       { test: { id: "whatsapp-status-command" }, result: { status: "fail" } },
     ]);
+    expect(result.observedCells).toEqual([]);
     await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
   });
 
@@ -2252,7 +2263,7 @@ describe("qa suite runtime launcher", () => {
     ]);
     const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
       entries?: Array<{
-        execution?: { channel?: { id?: string } };
+        execution?: { channel?: { driver?: string; id?: string; live?: boolean } };
         result?: { status?: string };
         test?: { id?: string };
       }>;
@@ -2260,10 +2271,21 @@ describe("qa suite runtime launcher", () => {
     for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
       const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
       expect(blocked).toMatchObject({
-        execution: { channel: { id: "whatsapp", driver: "live", live: true } },
+        execution: { channel: { id: "whatsapp", live: false } },
         result: { status: "blocked" },
       });
+      expect(blocked?.execution?.channel?.driver).toBeUndefined();
     }
+    expect(result.observedCells).not.toEqual(
+      expect.arrayContaining([
+        { scenarioId: "whatsapp-status-command", executionKind: "flow", channel: "whatsapp" },
+        {
+          scenarioId: "whatsapp-access-control-dm-open",
+          executionKind: "flow",
+          channel: "whatsapp",
+        },
+      ]),
+    );
   });
 
   it("omits later credential failures after the first failed flow scenario", async () => {

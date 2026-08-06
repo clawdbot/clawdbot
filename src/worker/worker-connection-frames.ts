@@ -27,6 +27,7 @@ import {
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { notifyListeners } from "../shared/listeners.js";
 import {
   createPendingRequestRegistry,
   type PendingRequestEntry,
@@ -133,9 +134,7 @@ export class WorkerConnectionFrameDispatcher {
         closeInvalidWorkerFrame(socket);
         return;
       }
-      for (const listener of this.inferenceEventListeners) {
-        listener(frame);
-      }
+      notifyListeners(this.inferenceEventListeners, frame);
       return;
     }
     if (validateWorkerInferenceTerminalFrame(frame)) {
@@ -143,9 +142,7 @@ export class WorkerConnectionFrameDispatcher {
         closeInvalidWorkerFrame(socket);
         return;
       }
-      for (const listener of this.inferenceTerminalListeners) {
-        listener(frame);
-      }
+      notifyListeners(this.inferenceTerminalListeners, frame);
       return;
     }
     const id = responseId(frame);

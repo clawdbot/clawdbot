@@ -90,6 +90,7 @@ vi.mock("@opentelemetry/api", () => ({
   metrics: {
     getMeter: () => telemetryState.meter,
   },
+  isSpanContextValid: () => true,
   trace: {
     getTracer: () => telemetryState.tracer,
     setSpanContext: telemetryState.tracer.setSpanContext,
@@ -182,6 +183,7 @@ import {
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
+  formatDiagnosticTraceparent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -1011,11 +1013,30 @@ describe("diagnostics-otel service", () => {
   });
 
   test("restarts without retaining prior listeners or log transports", async () => {
-    const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
+    const unregisterBridge = vi.fn();
+    const { service, ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      configure: (context) => {
+        const registerBridge = context.internalDiagnostics?.registerTracePropagationBridge;
+        context.internalDiagnostics = {
+          ...context.internalDiagnostics!,
+          registerTracePropagationBridge: (bridge) => {
+            const unregister = registerBridge!(bridge);
+            return () => {
+              unregisterBridge();
+              unregister();
+            };
+          },
+        };
+      },
+    });
     await service.start(ctx);
 
     expect(logShutdown).toHaveBeenCalledTimes(1);
     expect(sdkShutdown).toHaveBeenCalledTimes(1);
+    expect(unregisterBridge).toHaveBeenCalledTimes(1);
 
     telemetryState.tracer.startSpan.mockClear();
     emitDiagnosticEvent({
@@ -1029,6 +1050,7 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
     expect(logShutdown).toHaveBeenCalledTimes(2);
     expect(sdkShutdown).toHaveBeenCalledTimes(2);
+    expect(unregisterBridge).toHaveBeenCalledTimes(2);
 
     telemetryState.tracer.startSpan.mockClear();
     emitDiagnosticEvent({
@@ -1038,6 +1060,55 @@ describe("diagnostics-otel service", () => {
       durationMs: 10,
     });
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
+  test("surfaces bridge cleanup failure after attempting every shutdown phase", async () => {
+    const cleanupError = new Error("bridge cleanup failed");
+    const unregisterBridge = vi.fn(() => {
+      throw cleanupError;
+    });
+    const cleanupOrder: string[] = [];
+    logShutdown.mockImplementationOnce(async () => {
+      cleanupOrder.push("log-provider");
+    });
+    sdkShutdown.mockImplementationOnce(async () => {
+      cleanupOrder.push("sdk-provider");
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    const onEvent = ctx.internalDiagnostics!.onEvent;
+    ctx.internalDiagnostics = {
+      ...ctx.internalDiagnostics!,
+      onEvent: (listener) => {
+        const unsubscribe = onEvent(listener);
+        return () => {
+          cleanupOrder.push("listener");
+          unsubscribe();
+        };
+      },
+      registerTracePropagationBridge: () => () => {
+        cleanupOrder.push("bridge");
+        unregisterBridge();
+      },
+    };
+    await service.start(ctx);
+    emitRunStarted();
+    const runSpan = spanByName("openclaw.run");
+
+    const stopError = await Promise.resolve(service.stop?.(ctx)).catch((error: unknown) => error);
+
+    expect(stopError).toBe(cleanupError);
+    expect(unregisterBridge).toHaveBeenCalledOnce();
+    expect(runSpan.end).toHaveBeenCalledOnce();
+    expect(logShutdown).toHaveBeenCalledOnce();
+    expect(sdkShutdown).toHaveBeenCalledOnce();
+    expect(unhandledRejectionHandlerState.getHandlers()).toEqual([]);
+    expect(cleanupOrder.indexOf("bridge")).toBeLessThan(cleanupOrder.indexOf("log-provider"));
+    expect(cleanupOrder.indexOf("listener")).toBeLessThan(cleanupOrder.indexOf("sdk-provider"));
   });
 
   test("attempts every provider shutdown and reports every failure", async () => {
@@ -1460,6 +1531,7 @@ describe("diagnostics-otel service", () => {
     process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
     process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
     process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/protobuf";
+    const registerBridge = vi.fn(() => vi.fn());
 
     const { ctx } = await startOtelService({
       traces: true,
@@ -1467,6 +1539,10 @@ describe("diagnostics-otel service", () => {
       logs: false,
       configure: (context) => {
         delete context.config.diagnostics?.otel?.protocol;
+        context.internalDiagnostics = {
+          ...context.internalDiagnostics!,
+          registerTracePropagationBridge: registerBridge,
+        };
       },
     });
 
@@ -1481,6 +1557,7 @@ describe("diagnostics-otel service", () => {
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       "diagnostics-otel: unsupported traces protocol grpc; OTLP export disabled",
     );
+    expect(registerBridge).not.toHaveBeenCalled();
   });
 
   test("keeps stdout logs active when the OTLP branch of both is unsupported", async () => {
@@ -4039,6 +4116,54 @@ describe("diagnostics-otel service", () => {
     expect(parentBySpanName["openclaw.model.call"]?.spanId).toBe(runSpanContext.spanId);
   });
 
+  test("prepares model and tool spans synchronously for propagation without duplicate spans", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    const runTrace = createTestTrace(CHILD_SPAN_ID, SPAN_ID);
+    const modelTrace = createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID);
+    const toolTrace = createTestTrace(TOOL_SPAN_ID, MODEL_CALL_SPAN_ID);
+    emitRunStarted({ trace: runTrace });
+    expect(formatDiagnosticTraceparent(modelTrace)).toBe(
+      `00-${modelTrace.traceId}-${modelTrace.spanId}-01`,
+    );
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      ...MODEL_CALL_FIXTURE,
+      trace: modelTrace,
+    });
+
+    const modelSpanContext = spanByName("openclaw.model.call").spanContext();
+    const runSpanContext = spanByName("openclaw.run").spanContext();
+    expect(startedSpanParentContexts("openclaw.model.call")).toEqual([runSpanContext]);
+    expect(formatDiagnosticTraceparent(modelTrace)).toBe(
+      `00-${modelTrace.traceId}-${modelTrace.spanId}-01`,
+    );
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: "run-1",
+      toolName: "read",
+      trace: toolTrace,
+    });
+    expect(startedSpanParentContexts("openclaw.tool.execution")).toEqual([modelSpanContext]);
+    expect(formatDiagnosticTraceparent(toolTrace)).toBe(
+      `00-${toolTrace.traceId}-${toolTrace.spanId}-01`,
+    );
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      telemetryState.tracer.startSpan.mock.calls.filter(
+        (call) => call[0] === "openclaw.model.call",
+      ),
+    ).toHaveLength(1);
+    expect(
+      telemetryState.tracer.startSpan.mock.calls.filter(
+        (call) => call[0] === "openclaw.tool.execution",
+      ),
+    ).toHaveLength(1);
+  });
+
   test("uses production message lifecycle helpers as the message span anchor", async () => {
     await startOtelService({ traces: true, metrics: true });
 
@@ -4527,6 +4652,42 @@ describe("diagnostics-otel service", () => {
     );
     expect(parentBySpanName["openclaw.run"]).toBeUndefined();
     expect(parentBySpanName["openclaw.model.call"]).toBeUndefined();
+  });
+
+  test.each([
+    {
+      label: "completed",
+      event: {
+        type: "harness.run.completed",
+        runId: "run-completed-only",
+        provider: "openai",
+        model: "gpt-5.4",
+        harnessId: "openclaw",
+        outcome: "completed",
+        durationMs: 90,
+        trace: createTestTrace(GRANDCHILD_SPAN_ID, CHILD_SPAN_ID),
+      } satisfies TrustedEventOf<"harness.run.completed">,
+    },
+    {
+      label: "error",
+      event: {
+        type: "harness.run.error",
+        runId: "run-error-only",
+        provider: "openai",
+        model: "gpt-5.4",
+        harnessId: "openclaw",
+        phase: "send",
+        errorCategory: "aborted",
+        durationMs: 90,
+        trace: createTestTrace(GRANDCHILD_SPAN_ID, CHILD_SPAN_ID),
+      } satisfies TrustedEventOf<"harness.run.error">,
+    },
+  ])("keeps $label-only harness fallback spans parentless", async ({ event }) => {
+    await startOtelService({ traces: true, metrics: true });
+
+    await emitTrustedAndFlush(event);
+
+    expect(startedSpanParentContexts("openclaw.harness.run")[0]).toBeUndefined();
   });
 
   test("does not parent untrusted diagnostic lifecycle spans from injected trace ids", async () => {

@@ -7,6 +7,7 @@ import {
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
@@ -60,6 +61,7 @@ function createServiceContext(params: {
           internalDiagnostics: {
             emit: emitTrustedDiagnosticEventWithPrivateData,
             onEvent: onTrustedInternalDiagnosticEvent,
+            registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
           },
         }
       : {}),

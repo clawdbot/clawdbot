@@ -124,6 +124,50 @@ describe("shared Matrix client generations", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps colliding delimiter-shaped auth tuples isolated", async () => {
+    const firstAuth = {
+      ...authFor("main"),
+      homeserver: "https://matrix.example.org/base|@alice",
+      userId: "@bob:example.org",
+      accessToken: "shared-token",
+      encryption: true,
+    } satisfies MatrixAuth;
+    const secondAuth = {
+      ...authFor("main"),
+      homeserver: "https://matrix.example.org/base",
+      // Historical Matrix user IDs may contain both characters in the localpart.
+      userId: "@alice|@bob:example.org",
+      accessToken: "shared-token",
+      encryption: true,
+    } satisfies MatrixAuth;
+    const firstCrypto = { prepare: vi.fn(async () => undefined) };
+    const secondCrypto = { prepare: vi.fn(async () => undefined) };
+    const firstClient = { ...createMockClient("first"), crypto: firstCrypto };
+    const secondClient = { ...createMockClient("second"), crypto: secondCrypto };
+
+    createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(secondClient);
+
+    const firstLease = await acquireSharedMatrixClient({ auth: firstAuth });
+    const repeatedFirstLease = await acquireSharedMatrixClient({ auth: firstAuth });
+    const secondLease = await acquireSharedMatrixClient({ auth: secondAuth });
+
+    expect(firstLease.client).toBe(firstClient);
+    expect(repeatedFirstLease.client).toBe(firstClient);
+    expect(secondLease.client).toBe(secondClient);
+    expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
+    expect(firstCrypto.prepare).toHaveBeenCalledTimes(1);
+    expect(secondCrypto.prepare).toHaveBeenCalledTimes(1);
+
+    await firstLease.release();
+    expect(firstClient.stopAndPersist).not.toHaveBeenCalled();
+    await repeatedFirstLease.release();
+    expect(firstClient.stopAndPersist).toHaveBeenCalledTimes(1);
+    expect(secondClient.stopAndPersist).not.toHaveBeenCalled();
+
+    await secondLease.release();
+    expect(secondClient.stopAndPersist).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps account generations isolated", async () => {
     const mainClient = createMockClient("main");
     const opsClient = createMockClient("ops");

@@ -1,4 +1,4 @@
-// Qa Lab tests cover canonical scenario lane matching behavior.
+// QA Lab tests cover canonical scenario lane matching behavior.
 import { describe, expect, it } from "vitest";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaRunProfileExecutionSelection } from "./profile-planning.js";
@@ -6,7 +6,7 @@ import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
   describeQaProviderLaneMismatches,
-  resolveQaScenarioLaneChannels,
+  expandQaScenarioExecutionCells,
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -18,6 +18,28 @@ describe("QA scenario lane matching", () => {
       (coverageId) => planningCoverageIds.has(coverageId),
     ),
   );
+
+  it("expands scheduler cells deterministically across flow and native scenarios", () => {
+    const cells = expandQaScenarioExecutionCells({
+      scenarios: [
+        readQaScenarioById("thread-isolation"),
+        readQaScenarioById("control-ui-chat-flow-playwright"),
+      ],
+      channelDriver: "live",
+      supportsChannel: (channel) => channel === "matrix" || channel === "slack",
+      expandChannels: true,
+    });
+
+    expect(cells).toEqual([
+      { scenarioId: "thread-isolation", executionKind: "flow", channel: "slack" },
+      { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
+      {
+        scenarioId: "control-ui-chat-flow-playwright",
+        executionKind: "playwright",
+        channel: null,
+      },
+    ]);
+  });
 
   it.each(planningScenarios)("selects $id for the GPT-5.6 Luna live lane", (scenario) => {
     expect(
@@ -157,12 +179,16 @@ describe("QA scenario lane matching", () => {
     const scenario = readQaScenarioById("thread-isolation");
 
     expect(
-      resolveQaScenarioLaneChannels({
-        scenario,
+      expandQaScenarioExecutionCells({
+        scenarios: [scenario],
         channelDriver: "live",
         supportsChannel: (channel) => channel === "slack" || channel === "matrix",
+        expandChannels: true,
       }),
-    ).toEqual(["slack", "matrix"]);
+    ).toEqual([
+      { scenarioId: scenario.id, executionKind: "flow", channel: "slack" },
+      { scenarioId: scenario.id, executionKind: "flow", channel: "matrix" },
+    ]);
   });
 
   it("reports every declared mismatch in one decision", () => {

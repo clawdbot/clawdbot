@@ -787,6 +787,7 @@ describe("startPluginServices", () => {
 
     expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(contexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf("function");
 
     const prometheusContexts: OpenClawPluginServiceContext[] = [];
     const prometheusService = createTrackingService("diagnostics-prometheus", {
@@ -799,6 +800,9 @@ describe("startPluginServices", () => {
 
     expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(prometheusContexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf(
+      "function",
+    );
 
     const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
     const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
@@ -816,6 +820,9 @@ describe("startPluginServices", () => {
 
     expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(
+      officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
+    ).toBeTypeOf("function");
 
     const officialInstallContexts: OpenClawPluginServiceContext[] = [];
     const officialInstallService = createTrackingService("diagnostics-prometheus", {
@@ -828,6 +835,9 @@ describe("startPluginServices", () => {
 
     expect(officialInstallContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(officialInstallContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(
+      officialInstallContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
+    ).toBeTypeOf("function");
 
     const untrustedContexts: OpenClawPluginServiceContext[] = [];
     const untrustedService = createTrackingService("diagnostics-otel", {
