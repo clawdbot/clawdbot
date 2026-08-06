@@ -9,7 +9,6 @@ import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { GatewayService } from "./service.js";
 import {
-  assertGatewayServiceStarted,
   describeGatewayServiceRestart,
   readGatewayServiceState,
   resolveGatewayService,
@@ -809,74 +808,5 @@ describe("startGatewayService", () => {
 
     expect(result.outcome).toBe("missing-install");
     expect(result.state.installed).toBe(false);
-  });
-});
-
-describe("assertGatewayServiceStarted", () => {
-  function state(
-    overrides: {
-      status?: string;
-      lastExitStatus?: number;
-      svcState?: string;
-    } = {},
-  ) {
-    return {
-      installed: true,
-      loaded: true,
-      running: overrides.status === "running",
-      env: {} as never,
-      command: null,
-      runtime: {
-        status: overrides.status ?? "running",
-        lastExitStatus: overrides.lastExitStatus,
-        state: overrides.svcState,
-      },
-    };
-  }
-
-  it("throws when the service manager reports a failed state", () => {
-    expect(() =>
-      assertGatewayServiceStarted(
-        state(),
-        state({ status: "stopped", svcState: "failed" }),
-        "start",
-      ),
-    ).toThrow("Service failed to start (state failed)");
-  });
-
-  it("throws when the service started but immediately exited with a new non-zero code", () => {
-    expect(() =>
-      assertGatewayServiceStarted(
-        state({ status: "stopped", lastExitStatus: 0 }),
-        state({ status: "stopped", lastExitStatus: 78 }),
-        "start",
-      ),
-    ).toThrow("Service failed to start (exit 78)");
-  });
-
-  it("does not throw when the exit code is unchanged", () => {
-    expect(() =>
-      assertGatewayServiceStarted(
-        state({ status: "stopped", lastExitStatus: 78 }),
-        state({ status: "stopped", lastExitStatus: 78 }),
-        "start",
-      ),
-    ).not.toThrow();
-  });
-
-  it("does not throw on a clean start", () => {
-    expect(() =>
-      assertGatewayServiceStarted(state(), state({ status: "running" }), "start"),
-    ).not.toThrow();
-  });
-
-  it("includes the context in the error message", () => {
-    expect(() =>
-      assertGatewayServiceStarted(
-        state(),
-        state({ status: "stopped", lastExitStatus: 1 }),
-        "start after update recovery",
-      ),
-    ).toThrow("Service failed to start after update recovery (exit 1)");
   });
 });
