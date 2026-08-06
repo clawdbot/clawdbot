@@ -313,7 +313,7 @@ export async function applyShortTermPromotions(
       if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
         return false;
       }
-      if (maxAgeDays >= 0 && (candidate.ageDays === null || candidate.ageDays > maxAgeDays)) {
+      if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
         return false;
       }
       if (latest?.promotedAt) {

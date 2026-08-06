@@ -3773,19 +3773,19 @@ describe("short-term promotion", () => {
         expect(valid).toBeDefined();
         expect(malformed).toBeDefined();
         // The valid entry earns a recency component; the malformed one gets 0
-        // instead of the previous ageDays=0 fallback that silently granted a
-        // maximum recency boost to broken timestamps.
+        // instead of the previous fallback that silently granted a maximum
+        // recency boost to broken timestamps via calculateRecencyComponent(0).
         expect(valid?.components.recency).toBeGreaterThan(0);
         expect(malformed?.components.recency).toBe(0);
         expect(valid?.score).toBeGreaterThan(malformed?.score ?? 0);
-        // ageDays must be JSON-safe: null for invalid timestamps, not Infinity
-        // (which JSON.stringify serializes as null anyway, but null is explicit
-        // and doesn't surprise consumers expecting a number or null).
+        // ageDays stays numeric (0 for invalid) to preserve the Gateway doctor
+        // payload contract; the recency fix is in the recency calculation, not
+        // in the ageDays representation.
         expect(valid?.ageDays).toBe(1);
-        expect(malformed?.ageDays).toBeNull();
-        // Verify the candidate is JSON-serializable without Infinity→null loss.
+        expect(malformed?.ageDays).toBe(0);
+        // Verify the candidate is JSON-serializable with a numeric ageDays.
         const serialized = JSON.parse(JSON.stringify(malformed));
-        expect(serialized.ageDays).toBeNull();
+        expect(serialized.ageDays).toBe(0);
       });
     });
   });
