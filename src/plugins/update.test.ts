@@ -988,6 +988,88 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.5.2-beta.2");
   });
 
+  it.each([
+    {
+      name: "inferred beta",
+      channel: "beta" as const,
+      configuredChannel: undefined,
+      registryVersion: "2026.5.3-beta.1",
+      expectedSpec: "@openclaw/codex@beta",
+    },
+    {
+      name: "inferred stable",
+      channel: "stable" as const,
+      configuredChannel: undefined,
+      registryVersion: "2026.5.3",
+      expectedSpec: "@openclaw/codex",
+    },
+    {
+      name: "configured stable over inferred beta",
+      channel: "beta" as const,
+      configuredChannel: "stable" as const,
+      registryVersion: "2026.5.3",
+      expectedSpec: "@openclaw/codex",
+    },
+  ])(
+    "uses the $name channel for a targeted floating official npm update",
+    async ({ channel, configuredChannel, registryVersion, expectedSpec }) => {
+      const { config } = createNpmUpdateFixture({
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        installedVersion: "2026.5.2",
+        registryVersion,
+        installerVersion: registryVersion,
+        installerResolvedSpec: `@openclaw/codex@${registryVersion}`,
+      });
+
+      const result = await updatePlugin(config, "codex", {
+        officialPluginUpdateChannel: channel,
+        ...(configuredChannel ? { updateChannel: configuredChannel } : {}),
+      });
+
+      expect(npmInstallCall()?.spec).toBe(expectedSpec);
+      expect(result.config.plugins?.installs?.codex?.spec).toBe("@openclaw/codex");
+      expect(result.config.plugins?.installs?.codex?.resolvedSpec).toBe(
+        `@openclaw/codex@${registryVersion}`,
+      );
+    },
+  );
+
+  it("retains the default fallback for a targeted official beta update", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "npm_package_not_found",
+        error: "No matching version found for @openclaw/codex@beta",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "codex",
+          targetDir: "/tmp/codex",
+          version: "2026.5.3",
+          npmResolution: {
+            name: "@openclaw/codex",
+            version: "2026.5.3",
+            resolvedSpec: "@openclaw/codex@2026.5.3",
+          },
+        }),
+      );
+    const config = createNpmInstallConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/codex",
+      resolvedName: "@openclaw/codex",
+    });
+
+    const result = await updatePlugin(config, "codex", {
+      officialPluginUpdateChannel: "beta",
+    });
+
+    expect(npmInstallCall(0)?.spec).toBe("@openclaw/codex@beta");
+    expect(npmInstallCall(1)?.spec).toBe("@openclaw/codex");
+    expect(result.config.plugins?.installs?.codex?.spec).toBe("@openclaw/codex");
+  });
+
   it("pins unchanged official npm records during official sync", async () => {
     const { config } = createNpmUpdateFixture({
       pluginId: "acpx",
@@ -1200,7 +1282,7 @@ describe("updateNpmInstalledPlugins", () => {
     );
   });
 
-  it("does not apply official beta-channel sync to third-party npm specs", async () => {
+  it("does not apply a targeted official beta channel to third-party npm specs", async () => {
     const { config } = createNpmUpdateFixture({
       pluginId: "lossless-claw",
       packageName: "@martian-engineering/lossless-claw",
@@ -1210,7 +1292,6 @@ describe("updateNpmInstalledPlugins", () => {
       installerResolvedSpec: "@martian-engineering/lossless-claw@0.9.1",
     });
     await updatePlugin(config, "lossless-claw", {
-      syncOfficialPluginInstalls: true,
       officialPluginUpdateChannel: "beta",
     });
 
@@ -2536,7 +2617,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("preserves exact official npm pins when official install sync is not requested", async () => {
+  it("preserves exact official npm pins on an inferred beta channel", async () => {
     const { config } = createNpmUpdateFixture({
       pluginId: "codex",
       packageName: "@openclaw/codex",
@@ -2545,7 +2626,10 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "2026.5.28",
       installerResolvedSpec: "@openclaw/codex@2026.5.28",
     });
-    const result = await updatePlugin(config, "codex", { dryRun: true });
+    const result = await updatePlugin(config, "codex", {
+      dryRun: true,
+      officialPluginUpdateChannel: "beta",
+    });
 
     expect(npmInstallCall()?.spec).toBe("@openclaw/codex@2026.5.28");
     expect(npmInstallCall()?.expectedPluginId).toBe("codex");
@@ -3737,6 +3821,57 @@ describe("updateNpmInstalledPlugins", () => {
       version: "1.3.0-beta.1",
       clawhubPackage: "demo",
     });
+  });
+
+  it("uses the beta core channel for a targeted official ClawHub install with npm-only catalog metadata", async () => {
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "discord",
+        targetDir: "/tmp/discord",
+        version: "2026.5.4-beta.1",
+        clawhubPackage: "@openclaw/discord",
+      }),
+    );
+
+    const result = await updatePlugin(
+      createClawHubInstallConfig({
+        pluginId: "discord",
+        clawhubPackage: "@openclaw/discord",
+      }),
+      "discord",
+      { officialPluginUpdateChannel: "beta" },
+    );
+
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord@beta");
+    expectRecordFields(result.config.plugins?.installs?.discord, {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/discord",
+      version: "2026.5.4-beta.1",
+      clawhubPackage: "@openclaw/discord",
+    });
+  });
+
+  it("does not apply the official beta channel to custom ClawHub provenance", async () => {
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "discord",
+        targetDir: "/tmp/discord",
+        version: "2026.5.4",
+        clawhubPackage: "@openclaw/discord",
+      }),
+    );
+
+    await updatePlugin(
+      createClawHubInstallConfig({
+        pluginId: "discord",
+        clawhubPackage: "@openclaw/discord",
+        clawhubUrl: "https://custom-clawhub.example",
+      }),
+      "discord",
+      { officialPluginUpdateChannel: "beta" },
+    );
+
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord");
   });
 
   it("falls back to the default ClawHub spec when a beta release is unavailable", async () => {

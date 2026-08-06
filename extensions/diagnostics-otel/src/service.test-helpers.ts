@@ -1,5 +1,6 @@
 import {
   emitTrustedDiagnosticEventWithPrivateData,
+  type DiagnosticEventPayload,
   type DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
@@ -38,6 +39,13 @@ type StartOtelServiceOptions = OtelContextFlags & {
   endpoint?: string;
   configure?: (ctx: OpenClawPluginServiceContext) => void;
 };
+type InternalDiagnosticListener = Parameters<
+  NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>["onEvent"]
+>[0];
+type ModelUsageEventInput = Omit<
+  Extract<DiagnosticEventPayload, { type: "model.usage" }>,
+  "seq" | "ts"
+>;
 
 type StartedService = {
   service: ReturnType<typeof createDiagnosticsOtelService>;
@@ -100,6 +108,41 @@ export async function startOtelService({
   const started = { service, ctx };
   startedServices.add(started);
   return started;
+}
+
+export async function startOtelServiceWithHostUsage() {
+  let listener: InternalDiagnosticListener | undefined;
+  const started = await startOtelService({
+    traces: true,
+    configure: (ctx) => {
+      const internalDiagnostics = ctx.internalDiagnostics;
+      if (!internalDiagnostics) {
+        throw new Error("expected internal diagnostics for trusted OTel service");
+      }
+      const onEvent = internalDiagnostics.onEvent;
+      ctx.internalDiagnostics = {
+        ...internalDiagnostics,
+        onEvent: (registeredListener) => {
+          listener = registeredListener;
+          return onEvent(registeredListener);
+        },
+      };
+    },
+  });
+  if (!listener) {
+    throw new Error("expected OTel service to register a diagnostics listener");
+  }
+  const registeredListener = listener;
+  return {
+    ...started,
+    emitHostPluginUsage(event: ModelUsageEventInput, hostPluginId: string) {
+      registeredListener({ ...event, seq: 1, ts: Date.now() }, { trusted: true, internal: true }, {
+        hostPluginId,
+      } as Parameters<InternalDiagnosticListener>[2] & {
+        hostPluginId: string;
+      });
+    },
+  };
 }
 
 export async function stopStartedOtelServices() {
