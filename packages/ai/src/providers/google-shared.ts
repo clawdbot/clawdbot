@@ -421,7 +421,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   stream: AssistantMessageEventStream;
   model: Model<T>;
   output: AssistantMessage;
-  options?: Pick<StreamOptions, "signal" | "onPayload">;
+  options?: Pick<StreamOptions, "signal" | "onPayload" | "onResponse">;
   createClient: () => GoogleGenerateContentClient;
   buildParams: () => GenerateContentParameters;
   nextToolCallId: (name: string | undefined) => string;
