@@ -66,6 +66,10 @@ describe("legacy media persistence terminal NUL-tail recovery", () => {
         path.join(archiveDir, "truncated.jsonl.deleted.2026-08-06T01-02-08.000Z"),
         Buffer.from(`${plainContent}{"type":"message"`),
       ],
+      [
+        path.join(archiveDir, "blank-only-nul-tail.jsonl.deleted.2026-08-06T01-02-08.500Z"),
+        Buffer.from("\n\0"),
+      ],
       [path.join(archiveDir, "all-nul.jsonl.deleted.2026-08-06T01-02-09.000Z"), Buffer.alloc(284)],
     ]);
     for (const [filePath, bytes] of corruptions) {

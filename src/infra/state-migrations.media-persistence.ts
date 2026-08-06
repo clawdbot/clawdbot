@@ -509,10 +509,11 @@ function recoverTerminalNulArchiveTail(content: string): {
   while (tailStart > 0 && content.charCodeAt(tailStart - 1) === 0) {
     tailStart -= 1;
   }
-  if (tailStart === 0) {
+  const prefix = content.slice(0, tailStart);
+  if (tailStart === 0 || !prefix.trim()) {
     return { content, recovered: false };
   }
-  return { content: content.slice(0, tailStart), recovered: true };
+  return { content: prefix, recovered: true };
 }
 
 function serializeArchiveEvents(
