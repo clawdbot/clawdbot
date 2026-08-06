@@ -282,6 +282,10 @@ function createDraftStreamStub() {
     seal: vi.fn(noopAsync),
     stop: vi.fn(noop),
     forceNewMessage: vi.fn(),
+    finalizeMessage: vi.fn(async (_messageId: string, editFinal: () => Promise<void>) => {
+      await editFinal();
+      return true;
+    }),
     messageId: () => "171234.567",
     channelId: () => "C123",
   };
@@ -1237,6 +1241,26 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       flush: vi.fn(async () => {
         messageId = undefined;
       }),
+      messageId: () => messageId,
+      channelId: () => (messageId ? "C123" : undefined),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledOnce();
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("posts the final below a human message received while the preview was sealing", async () => {
+    let messageId: string | undefined = "171234.567";
+    const draftStream = {
+      ...createDraftStreamStub(),
+      seal: vi.fn(async () => {
+        messageId = undefined;
+      }),
+      finalizeMessage: vi.fn(async () => false),
       messageId: () => messageId,
       channelId: () => (messageId ? "C123" : undefined),
     };
@@ -4457,6 +4481,48 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
     expect(delivered.replies).toEqual([
       {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+  });
+
+  it("delivers TTS below a human interruption received while its preview was flushing", async () => {
+    let messageId: string | undefined = "171234.567";
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(async () => {
+        messageId = undefined;
+      }),
+      messageId: () => messageId,
+      channelId: () => (messageId ? "C123" : undefined),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledOnce();
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([
+      {
+        text: "Spoken answer",
         mediaUrl: "https://example.com/tts.mp3",
         audioAsVoice: true,
         spokenText: "Spoken answer",

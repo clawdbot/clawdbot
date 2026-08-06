@@ -49,6 +49,7 @@ function createDraftStreamHarness(
     cfg: TEST_CFG,
     token: "xoxb-test",
     accountId: params.accountId,
+    conversationChannelId: "C123",
     throttleMs: 250,
     maxChars: params.maxChars,
     eventScope: params.eventScope,
@@ -283,6 +284,49 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("100.500");
   });
 
+  it("reconciles an interruption received before Slack returns the first preview id", async () => {
+    const accountId = "interruption-during-send";
+    let finishFirstSend: ((value: ReturnType<typeof slackDraftSendResult>) => void) | undefined;
+    const firstSend = new Promise<ReturnType<typeof slackDraftSendResult>>((resolve) => {
+      finishFirstSend = resolve;
+    });
+    const send = vi
+      .fn<DraftSendFn>()
+      .mockImplementationOnce(async () => await firstSend)
+      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
+    const { stream, edit, remove } = createDraftStreamHarness({
+      accountId,
+      threadTs: "100.000",
+      send,
+    });
+
+    stream.update("_checking the original request_");
+    const firstFlush = stream.flush();
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledOnce();
+    });
+
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "100.200",
+      userId: "U_OWNER",
+    });
+    finishFirstSend?.(slackDraftSendResult("100.100"));
+    await firstFlush;
+
+    expect(stream.messageId()).toBeUndefined();
+    expect(remove).not.toHaveBeenCalled();
+
+    stream.update("_incorporating the newer clarification_");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(edit).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("100.300");
+  });
+
   it("keeps direct-message previews after the latest unthreaded human message", async () => {
     const accountId = "unthreaded-direct-message";
     const send = vi
@@ -398,6 +442,65 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("111.222");
   });
 
+  it("continues observing conversation boundaries while the final preview edit is in flight", async () => {
+    const accountId = "interrupted-final-edit";
+    let finishFinalEdit: (() => void) | undefined;
+    const finalEdit = new Promise<void>((resolve) => {
+      finishFinalEdit = resolve;
+    });
+    const { stream, edit, remove } = createDraftStreamHarness({
+      accountId,
+      threadTs: "100.000",
+    });
+
+    stream.update("_checking the last detail_");
+    await stream.flush();
+    await stream.seal();
+    const finalizing = stream.finalizeMessage("111.222", async () => {
+      await finalEdit;
+    });
+
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "111.333",
+      userId: "U_OWNER",
+    });
+    finishFinalEdit?.();
+
+    await expect(finalizing).resolves.toBe(false);
+    expect(stream.messageId()).toBeUndefined();
+    expect(remove).not.toHaveBeenCalled();
+    expect(edit).toHaveBeenCalledWith(
+      "C123",
+      "111.222",
+      "_checking the last detail_",
+      expect.objectContaining({ accountId }),
+    );
+  });
+
+  it("does not finalize a preview invalidated while the stream was being sealed", async () => {
+    const accountId = "interrupted-sealed-preview";
+    const { stream, edit } = createDraftStreamHarness({ accountId, threadTs: "100.000" });
+    const finalize = vi.fn(async () => {});
+
+    stream.update("_nearly finished_");
+    await stream.flush();
+    await stream.seal();
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "111.333",
+      userId: "U_OWNER",
+    });
+
+    await expect(stream.finalizeMessage("111.222", finalize)).resolves.toBe(false);
+    expect(finalize).not.toHaveBeenCalled();
+    expect(edit).not.toHaveBeenCalled();
+  });
+
   it("stops observing conversation boundaries once the preview is finalized", async () => {
     const accountId = "finalized-preview";
     const { stream } = createDraftStreamHarness({ accountId, threadTs: "100.000" });
@@ -405,6 +508,7 @@ describe("createSlackDraftStream", () => {
     stream.update("_finished_");
     await stream.flush();
     await stream.seal();
+    await stream.finalizeMessage("111.222", async () => {});
 
     noteSlackDraftConversationMessage({
       accountId,
