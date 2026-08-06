@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stableStringify } from "@openclaw/normalization-core";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
