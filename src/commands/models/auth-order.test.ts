@@ -101,9 +101,9 @@ describe("models auth order", () => {
       order: null,
     });
     expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledTimes(1);
-    expect(
-      runtime.logs.some((line) => line.includes("Auth profile order override cleared")),
-    ).toBe(true);
+    expect(runtime.logs.some((line) => line.includes("Auth profile order override cleared"))).toBe(
+      true,
+    );
   });
 
   it("does not refresh the gateway when the store update fails", async () => {
