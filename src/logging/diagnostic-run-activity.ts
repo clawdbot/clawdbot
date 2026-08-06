@@ -338,16 +338,17 @@ export function markDiagnosticArgumentChurnObservation(
 }
 
 export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
-  const activity = resolveSessionActivity({ ...params, create: true });
+  const runId = params.runId?.trim() || undefined;
+  const activity = resolveSessionActivity({ ...params, runId, create: true });
   if (!activity) {
     return;
   }
-  // run.progress predates progressKind; only an explicit semantic fact may clear evidence.
-  if (params.progressKind !== "semantic") {
+  // Only an explicit fact from the current owner may clear its recovery evidence.
+  if (params.progressKind !== "semantic" || !runId) {
     touchSessionActivity(activity, params.reason);
     return;
   }
-  touchSemanticSessionActivity(activity, params.reason, { runId: params.runId });
+  touchSemanticSessionActivity(activity, params.reason, { runId });
 }
 
 function recordRunCompleted(

@@ -598,7 +598,39 @@ describe("repeated request liveness", () => {
     ).toBeUndefined();
   });
 
-  it("orders semantic progress across merged session aliases", () => {
+  it("keeps replacement-owner evidence across delayed semantic event delivery", async () => {
+    const ref = { sessionId: "queued-owner-session", sessionKey: "agent:main:queued-owner" };
+
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "queued-old-owner" });
+    emitTrustedDiagnosticEvent({
+      type: "run.progress",
+      ...ref,
+      runId: "queued-old-owner",
+      reason: "delayed-old-owner-output",
+      progressKind: "semantic",
+    });
+
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "queued-new-owner" });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId: "queued-new-owner",
+        provider: "mock",
+        model: "request-model",
+        observationUnit: "request",
+      });
+    }
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "delayed-old-owner-output",
+      repeatedRequestNoProgressAgeMs: expect.any(Number),
+    });
+  });
+
+  it("requires an owned semantic event across merged session aliases", () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-08-04T02:00:00Z");
     vi.setSystemTime(startedAt);
@@ -607,24 +639,45 @@ describe("repeated request liveness", () => {
     const runId = "merge-run";
 
     markDiagnosticEmbeddedRunStarted({ sessionId, runId });
-    markDiagnosticModelStartedForTest({
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        sessionId,
+        runId,
+        provider: "mock",
+        model: "request-model",
+        observationUnit: "request",
+      });
+    }
+    markDiagnosticRunProgress({
       sessionId,
-      runId,
-      provider: "mock",
-      model: "request-model",
-      observationUnit: "request",
+      sessionKey,
+      reason: "ownerless:semantic",
+      progressKind: "semantic",
     });
     markDiagnosticRunProgress({
+      sessionId,
       sessionKey,
-      reason: "reply:delivered",
+      runId: "   ",
+      reason: "whitespace-owner:semantic",
       progressKind: "semantic",
     });
 
     vi.setSystemTime(startedAt + 6 * 60_000);
-    expect(
-      getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
-        .repeatedRequestNoProgressAgeMs,
-    ).toBeUndefined();
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      lastProgressReason: "whitespace-owner:semantic",
+      repeatedRequestNoProgressAgeMs: 6 * 60_000,
+    });
+
+    markDiagnosticRunProgress({
+      sessionKey,
+      runId: `  ${runId}  `,
+      reason: "owned:semantic",
+      progressKind: "semantic",
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
+      lastProgressReason: "owned:semantic",
+      repeatedRequestNoProgressAgeMs: undefined,
+    });
   });
 
   it("keeps repeated request evidence across same-logical-owner attempt rearming", async () => {

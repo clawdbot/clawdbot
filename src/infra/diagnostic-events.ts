@@ -377,7 +377,7 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   sessionId?: string;
   runId?: string;
   reason: string;
-  /** Only explicit semantic progress resets evidence; liveness or omission only keeps work alive. */
+  /** Semantic progress resets evidence only for its matching runId; other progress is liveness. */
   progressKind?: "semantic" | "liveness";
 };
 
