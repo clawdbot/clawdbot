@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { expect, vi } from "vitest";
 import type { createZalouserIngressMonitor } from "./ingress.js";
@@ -80,8 +81,11 @@ export async function withZalouserIngressTestQueue<T>(
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
+    // Agent close releases leases through shared state; closing shared state first
+    // can reopen it during teardown and leave Windows handles under the state dir.
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
   }
 }
 
