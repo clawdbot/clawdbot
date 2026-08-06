@@ -129,6 +129,15 @@ describe("channel-streaming", () => {
         streaming: { mode: "block", block: { enabled: true } },
       }),
     ).toBe(true);
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "partial" } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(false);
   });
 
   it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {

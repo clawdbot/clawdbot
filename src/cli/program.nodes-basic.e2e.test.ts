@@ -325,6 +325,39 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("Two");
   });
 
+  it("counts catalog-only paired nodes in the filtered list total", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [{ nodeId: "paired-store", displayName: "Paired Store" }],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            { nodeId: "paired-store", connected: true },
+            {
+              nodeId: "catalog-only",
+              displayName: "Catalog Only",
+              paired: true,
+              connected: true,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list", "--connected"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toMatch(/^Pending: 0 · Paired: 2$/m);
+    expect(output).toContain("Paired Store");
+    expect(output).toContain("Catalog Only");
+  });
+
   it("runs nodes status --last-connected and filters by age", async () => {
     const now = Date.now();
     callGateway.mockImplementation(async (...args: unknown[]) => {

@@ -1,4 +1,6 @@
 // Plans release workflow matrix entries from profile and suite inputs.
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
+
 const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "core",
@@ -236,7 +238,7 @@ function writeOutputs(plan) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plan = createReleaseWorkflowMatrixPlan({
     dockerLanes: process.env.DOCKER_LANES,
     includeLiveSuites: process.env.INCLUDE_LIVE_SUITES,

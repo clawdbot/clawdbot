@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -27,10 +29,12 @@ const uiProofArtifactDir = path.join(
   "control-ui-e2e",
   "appearance-settings-defaults",
 );
-const settingsStorageKey = "openclaw.control.settings.v1:ws://127.0.0.1:18789";
-
 let browser: Browser;
 let server: ControlUiE2eServer;
+
+function settingsStorageKey(): string {
+  return controlUiBundledSettingsStorageKey(server.baseUrl);
+}
 
 function configResponse(prefs: Record<string, unknown>, hash: string) {
   const config = { ui: { prefs } };
@@ -110,7 +114,7 @@ async function readPersistedSettings(page: Page): Promise<Record<string, unknown
   return page.evaluate((key) => {
     const raw = localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-  }, settingsStorageKey);
+  }, settingsStorageKey());
 }
 
 async function readThemeImportRaceState(page: Page) {
@@ -169,20 +173,23 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
       serviceWorkers: "block",
       viewport: { height: 1000, width: 1440 },
     });
-    await context.addInitScript((key) => {
-      const seedKey = "openclaw.control-ui-e2e.appearance-defaults-seeded";
-      if (sessionStorage.getItem(seedKey) === "1") {
-        return;
-      }
-      sessionStorage.setItem(seedKey, "1");
-      localStorage.setItem(
-        key,
-        JSON.stringify({
-          gatewayUrl: "ws://127.0.0.1:18789",
-          textScale: 110,
-        }),
-      );
-    }, settingsStorageKey);
+    await context.addInitScript(
+      ({ gatewayUrl, key }) => {
+        const seedKey = "openclaw.control-ui-e2e.appearance-defaults-seeded";
+        if (sessionStorage.getItem(seedKey) === "1") {
+          return;
+        }
+        sessionStorage.setItem(seedKey, "1");
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            gatewayUrl,
+            textScale: 110,
+          }),
+        );
+      },
+      { gatewayUrl: controlUiBundledGatewayUrl(server.baseUrl), key: settingsStorageKey() },
+    );
     const page = await context.newPage();
     const initialPrefs: Record<string, unknown> = {
       chatSendShortcut: "modifier-enter",
@@ -501,17 +508,21 @@ describeControlUiE2e("Control UI Appearance defaults mocked Gateway E2E", () => 
       viewport: { height: 1000, width: 1440 },
     });
     await context.addInitScript(
-      ({ key, theme }) => {
+      ({ gatewayUrl, key, theme }) => {
         localStorage.setItem(
           key,
           JSON.stringify({
             customTheme: theme,
-            gatewayUrl: "ws://127.0.0.1:18789",
+            gatewayUrl,
             theme: "custom",
           }),
         );
       },
-      { key: settingsStorageKey, theme: existingTheme },
+      {
+        gatewayUrl: controlUiBundledGatewayUrl(server.baseUrl),
+        key: settingsStorageKey(),
+        theme: existingTheme,
+      },
     );
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {

@@ -23,6 +23,9 @@ export async function runActiveToolSchemaWarningsHealth(
   const warnings = await collectActiveToolSchemaProjectionWarnings({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
   });
   if (warnings.length === 0) {
     return;
@@ -107,12 +110,23 @@ export async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Pr
     options: ctx.options,
   });
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-  noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
+  noteWorkspaceStatus(ctx.cfg, {
+    pluginVersionDrift,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  });
 }
 
 export async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
-  ctx.cfg = await maybeRepairSkillReadiness({ cfg: ctx.cfg, prompter: ctx.prompter });
+  ctx.cfg = await maybeRepairSkillReadiness({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+    ...(ctx.runWithPluginMetadataSnapshot
+      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+      : {}),
+  });
 }
 
 export async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {

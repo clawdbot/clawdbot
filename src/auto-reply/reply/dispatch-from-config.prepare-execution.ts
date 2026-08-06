@@ -21,6 +21,7 @@ import {
   withFullRuntimeReplyConfig,
   withPublishedRuntimeReplyConfig,
 } from "./get-reply-fast-path.js";
+import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -366,15 +367,18 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         },
       })
     : undefined;
-  const canConsumeItemEvents = deliverStandaloneCommentaryProgress || canForwardItemEvents;
-  // Item-event presence gates CLI commentary classification downstream, so
-  // the handler exists exactly when verbose buffers it or a channel consumes it.
+  const canCaptureCliPreambleEvents =
+    Boolean(params.replyOptions?.onItemEvent) && shouldBridgeCliPreambleEvents(params.replyOptions);
+  const canConsumeItemEvents =
+    deliverStandaloneCommentaryProgress || canForwardItemEvents || canCaptureCliPreambleEvents;
+  // CLI runners classify preambles as item events only when this handler exists.
+  // Keep it for channel-owned capture even when delivery policy hides the event.
   const onItemEvent = canConsumeItemEvents
     ? async (payload: Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0]) => {
         if (isDispatchOperationAborted()) {
           return;
         }
-        if (!forwardItemEvent) {
+        if (!forwardItemEvent && deliverStandaloneCommentaryProgress) {
           // The wrapped forwarder marks progress itself when present.
           markProgress();
         }

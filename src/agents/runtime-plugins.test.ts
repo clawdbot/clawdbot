@@ -102,4 +102,22 @@ describe("agent runtime plugin registries", () => {
       }),
     );
   });
+
+  it("lets direct local hosts bound the registry to configured runtime owners", () => {
+    const config = {} as never;
+
+    loadAgentRuntimePluginRegistryHandle({
+      basePluginIds: [],
+      config,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(hoisted.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/workspace",
+      basePluginIds: [],
+      selections: [],
+    });
+  });
 });

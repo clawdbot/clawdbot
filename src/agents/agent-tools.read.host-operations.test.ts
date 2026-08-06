@@ -29,8 +29,10 @@ const mocks = vi.hoisted(() => ({
   writeOps: undefined as CapturedWriteOperations | undefined,
 }));
 
-vi.mock("./sessions/index.js", async () => {
-  const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
+vi.mock("./sessions/tools/index.js", async () => {
+  const actual = await vi.importActual<typeof import("./sessions/tools/index.js")>(
+    "./sessions/tools/index.js",
+  );
   return {
     ...actual,
     createEditTool: (_cwd: string, options?: { operations?: CapturedEditOperations }) => {

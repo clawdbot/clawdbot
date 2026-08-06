@@ -356,6 +356,7 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
       status: "running",
+      lifecycleRunId: params.clientRunId,
       startedAt: params.startedAt,
       endedAt: undefined,
       restartRecoveryDeliveryContext: undefined,
@@ -402,6 +403,7 @@ export async function terminalizeRestartSafeChatAdmission(params: {
       terminalized = true;
       return {
         abortedLastRun: params.retryable ? false : params.status === "killed",
+        lifecycleRunId: undefined,
         endedAt,
         ...(params.retryable
           ? {}

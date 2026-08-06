@@ -64,6 +64,8 @@ export type TurnAdoptionLifecycle = {
    * Durable ingress sets exclusive; gateway cancel identity sets cancel-only.
    */
   admission?: TurnAdoptionAdmission;
+  /** Transcript branch leaf from which this turn was admitted. */
+  originatingLeafEntryId?: string | null;
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;

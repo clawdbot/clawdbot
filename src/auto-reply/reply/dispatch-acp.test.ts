@@ -56,6 +56,7 @@ const routeMocks = vi.hoisted(() => ({
       _params: unknown,
     ) => Promise<
       | { ok: true; delivered: boolean; messageId?: string }
+      | { ok: true; delivered: false; suppressed: true }
       | { ok: false; delivered: boolean; error: string }
     >
   >(async () => ({ ok: true, delivered: true, messageId: "mock" })),
@@ -95,6 +96,8 @@ const ttsMocks = vi.hoisted(() => ({
   }),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
 }));
+
+const ttsCapabilityMocks = vi.hoisted(() => ({ captionedFinalText: false }));
 
 const mediaUnderstandingMocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn<
@@ -175,6 +178,16 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
+
+vi.mock("../../tts/captioned-final.js", async () => {
+  const actual = await vi.importActual<typeof import("../../tts/captioned-final.js")>(
+    "../../tts/captioned-final.js",
+  );
+  return {
+    ...actual,
+    shouldDeferFinalTtsText: () => ttsCapabilityMocks.captionedFinalText,
+  };
+});
 
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ({
@@ -517,6 +530,7 @@ describe("tryDispatchAcpReply", () => {
     });
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsCapabilityMocks.captionedFinalText = false;
     mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
     acpAttachmentBuffers.clear();
@@ -2890,6 +2904,150 @@ describe("tryDispatchAcpReply", () => {
     expect(finalPayload.spokenText).toBe("WebChat ACP block reply.");
     expect(finalPayload.trustedLocalMedia).toBe(true);
     expect(result?.queuedFinal).toBe(true);
+  });
+
+  it("delivers Telegram ACP final-mode TTS as one captioned voice reply", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      text: "Captioned ACP reply.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+      spokenText: "Captioned ACP reply.",
+      ttsSupplement: { spokenText: "Captioned ACP reply." },
+    } as MockTtsReply);
+    mockVisibleTextTurn("Captioned ACP reply.");
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply)).toMatchObject({
+      text: "Captioned ACP reply.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps Telegram ACP TTS-only block text out of the voice caption", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    } as MockTtsReply);
+    mockVisibleTextTurn("[[tts:text]]Private speech.[[/tts:text]]");
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBeUndefined();
+  });
+
+  it("keeps cross-block ACP TTS-only text out of the Telegram caption", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    } as MockTtsReply);
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          text: "Visible. [[tts:text]]Private",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: " speech.[[/tts:text]] Done.",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({ type: "done", status: "completed" });
+      },
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Visible.  Done.");
+  });
+
+  it("falls back to Telegram ACP text when a routed captioned voice is suppressed", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      text: "Visible ACP fallback.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+      spokenText: "Visible ACP fallback.",
+      ttsSupplement: { spokenText: "Visible ACP fallback." },
+    } as MockTtsReply);
+    mockRoutedTextTurn("Visible ACP fallback.");
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: true, delivered: false, suppressed: true })
+      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "fallback" });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routePayload(0)).toMatchObject({
+      text: "Visible ACP fallback.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+    });
+    expect(routePayload(1)).toEqual({ text: "Visible ACP fallback." });
+  });
+
+  it("delivers deferred Telegram ACP text when the runtime is cancelled", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          text: "Partial reply before cancellation.",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({ type: "done", status: "cancelled" });
+      },
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply)).toEqual({
+      text: "Partial reply before cancellation.",
+    });
   });
 
   it("falls back to final text when a later telegram ACP block delivery fails", async () => {

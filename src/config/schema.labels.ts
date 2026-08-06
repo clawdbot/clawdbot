@@ -28,6 +28,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "wizard.securityAcknowledgedAt": "Wizard Security Acknowledgement Timestamp",
   "logging.audit": "Audit Ledger",
   "logging.audit.enabled": "Audit Ledger Enabled",
+  "logging.audit.executionIdentity": "Execution Identity Audit",
   "logging.audit.messages": "Message Audit Scope",
   diagnostics: "Diagnostics",
   "diagnostics.otel": "OpenTelemetry",

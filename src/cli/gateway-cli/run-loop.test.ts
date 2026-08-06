@@ -244,7 +244,7 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   waitForActiveEmbeddedRuns: (timeoutMs?: number) => waitForActiveEmbeddedRuns(timeoutMs),
 }));
 
-vi.mock("../../agents/main-session-restart-recovery.js", () => ({
+vi.mock("../../agents/main-session-restart-recovery-marking.js", () => ({
   markRestartAbortedMainSessions: (params: unknown) => markRestartAbortedMainSessions(params),
 }));
 
@@ -261,7 +261,7 @@ vi.mock("../../logging/logger.js", () => ({
   flushLogger: () => flushLogger(),
 }));
 
-vi.mock("../../gateway/server-reload-handlers.js", () => ({
+vi.mock("../../gateway/server-reload-contracts.js", () => ({
   abortPendingChannelReloads: () => abortPendingChannelReloads(),
 }));
 

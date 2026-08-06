@@ -15,10 +15,12 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
@@ -40,6 +42,7 @@ const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
 const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
   "docs/maturity/scorecard.md",
@@ -88,8 +91,8 @@ function runWorkflowShellScript(
     let moduleIndex = 0;
     const moduleRoot = options.cwd ?? process.cwd();
     const rewritten = script.replace(
-      /node --input-type=module <<'EOF'\n([\s\S]*?)\nEOF/gu,
-      (_match, body: string) => {
+      /node --input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
+      (_match, _marker: string, body: string) => {
         const modulePath = path.join(
           moduleRoot,
           `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
@@ -418,6 +421,150 @@ function runMaturityArtifactCopyScenario(
 
 function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
+}
+
+type QaProfileTimeoutFixtureMode =
+  | "natural-124"
+  | "self-kill"
+  | "supervisor-term"
+  | "term"
+  | "kill";
+
+function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-qa-profile-timeout-"));
+  try {
+    const binDir = path.join(root, "bin");
+    mkdirSync(binDir);
+    const fakePnpm = path.join(binDir, "pnpm");
+    writeFileSync(
+      fakePnpm,
+      `#!/usr/bin/env bash
+set -u
+echo "child-stderr-sentinel:\${FAKE_PNPM_MODE}" >&2
+echo "child-locale:\${LC_ALL-unset}" >&2
+case "\${FAKE_PNPM_MODE}" in
+  natural-124)
+    echo "timeout: sending signal KILL to command 'spoofed-child'" >&2
+    exit 124
+    ;;
+  self-kill)
+    kill -KILL "$$"
+    ;;
+  supervisor-term)
+    : > "$SUPERVISOR_READY_FILE"
+    while :; do sleep 0.01; done
+    ;;
+  term)
+    trap 'exit 0' TERM
+    while :; do sleep 0.01; done
+    ;;
+  kill)
+    trap '' TERM
+    while :; do sleep 0.01 || true; done
+    ;;
+esac
+`,
+      "utf8",
+    );
+    chmodSync(fakePnpm, 0o755);
+    const fixturePath = `${binDir}:${process.env.PATH ?? ""}`;
+    const timeoutVersion = spawnSync("timeout", ["--version"], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: fixturePath },
+    });
+    if (timeoutVersion.status !== 0 || !timeoutVersion.stdout.includes("(GNU coreutils)")) {
+      throw new Error(
+        `QA timeout fixture requires GNU timeout: ${timeoutVersion.stdout}${timeoutVersion.stderr}`,
+      );
+    }
+
+    const workflow = readQaProfileEvidenceWorkflow();
+    const runProfileStep = expectDefined(
+      workflow.jobs.run_qa_profile.steps.find(
+        (step: WorkflowStep) => step.name === "Run QA profile",
+      ),
+      "Run QA profile step",
+    );
+    let script = runProfileStep.run
+      .replace("--kill-after=30s 110m", "--kill-after=0.5s 1s")
+      .replaceAll("110 minutes", "1 second")
+      .replaceAll("30-second", "0.5-second");
+    if (mode === "supervisor-term") {
+      const timeoutCommandTail = '  3>&2 2>"$timeout_supervisor_fifo" || qa_exit_code=$?';
+      const signaledTimeoutCommandTail = `  3>&2 2>"$timeout_supervisor_fifo" &
+timeout_supervisor_pid=$!
+(
+  for _ in {1..100}; do
+    [[ -e "$SUPERVISOR_READY_FILE" ]] && break
+    sleep 0.01
+  done
+  [[ -e "$SUPERVISOR_READY_FILE" ]]
+  kill -TERM "$timeout_supervisor_pid"
+) &
+timeout_signaler_pid=$!
+wait "$timeout_supervisor_pid" || qa_exit_code=$?
+wait "$timeout_signaler_pid"`;
+      const signaledScript = script.replace(timeoutCommandTail, signaledTimeoutCommandTail);
+      if (signaledScript === script) {
+        throw new Error("QA timeout fixture could not instrument the timeout supervisor");
+      }
+      script = signaledScript;
+    }
+    const timeoutSupervisorCapture = path.join(root, "timeout-supervisor.log");
+    const timeoutClassificationStart = `supervisor_tee_pid=""
+
+timeout_outcome="none"`;
+    // Bash writes killed-job diagnostics outside timeout's redirected stream. Capture the
+    // authoritative supervisor log before the workflow's EXIT trap removes it.
+    const capturedScript = script.replace(
+      timeoutClassificationStart,
+      `supervisor_tee_pid=""
+cp "$timeout_supervisor_log" "$TIMEOUT_SUPERVISOR_CAPTURE"
+
+timeout_outcome="none"`,
+    );
+    if (capturedScript === script) {
+      throw new Error("QA timeout fixture could not capture the timeout supervisor log");
+    }
+    script = capturedScript;
+    const githubOutput = path.join(root, "github-output");
+    const run = runWorkflowShellScript(script, {
+      cwd: root,
+      env: {
+        ...process.env,
+        FAKE_PNPM_MODE: mode,
+        GITHUB_OUTPUT: githubOutput,
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_RUN_ID: "42",
+        LC_ALL: "POSIX",
+        PATH: fixturePath,
+        QA_PROFILE: "all",
+        REQUESTED_REF: "fixture",
+        SUPERVISOR_READY_FILE: path.join(root, "supervisor-ready"),
+        TARGET_SHA: "a".repeat(40),
+        TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
+      },
+    });
+    const outputDir = path.join(root, ".artifacts", "qa-e2e", "profile-all-42-1");
+    const status = JSON.parse(
+      readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
+    ) as {
+      exitCode: number;
+      timedOut: boolean;
+      timeoutOutcome: "none" | "term" | "kill";
+    };
+    return {
+      commandStatus: run.status,
+      githubOutput: readFileSync(githubOutput, "utf8"),
+      status,
+      stderr: run.stderr,
+      stdout: run.stdout,
+      timeoutSupervisorLog: readFileSync(timeoutSupervisorCapture, "utf8"),
+      timeoutVersion: timeoutVersion.stdout.trim(),
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function runQaProfileFailureGate(options: {
@@ -853,6 +1000,22 @@ function runGeneratedPublisherScenario(
 }
 
 describe("ci workflow guards", () => {
+  it("extracts module heredocs only at exact closing marker lines", () => {
+    const run = runWorkflowShellScript(
+      `node --input-type=module <<'NODE'
+NODE_prefix: for (const value of ["heredoc-body-preserved"]) {
+  console.log(value);
+  break NODE_prefix;
+}
+NODE
+`,
+      {},
+    );
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toBe("heredoc-body-preserved\n");
+  });
+
   it("routes PR edited metadata only to interested automation", () => {
     const autoResponse = readWorkflow(".github/workflows/auto-response.yml");
     const clawsweeperDispatch = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
@@ -897,6 +1060,54 @@ describe("ci workflow guards", () => {
       betaBlocker: ["title"],
       activePrLimit: [],
     });
+  });
+
+  it("runs the PR context and evidence gate only for relevant PR changes", () => {
+    const workflow = readRealBehaviorProofWorkflow();
+
+    expect(workflow.name).toBe("PR context and evidence");
+    expect(workflow.jobs["real-behavior-proof"].name).toBe("PR context and evidence");
+    expect(workflow.on.pull_request_target.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+    ]);
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.pull_request.number }}",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event.action == 'synchronize' }}",
+    );
+  });
+
+  it("isolates auto-response per item and ignores ClawSweeper PR label feedback", () => {
+    const workflow = readWorkflow(".github/workflows/auto-response.yml");
+    const guard = workflow.jobs["auto-response"].if;
+
+    expect(workflow.on.issues.types).toEqual(["opened", "edited", "labeled"]);
+    expect(workflow.on.issue_comment.types).toEqual(["created"]);
+    expect(workflow.on.pull_request_target.types).toEqual([
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "labeled",
+      "unlabeled",
+    ]);
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}",
+    );
+    expect(guard).toContain("github.event_name != 'pull_request_target'");
+    expect(guard).toContain("github.event.action != 'labeled'");
+    expect(guard).toContain("github.event.action != 'unlabeled'");
+    expect(guard).toContain("github.actor != 'clawsweeper[bot]'");
+    expect(guard).toContain("github.actor != 'openclaw-clawsweeper[bot]'");
+    expect(guard).not.toContain("openclaw-barnacle[bot]");
   });
 
   it("routes stale bug issues through ClawSweeper instead of Barnacle closure", () => {
@@ -2934,6 +3145,15 @@ describe("ci workflow guards", () => {
     expect(warmerSource).toContain('"agentic-agents-embedded"');
     expect(warmerSource).toContain('"agentic-gateway-methods"');
     expect(warmerSource).toContain('"auto-reply-reply-commands-3"');
+    expect(warmerSource).toContain("const groups = shards.flatMap((shard) =>");
+    expect(warmerSource).toContain("configs: [config]");
+    expect(warmerSource).toContain("...(shard.env ? { env: shard.env } : {})");
+    expect(warmerSource).toContain(
+      "...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {})",
+    );
+    expect(warmerSource).toContain("`OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`");
+    expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-actions-cache": "true",
@@ -2949,6 +3169,108 @@ describe("ci workflow guards", () => {
     expect(warmStep.if).toBeUndefined();
     expect(maintainStoreStep).toBeUndefined();
     expect(maintainStickyStoreStep.env.OPENCLAW_PNPM_STORE_MAX_KIB).toBe("8388608");
+
+    const seedRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cache-seed-"));
+    try {
+      const envPath = path.join(seedRoot, "github-env");
+      const result = runWorkflowShellScript(seedStep.run, {
+        env: {
+          ...process.env,
+          GITHUB_ENV: envPath,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const seedEnv = Object.fromEntries(
+        readFileSync(envPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+      );
+      const serializedGroups = seedEnv.OPENCLAW_NODE_TEST_GROUPS_JSON;
+      if (!serializedGroups) {
+        throw new Error("cache warmer did not export OPENCLAW_NODE_TEST_GROUPS_JSON");
+      }
+      const groups = JSON.parse(serializedGroups) as Array<{
+        configs: string[];
+        env?: Record<string, string>;
+        includePatterns?: string[];
+        shard_name: string;
+      }>;
+      const selectedShardNames = new Set([
+        "agentic-agents-embedded",
+        "agentic-gateway-methods",
+        "auto-reply-reply-commands-3",
+      ]);
+      const selectedShards = createNodeTestShards().filter(
+        (shard) =>
+          shard.shardName.startsWith("core-unit-fast") || selectedShardNames.has(shard.shardName),
+      );
+      const expectedGroups = selectedShards.flatMap((shard) =>
+        shard.configs.map((config) => ({
+          configs: [config],
+          ...(shard.env ? { env: shard.env } : {}),
+          ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+          shard_name: `cache-warm:${shard.shardName}:${config}`,
+        })),
+      );
+
+      expect(groups).toEqual(expectedGroups);
+      expect(groups).toHaveLength(10);
+      expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+      expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
+      expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty(
+        "size",
+        groups.length,
+      );
+
+      const coreStripeGroups = groups.filter(
+        (group) => group.configs[0] === "test/vitest/vitest.unit-fast.config.ts",
+      );
+      expect(coreStripeGroups).toHaveLength(2);
+      expect(coreStripeGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(
+        true,
+      );
+      const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
+      expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
+
+      const isolatedGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
+      );
+      expect(isolatedGroups).toHaveLength(2);
+      expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
+      expect(isolatedGroups.every((group) => group.env === undefined)).toBe(true);
+
+      const embeddedGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:agentic-agents-embedded:"),
+      );
+      expect(embeddedGroups).toHaveLength(4);
+      expect(
+        embeddedGroups.every(
+          (group) => group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS === "660000",
+        ),
+      ).toBe(true);
+
+      const gatewayGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
+      );
+      expect(gatewayGroups).toHaveLength(1);
+      expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
+      expect(gatewayGroups[0]?.env).toBeUndefined();
+
+      const autoReplyGroups = groups.filter((group) =>
+        group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
+      );
+      expect(autoReplyGroups).toHaveLength(1);
+      expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
+      expect(autoReplyGroups[0]?.env).toBeUndefined();
+      expect(seedEnv.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
+      expect(seedEnv).not.toHaveProperty("OPENCLAW_NODE_TEST_CONFIGS_JSON");
+    } finally {
+      rmSync(seedRoot, { force: true, recursive: true });
+    }
 
     const maintenanceRoot = mkdtempSync(path.join(tmpdir(), "openclaw-pnpm-maintenance-"));
     try {
@@ -4701,6 +5023,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
+  it("runs the Doctor plugin-index persistence proof against the built CLI", () => {
+    const workflow = readCiWorkflow();
+    const proofStep = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Verify built Doctor plugin index persistence",
+    );
+
+    expect(proofStep.run).toContain(
+      "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+    );
+    expect(proofStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
+    expect(proofStep.run).toContain("Selected target predates");
+  });
+
   it("restores the dist build cache before building and saves only cache misses", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -4765,7 +5100,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(saveStep.with.key).toContain("dist-build-v2-");
   });
 
-  it("parallelizes gateway watch only on the large self-hosted build runner", () => {
+  it("keeps the full built TUI PTY suite out of the artifact canary gate", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const builtArtifactChecks = buildArtifactSteps.find(
@@ -4785,8 +5120,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run).toContain(
       'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
     );
+    const firstWait = run.indexOf("\nwait_checks\n");
+    const hostedGatewayWatch = run.indexOf(
+      'if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then',
+    );
+    const tuiPty = run.indexOf('if [ "$RUN_TUI_PTY" = "true" ]; then');
+    const hostedGatewayWait = run.indexOf("\n  wait_checks\n", hostedGatewayWatch);
+    const tuiPtyWait = run.indexOf("\n  wait_checks\n", tuiPty);
+    expect(firstWait).toBeGreaterThan(run.indexOf('start_check "core-support-boundary"'));
+    expect(hostedGatewayWatch).toBeGreaterThan(firstWait);
+    expect(hostedGatewayWait).toBeGreaterThan(hostedGatewayWatch);
+    expect(tuiPty).toBeGreaterThan(hostedGatewayWait);
+    expect(tuiPtyWait).toBeGreaterThan(tuiPty);
+    expect(run.slice(tuiPty, tuiPtyWait)).toContain("src/tui/tui-pty-local.e2e.test.ts");
+    expect(run.slice(tuiPty, tuiPtyWait)).toContain("--testNamePattern");
+    expect(run.slice(tuiPty, tuiPtyWait)).toContain(
+      "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
+    );
     expect(run).toContain("wait_checks()");
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(2);
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(3);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
@@ -4971,6 +5323,91 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(true);
   });
 
+  it.skipIf(process.platform !== "linux")(
+    "classifies QA timeouts only from isolated supervisor diagnostics",
+    () => {
+      const scenarios = [
+        {
+          exitCode: 124,
+          mode: "natural-124",
+          supervisorSignals: [],
+          timedOut: false,
+          timeoutOutcome: "none",
+        },
+        {
+          exitCode: 137,
+          mode: "self-kill",
+          supervisorSignals: [],
+          timedOut: false,
+          timeoutOutcome: "none",
+        },
+        {
+          exitCode: 143,
+          mode: "supervisor-term",
+          supervisorSignals: ["TERM"],
+          timedOut: false,
+          timeoutOutcome: "none",
+        },
+        {
+          exitCode: 124,
+          mode: "term",
+          supervisorSignals: ["TERM"],
+          timedOut: true,
+          timeoutOutcome: "term",
+        },
+        {
+          exitCode: 137,
+          mode: "kill",
+          supervisorSignals: ["TERM", "KILL"],
+          timedOut: true,
+          timeoutOutcome: "kill",
+        },
+      ] as const;
+
+      for (const scenario of scenarios) {
+        const result = runQaProfileTimeoutFixture(scenario.mode);
+        expect(result.commandStatus, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(result.status).toMatchObject({
+          exitCode: scenario.exitCode,
+          timedOut: scenario.timedOut,
+          timeoutOutcome: scenario.timeoutOutcome,
+        });
+        expect(result.githubOutput).toContain(`qa_exit_code=${scenario.exitCode}`);
+        expect(result.stderr).toContain(`child-stderr-sentinel:${scenario.mode}`);
+        expect(result.stderr).toContain("child-locale:POSIX");
+        expect(result.timeoutVersion).toContain("(GNU coreutils)");
+
+        const supervisorSignals: readonly ("TERM" | "KILL")[] = scenario.supervisorSignals;
+        for (const signal of ["TERM", "KILL"] as const) {
+          const diagnostic = `timeout: sending signal ${signal} to command 'env'`;
+          if (supervisorSignals.includes(signal)) {
+            expect(result.timeoutSupervisorLog).toContain(diagnostic);
+          } else {
+            expect(result.timeoutSupervisorLog).not.toContain(diagnostic);
+          }
+        }
+
+        if (scenario.mode === "natural-124") {
+          expect(result.stderr).toContain(
+            "timeout: sending signal KILL to command 'spoofed-child'",
+          );
+          expect(result.timeoutSupervisorLog).not.toContain("spoofed-child");
+        }
+        if (scenario.timeoutOutcome === "term") {
+          expect(result.stdout).toContain(
+            "::warning::QA profile 'all' timed out after 1 second and was terminated",
+          );
+        } else if (scenario.timeoutOutcome === "kill") {
+          expect(result.stdout).toContain(
+            "::warning::QA profile 'all' timed out after 1 second and required SIGKILL after the 0.5-second grace period",
+          );
+        } else {
+          expect(result.stdout).not.toContain("::warning::QA profile");
+        }
+      }
+    },
+  );
+
   it("keeps maturity scorecard generated QA evidence handoff strict", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
     const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
@@ -5072,9 +5509,53 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(runProfileStep.env?.OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF).toBe("1");
     expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
+    expect(runProfileStep.env?.REQUESTED_REF).toBe("${{ inputs.ref }}");
+    expect(runProfileStep.env?.TARGET_SHA).toBe(
+      "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+    );
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
+    expect(runProfileStep.run).toContain('mkdir -p "$output_dir"');
+    expect(runProfileStep.run.indexOf('mkdir -p "$output_dir"')).toBeLessThan(
+      runProfileStep.run.indexOf('echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"'),
+    );
+    expect(runProfileStep.run).toContain(
+      "LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m",
+    );
     expect(runProfileStep.run).toContain("qa_exit_code=$?");
+    expect(runProfileStep.run).toContain('timeout_child_env+=("LC_ALL=$LC_ALL")');
+    expect(runProfileStep.run).toContain('timeout_child_env+=("-u" "LC_ALL")');
+    expect(runProfileStep.run).toContain(`bash -c 'exec "$@" 2>&3' bash`);
+    expect(runProfileStep.run).toContain('3>&2 2>"$timeout_supervisor_fifo"');
+    expect(runProfileStep.run).toContain('mkfifo "$timeout_supervisor_fifo"');
+    expect(runProfileStep.run).toContain(
+      'tee "$timeout_supervisor_log" <"$timeout_supervisor_fifo" >&2 &',
+    );
+    expect(runProfileStep.run).toContain("supervisor_tee_pid=$!");
+    expect(runProfileStep.run).toContain("trap cleanup_timeout_supervisor EXIT");
+    expect(runProfileStep.run).toContain(
+      'rm -f "$timeout_supervisor_fifo" "$timeout_supervisor_log"',
+    );
+    expect(runProfileStep.run).not.toContain(">(tee");
+    const teeWait = runProfileStep.run.indexOf('wait "$supervisor_tee_pid"');
+    const timeoutClassification = runProfileStep.run.indexOf(
+      'grep -Eq "^timeout: sending signal KILL',
+    );
+    expect(teeWait).toBeGreaterThan(-1);
+    expect(teeWait).toBeLessThan(timeoutClassification);
+    expect(runProfileStep.run).toContain(
+      `[[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$"`,
+    );
+    expect(runProfileStep.run).toContain(
+      `[[ "$qa_exit_code" -eq 124 ]] && grep -Eq "^timeout: sending signal TERM to command '[A-Za-z0-9_./+-]+'$"`,
+    );
+    expect(runProfileStep.run).not.toContain('case "$qa_exit_code"');
+    expect(runProfileStep.run).toContain('TIMEOUT_OUTCOME="$timeout_outcome"');
+    expect(runProfileStep.run).toContain("qa-profile-run-status.json");
+    expect(runProfileStep.run).toContain("exitCode: Number(process.env.QA_EXIT_CODE)");
+    expect(runProfileStep.run).toContain('timedOut: timeoutOutcome !== "none"');
+    expect(runProfileStep.run).toContain("timeoutOutcome,");
+    expect(runProfileStep.run).toContain("completedAt: new Date().toISOString()");
     expect(runProfileStep.run).not.toContain("--allow-failures");
     const failProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Fail if QA profile failed",
@@ -5239,6 +5720,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
+    expect(validateManifestStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(validateManifestStep.run).toContain("profilePlanSha256");
+    expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
 
     expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
     const qaEvidenceStep = qaRunJob.steps.find(
@@ -5249,6 +5733,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(qaEvidenceStep.run).toContain("validateQaEvidenceSummaryJson");
+    expect(qaEvidenceStep.run).toContain("qaProfileEvidencePlan.attest");
+    expect(qaEvidenceStep.run).toContain("profilePlanSha256");
+    expect(qaEvidenceStep.run).toContain("rerun the QA Profile Evidence workflow");
     expect(qaEvidenceStep.env.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
     expect(qaEvidenceStep.run).toContain("qaExitCode: Number(process.env.QA_EXIT_CODE)");
     expect(qaEvidenceStep.run).toContain('qaPassed: process.env.QA_EXIT_CODE === "0"');
@@ -5258,6 +5745,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const qaUploadStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Upload QA profile evidence",
     );
+    expect(qaUploadStep.if).toBe("always()");
     expect(qaUploadStep.with).toMatchObject({
       name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
       path: "${{ steps.run_profile.outputs.output_dir }}",
@@ -5380,6 +5868,168 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(maturityWorkflowSource).not.toContain("gh auth setup-git");
     expect(maturityWorkflowSource).not.toContain("git push --force-with-lease");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "round-trips complete and incomplete profile evidence and rejects digest drift",
+    () => {
+      const qaWorkflow = readQaProfileEvidenceWorkflow();
+      const maturityWorkflow = readMaturityScorecardWorkflow();
+      const producerStep = qaWorkflow.jobs.run_qa_profile.steps.find(
+        (step: WorkflowStep) => step.name === "Validate QA profile evidence",
+      );
+      const consumerStep = maturityWorkflow.jobs.publish.steps.find(
+        (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
+      );
+      const producerScript = expectDefined(producerStep?.run, "QA evidence producer script");
+      const consumerScript = expectDefined(consumerStep?.run, "QA evidence consumer script");
+      const root = tempDirs.make("openclaw-qa-profile-artifact-");
+      const evidencePath = path.join(root, "qa-evidence.json");
+      const manifestPath = path.join(root, "qa-profile-evidence-manifest.json");
+      const targetSha = "a".repeat(40);
+      const expectedCell = {
+        scenarioId: "scenario-one",
+        executionKind: "flow",
+        channel: null,
+      };
+      const scorecard = {
+        filters: { surface: null, category: null },
+        run: { evidenceEntryCount: 0 },
+        categories: { total: 1, fulfilled: 1, partial: 0, missing: 0, fulfillmentPercent: 100 },
+        features: { total: 1, fulfilled: 1, partial: 0, missing: 0, fulfillmentPercent: 100 },
+        coverageIds: {
+          total: 1,
+          fulfilled: 1,
+          missing: 0,
+          fulfillmentPercent: 100,
+        },
+        categoryReports: [
+          {
+            id: "surface.category",
+            surfaceId: "surface",
+            name: "Category",
+            status: "fulfilled",
+            features: {
+              total: 1,
+              fulfilled: 1,
+              partial: 0,
+              missing: 0,
+              fulfillmentPercent: 100,
+            },
+            coverageIds: {
+              total: 1,
+              fulfilled: 1,
+              missing: 0,
+              fulfillmentPercent: 100,
+              secondaryOnly: 0,
+            },
+            missingCoverageIds: [],
+          },
+        ],
+      };
+
+      const writeEvidence = (complete: boolean) => {
+        const observedCells = complete ? [expectedCell] : [];
+        const missingCells = complete ? [] : [expectedCell];
+        writeFileSync(
+          evidencePath,
+          `${JSON.stringify({
+            kind: "openclaw.qa.evidence-summary",
+            schemaVersion: 2,
+            generatedAt: "2026-08-05T00:00:00.000Z",
+            evidenceMode: "full",
+            entries: [],
+            profile: "all",
+            profilePlan: {
+              profile: "all",
+              membership: ["scenario-one"],
+              selected: ["scenario-one"],
+              excluded: [],
+              expectedCells: [expectedCell],
+              observedCells,
+              missingCells,
+              counts: {
+                membership: 1,
+                selected: 1,
+                excluded: 0,
+                expectedCells: 1,
+                observedCells: observedCells.length,
+                missingCells: missingCells.length,
+              },
+            },
+            scorecard,
+          })}\n`,
+          "utf8",
+        );
+      };
+      const runProducer = (qaExitCode: string) =>
+        runWorkflowShellScript(producerScript, {
+          env: {
+            ...process.env,
+            ALLOW_FAILURES: "true",
+            ARTIFACT_NAME: `qa-profile-evidence-all-${targetSha}`,
+            GITHUB_OUTPUT: path.join(root, "github-output"),
+            GITHUB_STEP_SUMMARY: path.join(root, "github-summary"),
+            OUTPUT_DIR: root,
+            QA_EXIT_CODE: qaExitCode,
+            QA_PROFILE: "all",
+            REQUESTED_REF: targetSha,
+            TARGET_SHA: targetSha,
+            TRUSTED_REASON: "fixture",
+          },
+        });
+      const runConsumer = () =>
+        runWorkflowShellScript(consumerScript, {
+          env: {
+            ...process.env,
+            QA_EVIDENCE_PATH: evidencePath,
+            TARGET_SHA: targetSha,
+          },
+        });
+
+      try {
+        writeEvidence(true);
+        const completeProducer = runProducer("0");
+        expect(
+          completeProducer.status,
+          `${completeProducer.stdout}${completeProducer.stderr}`,
+        ).toBe(0);
+        const completeConsumer = runConsumer();
+        expect(
+          completeConsumer.status,
+          `${completeConsumer.stdout}${completeConsumer.stderr}`,
+        ).toBe(0);
+
+        writeEvidence(false);
+        const incompleteProducer = runProducer("7");
+        expect(
+          incompleteProducer.status,
+          `${incompleteProducer.stdout}${incompleteProducer.stderr}`,
+        ).toBe(0);
+        const incompleteConsumer = runConsumer();
+        expect(
+          incompleteConsumer.status,
+          `${incompleteConsumer.stdout}${incompleteConsumer.stderr}`,
+        ).toBe(0);
+
+        writeEvidence(true);
+        const mismatchProducer = runProducer("0");
+        expect(
+          mismatchProducer.status,
+          `${mismatchProducer.stdout}${mismatchProducer.stderr}`,
+        ).toBe(0);
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+        manifest.profilePlanSha256 = "0".repeat(64);
+        writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
+        const mismatched = runConsumer();
+        expect(mismatched.status).toBe(1);
+        expect(`${mismatched.stdout}${mismatched.stderr}`).toContain(
+          "QA evidence profilePlan digest does not match the manifest",
+        );
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "suppresses only reported QA result failures when explicitly allowed",

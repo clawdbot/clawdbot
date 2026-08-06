@@ -37,7 +37,6 @@ describe("TTS core", () => {
   it("keeps summarization-only LLM modules lazy", () => {
     const source = readFileSync(new URL("./tts-core.ts", import.meta.url), "utf8");
 
-    expect(source).toContain('import("../llm/stream.js")');
     expect(source).toContain('import("../agents/simple-completion-runtime.js")');
     expect(source).not.toContain('from "../llm/stream.js"');
     expect(source).not.toContain('from "../agents/simple-completion-runtime.js"');
@@ -103,7 +102,7 @@ describe("TTS core", () => {
           timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
         },
         {
-          completeSimple: vi.fn(async () => assistant),
+          completeWithPreparedSimpleCompletionModel: vi.fn(async () => assistant),
           prepareSimpleCompletionModel: vi.fn(async () => ({ model, auth })),
           requireApiKey: vi.fn(() => "key"),
         },

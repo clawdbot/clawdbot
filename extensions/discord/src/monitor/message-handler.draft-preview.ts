@@ -55,16 +55,17 @@ export function createDiscordDraftPreviewController(params: {
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
   const draftMaxChars = Math.min(params.textLimit, 2000);
-  const accountBlockStreamingEnabled =
-    resolveChannelStreamingBlockEnabled(params.discordConfig) ??
-    params.cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamProgressDraftForToolOnlySource =
     params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
-  const canStreamDraft =
+  const previewAvailable =
     allowProviderPreview &&
     (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
-    discordStreamMode !== "off" &&
-    !accountBlockStreamingEnabled;
+    discordStreamMode !== "off";
+  const accountBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig, {
+    previewAvailable,
+    blockStreamingDefault: params.cfg.agents?.defaults?.blockStreamingDefault,
+  });
+  const canStreamDraft = previewAvailable && !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
     ? createDiscordDraftStream({
         rest: params.deliveryRest,

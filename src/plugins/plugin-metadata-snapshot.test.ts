@@ -384,6 +384,37 @@ describe("plugin metadata snapshot", () => {
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
+  it("propagates the current-snapshot bypass to the registry reader", () => {
+    const config = {};
+    const index = makeIndex();
+    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "derived",
+      snapshot: index,
+      diagnostics: [],
+    });
+    const current = loadPluginMetadataSnapshot({ config, env: {}, index });
+    setCurrentPluginMetadataSnapshot(current, { config, env: {} });
+    loadPluginRegistrySnapshotWithMetadata.mockClear();
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: index,
+      diagnostics: [],
+    });
+
+    const resolved = resolvePluginMetadataSnapshot({
+      config,
+      env: {},
+      allowCurrent: false,
+    });
+
+    expect(resolved).not.toBe(current);
+    expect(resolved.registrySource).toBe("persisted");
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ allowCurrent: false }),
+    );
+  });
+
   it("keeps scoped loads separate without an LRU", () => {
     const index = makeIndex();
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({

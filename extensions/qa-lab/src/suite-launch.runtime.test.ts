@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaSuiteScenarioResult } from "./suite.js";
+import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type {
   QaTestFileScenario,
   QaTestFileScenarioRunResult,
@@ -31,7 +32,7 @@ vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
   runQaTestFileScenarios,
 }));
 
-import { runQaSuite } from "./suite-launch.runtime.js";
+import { runQaSuite, runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
 
 const tempRoots: string[] = [];
 
@@ -126,6 +127,7 @@ describe("qa suite runtime launcher", () => {
             status: "pass",
             steps: [],
           })),
+          startedScenarioIds: scenarioIds,
           watchUrl: "http://127.0.0.1:43124",
         };
       },
@@ -246,6 +248,34 @@ describe("qa suite runtime launcher", () => {
       expect(stderrWrite.mock.calls.flat().join("")).toContain(
         "[qa-suite] infra retry 1/1: agent.wait failed",
       );
+    } finally {
+      stderrWrite.mockRestore();
+    }
+  });
+
+  it("retries a cleanup-only ECONNRESET through its preserved cause", async () => {
+    const cleanupError = Object.assign(new Error("cleanup socket reset"), {
+      code: "ECONNRESET",
+    });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    let attempts = 0;
+
+    try {
+      const result = await runQaSuiteWithInfraRetry(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throwQaSuiteCleanupErrors({
+            cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
+            runFailed: false,
+            runError: undefined,
+          });
+        }
+        return "retried";
+      }, 1);
+
+      expect(result).toBe("retried");
+      expect(attempts).toBe(2);
+      expect(stderrWrite.mock.calls.flat().join("")).toContain("[qa-suite] infra retry 1/1:");
     } finally {
       stderrWrite.mockRestore();
     }
@@ -410,6 +440,15 @@ describe("qa suite runtime launcher", () => {
     expect(
       result.result.scenarios.find((scenario) => scenario.name === "thread-isolation [matrix]"),
     ).toMatchObject({ status: "fail" });
+    expect(result.observedCells).toEqual(
+      expect.arrayContaining([
+        { scenarioId: "channel-chat-baseline", executionKind: "flow", channel: null },
+        { scenarioId: "telegram-help-command", executionKind: "flow", channel: "telegram" },
+        { scenarioId: "matrix-restart-resume", executionKind: "flow", channel: "matrix" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "slack" },
+        { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
+      ]),
+    );
   });
 
   it("uses one eligible channel outside profile execution", async () => {
@@ -660,6 +699,7 @@ describe("qa suite runtime launcher", () => {
     expect(evidence.entries).toMatchObject([
       { test: { id: "whatsapp-status-command" }, result: { status: "fail" } },
     ]);
+    expect(result.observedCells).toEqual([]);
     await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
   });
 
@@ -2223,7 +2263,7 @@ describe("qa suite runtime launcher", () => {
     ]);
     const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
       entries?: Array<{
-        execution?: { channel?: { id?: string } };
+        execution?: { channel?: { driver?: string; id?: string; live?: boolean } };
         result?: { status?: string };
         test?: { id?: string };
       }>;
@@ -2231,10 +2271,21 @@ describe("qa suite runtime launcher", () => {
     for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
       const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
       expect(blocked).toMatchObject({
-        execution: { channel: { id: "whatsapp", driver: "live", live: true } },
+        execution: { channel: { id: "whatsapp", live: false } },
         result: { status: "blocked" },
       });
+      expect(blocked?.execution?.channel?.driver).toBeUndefined();
     }
+    expect(result.observedCells).not.toEqual(
+      expect.arrayContaining([
+        { scenarioId: "whatsapp-status-command", executionKind: "flow", channel: "whatsapp" },
+        {
+          scenarioId: "whatsapp-access-control-dm-open",
+          executionKind: "flow",
+          channel: "whatsapp",
+        },
+      ]),
+    );
   });
 
   it("omits later credential failures after the first failed flow scenario", async () => {

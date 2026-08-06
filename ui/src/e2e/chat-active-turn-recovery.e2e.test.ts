@@ -31,12 +31,13 @@ function activeRunSnapshot(
   runId: string,
   prompt: string,
   streamText: string,
-  opts?: { persistedToolCall?: boolean },
+  opts?: { persistedToolCall?: boolean; startedAt?: number },
 ) {
   return {
     inFlightRun: {
       runId,
       text: streamText,
+      startedAt: opts?.startedAt,
       events: [
         {
           runId,
@@ -136,7 +137,7 @@ async function installActiveRunSnapshot(
   runId: string,
   prompt: string,
   streamText: string,
-  opts?: { persistedToolCall?: boolean },
+  opts?: { persistedToolCall?: boolean; startedAt?: number },
 ): Promise<void> {
   const snapshot = activeRunSnapshot(runId, prompt, streamText, opts);
   await gateway.setMethodResponse("chat.startup", snapshot);
@@ -164,6 +165,15 @@ async function assertActiveTurnVisible(page: Page, streamText: string): Promise<
         .count(),
     )
     .toBe(0);
+}
+
+async function readWorkingStartedAts(page: Page): Promise<number[]> {
+  return page.locator(".chat-working-indicator openclaw-elapsed-time").evaluateAll((elements) =>
+    elements.flatMap((element) => {
+      const value = (element as HTMLElement & { startMs?: unknown }).startMs;
+      return typeof value === "number" ? [value] : [];
+    }),
+  );
 }
 
 async function waitForGatewayConnected(page: Page): Promise<void> {
@@ -229,7 +239,8 @@ suite.define(() => {
       const prompt = "navigation active turn";
       const streamText = "Navigation progress is still running.";
       const runId = await startActiveTurn(page, gateway, prompt, streamText);
-      await installActiveRunSnapshot(gateway, runId, prompt, streamText);
+      const startedAt = Date.now() - 10 * 60_000;
+      await installActiveRunSnapshot(gateway, runId, prompt, streamText, { startedAt });
       await capture(page, "01-navigation-before");
 
       const sidebar = page.locator("openclaw-app-sidebar");
@@ -241,6 +252,10 @@ suite.define(() => {
       await sidebar.getByRole("link", { name: "Home" }).click();
       await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
       await assertActiveTurnVisible(page, streamText);
+      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await expect(
+        page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),
+      ).not.toHaveCount(0);
       await capture(page, "02-navigation-after");
       await finishRecoveredTurn(page, gateway, runId, "Navigation delivery complete.");
     } finally {
@@ -254,7 +269,8 @@ suite.define(() => {
       const prompt = "reconnect active turn";
       const streamText = "Reconnect progress is still running.";
       const runId = await startActiveTurn(page, gateway, prompt, streamText);
-      await installActiveRunSnapshot(gateway, runId, prompt, streamText);
+      const startedAt = Date.now() - 10 * 60_000;
+      await installActiveRunSnapshot(gateway, runId, prompt, streamText, { startedAt });
       await capture(page, "03-reconnect-before");
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
@@ -265,6 +281,10 @@ suite.define(() => {
         .toBeGreaterThan(startupCount);
       await waitForGatewayConnected(page);
       await assertActiveTurnVisible(page, streamText);
+      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await expect(
+        page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),
+      ).not.toHaveCount(0);
       await capture(page, "04-reconnect-after");
       await finishRecoveredTurn(page, gateway, runId, "Reconnect delivery complete.");
     } finally {
@@ -278,13 +298,19 @@ suite.define(() => {
       const prompt = "reload active turn";
       const streamText = "Reload progress is still running.";
       const runId = await startActiveTurn(page, gateway, prompt, streamText);
+      const startedAt = Date.now() - 10 * 60_000;
       await installActiveRunSnapshot(gateway, runId, prompt, streamText, {
         persistedToolCall: true,
+        startedAt,
       });
       await capture(page, "05-reload-before");
 
       await page.reload();
       await assertActiveTurnVisible(page, streamText);
+      expect(await readWorkingStartedAts(page)).toContain(startedAt);
+      await expect(
+        page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),
+      ).not.toHaveCount(0);
       await capture(page, "06-reload-after");
       await finishRecoveredTurn(page, gateway, runId, "Reload delivery complete.");
     } finally {

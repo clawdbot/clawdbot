@@ -8,9 +8,6 @@ let createSlackSystemEventTestHarness: typeof import("./system-event-test-harnes
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-}));
 type SlackChannelHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;

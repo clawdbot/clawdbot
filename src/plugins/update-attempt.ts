@@ -332,6 +332,7 @@ export async function runPluginUpdateAttempt(params: {
   clawhubSpecs?: PluginUpdateSpecPlan;
   officialNpmFallbackSpecs?: PluginUpdateSpecPlan | null;
   trustedSourceLinkedOfficialInstall: boolean;
+  expectedReplacementPluginId?: string;
   getFallbackExpectedIntegrity: () => Promise<string | undefined>;
   installNpmSpecForUpdate: typeof installPluginFromNpmSpec;
   logger: PluginUpdateLogger;
@@ -358,6 +359,7 @@ export async function runPluginUpdateAttempt(params: {
             dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
             trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
             expectedPluginId: params.pluginId,
+            expectedReplacementPluginId: params.expectedReplacementPluginId,
             expectedIntegrity: params.expectedIntegrity,
             onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
               pluginId: params.pluginId,
@@ -453,6 +455,7 @@ export async function runPluginUpdateAttempt(params: {
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       expectedPluginId: params.pluginId,
+      expectedReplacementPluginId: params.expectedReplacementPluginId,
       expectedIntegrity: await params.getFallbackExpectedIntegrity(),
       onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
         pluginId: params.pluginId,
@@ -526,6 +529,7 @@ export async function runPluginUpdateAttempt(params: {
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       trustedSourceLinkedOfficialInstall: true,
       expectedPluginId: params.pluginId,
+      expectedReplacementPluginId: params.expectedReplacementPluginId,
       logger: params.logger,
     });
   }

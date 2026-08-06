@@ -41,7 +41,6 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
-import { runSkillResearchAutoCapture } from "../skills/research/autocapture.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
@@ -49,6 +48,7 @@ import {
   runPreparedCliAgent,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
+import { createClaudeInputStartedEvent } from "./cli-runner.test-helpers.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
@@ -91,10 +91,6 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../skills/research/autocapture.js", () => ({
-  runSkillResearchAutoCapture: vi.fn(async () => undefined),
-}));
-
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
   resolveModelOverridePolicy: vi.fn(),
@@ -102,7 +98,6 @@ vi.mock("../tts/tts-settings.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
-const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -258,6 +253,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function claudeInputStartedJson(data: string): string {
+  const event = createClaudeInputStartedEvent(data);
+  if (!event) {
+    throw new Error("expected Claude user input UUID");
+  }
+  return JSON.stringify(event);
+}
+
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
   return value as Array<unknown>;
@@ -374,8 +377,6 @@ describe("runCliAgent reliability", () => {
     restoreCliRunnerTestDeps();
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
-    mockAutoCapture.mockReset();
-    mockAutoCapture.mockResolvedValue(undefined);
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
@@ -2001,7 +2002,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it("forks a synthetic-stalled resume without rebuilding its cached conversation", async () => {
+  it("forks a lifecycle-started resume stall without rebuilding its cached conversation", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const transcriptProbe = vi.fn(async () => false);
@@ -2062,15 +2063,7 @@ describe("runCliAgent reliability", () => {
                     subtype: "init",
                     session_id: "stale-live",
                   }),
-                  JSON.stringify({
-                    type: "assistant",
-                    session_id: "stale-live",
-                    message: {
-                      model: "<synthetic>",
-                      role: "assistant",
-                      content: [{ type: "text", text: "No response requested." }],
-                    },
-                  }),
+                  claudeInputStartedJson(dataValue),
                 ].join("\n") + "\n",
               );
               cb?.();
@@ -2103,6 +2096,7 @@ describe("runCliAgent reliability", () => {
             stdoutListener?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: "forked-live" }),
+                claudeInputStartedJson(dataValue),
                 JSON.stringify({
                   type: "assistant",
                   uuid: "assistant-after-recovery",
@@ -2234,7 +2228,7 @@ describe("runCliAgent reliability", () => {
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
-  it("falls back to transcript reseeding when the cache-preserving fork also stalls", async () => {
+  it("falls back to transcript reseeding when the lifecycle-started fork also stalls", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const spawnedArgv: string[][] = [];
@@ -2277,18 +2271,9 @@ describe("runCliAgent reliability", () => {
             input.onStdout?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                claudeInputStartedJson(dataValue),
                 ...(spawnIndex < 3
-                  ? [
-                      JSON.stringify({
-                        type: "assistant",
-                        session_id: sessionId,
-                        message: {
-                          model: "<synthetic>",
-                          role: "assistant",
-                          content: [{ type: "text", text: "No response requested." }],
-                        },
-                      }),
-                    ]
+                  ? []
                   : [
                       JSON.stringify({
                         type: "result",
@@ -2434,6 +2419,7 @@ describe("runCliAgent reliability", () => {
             input.onStdout?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                claudeInputStartedJson(dataValue),
                 ...(spawnIndex === 1
                   ? []
                   : [
@@ -3260,71 +3246,6 @@ describe("runCliAgent reliability", () => {
     expect(resolved).toBe(false);
 
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({
-      payloads: [{ text: "hello from cli" }],
-    });
-    expect(resolved).toBe(true);
-  });
-
-  it("waits for eligible Skill Research auto-capture before resolving direct CLI runs", async () => {
-    let releaseAutoCapture: () => void = () => undefined;
-    const autoCaptureSettled = new Promise<void>((resolve) => {
-      releaseAutoCapture = resolve;
-    });
-    mockAutoCapture.mockReturnValueOnce(autoCaptureSettled);
-
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "hello from cli",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const context = buildPreparedContext({ sessionKey: "agent:main:main" });
-    let resolved = false;
-    const run = runPreparedCliAgent({
-      ...context,
-      params: {
-        ...context.params,
-        agentId: "main",
-        trigger: "user",
-        config: {
-          skills: {
-            workshop: {
-              autonomous: {
-                mode: "propose",
-              },
-            },
-          },
-        },
-      },
-    }).then((result) => {
-      resolved = true;
-      return result;
-    });
-
-    await vi.waitFor(() => {
-      expect(mockAutoCapture).toHaveBeenCalledTimes(1);
-    });
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-    expect(mockAutoCapture).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          trigger: "user",
-        }),
-      }),
-    );
-
-    releaseAutoCapture();
     await expect(run).resolves.toMatchObject({
       payloads: [{ text: "hello from cli" }],
     });

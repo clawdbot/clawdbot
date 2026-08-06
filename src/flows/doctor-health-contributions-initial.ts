@@ -63,11 +63,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runInitialConfigWriteHealth,
     }),
     createDoctorHealthContribution({
-      id: "doctor:active-tool-schema-warnings",
-      label: "Active tool schema warnings",
-      run: runActiveToolSchemaWarningsHealth,
-    }),
-    createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
       healthCheckIds: ["core/doctor/gateway-config"],
@@ -252,6 +247,13 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor plugin registry contribution owns registry repairs"),
       },
       run: runPluginRegistryHealth,
+    }),
+    // Runtime tool discovery must follow plugin metadata repair; running it earlier
+    // scans each workspace again after the authoritative generation changes.
+    createDoctorHealthContribution({
+      id: "doctor:active-tool-schema-warnings",
+      label: "Active tool schema warnings",
+      run: runActiveToolSchemaWarningsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",

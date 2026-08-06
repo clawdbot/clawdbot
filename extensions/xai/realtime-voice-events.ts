@@ -77,7 +77,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
             "xAI realtime voice stream returned malformed base64 audio data",
           );
         }
-        this.config.onAudio(Buffer.from(canonicalAudio, "base64"));
+        this.emitAudioWithPlaybackMark(Buffer.from(canonicalAudio, "base64"));
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
           this.responseStartTimestamp = this.latestMediaTimestamp;
@@ -85,7 +85,6 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           this.responseStartTimestamp = this.latestMediaTimestamp;
         }
         this.responseActive = true;
-        this.sendMark();
         return;
       }
       case "input_audio_buffer.speech_started":

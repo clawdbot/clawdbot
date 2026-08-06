@@ -11,7 +11,11 @@ import {
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -61,6 +65,7 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
+import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import {
   isSessionWorkAdmissionActive,
@@ -71,7 +76,6 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
-import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
@@ -90,6 +94,7 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
 );
 
 async function existingModelSelectionWouldChange(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
   defaultModel: string;
@@ -165,6 +170,7 @@ async function existingModelSelectionWouldChange(params: {
       : existingProfile !== undefined &&
         !shouldPreserveSessionAuthProfileOverride({
           cfg: params.cfg,
+          agentDir: resolveAgentDir(params.cfg, params.agentId),
           currentProvider:
             params.existingEntry.providerOverride ??
             params.existingEntry.modelProvider ??
@@ -874,6 +880,7 @@ export async function createGatewaySession(params: {
             agentId: target.agentId,
           });
           const modelSelectionWouldChange = await existingModelSelectionWouldChange({
+            agentId: target.agentId,
             cfg: params.cfg,
             catalogModel,
             defaultModel: gateDefaultModel.model,
