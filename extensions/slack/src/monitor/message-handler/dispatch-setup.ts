@@ -187,7 +187,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   }
   const ensureStatusTarget = () => {
     if (!threadStatusOwners || !statusTargetKey) {
-      return;
+      return undefined;
     }
     let target = threadStatusOwners.get(statusTargetKey);
     if (!target) {
