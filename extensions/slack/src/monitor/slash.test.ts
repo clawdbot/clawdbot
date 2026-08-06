@@ -369,10 +369,15 @@ async function getCommandArgMenuValues(handler: (args: unknown) => Promise<void>
   const encodedValues = (payload.blocks ?? [])
     .filter((block) => block.type === "actions")
     .flatMap((block) =>
-      (block.elements ?? []).flatMap((element) => [
-        ...(element.value ? [element.value] : []),
-        ...(element.options ?? []).flatMap((option) => (option.value ? [option.value] : [])),
-      ]),
+      (block.elements ?? []).flatMap((element) => {
+        const values = (element.options ?? []).flatMap((option) =>
+          option.value ? [option.value] : [],
+        );
+        if (element.value) {
+          values.unshift(element.value);
+        }
+        return values;
+      }),
     );
   return encodedValues.flatMap((value) => {
     const encodedChoice = value.split("|")[3];
