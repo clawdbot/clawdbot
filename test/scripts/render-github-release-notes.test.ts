@@ -63,17 +63,29 @@ describe("GitHub release-note rendering", () => {
     expect(commaSeparated).toContain(
       "1,234 in-range PRs + 56 retained seed-only PRs = 1,290 unique PRs.",
     );
-    expect(parseContributionRecordProvenance(commaSeparated)).toEqual({
+    expect(
+      parseContributionRecordProvenance(
+        [singular, "", "#### Pull requests", "", "- **PR #123** fix: canonical example."].join(
+          "\n",
+        ),
+      ),
+    ).toEqual({
       base: "v2026.7.2-beta.7",
       target,
-      inRangePullRequests: 1_234,
-      retainedSeedOnlyPullRequests: 56,
-      uniquePullRequests: 1_290,
+      inRangePullRequests: 1,
+      retainedSeedOnlyPullRequests: 0,
+      uniquePullRequests: 1,
     });
     const legacy = parseContributionRecordProvenance(
-      `This audited record covers the complete v2026.7.2-beta.6..02d06caeb0febe7ec3c0df1454b85c38f3fb27d1 history: 5089 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
+      [
+        `This audited record covers the complete v2026.7.2-beta.6..02d06caeb0febe7ec3c0df1454b85c38f3fb27d1 history: 1 merged PR. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
+        "",
+        "#### Pull requests",
+        "",
+        "- **PR #123** fix: legacy example.",
+      ].join("\n"),
     );
-    expect(legacy).toMatchObject({ uniquePullRequests: 5_089 });
+    expect(legacy).toMatchObject({ uniquePullRequests: 1 });
     expect(() => formatContributionRecordProvenance(legacy!)).toThrow("requires split PR counts");
     expect(() =>
       parseContributionRecordProvenance(
@@ -83,6 +95,12 @@ describe("GitHub release-note rendering", () => {
     expect(() =>
       parseContributionRecordProvenance(commaSeparated.replace("1,234", "1234")),
     ).toThrow("provenance is malformed");
+    expect(() =>
+      parseContributionRecordProvenance(singular.replace("1 in-range", "001 in-range")),
+    ).toThrow("provenance is malformed");
+    expect(() => parseContributionRecordProvenance(singular)).toThrow(
+      "positive contribution record requires a Pull requests section",
+    );
   });
 
   it("emits the complete matching section including its version heading when it fits", () => {

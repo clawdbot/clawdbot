@@ -61,7 +61,7 @@ export function parseContributionRecordProvenance(section) {
     return undefined;
   }
   const canonical = line.match(
-    /^This audited record covers the complete (?<base>\S+)\.\.(?<target>[0-9a-f]{40}) history: (?<inRange>[0-9]{1,3}(?:,[0-9]{3})*) in-range PRs? \+ (?<seedOnly>[0-9]{1,3}(?:,[0-9]{3})*) retained seed-only PRs? = (?<unique>[0-9]{1,3}(?:,[0-9]{3})*) unique PRs?\./u,
+    /^This audited record covers the complete (?<base>\S+)\.\.(?<target>[0-9a-f]{40}) history: (?<inRange>0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) in-range PRs? \+ (?<seedOnly>0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) retained seed-only PRs? = (?<unique>0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) unique PRs?\./u,
   );
   const legacy =
     canonical ??
@@ -87,7 +87,10 @@ export function parseContributionRecordProvenance(section) {
       fail("release contribution record provenance arithmetic is invalid");
     }
   }
-  if (section.includes("#### Pull requests") && rows.length !== provenance.uniquePullRequests) {
+  if (provenance.uniquePullRequests > 0 && !/^#### Pull requests\r?$/mu.test(section)) {
+    fail("positive contribution record requires a Pull requests section");
+  }
+  if (rows.length !== provenance.uniquePullRequests) {
     fail(`contribution record row count ${rows.length} != ${provenance.uniquePullRequests}`);
   }
   return provenance;

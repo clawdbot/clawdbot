@@ -75,6 +75,10 @@ describe("release-note verification", () => {
           "### Complete contribution record",
           "",
           `This audited record covers the complete base..${target} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
+          "",
+          "#### Pull requests",
+          "",
+          "- **PR #123** fix: example.",
         ].join("\n"),
       }),
     ).toBe(target);
