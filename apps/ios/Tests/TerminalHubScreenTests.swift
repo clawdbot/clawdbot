@@ -174,44 +174,41 @@ struct TerminalHubScreenTests {
     }
 
     @Test func `authenticated Control UI origin rejects authority changes`() throws {
-        let expected = try #require(AuthenticatedControlUIOrigin(
-            url: #require(URL(string: "https://gateway.example.com/control"))))
+        let controlURL = try #require(URL(string: "https://gateway.example.com/control"))
+        let defaultPortURL = try #require(URL(string: "https://GATEWAY.example.com:443/chat"))
+        let alternatePortURL = try #require(URL(string: "https://gateway.example.com:8443/chat"))
+        let alternateHostURL = try #require(URL(string: "https://replacement.example.com/chat"))
+        let insecureURL = try #require(URL(string: "http://gateway.example.com/chat"))
+        let expected = try #require(AuthenticatedControlUIOrigin(url: controlURL))
 
-        #expect(try expected == AuthenticatedControlUIOrigin(
-            url: #require(URL(string: "https://GATEWAY.example.com:443/chat"))))
-        #expect(try expected != AuthenticatedControlUIOrigin(
-            url: #require(URL(string: "https://gateway.example.com:8443/chat"))))
-        #expect(try expected != AuthenticatedControlUIOrigin(
-            url: #require(URL(string: "https://replacement.example.com/chat"))))
-        #expect(try expected != AuthenticatedControlUIOrigin(
-            url: #require(URL(string: "http://gateway.example.com/chat"))))
+        #expect(expected == AuthenticatedControlUIOrigin(url: defaultPortURL))
+        #expect(expected != AuthenticatedControlUIOrigin(url: alternatePortURL))
+        #expect(expected != AuthenticatedControlUIOrigin(url: alternateHostURL))
+        #expect(expected != AuthenticatedControlUIOrigin(url: insecureURL))
     }
 
     @Test func `authenticated Control UI navigation keeps the main frame on its origin`() throws {
+        let controlURL = try #require(URL(string: "https://gateway.example.com/control"))
+        let sameOriginURL = try #require(URL(string: "https://gateway.example.com/chat?session=main"))
+        let alternateHostURL = try #require(URL(string: "https://replacement.example.com/chat"))
+        let alternatePortURL = try #require(URL(string: "https://gateway.example.com:8443/chat"))
+        let embeddedURL = try #require(URL(string: "https://discussion.example.com/embed/thread/a/b"))
+        let unknownFrameURL = try #require(URL(string: "https://gateway.example.com/chat"))
         let coordinator = try AuthenticatedControlUIWebViewCoordinator(
-            url: #require(URL(string: "https://gateway.example.com/control")),
+            url: controlURL,
             tls: nil)
 
-        #expect(try coordinator.allowsNavigation(
-            to: #require(URL(string: "https://gateway.example.com/chat?session=main")),
-            isMainFrame: true))
-        #expect(try !coordinator.allowsNavigation(
-            to: #require(URL(string: "https://replacement.example.com/chat")),
-            isMainFrame: true))
-        #expect(try !coordinator.allowsNavigation(
-            to: #require(URL(string: "https://gateway.example.com:8443/chat")),
-            isMainFrame: true))
-        #expect(try coordinator.allowsNavigation(
-            to: #require(URL(string: "https://discussion.example.com/embed/thread/a/b")),
-            isMainFrame: false))
-        #expect(try !coordinator.allowsNavigation(
-            to: #require(URL(string: "https://gateway.example.com/chat")),
-            isMainFrame: nil))
+        #expect(coordinator.allowsNavigation(to: sameOriginURL, isMainFrame: true))
+        #expect(!coordinator.allowsNavigation(to: alternateHostURL, isMainFrame: true))
+        #expect(!coordinator.allowsNavigation(to: alternatePortURL, isMainFrame: true))
+        #expect(coordinator.allowsNavigation(to: embeddedURL, isMainFrame: false))
+        #expect(!coordinator.allowsNavigation(to: unknownFrameURL, isMainFrame: nil))
     }
 
     @Test func `authenticated Control UI TLS authority uses the normalized page authority`() throws {
+        let controlURL = try #require(URL(string: "https://Gateway.Example.com/control"))
         let coordinator = try AuthenticatedControlUIWebViewCoordinator(
-            url: #require(URL(string: "https://Gateway.Example.com/control")),
+            url: controlURL,
             tls: nil)
 
         #expect(coordinator.matchesExpectedAuthority(host: "gateway.example.com", port: 443))
