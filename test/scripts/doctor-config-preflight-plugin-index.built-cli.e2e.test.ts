@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+} from "../../src/gateway/test-helpers.e2e.js";
 import { hasActiveStartupMigrationLease } from "../../src/infra/startup-migration-checkpoint.js";
 import {
   readPersistedInstalledPluginIndexSync,
@@ -12,6 +16,7 @@ import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-met
 import { loadPluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { writeManagedNpmPlugin } from "../../src/plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../src/utils/message-channel.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -119,7 +124,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
     });
   }, 120_000);
 
-  it("recovers a missing installed plugin through the built CLI policy refresh", async () => {
+  it("recovers a missing installed plugin through the built gateway policy refresh", async () => {
     const instance = await createOpenClawTestInstance({
       name: "policy-plugin-index-recovery",
       env: {
@@ -131,6 +136,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
 
     const disablePluginId = "policy-refresh-recovery";
     const recoveredPluginId = "policy-refresh-recovered";
+    const unavailablePluginId = "policy-refresh-unavailable";
     writeManagedNpmPlugin({
       stateDir: instance.stateDir,
       packageName: "@openclaw/policy-refresh-recovery",
@@ -143,35 +149,70 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       pluginId: recoveredPluginId,
       version: "1.0.0",
     });
+    const unavailablePluginDir = writeManagedNpmPlugin({
+      stateDir: instance.stateDir,
+      packageName: "@openclaw/policy-refresh-unavailable",
+      pluginId: unavailablePluginId,
+      version: "1.0.0",
+    });
+
+    // The built gateway derives and persists an index with all three managed
+    // plugins before it serves requests.
+    await instance.startGateway();
     const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8")) as OpenClawConfig;
-    const current = loadPluginMetadataSnapshot({
+    const startup = loadPluginMetadataSnapshot({
       config,
       env: instance.env,
       stateDir: instance.stateDir,
     });
-    for (const pluginId of [disablePluginId, recoveredPluginId]) {
-      expect(current.index.plugins.some((plugin) => plugin.pluginId === pluginId)).toBe(true);
-      expect(current.index.installRecords[pluginId]).toBeDefined();
+    for (const pluginId of [disablePluginId, recoveredPluginId, unavailablePluginId]) {
+      expect(
+        startup.index.plugins.some((plugin) => plugin.pluginId === pluginId),
+        instance.logs(),
+      ).toBe(true);
     }
 
-    // The disable target stays in the persisted plugins list so the policy
-    // refresh stays on the recovery fast path; the recovered plugin is missing
-    // from plugins but keeps a distinct, materializable install record.
+    // While the built gateway runs, delete the unavailable plugin's install
+    // root and drop the recovered plugin from the persisted plugins list while
+    // keeping its durable install record. The disable target stays persisted so
+    // the policy refresh keeps the recovery fast path; the retained unavailable
+    // plugin only survives when recovery (not the pre-existing full-refresh
+    // fallback) rebuilds the index.
+    fs.rmSync(path.resolve(unavailablePluginDir, "..", "..", ".."), {
+      recursive: true,
+      force: true,
+    });
     writePersistedInstalledPluginIndexSync(
       {
-        ...current.index,
-        plugins: current.index.plugins.filter((plugin) => plugin.pluginId !== recoveredPluginId),
+        ...startup.index,
+        plugins: startup.index.plugins.filter((plugin) => plugin.pluginId !== recoveredPluginId),
       },
       { env: instance.env },
     );
     clearPluginMetadataLifecycleCaches();
     closeOpenClawStateDatabaseForTest();
 
-    const result = await instance.cli(["plugins", "disable", disablePluginId], {
-      timeoutMs: 120_000,
+    const client = await connectGatewayClient({
+      url: instance.url,
+      token: instance.gatewayToken,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: `policy-recovery-${instance.name}`,
+      clientVersion: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      role: "operator",
+      scopes: ["operator.admin"],
     });
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout).toContain(`Disabled plugin "${disablePluginId}"`);
+    let setEnabled: Record<string, unknown> | undefined;
+    try {
+      setEnabled = await client.request("plugins.setEnabled", {
+        pluginId: disablePluginId,
+        enabled: false,
+      });
+    } finally {
+      await disconnectGatewayClient(client);
+    }
+    expect(setEnabled?.ok, instance.logs()).toBe(true);
 
     clearPluginMetadataLifecycleCaches();
     closeOpenClawStateDatabaseForTest();
@@ -180,6 +221,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       expect.arrayContaining([
         expect.objectContaining({ pluginId: disablePluginId, enabled: false }),
         expect.objectContaining({ pluginId: recoveredPluginId }),
+        expect.objectContaining({ pluginId: unavailablePluginId }),
       ]),
     );
   }, 120_000);
