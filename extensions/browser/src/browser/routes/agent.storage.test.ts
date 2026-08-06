@@ -114,7 +114,7 @@ describe("browser storage route parsing", () => {
           latitude: "48.2082",
           longitude: 16.3738,
           accuracy: "12.5",
-          origin: " https://example.com ",
+          origin: " https://example.com/path?query=1#hash ",
         }),
       ).toEqual({
         clear: false,
@@ -125,18 +125,17 @@ describe("browser storage route parsing", () => {
       });
     });
 
-    it("allows clearing without coordinates", () => {
+    it("allows clearing without parsing unused geolocation fields", () => {
       expect(
         parseGeolocationOptions({
           clear: true,
-          latitude: "",
-          longitude: "",
+          latitude: "not-used",
+          longitude: "not-used",
           accuracy: "not-used",
-          origin: " https://example.com ",
+          origin: "not a url",
         }),
       ).toEqual({
         clear: true,
-        origin: "https://example.com",
       });
     });
 
@@ -159,6 +158,15 @@ describe("browser storage route parsing", () => {
       expect(() => parseGeolocationOptions({ latitude: 48, longitude: 16, accuracy: -1 })).toThrow(
         "accuracy must be non-negative.",
       );
+    });
+
+    it("rejects malformed and non-http geolocation origins", () => {
+      expect(() =>
+        parseGeolocationOptions({ latitude: 48, longitude: 16, origin: "file:///tmp/page.html" }),
+      ).toThrow("origin must be an http(s) origin");
+      expect(() =>
+        parseGeolocationOptions({ latitude: 48, longitude: 16, origin: "not a url" }),
+      ).toThrow("origin must be an http(s) origin");
     });
   });
 });

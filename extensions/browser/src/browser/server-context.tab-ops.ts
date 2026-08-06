@@ -408,6 +408,8 @@ export function createProfileTabOps({
     }
     const profileState = getProfileState();
     const resolvedUrl = created.url ?? url;
+    // `/json/new` must create a page. Do not tighten the shared list filter:
+    // some CDP list endpoints omit `type` for otherwise usable legacy tabs.
     if (created.type !== "page" || !isSelectableCdpBrowserTarget({ url: resolvedUrl })) {
       throw new Error("Failed to open tab (non-selectable target)");
     }

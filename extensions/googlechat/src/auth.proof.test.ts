@@ -12,7 +12,7 @@
 // proof (#102862): capture the production timeout callback and fire it only
 // after the real loopback server confirms request receipt.
 import { createServer } from "node:http";
-import type { Socket } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
@@ -86,7 +86,7 @@ async function listenOnLoopback(server: ReturnType<typeof createServer>): Promis
         reject(new Error("expected loopback TCP address"));
         return;
       }
-      resolve(address.port);
+      resolve((address as AddressInfo).port);
     });
   });
 }
@@ -202,7 +202,7 @@ describe("googlechat cert-fetch — real guard proof", () => {
     // googleapis.com cert URL keeps the real SSRF hostname allowlist satisfied.
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       return await realFetch(`${server.origin}${CHAT_CERTS_PATH}`, {
-        method: init?.method ?? "GET",
+        method: (init?.method as string | undefined) ?? "GET",
         signal: init?.signal,
       });
     });

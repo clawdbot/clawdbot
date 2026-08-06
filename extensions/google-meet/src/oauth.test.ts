@@ -102,6 +102,26 @@ describe("Google Meet OAuth", () => {
     expect(params.get("refresh_token")).toBe("refresh-token");
   });
 
+  it("rejects oversized OAuth token responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array(300 * 1024), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(
+      refreshGoogleMeetAccessToken({
+        clientId: "client-id",
+        refreshToken: "refresh-token",
+      }),
+    ).rejects.toThrow("Google OAuth token: JSON response exceeds 262144 bytes");
+  });
+
   it("refreshes cached access tokens with Date-invalid expiries", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(
