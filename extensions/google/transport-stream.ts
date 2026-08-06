@@ -1365,6 +1365,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 execute: openSse,
               })
             : await openSse(apiKey);
+        // Reaching this point means the SSE stream opened successfully; error statuses
+        // throw before it.
+        await options?.onResponse?.({ status: 200, headers: {} }, model);
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
         let sawTerminalReason = false;
