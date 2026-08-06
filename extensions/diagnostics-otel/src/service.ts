@@ -5,6 +5,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import type { LoggerProvider } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
+import { NodeSDK } from "@opentelemetry/sdk-node";
 import {
   BatchSpanProcessor,
   ParentBasedSampler,
@@ -47,13 +48,13 @@ import {
 } from "./service-exporter.js";
 import { createDiagnosticsLogExporter } from "./service-logs.js";
 import { createDiagnosticsMetrics } from "./service-metrics.js";
+import { registerDisabledSdkRuntime } from "./service-propagation.js";
 import { createDiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import { createHarnessRecorders } from "./service-recorders-harness.js";
 import { createModelRecorders } from "./service-recorders-model.js";
 import { createOperationsRecorders } from "./service-recorders-operations.js";
 import { createToolAndSystemRecorders } from "./service-recorders-tools.js";
 import { createUsageRecorders } from "./service-recorders-usage.js";
-import { OpenClawOtelSdk } from "./service-sdk.js";
 import { createDiagnosticsTraceRuntime } from "./service-traces.js";
 import type { OtelLogsExporter, TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
@@ -70,6 +71,20 @@ const OTEL_SIGNAL_PROTOCOL_ENV = {
   metrics: OTEL_EXPORTER_OTLP_METRICS_PROTOCOL_ENV,
   logs: OTEL_EXPORTER_OTLP_LOGS_PROTOCOL_ENV,
 } satisfies Record<TelemetryExporterDiagnosticEvent["signal"], string>;
+
+function isOtelSdkDisabled(logger: { warn(message: string): void }): boolean {
+  const value = process.env.OTEL_SDK_DISABLED?.trim().toLowerCase();
+  if (!value || value === "false") {
+    return false;
+  }
+  if (value === "true") {
+    return true;
+  }
+  logger.warn(
+    "diagnostics-otel: invalid OTEL_SDK_DISABLED value; expected true or false, using false",
+  );
+  return false;
+}
 
 function readNonblankOtelEnv(name: string): string | undefined {
   const value = process.env[name];
@@ -129,26 +144,13 @@ function diagnosticTraceContextFromSpanContext(spanContext: SpanContext): Diagno
   };
 }
 
-function isOtelSdkDisabled(logger: { warn(message: string): void }): boolean {
-  const value = process.env.OTEL_SDK_DISABLED?.trim().toLowerCase();
-  if (!value || value === "false") {
-    return false;
-  }
-  if (value === "true") {
-    return true;
-  }
-  logger.warn(
-    "diagnostics-otel: invalid OTEL_SDK_DISABLED value; expected true or false, using false",
-  );
-  return false;
-}
-
 export function createDiagnosticsOtelService(): OpenClawPluginService {
-  let sdk: OpenClawOtelSdk | null = null;
+  let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
   let unsubscribe: (() => void) | null = null;
   let unregisterTracePropagationBridge: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
+  let unregisterDisabledSdkRuntime: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
   let retireExporterRoutes: ((preserveFailures?: boolean) => void) | null = null;
   let preserveExporterRoutesOnNextStop = false;
@@ -159,6 +161,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
+    const currentUnregisterDisabledSdkRuntime = unregisterDisabledSdkRuntime;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
     const currentRetireExporterRoutes = retireExporterRoutes;
 
@@ -167,6 +170,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     logProvider = null;
     sdk = null;
     stopActiveTrustedSpans = null;
+    unregisterDisabledSdkRuntime = null;
     unregisterUnhandledRejectionHandler = null;
     retireExporterRoutes = options?.preserveExporterRoutes ? currentRetireExporterRoutes : null;
 
@@ -174,14 +178,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       (
         await Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.())))
       ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-    // Keep context active while providers flush; BatchSpanProcessor suppresses its own spans there.
+    // Preserve cleanup -> provider flush -> handler removal while attempting every step per phase.
     const failures = await settle(
       currentUnregisterTracePropagationBridge,
       currentUnsubscribe,
       currentStopActiveTrustedSpans,
-    );
-    failures.push(
-      ...(await settle(currentSdk ? () => currentSdk.unregisterSignalGlobals() : null)),
+      currentUnregisterDisabledSdkRuntime,
     );
     const providerFailures = await settle(
       currentLogProvider ? () => currentLogProvider.shutdown() : null,
@@ -196,9 +198,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       retireExporterRoutes = currentRetireExporterRoutes;
     }
     failures.push(...(await settle(currentUnregisterUnhandledRejectionHandler)));
-    failures.push(
-      ...(await settle(currentSdk ? () => currentSdk.unregisterContextGlobals() : null)),
-    );
 
     if (failures.length === 1) {
       throw failures[0];
@@ -223,13 +222,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      const sdkPreloaded = hasPreloadedOtelSdk();
       const sdkDisabled = isOtelSdkDisabled(ctx.logger);
-      if (sdkDisabled) {
-        if (!sdkPreloaded) {
-          sdk = new OpenClawOtelSdk();
-          sdk.start();
-        }
+      const sdkPreloaded = hasPreloadedOtelSdk();
+      if (!sdkPreloaded && sdkDisabled) {
+        // sdk-node returns before installing context or propagation when disabled.
+        // Preserve both while admitting no OpenClaw telemetry lifecycle.
+        unregisterDisabledSdkRuntime = registerDisabledSdkRuntime();
         return;
       }
       const exporterRoutes = new Map<string, ExporterRouteState>();
@@ -272,7 +270,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       });
       const tracesEnabled = otel.traces !== false;
       const metricsEnabled = otel.metrics !== false;
-      const logsEnabled = otel.logs === true;
+      const logsEnabled = otel.logs === true && !sdkDisabled;
       const logsExporter: OtelLogsExporter = otel.logsExporter ?? "otlp";
       const logsToOtlpRequested =
         logsEnabled && (logsExporter === "otlp" || logsExporter === "both");
@@ -403,16 +401,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               { emitExporterEvent, signal: "traces" },
             )
           : undefined;
-        const spanProcessors = traceExporter
-          ? [
-              new BatchSpanProcessor(
-                traceExporter,
-                typeof otel.flushIntervalMs === "number"
-                  ? { scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs) }
-                  : undefined,
-              ),
-            ]
-          : [];
+        const spanProcessors =
+          traceExporter && typeof otel.flushIntervalMs === "number"
+            ? [
+                new BatchSpanProcessor(traceExporter, {
+                  scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs),
+                }),
+              ]
+            : undefined;
 
         const metricExporter = metricsToOtlp
           ? observeOtlpExporterHealth(
@@ -434,10 +430,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             })
           : undefined;
 
-        sdk = new OpenClawOtelSdk({
+        sdk = new NodeSDK({
           resource,
-          spanProcessors,
+          // Empty arrays are required in mixed-signal cases too; omission lets NodeSDK
+          // restore a protocol-rejected exporter from ambient OTEL_* settings.
+          ...(spanProcessors
+            ? { spanProcessors }
+            : traceExporter
+              ? { traceExporter }
+              : { spanProcessors: [] }),
           metricReaders: metricReader ? [metricReader] : [],
+          logRecordProcessors: [],
           ...(sampleRate !== undefined
             ? {
                 sampler: new ParentBasedSampler({

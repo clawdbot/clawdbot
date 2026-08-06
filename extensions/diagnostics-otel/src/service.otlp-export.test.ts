@@ -6,7 +6,7 @@
 // a parent lookup keyed by one id space and queried with the other.
 //
 // Trace cases use the OPENCLAW_OTEL_PRELOADED seam to retain this file's tracer provider.
-// Collector-boundary cases start the real local SDK, so teardown restores every global SDK
+// Collector-boundary cases start the real NodeSDK, so teardown restores every global SDK
 // registration; otherwise a shutdown provider would poison later real-SDK cases.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -47,7 +47,6 @@ import {
 const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
 const ENDPOINT_ENV_KEYS = [
   "OTEL_SDK_DISABLED",
-  "OTEL_PROPAGATORS",
   "OTEL_TRACES_EXPORTER",
   "OTEL_METRICS_EXPORTER",
   "OTEL_LOGS_EXPORTER",
@@ -938,7 +937,6 @@ test.each([
 ] as const)(
   "does not auto-create an undeclared $disabledSignal OTLP exporter",
   async ({ disabledSignal, envKey, flags }) => {
-    releasePreloadedOtelGlobals();
     process.env[PRELOAD_ENV] = "0";
     const credential = `qa-otel-${disabledSignal.replaceAll(" ", "-")}-disabled-password`;
     process.env[envKey] = `https://operator:${credential}@[`;
