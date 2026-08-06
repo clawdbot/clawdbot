@@ -136,6 +136,20 @@ enum GatewayDiscoveryPreferences {
             remoteTarget: state.remoteTarget)
     }
 
+    @MainActor
+    static func retirePreferredRouteBeforeLeavingRemote(state: AppState) {
+        // Clear automatic Direct authority while its route binding is still observable.
+        // Clearing the receipt first would make a later discovery choice look manual.
+        if self.currentRouteIsDiscoveryOwned(state: state),
+           state.remoteTransport == .direct
+        {
+            state.remoteTransport = .ssh
+            state.remoteUrl = GatewayDiscoverySelectionSupport.sshTunnelGatewayUrl(
+                current: state.remoteUrl)
+        }
+        self.setPreferredStableID(nil)
+    }
+
     static func setPreferredStableID(_ stableID: String?, routeBinding: String?) {
         self.setPreferredStableID(stableID)
         guard self.preferredStableID() != nil,

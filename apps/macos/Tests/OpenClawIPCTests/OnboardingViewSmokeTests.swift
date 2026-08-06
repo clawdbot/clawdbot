@@ -499,6 +499,48 @@ struct OnboardingViewSmokeTests {
             defaults: defaults))
     }
 
+    @Test func `leaving remote retires discovered direct transport before another selection`() {
+        let previousGatewayPreference = captureOnboardingGatewayPreference()
+        defer { restoreOnboardingGatewayPreference(previousGatewayPreference) }
+        let destinations: [AppState.ConnectionMode] = [.local, .unconfigured]
+
+        for destination in destinations {
+            let state = AppState(preview: true)
+            state.connectionMode = .remote
+            state.remoteTransport = .direct
+            state.remoteUrl = "wss://trusted-gateway.example.ts.net"
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "tailscale-serve|trusted-gateway.example.ts.net",
+                routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: state.connectionMode,
+                    remoteTransport: state.remoteTransport,
+                    remoteURL: state.remoteUrl,
+                    remoteTarget: state.remoteTarget))
+            let view = OnboardingView(state: state)
+
+            if destination == .local {
+                view.selectLocalGateway()
+            } else {
+                view.selectUnconfiguredGateway()
+            }
+            view.selectRemoteGateway(GatewayDiscoveryModel.DiscoveredGateway(
+                displayName: "Nearby gateway",
+                serviceHost: "nearby-gateway.local",
+                servicePort: 18789,
+                lanHost: nil,
+                tailnetDns: nil,
+                sshPort: 22,
+                gatewayPort: 18789,
+                gatewayDirectReachable: true,
+                stableID: "bonjour|nearby-gateway",
+                debugID: "nearby-gateway",
+                isLocal: false))
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
+        }
+    }
+
     @Test func `same local selection preserves pending gateway setup state`() throws {
         let (defaults, suiteName) = try makeOnboardingResumeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }

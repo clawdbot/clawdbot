@@ -7,23 +7,23 @@ extension OnboardingView {
         if state.connectionMode != .local {
             resetGatewayBoundAIState()
         }
+        GatewayDiscoveryPreferences.retirePreferredRouteBeforeLeavingRemote(state: state)
         defaultsToLocalGateway = false
         state.connectionMode = .local
         preferredGatewayID = nil
         showAdvancedConnection = false
         showRemoteChoices = false
-        GatewayDiscoveryPreferences.setPreferredStableID(nil)
         probeConfiguredGatewayForDashboard()
     }
 
     func selectUnconfiguredGateway() {
         resetGatewayBoundAIState()
+        GatewayDiscoveryPreferences.retirePreferredRouteBeforeLeavingRemote(state: state)
         defaultsToLocalGateway = false
         state.connectionMode = .unconfigured
         preferredGatewayID = nil
         showAdvancedConnection = false
         showRemoteChoices = false
-        GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
