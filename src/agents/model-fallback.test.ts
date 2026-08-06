@@ -821,6 +821,53 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("releases a half-open recovery probe when the attempt throws", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const cfg = makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]);
+    const overloaded = new FailoverError("provider overloaded", {
+      provider: "openai",
+      model: "gpt-5.5",
+      reason: "overloaded",
+    });
+    const degradedRun = vi.fn(async (provider: string) => {
+      if (provider === "openai") {
+        throw overloaded;
+      }
+      return "fallback-ok";
+    });
+
+    try {
+      for (let index = 0; index < modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
+        await runWithModelFallback({ cfg, provider: "openai", model: "gpt-5.5", run: degradedRun });
+      }
+      now += modelCircuitInternals.INITIAL_OPEN_MS + 1;
+      const terminalError = makeCommandLaneTaskTimeoutError("main", 1_000);
+      const terminalRun = vi.fn(async () => {
+        throw terminalError;
+      });
+
+      await expect(
+        runWithModelFallback({ cfg, provider: "openai", model: "gpt-5.5", run: terminalRun }),
+      ).rejects.toBe(terminalError);
+
+      const recoveryRun = vi.fn(async (provider: string) =>
+        provider === "openai" ? "primary-recovered" : "fallback-ok",
+      );
+      const recovered = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run: recoveryRun,
+      });
+
+      expect(recovered.result).toBe("primary-recovered");
+      expect(recoveryRun).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("keeps trying the only candidate when no fallback can serve", async () => {
     const cfg = makeDiagnosticFallbackConfig([]);
     const failure = new FailoverError("provider overloaded", {

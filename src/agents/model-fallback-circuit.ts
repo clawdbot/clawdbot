@@ -59,11 +59,11 @@ function pruneCircuitStates(now: number): void {
   }
 }
 
-function findOldestStateKey(now: number, closedOnly: boolean): string | undefined {
+function findOldestInactiveStateKey(now: number): string | undefined {
   let oldestKey: string | undefined;
   let oldestTouchedAt = Number.POSITIVE_INFINITY;
   for (const [key, state] of modelCircuitStates) {
-    if (closedOnly && (state.openUntil > now || state.halfOpenInFlight)) {
+    if (state.openUntil > now || state.halfOpenInFlight) {
       continue;
     }
     if (state.lastTouchedAt < oldestTouchedAt) {
@@ -74,18 +74,15 @@ function findOldestStateKey(now: number, closedOnly: boolean): string | undefine
   return oldestKey;
 }
 
-function evictOldestState(now: number): void {
-  const key = findOldestStateKey(now, true) ?? findOldestStateKey(now, false);
-  if (key) {
-    modelCircuitStates.delete(key);
-  }
-}
-
-function reserveStateCapacity(key: string, now: number): void {
+function reserveStateCapacity(key: string, now: number): boolean {
   pruneCircuitStates(now);
-  if (!modelCircuitStates.has(key) && modelCircuitStates.size >= MAX_TRACKED_ROUTES) {
-    evictOldestState(now);
+  if (modelCircuitStates.has(key) || modelCircuitStates.size < MAX_TRACKED_ROUTES) {
+    return true;
   }
+  // Active circuits own their recovery lease. Dropping one here could admit a
+  // second concurrent probe, so leave the new route untracked when all are active.
+  const evictableKey = findOldestInactiveStateKey(now);
+  return evictableKey ? modelCircuitStates.delete(evictableKey) : false;
 }
 
 function formatOpenError(state: ModelCircuitState, now: number): string {
@@ -176,7 +173,9 @@ function recordModelCircuitFailure(
     return clearIneligibleHalfOpen(attempt);
   }
 
-  reserveStateCapacity(attempt.key, now);
+  if (!reserveStateCapacity(attempt.key, now)) {
+    return null;
+  }
   const state = modelCircuitStates.get(attempt.key) ?? newCircuitState(now, reason);
   updateFailureState(state, reason, now);
   if (attempt.wasHalfOpen || state.failures.length >= FAILURE_THRESHOLD) {

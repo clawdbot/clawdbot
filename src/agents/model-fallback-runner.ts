@@ -470,6 +470,8 @@ async function runWithModelFallbackInternal<T>(
       modelCircuitAttempt = circuitGate.attempt;
     }
 
+    // Terminal attempt paths can reject before returning an outcome. Release a
+    // half-open lease so the next turn can perform the recovery probe.
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -490,6 +492,9 @@ async function runWithModelFallbackInternal<T>(
       ...attemptContext,
       attribution: runAttribution,
       abortSignal: params.abortSignal,
+    }).catch((err: unknown) => {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
+      throw err;
     });
     if ("success" in attemptRun) {
       recordCandidateCircuitSuccess({ attempt: modelCircuitAttempt, ...candidateRef });

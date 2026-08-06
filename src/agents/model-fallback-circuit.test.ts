@@ -22,10 +22,23 @@ function requireAttempt(now: number) {
   return gate.attempt;
 }
 
-function recordFailures(count: number, startAt = 1_000): void {
+function recordRouteFailures(
+  route: { provider: string; model: string; agentDir?: string },
+  count: number,
+  startAt: number,
+): void {
   for (let index = 0; index < count; index += 1) {
-    recordModelCircuitFailure(requireAttempt(startAt + index), "overloaded", startAt + index);
+    const now = startAt + index;
+    const gate = acquireModelCircuit({ ...route, now });
+    expect(gate.type).toBe("attempt");
+    if (gate.type === "attempt") {
+      recordModelCircuitFailure(gate.attempt, "overloaded", now);
+    }
   }
+}
+
+function recordFailures(count: number, startAt = 1_000): void {
+  recordRouteFailures(ROUTE, count, startAt);
 }
 
 afterEach(() => {
@@ -119,5 +132,34 @@ describe("model fallback circuit", () => {
     expect(modelCircuitInternals.modelCircuitStates.size).toBe(
       modelCircuitInternals.MAX_TRACKED_ROUTES,
     );
+  });
+
+  it("does not evict an in-flight recovery probe at capacity", () => {
+    recordFailures(modelCircuitInternals.FAILURE_THRESHOLD, 1_000);
+    const probeAt = 1_000 + modelCircuitInternals.INITIAL_OPEN_MS + 10;
+    expect(requireAttempt(probeAt).wasHalfOpen).toBe(true);
+    for (let index = 1; index < modelCircuitInternals.MAX_TRACKED_ROUTES; index += 1) {
+      recordRouteFailures(
+        { provider: "provider", model: `model-${index}` },
+        modelCircuitInternals.FAILURE_THRESHOLD,
+        probeAt + 10,
+      );
+    }
+
+    const overflowAt = probeAt + 20;
+    const newRoute = acquireModelCircuit({
+      provider: "provider",
+      model: "overflow",
+      now: overflowAt,
+    });
+    expect(newRoute.type).toBe("attempt");
+    if (newRoute.type === "attempt") {
+      recordModelCircuitFailure(newRoute.attempt, "overloaded", overflowAt);
+    }
+
+    expect(modelCircuitInternals.modelCircuitStates.size).toBe(
+      modelCircuitInternals.MAX_TRACKED_ROUTES,
+    );
+    expect(acquireAt(overflowAt + 1).type).toBe("open");
   });
 });
