@@ -440,11 +440,37 @@ suite.define(() => {
 
         await gateway.setMethodResponse("openclaw.chat", {
           sessionId: "e2e-rich-wizard",
-          reply: "Setup complete.",
+          reply: "Confirm setup.",
           action: "none",
+          wizardInputPending: true,
+          step: {
+            id: "confirm",
+            type: "confirm",
+            message: "Connect Twitch now?",
+          },
         });
         await secretInput.fill("fake-client-secret");
         await page.getByRole("button", { name: "Submit" }).click();
+        const noButton = page.getByRole("button", { name: "No" });
+        const yesButton = page.getByRole("button", { name: "Yes" });
+        await noButton.waitFor();
+
+        await gateway.deferNext("openclaw.chat");
+        await yesButton.click();
+        await expect.poll(() => noButton.isDisabled()).toBe(true);
+        await expect.poll(() => yesButton.isDisabled()).toBe(true);
+        for (const button of [noButton, yesButton]) {
+          const restingStyle = await button.evaluate(readInteractionStyle);
+          await button.hover();
+          expect(await button.evaluate(readInteractionStyle)).toEqual(restingStyle);
+          expect(restingStyle.cursor).toBe("not-allowed");
+        }
+
+        await gateway.resolveDeferred("openclaw.chat", {
+          sessionId: "e2e-rich-wizard",
+          reply: "Setup complete.",
+          action: "none",
+        });
         await page.getByText("Setup complete.").waitFor();
 
         const requests = await gateway.getRequests("openclaw.chat");
@@ -458,6 +484,9 @@ suite.define(() => {
           }),
           expect.objectContaining({
             wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
+          }),
+          expect.objectContaining({
+            wizardAnswer: { stepId: "confirm", value: true },
           }),
         ]);
         expect(

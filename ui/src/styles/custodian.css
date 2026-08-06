@@ -293,6 +293,12 @@ openclaw-custodian-page {
   cursor: pointer;
 }
 
+.custodian__wizard-step .btn:disabled:hover {
+  border-color: var(--border);
+  background: var(--bg-elevated);
+  box-shadow: none;
+}
+
 .custodian__wizard-step .btn.primary:disabled:hover {
   border-color: var(--accent);
   background: var(--primary);
