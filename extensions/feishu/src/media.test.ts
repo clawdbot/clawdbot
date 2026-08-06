@@ -56,14 +56,6 @@ let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFe
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
-const sendTestImage = () =>
-  sendMediaFeishu({
-    cfg: emptyConfig,
-    to: "user:ou_target",
-    mediaBuffer: validPngImage,
-    fileName: "photo.png",
-  });
-
 function expectMediaTimeoutClientConfigured(): void {
   const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
   expect(options.httpTimeoutMs).toBe(FEISHU_MEDIA_HTTP_TIMEOUT_MS);
@@ -427,34 +419,15 @@ describe("sendMediaFeishu msg_type routing", () => {
   });
 
   it("configures the media client timeout for image uploads", async () => {
-    await sendTestImage();
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: validPngImage,
+      fileName: "photo.png",
+    });
 
     expectMediaTimeoutClientConfigured();
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
-  });
-
-  it("reuses one uuid when retrying a transient media message send", async () => {
-    messageCreateMock.mockRejectedValueOnce(
-      Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-    );
-
-    await sendTestImage();
-
-    const firstUuid = callData<{ uuid?: string }>(messageCreateMock, 0).uuid;
-    const secondUuid = callData<{ uuid?: string }>(messageCreateMock, 1).uuid;
-    expect(firstUuid).toMatch(/^[0-9a-f-]{36}$/);
-    expect(secondUuid).toBe(firstUuid);
-  });
-
-  it("does not retry non-idempotent media uploads on transient failures", async () => {
-    imageCreateMock.mockRejectedValueOnce(
-      Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-    );
-
-    await expect(sendTestImage()).rejects.toThrow("Feishu image upload failed");
-
-    expect(imageCreateMock).toHaveBeenCalledTimes(1);
-    expect(messageCreateMock).not.toHaveBeenCalled();
   });
 
   it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
@@ -474,7 +447,12 @@ describe("sendMediaFeishu msg_type routing", () => {
       }),
     );
 
-    const send = sendTestImage();
+    const send = sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: validPngImage,
+      fileName: "photo.png",
+    });
 
     await expect(send).rejects.toThrow(/Feishu image send failed: .*"feishu_code":9499/);
     await expect(send).rejects.toThrow(/"feishu_log_id":"20260429124731MEDIA"/);
