@@ -19,7 +19,10 @@ registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector dynamic tool projection", () => {
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
-    const projector = await createProjector();
+    const projector = await createProjector(undefined, {
+      resolveDynamicToolResultContentSource: (toolName) =>
+        toolName === "browser" ? "network" : undefined,
+    });
 
     projector.recordDynamicToolCall({
       callId: "call-browser-1",
@@ -56,6 +59,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(toolResultMessage.toolCallId).toBe("call-browser-1");
     expect(toolResultMessage.toolName).toBe("browser");
     expect(toolResultMessage.isError).toBe(false);
+    expect(toolResultMessage["__openclaw"]).toMatchObject({ resultContentSource: "network" });
     const toolResultContent = requireRecord(
       requireArray(toolResultMessage.content, "tool result content")[0],
       "tool result content item",
@@ -66,6 +70,11 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(toolResultContent.toolName).toBe("browser");
     expect(toolResultContent.toolCallId).toBe("call-browser-1");
     expect(toolResultContent.content).toBe("opened");
+    expect(
+      requireRecord(result.messagesSnapshot[3], "final assistant")["__openclaw"],
+    ).toMatchObject({
+      turnTainted: true,
+    });
   });
 
   it("retains MCP App preview details in mirrored dynamic tool results", async () => {
@@ -141,7 +150,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     expect(toolResultMessage.details).toEqual(details);
   });
 
-  it("does not mirror Codex-native web searches into transcript snapshots", async () => {
+  it("marks native web-search results and subsequent assistant output as tainted", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -151,28 +160,24 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
           id: "search-observed",
           status: "completed",
           durationMs: 5,
+          query: "hostile result",
         },
       }),
     );
+    await projector.handleNotification(agentMessageDelta("summary"));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-
+    const toolResult = requireRecord(result.messagesSnapshot[2], "native web-search result");
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolName: "web_search",
+      __openclaw: { resultContentSource: "network" },
+    });
     expect(
-      result.messagesSnapshot.some((message) => {
-        const record = message as unknown as Record<string, unknown>;
-        if (record.role === "toolResult") {
-          return true;
-        }
-        const content = Array.isArray(record.content) ? record.content : [];
-        return content.some((entry) => {
-          return (
-            typeof entry === "object" &&
-            entry !== null &&
-            (entry as Record<string, unknown>).type === "toolCall"
-          );
-        });
-      }),
-    ).toBe(false);
+      requireRecord(result.messagesSnapshot[3], "final assistant")["__openclaw"],
+    ).toMatchObject({
+      turnTainted: true,
+    });
   });
 
   it("carries async-started dynamic tool metadata into attempt results", async () => {

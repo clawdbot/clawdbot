@@ -6,6 +6,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActiveChannelPluginRuntimeShape,
+  ActivePluginChannelRegistry,
   ActivePluginChannelRegistration,
 } from "../../plugins/channel-registry-state.types.js";
 import {
@@ -55,19 +56,19 @@ function coerceLoadedChannelPlugin(
   return plugin as LoadedChannelPlugin;
 }
 
-function resolveChannelPlugins(): ChannelPluginView {
+function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelPluginView {
   const snapshot = getActivePluginChannelRegistrySnapshotFromState();
-  const cached = cachedChannelPluginView;
-  if (cached?.snapshot === snapshot) {
-    return cached;
+  const currentRegistry = registry === undefined || registry === snapshot.registry;
+  if (currentRegistry && cachedChannelPluginView?.snapshot === snapshot) {
+    return cachedChannelPluginView;
   }
-  const registry = snapshot.registry;
+  const selectedRegistry = registry ?? snapshot.registry;
 
   const seen = new Set<string>();
   const byId = new Map<string, LoadedChannelPlugin>();
   const entriesById = new Map<string, LoadedChannelPluginEntry>();
-  if (registry && Array.isArray(registry.channels)) {
-    for (const entry of registry.channels) {
+  if (selectedRegistry && Array.isArray(selectedRegistry.channels)) {
+    for (const entry of selectedRegistry.channels) {
       const plugin = coerceLoadedChannelPlugin(entry?.plugin);
       if (!plugin) {
         continue;
@@ -97,15 +98,17 @@ function resolveChannelPlugins(): ChannelPluginView {
     return a.id.localeCompare(b.id);
   });
 
-  // The runtime owns snapshot invalidation across active and pinned registry
-  // changes. Share one derived view until that lifecycle snapshot changes.
-  cachedChannelPluginView = {
-    snapshot,
+  const view = {
+    snapshot: currentRegistry ? snapshot : { registry: selectedRegistry, version: 0 },
     sorted,
     byId,
     entriesById,
   };
-  return cachedChannelPluginView;
+  if (currentRegistry) {
+    // Runtime snapshots invalidate the single process-root registry view.
+    cachedChannelPluginView = view;
+  }
+  return view;
 }
 
 /**
@@ -113,6 +116,13 @@ function resolveChannelPlugins(): ChannelPluginView {
  */
 export function listLoadedChannelPlugins(): LoadedChannelPlugin[] {
   return resolveChannelPlugins().sorted.slice();
+}
+
+/** Lists one exact registry without substituting a pinned or active registry. */
+export function listLoadedChannelPluginsForRegistry(
+  registry: ActivePluginChannelRegistry,
+): ChannelPlugin[] {
+  return resolveChannelPlugins(registry).sorted.slice() as ChannelPlugin[];
 }
 
 /**

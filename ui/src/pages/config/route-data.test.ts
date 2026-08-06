@@ -5,10 +5,14 @@ describe("config route data", () => {
   it("normalizes the selected section and decodes the target block", () => {
     expect(
       configRouteData({
+        pathname: "/settings/appearance",
         search: "?section=%20browser%20",
         hash: "#config-section-browser%2Fprofiles",
       }),
     ).toEqual({
+      pathname: "/settings/appearance",
+      search: "?section=+browser+",
+      hash: "#config-section-browser%2Fprofiles",
       section: "browser",
       advanced: false,
       tab: null,
@@ -18,7 +22,10 @@ describe("config route data", () => {
 
   it("ignores malformed target hashes", () => {
     expect(configTargetIdFromHash("#%")).toBeNull();
-    expect(configRouteData({ search: "", hash: "#%" })).toEqual({
+    expect(configRouteData({ pathname: "/settings/appearance", search: "", hash: "#%" })).toEqual({
+      pathname: "/settings/appearance",
+      search: "",
+      hash: "#%",
       section: null,
       advanced: false,
       tab: null,
@@ -27,7 +34,16 @@ describe("config route data", () => {
   });
 
   it("preserves advanced search navigation intent", () => {
-    expect(configRouteData({ search: "?section=gateway&advanced=1", hash: "" })).toEqual({
+    expect(
+      configRouteData({
+        pathname: "/settings/advanced",
+        search: "?section=gateway&advanced=1",
+        hash: "",
+      }),
+    ).toEqual({
+      pathname: "/settings/advanced",
+      search: "?section=gateway&advanced=1",
+      hash: "",
       section: "gateway",
       advanced: true,
       tab: null,
@@ -36,11 +52,34 @@ describe("config route data", () => {
   });
 
   it("carries the hub tab a settings-search destination asks for", () => {
-    expect(configRouteData({ search: "?section=memory&tab=search", hash: "" })).toEqual({
+    expect(
+      configRouteData({
+        pathname: "/settings/memory",
+        search: "?section=memory&tab=search",
+        hash: "",
+      }),
+    ).toEqual({
+      pathname: "/settings/memory",
+      search: "?section=memory&tab=search",
+      hash: "",
       section: "memory",
       advanced: false,
       tab: "search",
       targetBlockId: null,
+    });
+  });
+
+  it("recovers a dynamic Memory pathname from the router's exact-match location", () => {
+    expect(
+      configRouteData({
+        pathname: "/settings/memory",
+        search: "?__openclawMemoryPath=%2Fsettings%2Fmemory%2Fdreams&agent=main",
+        hash: "",
+      }),
+    ).toMatchObject({
+      pathname: "/settings/memory/dreams",
+      search: "?agent=main",
+      tab: null,
     });
   });
 });

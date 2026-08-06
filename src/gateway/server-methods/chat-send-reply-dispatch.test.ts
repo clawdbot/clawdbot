@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   buildTranscriptReplyText,
   createChatSendReplyDispatch,
@@ -78,13 +79,15 @@ describe("createChatSendReplyDispatch", () => {
       { beforeAgentRunBlocked: true },
     );
 
-    dispatch.dispatcher.sendBlockReply(blockedPayload);
-    dispatch.dispatcher.sendToolResult({
+    const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+    dispatcher.sendBlockReply(blockedPayload);
+    dispatcher.sendToolResult({
       text: "tool summary",
       mediaUrl: "https://example.test/audio.mp3",
     });
-    dispatch.dispatcher.sendFinalReply({ text: "done" });
-    await dispatch.dispatcher.waitForIdle();
+    dispatcher.sendFinalReply({ text: "done" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
 
     expect(markBlocked).toHaveBeenCalledOnce();
     expect(dispatch.deliveredReplies).toEqual([
@@ -98,5 +101,91 @@ describe("createChatSendReplyDispatch", () => {
       },
       { payload: { text: "done" }, kind: "final" },
     ]);
+  });
+
+  it("keeps every capture and media side effect behind beforeDeliver cancellation", async () => {
+    const markBlocked = vi.fn();
+    const dispatch = createChatSendReplyDispatch({
+      accountId: undefined,
+      isAgentRunStarted: () => true,
+      logGateway: { warn: vi.fn() } as never,
+      session: {
+        agentId: "main",
+        backingSessionId: undefined,
+        cfg: {},
+        clientRunId: "run-cancel",
+        sessionKey: "agent:main:main",
+        sessionLoadOptions: undefined,
+      },
+      userTurnRecorder: { markBlocked },
+    });
+    const dispatcher = createReplyDispatcher({
+      ...dispatch.dispatcherOptions,
+      beforeDeliver: async () => null,
+    });
+
+    dispatcher.sendBlockReply(
+      setReplyPayloadMetadata({ text: "blocked" }, { beforeAgentRunBlocked: true }),
+    );
+    dispatcher.sendToolResult({ mediaUrl: "https://example.test/tool.png" });
+    dispatcher.sendFinalReply({ mediaUrl: "https://example.test/final.png" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(dispatch.deliveredReplies).toEqual([]);
+    expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
+    expect(markBlocked).not.toHaveBeenCalled();
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 1, block: 1, final: 1 });
+  });
+
+  it("finalizes media inside the admission without masking dispatch errors", async () => {
+    const dispatchError = new Error("dispatch failed");
+    const warn = vi.fn();
+    let insideAdmission = false;
+    let finalizedInsideAdmission = false;
+    const dispatch = createChatSendReplyDispatch({
+      accountId: undefined,
+      isAgentRunStarted: () => {
+        finalizedInsideAdmission = insideAdmission;
+        throw new Error("finalizer failed");
+      },
+      logGateway: { warn } as never,
+      session: {
+        agentId: "main",
+        backingSessionId: undefined,
+        cfg: {},
+        clientRunId: "run-finalize",
+        sessionKey: "agent:main:main",
+        sessionLoadOptions: undefined,
+      },
+      userTurnRecorder: { markBlocked: vi.fn() },
+    });
+    const dispatcher = createReplyDispatcher(dispatch.dispatcherOptions);
+    dispatcher.sendFinalReply({ mediaUrl: "https://example.test/final.png" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    await expect(
+      dispatch.runAgentMediaTranscript(
+        {
+          run: async (operation) => {
+            insideAdmission = true;
+            try {
+              return await operation();
+            } finally {
+              insideAdmission = false;
+            }
+          },
+        },
+        async () => {
+          throw dispatchError;
+        },
+      ),
+    ).rejects.toBe(dispatchError);
+
+    expect(finalizedInsideAdmission).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("webchat media finalization failed: Error: finalizer failed"),
+    );
   });
 });

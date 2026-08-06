@@ -37,7 +37,8 @@ describe("sync-labels", () => {
 
     const ghCalls = execFileSyncMock.mock.calls.filter(([command]) => command === "gh");
     expect(ghCalls.length).toBeGreaterThan(1);
-    for (const [, , options] of ghCalls) {
+    for (const call of ghCalls) {
+      const options = call[2];
       expect(options).toMatchObject({
         timeout: 120_000,
         killSignal: "SIGKILL",

@@ -49,7 +49,9 @@ export function isDirectScriptExecution(
 export function ensurePlaywrightChromium(
   options?: ChromiumInstallOptions & {
     ensureFfmpeg?: boolean;
+    requirePlaywrightChromium?: boolean;
     systemExecutablePath?: string;
   },
 ): number;
 export function shouldEnsureFfmpegFromArgv(argv?: readonly string[]): boolean;
+export function shouldRequirePlaywrightChromiumFromArgv(argv?: readonly string[]): boolean;

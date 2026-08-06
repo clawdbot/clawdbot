@@ -58,12 +58,31 @@ export async function requireCatalogEligibleThread(
   control: CodexSessionCatalogControl,
   threadId: string,
 ): Promise<CodexSessionCatalogSession> {
+  // Mutating actions use a fresh pinned control and authoritative thread/read. Passive positive hits
+  // may use the cadence-safe page memo; only a miss must bypass it before rejecting a new thread.
+  const cached = await findCatalogEligibleThread(control, threadId, false);
+  if (cached) {
+    return cached;
+  }
+  const refreshed = await findCatalogEligibleThread(control, threadId, true);
+  if (refreshed) {
+    return refreshed;
+  }
+  throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
+}
+
+async function findCatalogEligibleThread(
+  control: CodexSessionCatalogControl,
+  threadId: string,
+  forceRefresh: boolean,
+): Promise<CodexSessionCatalogSession | undefined> {
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
     const page = await control.listPage({
       limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
       ...(cursor ? { cursor } : {}),
+      ...(forceRefresh ? { forceRefresh: true } : {}),
     });
     const candidate = page.sessions.find((session) => session.threadId === threadId);
     if (candidate) {
@@ -74,7 +93,7 @@ export async function requireCatalogEligibleThread(
     }
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
-      throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
+      return undefined;
     }
     if (seenCursors.has(nextCursor)) {
       throw new CatalogParamsError("Codex session eligibility could not be verified");

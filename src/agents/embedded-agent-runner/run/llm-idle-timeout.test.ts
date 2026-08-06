@@ -421,6 +421,15 @@ describe("resolveLlmIdleTimeoutMs", () => {
         },
       }),
     ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "ollama/gpt-oss:120b-cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it.each([
@@ -586,6 +595,15 @@ describe("resolveLlmFirstEventTimeoutMs", () => {
     expect(
       resolveLlmFirstEventTimeoutMs({
         model: { provider: "ollama", id: "ollama/kimi-k2.6:cloud", baseUrl: "http://127.0.0.1" },
+      }),
+    ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "ollama/gpt-oss:120b-cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
       }),
     ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
   });

@@ -231,6 +231,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       config: params.config,
       contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
       workspaceDir: effectiveWorkspace,
+      remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,

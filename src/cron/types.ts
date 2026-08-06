@@ -360,6 +360,13 @@ type CronScriptPayloadPatch = {
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;
+  /**
+   * When the current scheduling inputs took effect. Restart catch-up replays a
+   * missed slot only when the slot is newer than this, because slots computed
+   * from a freshly edited schedule never existed under the old one. Absent on
+   * jobs whose schedule has not changed, where every computed slot is real.
+   */
+  scheduleActivatedAtMs?: number;
   /** Exact startup catch-up slot protected from future-slot repair across restarts. */
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
@@ -382,6 +389,12 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Durable explanation for a scheduler-owned automatic disable transition. */
+  autoDisabled?: {
+    reason: "consecutive-failures" | "schedule-errors";
+    atMs: number;
+    consecutiveErrors: number;
+  };
   /** Number of consecutive skipped executions (reset on success or error). */
   consecutiveSkipped?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
@@ -479,7 +492,9 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
-type CronJobStateInput = Partial<Omit<CronJobState, "streamSourceIdentity">>;
+type CronJobStateInput = Partial<
+  Omit<CronJobState, "autoDisabled" | "scheduleActivatedAtMs" | "streamSourceIdentity">
+>;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<

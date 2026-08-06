@@ -220,7 +220,7 @@ describe("cron tool", () => {
         action: "remove",
         jobId: "job-other",
       }),
-    ).rejects.toThrow("Cron tool is restricted to the current cron job.");
+    ).rejects.toThrow("Automations tool is restricted to the current automation.");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -266,7 +266,7 @@ describe("cron tool", () => {
     });
 
     await expect(tool.execute("call-runs-denied", args)).rejects.toThrow(
-      "Cron tool is restricted to the current cron job.",
+      "Automations tool is restricted to the current automation.",
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -328,7 +328,7 @@ describe("cron tool", () => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await expect(tool.execute("call-get-denied", args)).rejects.toThrow(
-      "Cron tool is restricted to the current cron job.",
+      "Automations tool is restricted to the current automation.",
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -450,6 +450,41 @@ describe("cron tool", () => {
     });
   });
 
+  it("does not let requested pagination bypass the scoped current-job scan", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:cron:job-current:run:abc",
+      selfRemoveOnlyJobId: "job-current",
+    });
+
+    const result = await tool.execute("call-scoped-list-requested-pagination", {
+      action: "list",
+      limit: 1,
+      offset: 200,
+    });
+
+    expectSingleGatewayCallMethod("cron.list");
+    expect(readGatewayCall().params).toEqual({
+      includeDisabled: false,
+      compact: true,
+      agentId: "agent-123",
+      limit: 200,
+      offset: 0,
+    });
+    expect(result.details).toMatchObject({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      hasMore: false,
+    });
+  });
+
   it.each([
     ["add", { action: "add", job: buildReminderAgentTurnJob() }],
     ["update", { action: "update", jobId: "job-current", patch: { enabled: false } }],
@@ -459,7 +494,7 @@ describe("cron tool", () => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
     await expect(tool.execute("call-denied", args)).rejects.toThrow(
-      "Cron tool is restricted to the current cron job.",
+      "Automations tool is restricted to the current automation.",
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
@@ -513,6 +548,87 @@ describe("cron tool", () => {
       compact: true,
       agentId: "worker",
     });
+  });
+
+  it("loads cron jobs beyond the first bounded page", async () => {
+    const firstPage = {
+      jobs: Array.from({ length: 200 }, (_, index) => ({
+        id: `job-${index}`,
+        name: `job ${index}`,
+      })),
+      total: 201,
+      offset: 0,
+      limit: 200,
+      hasMore: true,
+      nextOffset: 200,
+    };
+    const secondPage = {
+      jobs: [{ id: "job-200", name: "job 200" }],
+      total: 201,
+      offset: 200,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    };
+    callGatewayMock.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage);
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    const firstResult = await tool.execute("call-list-first-page", {
+      action: "list",
+      limit: 200,
+      offset: 0,
+    });
+    const secondResult = await tool.execute("call-list-second-page", {
+      action: "list",
+      limit: 200,
+      offset: firstPage.nextOffset,
+    });
+
+    expect(readGatewayCall(0)).toEqual({
+      method: "cron.list",
+      params: {
+        includeDisabled: false,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 0,
+      },
+    });
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.list",
+      params: {
+        includeDisabled: false,
+        compact: true,
+        agentId: "agent-123",
+        limit: 200,
+        offset: 200,
+      },
+    });
+    expect(firstResult.details).toEqual(firstPage);
+    expect(secondResult.details).toEqual(secondPage);
+  });
+
+  it.each([
+    ["zero limit", { limit: 0 }],
+    ["negative limit", { limit: -1 }],
+    ["fractional limit", { limit: 1.5 }],
+    ["oversized limit", { limit: 201 }],
+    ["unsafe limit", { limit: Number.MAX_SAFE_INTEGER + 1 }],
+    ["malformed limit", { limit: "1x" }],
+    ["negative offset", { offset: -1 }],
+    ["fractional offset", { offset: 1.5 }],
+    ["unsafe offset", { offset: Number.MAX_SAFE_INTEGER + 1 }],
+    ["malformed offset", { offset: "1x" }],
+  ])("rejects a %s before calling the cron gateway", async (_label, pagination) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-invalid-list-pagination", { action: "list", ...pagination }),
+    ).rejects.toThrow(/(?:limit|offset) must be a (?:positive|non-negative) integer/);
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("retries cron.list without compact for older gateways", async () => {
@@ -578,7 +694,7 @@ describe("cron tool", () => {
           text: "follow up",
           sessionKey: "agent:agent-456:discord:thread-xyz",
         }),
-      ).rejects.toThrow("cron sessionKey must match the calling agent");
+      ).rejects.toThrow("automations sessionKey must match the calling agent");
       expect(callGatewayMock).not.toHaveBeenCalled();
     });
 
@@ -972,7 +1088,7 @@ describe("cron tool", () => {
           agentId: null,
         },
       }),
-    ).rejects.toThrow("cron job agentId must match the calling agent");
+    ).rejects.toThrow("automation agentId must match the calling agent");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -1045,7 +1161,7 @@ describe("cron tool", () => {
           agentId: "worker",
         },
       }),
-    ).rejects.toThrow("cron job agentId must match the calling agent");
+    ).rejects.toThrow("automation agentId must match the calling agent");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1064,7 +1180,7 @@ describe("cron tool", () => {
           sessionTarget: "session:agent:worker:telegram:direct:alice",
         },
       }),
-    ).rejects.toThrow("cron sessionTarget must match the calling agent");
+    ).rejects.toThrow("automations sessionTarget must match the calling agent");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1118,7 +1234,7 @@ describe("cron tool", () => {
           payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1162,7 +1278,7 @@ describe("cron tool", () => {
           payload: { kind: "agentTurn", message: "done" },
         },
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -1298,7 +1414,7 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.add") as
       | { payload?: { toolsAllow?: string[] } }
       | undefined;
-    expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
+    expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
   });
 
   it("caps trigger-script systemEvent adds to the creator tool surface", async () => {
@@ -1321,7 +1437,7 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.add") as
       | { payload?: { toolsAllow?: string[] } }
       | undefined;
-    expect(params?.payload?.toolsAllow).toEqual(["read", "cron"]);
+    expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
   });
 
   it("infers systemEvent for implicit text payloads with toolsAllow", async () => {
@@ -1376,7 +1492,7 @@ describe("cron tool", () => {
           trigger: { script: "return { fire: false }" },
           payload: {
             kind: "systemEvent",
-            toolsAllow: ["read", "cron"],
+            toolsAllow: ["read", "automations"],
             toolsAllowIsDefault: true,
           },
         },
@@ -1460,7 +1576,7 @@ describe("cron tool", () => {
     expect(params?.payload?.toolsAllow).toEqual([
       "active_memory_search",
       "active_memory_store",
-      "cron",
+      "automations",
     ]);
   });
 
@@ -1729,7 +1845,7 @@ describe("cron tool", () => {
           payload: { kind: "systemEvent", text: "Reminder: the thing." },
         },
       }),
-    ).rejects.toThrow("cron job agentId must match the calling agent");
+    ).rejects.toThrow("automation agentId must match the calling agent");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -2287,7 +2403,7 @@ describe("cron tool", () => {
         id: "job-1",
         patch: { agentId: "worker" },
       }),
-    ).rejects.toThrow("cron patch agentId cannot be changed");
+    ).rejects.toThrow("automation patch agentId cannot be changed");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2321,7 +2437,7 @@ describe("cron tool", () => {
         id: "job-1",
         patch: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
       }),
-    ).rejects.toThrow("cron sessionTarget must match the calling agent");
+    ).rejects.toThrow("automations sessionTarget must match the calling agent");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2380,7 +2496,7 @@ describe("cron tool", () => {
           payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2400,7 +2516,7 @@ describe("cron tool", () => {
           payload: { argv: ["sh", "-lc", "echo bypass"] },
         },
       }),
-    ).rejects.toThrow("cron command payloads cannot be created or edited");
+    ).rejects.toThrow("automation command payloads cannot be created or edited");
 
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(readGatewayCall()).toEqual({
@@ -2440,7 +2556,7 @@ describe("cron tool", () => {
           schedule: { kind: "on-exit", command: "make" },
         },
       }),
-    ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
+    ).rejects.toThrow("automation on-exit schedules cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -2857,7 +2973,7 @@ describe("cron tool", () => {
       | undefined;
     expect(params?.patch?.payload).toEqual({
       kind: "agentTurn",
-      toolsAllow: ["read", "cron"],
+      toolsAllow: ["read", "automations"],
       toolsAllowIsDefault: true,
     });
   });
@@ -3072,7 +3188,7 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             message: "run later",
-            toolsAllow: ["read", "cron"],
+            toolsAllow: ["read", "automations"],
             toolsAllowIsDefault: true,
           },
         },

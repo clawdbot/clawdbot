@@ -12,6 +12,9 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 );
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
 const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
+const renderGatewayServiceCleanupHintsMock = vi.hoisted(() =>
+  vi.fn<(_services: unknown) => string[]>(() => []),
+);
 const isWSLEnvMock = vi.hoisted(() =>
   vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
 );
@@ -35,7 +38,7 @@ vi.mock("../../gateway/control-ui-links.js", () => ({
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
-  renderGatewayServiceCleanupHints: () => [],
+  renderGatewayServiceCleanupHints: renderGatewayServiceCleanupHintsMock,
 }));
 
 vi.mock("../../daemon/restart-logs.js", () => ({
@@ -93,6 +96,7 @@ describe("printDaemonStatus", () => {
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
+    renderGatewayServiceCleanupHintsMock.mockReset().mockReturnValue([]);
     resolveControlUiLinksMock.mockClear();
     isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
     renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
@@ -741,7 +745,14 @@ describe("printDaemonStatus", () => {
           listeners: [],
           hints: [],
         },
-        extraServices: [{ label: "ai.openclaw.gateway.rescue", scope: "user", detail: "loaded" }],
+        extraServices: [
+          {
+            platform: "darwin",
+            label: "ai.openclaw.gateway.rescue",
+            scope: "user",
+            detail: "loaded",
+          },
+        ],
       },
       { json: false },
     );
@@ -749,6 +760,42 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Other gateway-like services detected");
     expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("renders cleanup hints for the detected extra gateway without targeting the active gateway", () => {
+    const extraService = {
+      platform: "darwin" as const,
+      label: "com.example.openclaw-gateway",
+      scope: "user" as const,
+      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    };
+    renderGatewayServiceCleanupHintsMock.mockReturnValue([
+      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    ]);
+
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        extraServices: [extraService],
+      },
+      { json: false },
+    );
+
+    expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
+    expectMockLineContains(
+      runtime.log,
+      "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
+    );
+    expect(runtime.log.mock.calls.map(([line]) => line).join("\n")).not.toContain(
+      "ai.openclaw.gateway",
+    );
   });
 
   it("prints a terse plugin drift warning outside deep mode", () => {
@@ -987,6 +1034,46 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Check the probe credentials/config");
     const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
     expect(logged).not.toContain("Warm-up: launch agents");
+  });
+
+  it("does not combine diagnostic-only service state with the active probe target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          targetRole: "diagnostic-only",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18900,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18900",
+        },
+        port: {
+          port: 18900,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          url: "ws://127.0.0.1:18900",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Runtime: running");
+    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
+    expect(output).not.toContain("Warm-up: launch agents");
+    expect(output).not.toContain("service appears running");
   });
 
   it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {

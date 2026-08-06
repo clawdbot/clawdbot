@@ -41,9 +41,55 @@ private final class DashboardBrowserImportGate {
     }
 }
 
+private final class DashboardWindowGestureSpy: NSWindow {
+    private(set) var dragCount = 0
+    private(set) var zoomCount = 0
+
+    override func performDrag(with _: NSEvent) {
+        self.dragCount += 1
+    }
+
+    override func performZoom(_: Any?) {
+        self.zoomCount += 1
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowSmokeTests {
+    @Test func `dashboard frame routes single click to drag and double click to zoom`() throws {
+        let window = DashboardWindowGestureSpy(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false)
+        let dragRegion = DashboardWindowDragRegionView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 12))
+        window.contentView = dragRegion
+        let mouseDownEvent: (Int) -> NSEvent? = { clickCount in
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 100, y: 6),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: clickCount,
+                clickCount: clickCount,
+                pressure: 1)
+        }
+
+        dragRegion.mouseDown(with: try #require(mouseDownEvent(1)))
+
+        #expect(window.dragCount == 1)
+        #expect(window.zoomCount == 0)
+
+        dragRegion.mouseDown(with: try #require(mouseDownEvent(2)))
+
+        #expect(window.dragCount == 1)
+        #expect(window.zoomCount == 1)
+    }
+
     @Test func `dashboard window controller shows and closes`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=device-token"))
         let controller = DashboardWindowController(
@@ -55,6 +101,7 @@ struct DashboardWindowSmokeTests {
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
+        #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
         // The empty unified toolbar is what grows the titlebar to 52pt so the
@@ -464,6 +511,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserWebViewIdentity == nil)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
         #expect(controller._testLinkBrowserNavigationObservationCount == 0)
         #expect(controller._testLinkBrowserTabBarIsHidden)
         #expect(controller._testLinkBrowserTabBarHeight == 0)
@@ -478,6 +526,7 @@ struct DashboardWindowSmokeTests {
         #expect(!controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserRepresentedURL == urlA)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
         #expect(controller._testLinkBrowserTabBarIsHidden)
         #expect(controller._testLinkBrowserTabBarHeight == 0)
         #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)

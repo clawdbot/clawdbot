@@ -1,5 +1,4 @@
-// Gateway plugin startup bootstrap.
-// Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
+// Gateway plugin startup bootstrap and adjacent startup maintenance.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
@@ -14,7 +13,6 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
@@ -45,20 +43,13 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
     : params.cfgAtStart;
 }
 
-/** Builds plugin startup state and gateway method lists before the server binds. */
-export async function prepareGatewayPluginBootstrap(params: {
+/** Runs channel, session, and pairing maintenance before plugin bootstrap. */
+export async function runGatewayStartupMaintenance(params: {
   cfgAtStart: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
-  loadRuntimePlugins?: boolean;
-  loadSetupRuntimePlugins?: boolean;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}) {
-  const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
+}): Promise<void> {
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
     cfgAtStart: params.cfgAtStart,
     startupRuntimeConfig: params.startupRuntimeConfig,
@@ -110,7 +101,19 @@ export async function prepareGatewayPluginBootstrap(params: {
     }
     await Promise.all(startupTasks);
   }
+}
 
+/** Builds plugin startup state and gateway method lists before the server binds. */
+export async function prepareGatewayPluginBootstrap(params: {
+  cfgAtStart: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
+  minimalTestGateway: boolean;
+  log: GatewayPluginBootstrapLog;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}) {
+  const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   initSubagentRegistry();
 
   // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
@@ -142,9 +145,12 @@ export async function prepareGatewayPluginBootstrap(params: {
           workerProviderIds: params.workerProviderIds ?? [],
           ambientEnvTriggers: params.ambientEnvTriggers,
         });
-  const deferredConfiguredChannelPluginIds = [
-    ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
-  ];
+  // Startup logging consumes the same process-stable manifest snapshot used for
+  // activation planning. Minimal gateways deliberately have no plugin metadata.
+  const pluginManifestRecords =
+    pluginLookUpTable?.manifestRegistry.plugins ??
+    params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
+    [];
   const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
   const ambientAutostartSuppressedChannelIds =
     params.ambientEnvTriggers === "suppress"
@@ -154,80 +160,29 @@ export async function prepareGatewayPluginBootstrap(params: {
             activationSourceConfig,
             env: process.env,
             includePersistedAuthState: false,
-            ...(pluginLookUpTable?.manifestRegistry.plugins
-              ? { manifestRecords: pluginLookUpTable.manifestRegistry.plugins }
-              : {}),
+            manifestRecords: pluginManifestRecords,
           }),
         )
       : new Set<string>();
 
   const baseMethods = listGatewayMethods();
-  const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  let pluginRegistry;
-  let baseGatewayMethods = baseMethods;
-  const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
-  const shouldLoadSetupRuntimePlugins =
-    params.loadSetupRuntimePlugins === true && deferredConfiguredChannelPluginIds.length > 0;
-
-  if (!params.minimalTestGateway && shouldLoadSetupRuntimePlugins) {
-    // Pre-bind bootstrap only loads deferred channel plugins that expose setup runtime hooks.
-    // Full plugin handlers are loaded later so startup does not register duplicate methods.
-    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
-      {
-        cfg: gatewayPluginConfig,
-        activationSourceConfig,
-        workspaceDir: defaultWorkspaceDir,
-        log: params.log,
-        baseMethods,
-        coreGatewayMethodNames,
-        startupPluginIds: deferredConfiguredChannelPluginIds,
-        pluginLookUpTable,
-        preferSetupRuntimeForChannelPlugins: true,
-        suppressPluginInfoLogs: true,
-        ambientEnvTriggers: params.ambientEnvTriggers,
-      },
-    ));
-  } else if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
-    // Normal bootstrap loads every startup plugin and records that runtime handlers are ready
-    // before the gateway exposes the method list.
-    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
-      {
-        cfg: gatewayPluginConfig,
-        activationSourceConfig,
-        workspaceDir: defaultWorkspaceDir,
-        log: params.log,
-        baseMethods,
-        coreGatewayMethodNames,
-        startupPluginIds,
-        pluginLookUpTable,
-        preferSetupRuntimeForChannelPlugins: false,
-        suppressPluginInfoLogs: false,
-        ambientEnvTriggers: params.ambientEnvTriggers,
-      },
-    ));
-  } else {
-    // Minimal gateway tests reuse an already-active registry when present; production no-load
-    // paths install a fresh empty registry so stale plugin handlers cannot leak across starts.
-    pluginRegistry = params.minimalTestGateway
-      ? (getActivePluginRegistry() ?? emptyPluginRegistry)
-      : emptyPluginRegistry;
-    setActivePluginRegistry(pluginRegistry);
-  }
-
-  const runtimePluginsLoaded =
-    !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins;
+  // Minimal gateway tests reuse an already-active registry when present. Production publishes
+  // an empty pre-bind registry; every startup plugin runtime attaches after the listener binds.
+  const pluginRegistry = params.minimalTestGateway
+    ? (getActivePluginRegistry() ?? emptyPluginRegistry)
+    : emptyPluginRegistry;
+  setActivePluginRegistry(pluginRegistry);
 
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
-    deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,
-    baseGatewayMethods,
-    runtimePluginsLoaded,
+    baseGatewayMethods: baseMethods,
     ambientAutostartSuppressedChannelIds,
   };
 }
@@ -254,7 +209,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   }
 }
 
-/** Loads startup plugin runtimes through the deferred bootstrap boundary. */
+/** Loads startup plugin runtimes after the gateway listener binds. */
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -265,8 +220,6 @@ export async function loadGatewayStartupPluginRuntime(params: {
   hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
-  preferSetupRuntimeForChannelPlugins?: boolean;
-  suppressPluginInfoLogs?: boolean;
   startupTrace?: GatewayStartupTrace;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
@@ -285,20 +238,14 @@ export async function loadGatewayStartupPluginRuntime(params: {
     }),
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
-    preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
-    suppressPluginInfoLogs: params.suppressPluginInfoLogs,
+    channelPluginLoadIntent: "full",
     startupTrace: params.startupTrace,
     ambientEnvTriggers: params.ambientEnvTriggers,
   });
-  if (params.preferSetupRuntimeForChannelPlugins !== true) {
-    // Surface configured memory embedding providers after the full startup
-    // runtime load; setup-runtime pre-bind loads intentionally register only
-    // early channel hooks and would produce false missing-provider warnings.
-    warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: params.cfg,
-      pluginRegistry: loaded.pluginRegistry,
-      log: params.log,
-    });
-  }
+  warnUnregisteredConfiguredMemoryEmbeddingProviders({
+    config: params.cfg,
+    pluginRegistry: loaded.pluginRegistry,
+    log: params.log,
+  });
   return loaded;
 }

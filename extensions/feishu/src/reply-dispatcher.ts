@@ -328,6 +328,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     | undefined;
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
+  let skippedFinalAssistantMessageIndex: number | undefined;
+  let preparedDeliveryAssistantMessageIndex: number | undefined;
   let idleSideEffectsPromise: Promise<void> = Promise.resolve();
   let activeIdleSideEffectsPromise: Promise<void> | null = null;
   let idleRequestedForReply = false;
@@ -763,6 +765,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         acceptedChunks.push(chunk);
         markVisibleReplySent();
       } catch (error: unknown) {
+        if (isChannelPartialDeliveryError(error)) {
+          markVisibleReplySent();
+        }
         throw createFeishuPartialReplyDeliveryError(
           error,
           createFeishuReplyDeliveryResult({
@@ -841,7 +846,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         onError:
           options?.fallbackText === undefined
             ? undefined
-            : async ({ mediaUrl }) => {
+            : async ({ error, mediaUrl }) => {
+                if (isChannelPartialDeliveryError(error)) {
+                  // The attachment is already visible; text recovery would duplicate delivery.
+                  markVisibleReplySent();
+                  throw toError(error);
+                }
                 const fallbackText = await buildFeishuMediaFallbackText({
                   text: sentFallbackText ? undefined : options.fallbackText,
                   mediaUrl,
@@ -856,6 +866,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
     } catch (error: unknown) {
       const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+      if (partial) {
+        markVisibleReplySent();
+      }
       throw createFeishuPartialReplyDeliveryError(
         error,
         mergeFeishuReplyDeliveryResults([...results, ...(partial ? [partial] : [])]),
@@ -1181,9 +1194,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       conversationType: chatId.startsWith("oc_") ? "group" : "direct",
     },
     onSkip: (_payload, info) => {
-      if (info.kind === "final") {
+      if (info.kind === "final" || (info.kind === "block" && info.reason === "silent")) {
         skippedFinalReason = info.reason;
+        skippedFinalAssistantMessageIndex = info.assistantMessageIndex;
       }
+    },
+    beforeDeliver: (payload, info) => {
+      preparedDeliveryAssistantMessageIndex = info.assistantMessageIndex;
+      return payload;
     },
     onReplyStart: async () => {
       if (!replyLifecycleStateInitialized) {
@@ -1194,6 +1212,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         idleRequestedForReply = false;
         visibleReplySent = false;
         skippedFinalReason = null;
+        skippedFinalAssistantMessageIndex = undefined;
+        preparedDeliveryAssistantMessageIndex = undefined;
       }
       if (previewStreamingEnabled && renderMode === "card") {
         startStreaming();
@@ -1206,6 +1226,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     },
   };
   const handleDeliveryError = async (error: unknown, info: { kind: string }) => {
+    if (isChannelPartialDeliveryError(error)) {
+      // Core invokes this before no-visible recovery; keep accepted sends visible even
+      // when their normal success bookkeeping could not run.
+      markVisibleReplySent();
+    }
     params.runtime.error?.(
       `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
     );
@@ -1218,8 +1243,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     observeMessageSent: true,
     deliver: async (payload: ReplyPayload, info) => {
-      if (info?.kind === "final") {
+      // Core serializes before-delivery hooks and delivery, even when a later hook replaces
+      // the payload, so consume the prepared index before another reply can overwrite it.
+      const deliveryAssistantMessageIndex = preparedDeliveryAssistantMessageIndex;
+      preparedDeliveryAssistantMessageIndex = undefined;
+      // Skips happen at enqueue time. Preserve silence only when both message indices
+      // prove the failed delivery was older; unknown ordering must allow recovery.
+      if (
+        info?.kind === "final" ||
+        skippedFinalReason !== "silent" ||
+        skippedFinalAssistantMessageIndex === undefined ||
+        deliveryAssistantMessageIndex === undefined ||
+        deliveryAssistantMessageIndex >= skippedFinalAssistantMessageIndex
+      ) {
         skippedFinalReason = null;
+        skippedFinalAssistantMessageIndex = undefined;
       }
       const payloadText =
         payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;

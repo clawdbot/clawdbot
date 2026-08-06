@@ -8,8 +8,6 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "../styles.css";
 import "../components/board/board-view.ts";
 
-document.documentElement.classList.add("wa-dark");
-
 const initialSnapshot: BoardSnapshot = {
   sessionKey: "agent:main:board-fixture",
   revision: 7,

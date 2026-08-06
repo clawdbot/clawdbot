@@ -53,7 +53,11 @@ export function buildTurnStartParams(
       : {
           sandboxPolicy:
             options.sandboxPolicy ??
-            codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
+            codexSandboxPolicyForTurn(
+              options.appServer.sandbox,
+              options.cwd,
+              options.appServer.start?.args,
+            ),
         }),
     ...(modelSelection
       ? { model: modelSelection.model, personality: CODEX_NATIVE_PERSONALITY_NONE }

@@ -333,6 +333,30 @@ describe("session-entry compaction budgeting", () => {
     ).toEqual({ ok: true, value: undefined });
   });
 
+  it("plans provider-triggered cuts in provider token units", () => {
+    const entries = [
+      createMessageEntry({ role: "user", content: "first", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("ok", createUsage(2), 2), 1),
+      createMessageEntry({ role: "user", content: "second", timestamp: 3 }, 2),
+      createMessageEntry(createAssistant("ok", createUsage(2), 4), 3),
+      createMessageEntry({ role: "user", content: "latest", timestamp: 5 }, 4),
+      createMessageEntry(createAssistant("done", createUsage(170_000), 6), 5),
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 16_384,
+      keepRecentTokens: 20_000,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected provider usage to produce a compactable prefix");
+    }
+    expect(result.value.firstKeptEntryId).toBe("entry-4");
+    expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
+  });
+
   it("keeps reset-filtered tool rows out of later compaction input", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
@@ -474,6 +498,67 @@ describe("generateSummary thinking options", () => {
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["empty", []],
+    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
+    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
+  ])("rejects %s compaction output", async (_name, content) => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content,
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createUsage(1),
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "low",
+      streamFn,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected empty compaction output to fail");
+    }
+    expect(result.error).toMatchObject({
+      name: "CompactionError",
+      code: "summarization_failed",
+      message: "Summarization failed: model returned no summary text",
+    });
   });
 });
 

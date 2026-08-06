@@ -1,7 +1,5 @@
 // Control UI E2E tests cover browser Talk start and stop through a real page.
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -10,6 +8,14 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureComposerProof,
+  captureVideoTalkProof,
+  installBlockedMicrophoneFixture,
+  installBlockedVideoTalkFixture,
+  installTalkBrowserFixtures,
+  videoTalkCatalog,
+} from "./browser-talk-start-stop.fixtures.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -19,152 +25,6 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let browser: Browser;
-
-function videoTalkCatalog(activeProvider: "google" | "openai") {
-  return {
-    realtime: {
-      activeProvider,
-      providers: [{ id: activeProvider, label: activeProvider, supportsVideoFrames: true }],
-    },
-  };
-}
-
-async function installTalkBrowserFixtures(page: Page) {
-  await page.addInitScript(() => {
-    type InputProcessor = {
-      onaudioprocess:
-        | ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void)
-        | null;
-    };
-    const state = {
-      audioContextsClosed: 0,
-      tracksStopped: 0,
-      constraints: [] as unknown[],
-      inputProcessor: null as InputProcessor | null,
-      meterLevel: 0,
-    };
-    const track = { stop: () => (state.tracksStopped += 1) };
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        enumerateDevices: async () => [
-          { kind: "audioinput", deviceId: "built-in", label: "Built-in Microphone" },
-          { kind: "audioinput", deviceId: "usb", label: "USB Audio Interface" },
-          { kind: "videoinput", deviceId: "camera", label: "Camera" },
-        ],
-        getUserMedia: async (constraints: unknown) => {
-          state.constraints.push(constraints);
-          return { getTracks: () => [track] };
-        },
-      },
-    });
-
-    class MockAudioContext {
-      readonly currentTime = 0;
-      readonly destination = {};
-      readonly sampleRate: number;
-
-      constructor(options?: { sampleRate?: number }) {
-        this.sampleRate = options?.sampleRate ?? 24_000;
-      }
-
-      createMediaStreamSource() {
-        return { connect() {}, disconnect() {} };
-      }
-
-      createGain() {
-        return { connect() {}, disconnect() {}, gain: { value: 1 } };
-      }
-
-      createScriptProcessor() {
-        const processor = { connect() {}, disconnect() {}, onaudioprocess: null };
-        state.inputProcessor = processor;
-        return processor;
-      }
-
-      createAnalyser() {
-        return {
-          fftSize: 0,
-          smoothingTimeConstant: 0,
-          disconnect() {},
-          getFloatTimeDomainData(samples: Float32Array) {
-            samples.fill(state.meterLevel);
-          },
-        };
-      }
-
-      async close() {
-        state.audioContextsClosed += 1;
-      }
-    }
-
-    Object.defineProperty(window, "AudioContext", {
-      configurable: true,
-      value: MockAudioContext,
-    });
-    Object.defineProperty(window, "openclawTalkE2eState", {
-      configurable: true,
-      value: state,
-    });
-  });
-}
-
-async function captureComposerProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "voice-controls");
-  await mkdir(artifactDir, { recursive: true });
-  await page
-    .locator(".agent-chat__composer-shell")
-    .screenshot({ path: path.join(artifactDir, fileName) });
-}
-
-async function captureVideoTalkProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "video-talk");
-  await mkdir(artifactDir, { recursive: true });
-  await page
-    .locator(".agent-chat__composer-shell")
-    .screenshot({ path: path.join(artifactDir, fileName) });
-}
-
-async function installBlockedMicrophoneFixture(page: Page) {
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        enumerateDevices: async () => [],
-        getUserMedia: async () => {
-          throw new DOMException("Permission denied", "NotAllowedError");
-        },
-      },
-    });
-  });
-}
-
-async function installBlockedVideoTalkFixture(page: Page) {
-  await page.addInitScript(() => {
-    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia: async (constraints: MediaStreamConstraints) => {
-          if (constraints.video) {
-            throw new DOMException("Permission denied", "NotAllowedError");
-          }
-          return getUserMedia(constraints);
-        },
-      },
-    });
-    class FakePeerConnection extends EventTarget {
-      connectionState = "new";
-      close() {
-        this.connectionState = "closed";
-      }
-    }
-    Object.defineProperty(window, "RTCPeerConnection", {
-      configurable: true,
-      value: FakePeerConnection,
-    });
-  });
-}
 
 describeControlUiE2e("Control UI browser Talk", () => {
   beforeAll(async () => {
@@ -192,6 +52,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
       methodResponses: {
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-browser-talk-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           clientSecret: "auth_tokens/browser-talk-e2e",
@@ -373,6 +234,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
       methodResponses: {
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-controls-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -491,6 +353,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
         "talk.catalog": videoTalkCatalog("openai"),
         "talk.client.create": {
           provider: "openai",
+          voiceSessionId: "voice-openai-video-e2e",
           transport: "webrtc",
           clientSecret: "test-client-secret",
           offerUrl: "https://api.openai.com/v1/realtime/calls",
@@ -646,11 +509,21 @@ describeControlUiE2e("Control UI browser Talk", () => {
         channel?.dispatchEvent(
           new MessageEvent("message", {
             data: JSON.stringify({
-              type: "response.function_call_arguments.done",
-              item_id: "item-camera",
-              call_id: "call-camera",
-              name: "describe_view",
-              arguments: "{}",
+              type: "response.done",
+              response: {
+                id: "response-camera",
+                status: "completed",
+                output: [
+                  {
+                    type: "function_call",
+                    id: "item-camera",
+                    status: "completed",
+                    call_id: "call-camera",
+                    name: "describe_view",
+                    arguments: "{}",
+                  },
+                ],
+              },
             }),
           }),
         );
@@ -717,6 +590,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
         "talk.catalog": videoTalkCatalog("google"),
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-google-video-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -862,6 +736,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
         "talk.catalog": videoTalkCatalog("google"),
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-blocked-camera-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -994,6 +869,123 @@ describeControlUiE2e("Control UI browser Talk", () => {
       // A collapsed turn renders one character per line (tall, sliver-wide box).
       expect(turnBounds?.width ?? 0).toBeGreaterThanOrEqual(500);
       expect(turnBounds?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(120);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("closes a stale relay when stop and restart race its create response", async () => {
+    const context = await browser.newContext({ locale: "en-US", permissions: ["microphone"] });
+    const page = await context.newPage();
+    const currentRelaySessionId = "relay-current-e2e";
+    const staleRelaySessionId = "relay-stale-e2e";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.client.create": {
+          provider: "openai",
+          transport: "gateway-relay",
+          relaySessionId: currentRelaySessionId,
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
+        },
+        "talk.session.appendAudio": {},
+        "talk.session.close": {},
+      },
+    });
+    await installTalkBrowserFixtures(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("talk.client.create");
+
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await expect
+        .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
+        .toBe(1);
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await expect
+        .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
+        .toBe(2);
+
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { constraints: unknown[] };
+                }
+              ).openclawTalkE2eState?.constraints.length,
+          ),
+        )
+        .toBe(1);
+      await gateway.emitGatewayEvent("talk.event", {
+        relaySessionId: currentRelaySessionId,
+        type: "ready",
+      });
+      await expect
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
+        .toBe(1);
+
+      await gateway.resolveDeferred("talk.client.create", {
+        provider: "openai",
+        transport: "gateway-relay",
+        relaySessionId: staleRelaySessionId,
+        audio: {
+          inputEncoding: "pcm16",
+          inputSampleRateHz: 16_000,
+          outputEncoding: "pcm16",
+          outputSampleRateHz: 24_000,
+        },
+      });
+      await expect
+        .poll(() => gateway.getRequests("talk.session.close"))
+        .toEqual([
+          expect.objectContaining({
+            params: { sessionId: staleRelaySessionId },
+          }),
+        ]);
+
+      await page.evaluate(() => {
+        const state = (
+          window as Window & {
+            openclawTalkE2eState?: {
+              inputProcessor?: {
+                onaudioprocess?: (event: {
+                  inputBuffer: { getChannelData: () => Float32Array };
+                }) => void;
+              };
+            };
+          }
+        ).openclawTalkE2eState;
+        state?.inputProcessor?.onaudioprocess?.({
+          inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.1) },
+        });
+      });
+      await expect
+        .poll(() => gateway.getRequests("talk.session.appendAudio"))
+        .toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ sessionId: currentRelaySessionId }),
+          }),
+        ]);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Stop voice input" }).isVisible())
+        .toBe(true);
+
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await expect
+        .poll(() =>
+          gateway
+            .getRequests("talk.session.close")
+            .then((requests) => requests.map((request) => request.params)),
+        )
+        .toEqual([{ sessionId: staleRelaySessionId }, { sessionId: currentRelaySessionId }]);
     } finally {
       await context.close();
     }

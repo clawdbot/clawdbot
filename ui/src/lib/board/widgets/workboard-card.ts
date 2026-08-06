@@ -67,6 +67,7 @@ class OpenClawWorkboardCardWidget extends WorkboardWidgetElement {
                 <select
                   aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
                   .value=${card.status}
+                  ?disabled=${!this.canMutate}
                   @change=${(event: Event) => void this.handleStatusChange(event)}
                 >
                   ${statuses.map(
@@ -92,15 +93,18 @@ if (!customElements.get("openclaw-workboard-card-widget")) {
 export const renderWorkboardCardWidget: PluginBoardWidgetRenderer = ({
   widget,
   sessionKey,
+  canMutate,
   requestUpdate,
 }: {
   widget: BoardViewWidget;
   sessionKey: string;
+  canMutate: boolean;
   requestUpdate: () => void;
 }) => html`
   <openclaw-workboard-card-widget
     .widget=${widget}
     .sessionKey=${sessionKey}
+    .canMutate=${canMutate}
     .hostRequestUpdate=${requestUpdate}
   ></openclaw-workboard-card-widget>
 `;

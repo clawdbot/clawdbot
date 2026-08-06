@@ -211,6 +211,24 @@ describe("skills-remote", () => {
     expect(after).toBeGreaterThan(before);
   });
 
+  it("bumps the skills snapshot version when an eligible remote node connects", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = `/tmp/ws-${randomUUID()}`;
+    const nodeId = `node-${randomUUID()}`;
+
+    const before = getSkillsSnapshotVersion(workspaceDir);
+    recordRemoteNodeInfo({
+      nodeId,
+      displayName: "Remote Mac",
+      platform: "darwin",
+      commands: ["system.run"],
+    });
+    const after = getSkillsSnapshotVersion(workspaceDir);
+
+    expect(after).toBeGreaterThan(before);
+    removeRemoteNodeInfo(nodeId);
+  });
+
   it("ignores non-mac and non-system.run nodes for eligibility", () => {
     const linuxNodeId = `node-${randomUUID()}`;
     const noRunNodeId = `node-${randomUUID()}`;

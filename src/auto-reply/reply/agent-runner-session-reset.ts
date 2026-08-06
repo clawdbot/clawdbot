@@ -3,12 +3,8 @@ import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
-} from "../../config/sessions/sqlite-marker.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -83,6 +79,7 @@ export async function resetReplyRunSession(params: {
     lastInteractionAt: now,
     systemSent: false,
     abortedLastRun: false,
+    lifecycleRunId: undefined,
     modelProvider: undefined,
     model: undefined,
     inputTokens: undefined,
@@ -95,35 +92,15 @@ export async function resetReplyRunSession(params: {
     contextTokens: undefined,
     contextBudgetStatus: undefined,
     systemPromptReport: undefined,
-    fallbackNoticeSelectedModel: undefined,
-    fallbackNoticeActiveModel: undefined,
-    fallbackNoticeReason: undefined,
+    fallbackNotice: undefined,
     compactionCount: 0,
-    memoryFlushAt: undefined,
-    memoryFlushCompactionCount: undefined,
-    memoryFlushContextHash: undefined,
-    memoryFlushFailureCount: undefined,
-    memoryFlushLastFailedAt: undefined,
-    memoryFlushLastFailureError: undefined,
+    memoryFlush: undefined,
   };
   clearAllCliSessions(nextEntry);
   nextEntry.agentHarnessId = undefined;
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
   const agentId = params.followupRun.run.agentId;
-  const nextSessionFile =
-    (sqliteSessionFileMarkerMatchesTarget(prevEntry.sessionFile, {
-      agentId,
-      sessionId: nextSessionId,
-      storePath: params.storePath,
-    })
-      ? prevEntry.sessionFile
-      : undefined) ??
-    formatSqliteSessionFileMarker({
-      agentId,
-      sessionId: nextSessionId,
-      storePath: params.storePath,
-    });
-  nextEntry.sessionFile = nextSessionFile;
+  const nextSessionFile = params.sessionKey;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
     await deps.persistSessionResetLifecycle({

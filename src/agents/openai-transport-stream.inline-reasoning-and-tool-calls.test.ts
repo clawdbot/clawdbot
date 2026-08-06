@@ -1031,7 +1031,7 @@ describe("openai transport stream", () => {
     await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toEqual([
-      { type: "thinking", thinking: "Need to think.", thinkingSignature: "content" },
+      { type: "thinking", thinking: "Need to think." },
       { type: "text", text: "Visible answer." },
     ]);
   });

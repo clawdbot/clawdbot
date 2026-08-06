@@ -2,9 +2,9 @@ import { html, nothing } from "lit";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/working-phrase.ts";
-import { t } from "../../../i18n/index.ts";
+import { i18n, t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount, formatDurationCompact } from "../../../lib/format.ts";
+import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
@@ -16,9 +16,39 @@ const STARTUP_STATUS_LABEL_KEYS = {
   preparing_context: "chat.startupStatus.preparingContext",
   starting_model: "chat.startupStatus.startingModel",
 } as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
+const TURN_RECAP_DURATION_UNITS = [
+  { seconds: 86_400, unit: "day" },
+  { seconds: 3_600, unit: "hour" },
+  { seconds: 60, unit: "minute" },
+  { seconds: 1, unit: "second" },
+] as const;
 
 function startupStatusLabel(phase: ChatRunStartupPhase): string {
   return t(STARTUP_STATUS_LABEL_KEYS[phase]);
+}
+
+function formatTurnRecapDuration(ms: number): string {
+  let remainingSeconds = Math.max(1, Math.round(ms / 1_000));
+  const locale = i18n.getLocale();
+  const parts: string[] = [];
+  for (const { seconds, unit } of TURN_RECAP_DURATION_UNITS) {
+    const value = Math.floor(remainingSeconds / seconds);
+    if (value === 0) {
+      continue;
+    }
+    parts.push(
+      new Intl.NumberFormat(locale, {
+        style: "unit",
+        unit,
+        unitDisplay: "long",
+      }).format(value),
+    );
+    remainingSeconds -= value * seconds;
+    if (parts.length === 2) {
+      break;
+    }
+  }
+  return new Intl.ListFormat(locale, { style: "long", type: "unit" }).format(parts);
 }
 
 function renderLiveOutputTokens(outputTokens: number | null | undefined) {
@@ -104,9 +134,8 @@ export function renderTurnRecapRow(
   options: { presentation?: "standalone" | "continuation" } = {},
 ) {
   const continuation = options.presentation === "continuation";
-  // Sub-second turns still read "1s"; the clamp also keeps the type a string.
-  const clampedMs = Math.max(1_000, recap.runtimeMs);
-  const duration = formatDurationCompact(clampedMs, { spaced: true }) ?? "1s";
+  // Sub-second turns still read as one second; terminal recaps favor full words.
+  const duration = formatTurnRecapDuration(recap.runtimeMs);
   // 0 is a valid count (command-only turns); only null means "unknown".
   const tokens =
     typeof recap.outputTokens === "number"

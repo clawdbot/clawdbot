@@ -13,6 +13,7 @@ type BuiltinBoardWidgetRenderer = (context: {
 export type PluginBoardWidgetRenderer = (props: {
   widget: BoardViewWidget;
   sessionKey: string;
+  canMutate: boolean;
   requestUpdate: () => void;
 }) => TemplateResult;
 
@@ -24,8 +25,8 @@ type PluginWidgetKindContribution = {
 
 /**
  * Plugin renderers are trusted first-party Control UI code. They render in the
- * cell without an iframe or grants, receive only widget/session/update props,
- * and use the standard gateway client for RPCs owned by their plugin.
+ * cell without an iframe or grants, receive only widget/session/capability/update
+ * props, and use the standard gateway client for RPCs owned by their plugin.
  */
 const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribution> = {
   "workboard:card": {

@@ -1,12 +1,98 @@
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
+import { isQaProviderModeInput } from "./providers/index.js";
 import type { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
+export type QaScenarioExecutionCell = {
+  scenarioId: string;
+  executionKind: QaSeedScenario["execution"]["kind"];
+  channel: string | null;
+};
+
 function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveQaScenarioRequiredProviderMode(scenario: QaSeedScenario) {
+  const configuredMode = normalizeQaConfigString(scenario.execution.config?.requiredProviderMode);
+  const executionMode =
+    scenario.execution.kind === "flow" ? scenario.execution.providerMode : undefined;
+  if (configuredMode && executionMode && configuredMode !== executionMode) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares conflicting provider modes: execution.providerMode=${executionMode}, execution.config.requiredProviderMode=${configuredMode}`,
+    );
+  }
+  const providerMode = configuredMode ?? executionMode;
+  if (providerMode !== undefined && !isQaProviderModeInput(providerMode)) {
+    throw new Error(`QA scenario ${scenario.id} declares unknown provider mode: ${providerMode}`);
+  }
+  return providerMode;
+}
+
+function resolveQaScenarioLaneChannels(params: {
+  scenario: QaSeedScenario;
+  channelDriver: QaScorecardChannelDriver;
+  channel?: string | null;
+  defaultChannel?: string;
+  supportsChannel?: (channel: string) => boolean;
+}): Array<string | undefined> {
+  if (params.channelDriver === "qa-channel") {
+    return ["qa-channel"];
+  }
+  const selectedChannel = params.channel?.trim().toLowerCase();
+  if (selectedChannel) {
+    return [selectedChannel];
+  }
+  const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
+  if (scenarioChannel) {
+    return [scenarioChannel];
+  }
+  if (params.scenario.execution.kind === "flow") {
+    const driverChannels = params.scenario.execution.channels?.filter(
+      (channel) => channel !== "qa-channel",
+    );
+    const supportedChannels = driverChannels?.filter(
+      (channel) => !params.supportsChannel || params.supportsChannel(channel),
+    );
+    if (supportedChannels?.length) {
+      return supportedChannels;
+    }
+    if (driverChannels?.length) {
+      return driverChannels;
+    }
+  }
+  const defaultChannel = params.defaultChannel?.trim().toLowerCase();
+  return [defaultChannel];
+}
+
+export function resolveQaScenarioLaneChannel(
+  params: Parameters<typeof resolveQaScenarioLaneChannels>[0],
+): string | undefined {
+  return resolveQaScenarioLaneChannels(params)[0];
+}
+
+export function expandQaScenarioExecutionCells(
+  params: {
+    scenarios: readonly QaSeedScenario[];
+    expandChannels: boolean;
+  } & Omit<Parameters<typeof resolveQaScenarioLaneChannels>[0], "scenario">,
+): QaScenarioExecutionCell[] {
+  return params.scenarios.flatMap((scenario) => {
+    const channels =
+      scenario.execution.kind === "flow"
+        ? params.expandChannels
+          ? resolveQaScenarioLaneChannels({ ...params, scenario })
+          : [resolveQaScenarioLaneChannel({ ...params, scenario })]
+        : [undefined];
+    return channels.map((channel) => ({
+      scenarioId: scenario.id,
+      executionKind: scenario.execution.kind,
+      channel: channel ?? null,
+    }));
+  });
 }
 
 export function describeQaProviderLaneMismatches(params: {
@@ -19,11 +105,15 @@ export function describeQaProviderLaneMismatches(params: {
 }) {
   const mismatches: string[] = [];
   const config = params.scenario.execution.config ?? {};
-  const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
+  const requiredProviderMode = resolveQaScenarioRequiredProviderMode(params.scenario);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     mismatches.push(`providerMode=${requiredProviderMode}`);
   }
   const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
+    mismatches.push(`channelDriver=${requiredChannelDriver}`);
+  }
   const effectiveChannel =
     effectiveChannelDriver === "qa-channel"
       ? "qa-channel"

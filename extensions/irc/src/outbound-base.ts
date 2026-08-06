@@ -3,6 +3,10 @@ import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { chunkTextForOutbound } from "./channel-api.js";
 
+export function sanitizeIrcAssistantText(text: string): string {
+  return sanitizeForPlainText(sanitizeAssistantVisibleText(text));
+}
+
 export const ircOutboundBaseAdapter = {
   deliveryMode: "direct" as const,
   chunker: chunkTextForOutbound,
@@ -11,6 +15,5 @@ export const ircOutboundBaseAdapter = {
   // IRC's plain-text pass does not remove assistant scaffolding. Run the
   // canonical delivery sanitizer first so internal tool traces are dropped
   // before channel formatting.
-  sanitizeText: ({ text }: { text: string }) =>
-    sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
+  sanitizeText: ({ text }: { text: string }) => sanitizeIrcAssistantText(text),
 };

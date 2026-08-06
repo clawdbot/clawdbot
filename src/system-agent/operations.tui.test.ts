@@ -4,7 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 describe("system-agent TUI operations", () => {
   it("refuses doctor repairs before any write or audit", async () => {
@@ -20,7 +20,7 @@ describe("system-agent TUI operations", () => {
       expect(result).toEqual({ applied: false });
       expect(isPersistentSystemAgentOperation({ kind: "doctor-fix" })).toBe(false);
       expect(runDoctor).not.toHaveBeenCalled();
-      expect(lines.join("\n")).toContain("Exit OpenClaw");
+      expect(lines.join("\n")).toContain("with OpenClaw stopped");
       expect(lines.join("\n")).toContain("openclaw doctor --fix");
       expect(lines.join("\n")).not.toContain("[openclaw] running: doctor.fix");
       await expect(

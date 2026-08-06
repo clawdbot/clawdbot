@@ -300,7 +300,12 @@ final class WatchMessageOutbox {
             let owner = queued.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
             let messageID = queued.event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
             let text = queued.event.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !owner.isEmpty, !messageID.isEmpty, !text.isEmpty, seenSet.insert(messageID).inserted else {
+            guard !owner.isEmpty,
+                  !messageID.isEmpty,
+                  !text.isEmpty,
+                  !self.recentMessageIDs.contains(messageID),
+                  seenSet.insert(messageID).inserted
+            else {
                 return nil
             }
             return QueuedMessage(gatewayStableID: owner, event: self.message(queued.event, taggedFor: owner))

@@ -65,8 +65,8 @@ export async function buildExecAutoReviewInputForShellCommand(params: {
   if (!boundSingleCommand) {
     return undefined;
   }
-  // Startup files are outside the reviewed command and cannot be auto-approved.
-  if (isBlockedShellWrapperCommand(segment.argv)) {
+  // Blocked carriers and startup files execute outside the reviewed payload.
+  if (segment.resolution?.policyBlocked === true || isBlockedShellWrapperCommand(segment.argv)) {
     return undefined;
   }
   if (

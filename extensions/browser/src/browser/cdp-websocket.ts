@@ -3,7 +3,7 @@ import type { ClientRequest } from "node:http";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import WebSocket from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { getHeadersWithAuth, stripCdpUrlCredentials } from "./cdp-auth.js";
@@ -297,6 +297,7 @@ type CdpSocketOptions = {
   handshakeRetryDelayMs?: number;
   handshakeMaxRetryDelayMs?: number;
   lookup?: CdpSocketLookup;
+  signal?: AbortSignal;
 };
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {
@@ -358,8 +359,8 @@ export async function withCdpSocket<T>(
   opts?: CdpSocketOptions,
 ): Promise<T> {
   const maxHandshakeRetries = normalizeRetryCount(opts?.handshakeRetries, 2);
-  let lastHandshakeError: unknown;
-  for (let attempt = 0; attempt <= maxHandshakeRetries; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
+    opts?.signal?.throwIfAborted();
     const ws = openCdpWebSocket(wsUrl, opts);
     const { send, closeWithError } = createCdpSender(ws, opts);
 
@@ -368,24 +369,39 @@ export async function withCdpSocket<T>(
       ws.once("error", (err) => reject(err));
       ws.once("close", () => reject(new Error("CDP socket closed")));
     });
+    // A stalled HTTP upgrade must release its TCP socket on cancellation.
+    const abortHandshake = () => ws.terminate();
+    opts?.signal?.addEventListener("abort", abortHandshake, { once: true });
+    if (opts?.signal?.aborted) {
+      abortHandshake();
+    }
 
     try {
       await openPromise;
     } catch (err) {
-      lastHandshakeError = err;
       // openPromise is only rejected via `ws.once('error', err => reject(err))`
       // or the close event's `new Error(...)`; the former always carries an
       // Error from Node's `ws` library, the latter is already an Error. The
       // non-Error wrap is defensive and structurally unreachable.
       /* c8 ignore next */
       closeWithError(err instanceof Error ? err : new Error(String(err)));
+      // Cancellation on the final attempt must not become a handshake error.
+      opts?.signal?.throwIfAborted();
       if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
         throw err;
       }
       // Retry only handshake failures. Once CDP commands are flowing, callers
       // own retry semantics because commands may already have side effects.
-      await sleep(computeHandshakeRetryDelayMs(attempt + 1, opts));
+      // Cancelled route requests must not keep retrying Chrome handshakes.
+      await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
+        (error: unknown) => {
+          opts?.signal?.throwIfAborted();
+          throw error;
+        },
+      );
       continue;
+    } finally {
+      opts?.signal?.removeEventListener("abort", abortHandshake);
     }
 
     try {
@@ -397,9 +413,4 @@ export async function withCdpSocket<T>(
       ws.close();
     }
   }
-
-  if (lastHandshakeError instanceof Error) {
-    throw lastHandshakeError;
-  }
-  throw new Error("CDP socket failed to open");
 }

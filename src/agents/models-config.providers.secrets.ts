@@ -338,7 +338,6 @@ function resolveConfigBackedProviderAuth(params: {
     }
     return {
       apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
-      discoveryApiKey: undefined,
       mode: "api_key",
       source: "config",
     };

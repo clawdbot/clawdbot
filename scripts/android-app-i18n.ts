@@ -3,6 +3,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -93,8 +94,11 @@ type ResourceString = {
   value: string;
 };
 
-const GENERATED_TRANSLATION_LINT_IGNORE =
-  'tools:ignore="Typos,TypographyDashes,TypographyEllipsis"';
+const GENERATED_TRANSLATION_LINT_IGNORES = [
+  "Typos",
+  "TypographyDashes",
+  "TypographyEllipsis",
+] as const;
 
 type TranslationContradiction = {
   locale: string;
@@ -274,6 +278,19 @@ function parseStrings(source: string): ResourceString[] {
     rawValue: match[3] ?? "",
     value: decodeXml(match[3] ?? ""),
   }));
+}
+
+function withGeneratedTranslationLintIgnores(attrs: string): string {
+  const existing = attrs.match(/\btools:ignore\s*=\s*"([^"]*)"/u);
+  const ignores = [
+    ...(existing?.[1]
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter(Boolean) ?? []),
+    ...GENERATED_TRANSLATION_LINT_IGNORES,
+  ];
+  const rendered = `tools:ignore="${[...new Set(ignores)].join(",")}"`;
+  return existing ? attrs.replace(existing[0], rendered) : `${attrs} ${rendered}`;
 }
 
 function parseArrays(source: string): Map<string, string[]> {
@@ -516,6 +533,11 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
     new Set(["${normalized.takeUtf16Safe(87)}..."]),
+  ],
+  [
+    "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarShell.kt",
+    // Compose animation labels are tooling identifiers, not rendered copy.
+    new Set(["sidebar-content-translation"]),
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatCommandControls.kt",
@@ -1136,7 +1158,7 @@ function localizeManualStrings(
         ? selectExactArtifactTranslation(source, inventoryEntry.id, artifactEntries)
         : source;
     return {
-      attrs: translatable ? `${entry.attrs} ${GENERATED_TRANSLATION_LINT_IGNORE}` : entry.attrs,
+      attrs: translatable ? withGeneratedTranslationLintIgnores(entry.attrs) : entry.attrs,
       key: entry.key,
       rawValue: `"${escapeAndroidResourceValue(value)}"`,
       value,
@@ -1168,7 +1190,7 @@ function renderStringsXml(
       // Translation-memory text intentionally preserves technical tokens and source punctuation,
       // so Android's English dictionary and typography suggestions do not apply to managed keys.
       lines.push(
-        `    <string name="${key}"${formatted} ${GENERATED_TRANSLATION_LINT_IGNORE}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
+        `    <string name="${key}"${withGeneratedTranslationLintIgnores(formatted)}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
       );
     }
   }
@@ -1591,7 +1613,7 @@ export async function checkAndroidAppI18n(options: { tolerateManagedPending?: bo
   );
 }
 
-if (process.argv[1] && import.meta.url === `file://${path.resolve(process.argv[1])}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const [command] = process.argv.slice(2);
   if (command === "sync") {
     await syncAndroidAppI18n();

@@ -14,8 +14,8 @@ import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/se
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
+  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -40,7 +40,6 @@ import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
@@ -220,6 +219,7 @@ export async function writeSessionStore(params: {
       lastTo?: string;
       lastAccountId?: string;
       lastThreadId?: string | number;
+      sessionFile?: string;
     }
   >;
   storePath?: string;
@@ -231,6 +231,12 @@ export async function writeSessionStore(params: {
     throw new Error("writeSessionStore requires testState.sessionStorePath");
   }
   const upsertsByAgentId = new Map<string, Array<{ sessionKey: string; entry: SessionEntry }>>();
+  const transcriptImports: Array<{
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    transcriptPath: string;
+  }> = [];
   for (const [requestKey, entry] of Object.entries(params.entries)) {
     const rawKey = requestKey.trim();
     if (typeof entry.sessionId !== "string" || entry.sessionId.trim().length === 0) {
@@ -257,13 +263,18 @@ export async function writeSessionStore(params: {
       sessionKey: storeKey,
       entry: {
         ...canonicalEntry,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId,
-          sessionId: entry.sessionId,
-          storePath,
-        }),
       },
     });
+    if (typeof entry.sessionFile === "string" && entry.sessionFile.trim()) {
+      transcriptImports.push({
+        agentId,
+        sessionId: entry.sessionId,
+        sessionKey: storeKey,
+        transcriptPath: path.isAbsolute(entry.sessionFile)
+          ? entry.sessionFile
+          : path.join(path.dirname(storePath), entry.sessionFile),
+      });
+    }
     upsertsByAgentId.set(agentId, upserts);
   }
   clearSessionStoreCacheForTest();
@@ -283,6 +294,26 @@ export async function writeSessionStore(params: {
       upserts,
       skipMaintenance: true,
     });
+  }
+  for (const transcriptImport of transcriptImports) {
+    const contents = await fs.readFile(transcriptImport.transcriptPath, "utf8").catch(() => "");
+    if (!contents) {
+      continue;
+    }
+    const events = contents
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    await replaceTranscriptEvents(
+      {
+        agentId: transcriptImport.agentId,
+        sessionId: transcriptImport.sessionId,
+        sessionKey: transcriptImport.sessionKey,
+        storePath,
+      },
+      events,
+    );
   }
   clearSessionStoreCacheForTest();
 }
@@ -384,7 +415,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  clearGatewaySubagentRuntime();
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
@@ -450,7 +480,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   resetGatewayLifecycleTestState({ preserveRuntimeBindings: activeSuiteGatewayServerCount > 0 });
-  clearGatewaySubagentRuntime();
   resetLogger();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
@@ -483,7 +512,6 @@ async function resetGatewayTestRuntimeOnly() {
   resetConfigRuntimeState();
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
-  clearGatewaySubagentRuntime();
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
@@ -972,6 +1000,7 @@ type ConnectReqOptions = {
   prePairDevice?: boolean;
   browserOrigin?: string;
   timeoutMs?: number;
+  traceparent?: string;
 };
 
 function shouldPrePairTestDevice(params: {
@@ -1161,6 +1190,7 @@ export async function connectReq(
       type: "req",
       id,
       method: "connect",
+      ...(opts?.traceparent ? { traceparent: opts.traceparent } : {}),
       params: {
         minProtocol: opts?.minProtocol ?? PROTOCOL_VERSION,
         maxProtocol: opts?.maxProtocol ?? PROTOCOL_VERSION,

@@ -32,8 +32,9 @@ type OutboundAuditDeliveryContext = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
-  payloads: readonly ReplyPayload[];
+  payloads?: readonly ReplyPayload[];
   replyPayloadSendingHook?: { runId?: string };
+  preparedBatch?: { runId?: string };
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
 };
@@ -381,8 +382,8 @@ function emitOutboundAuditTerminal(params: {
       actorType: agentId ? "agent" : "system",
       actorId: agentId ?? "gateway",
       ...(agentId ? { agentId } : {}),
-      ...(context.replyPayloadSendingHook?.runId
-        ? { runId: context.replyPayloadSendingHook.runId }
+      ...((context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId)
+        ? { runId: context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId }
         : {}),
       direction: "outbound",
       channel: context.channel,

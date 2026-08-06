@@ -102,9 +102,12 @@ describe("applyModelOverrideToSessionEntry", () => {
         model: "claude-sonnet-4-6",
         contextTokenBudget: 200_000,
       }),
-      fallbackNoticeSelectedModel: "anthropic/claude-sonnet-4-6",
-      fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
-      fallbackNoticeReason: "provider temporary failure",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude-sonnet-4-6",
+        activeModel: "anthropic/claude-sonnet-4-6",
+        reason: "provider temporary failure",
+      },
     };
 
     const result = applyOpenAiSelection(entry);
@@ -113,9 +116,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expectRuntimeModelFieldsCleared(entry, before);
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
-    expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
-    expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.fallbackNotice).toBeUndefined();
     expect(entry.modelOverrideSource).toBe("user");
     expect(entry.modelOverrideRouteResolution).toBe("resolved");
   });
@@ -327,6 +328,38 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.authProfileOverride).toBe("newprofile");
     expect(entry.liveModelSwitchPending).toBe(true);
   });
+
+  it.each([
+    { preserveAuthProfileOverride: undefined, expectedProfile: undefined },
+    { preserveAuthProfileOverride: false, expectedProfile: undefined },
+    { preserveAuthProfileOverride: true, expectedProfile: "openai:work" },
+  ])(
+    "keeps auth profile metadata only when preservation is $preserveAuthProfileOverride",
+    ({ preserveAuthProfileOverride, expectedProfile }) => {
+      const entry: SessionEntry = {
+        sessionId: "sess-profile-preservation-contract",
+        updatedAt: Date.now() - 5_000,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      };
+
+      applyModelOverrideToSessionEntry({
+        entry,
+        selection: {
+          provider: "openai",
+          model: "gpt-4.1",
+        },
+        preserveAuthProfileOverride,
+      });
+
+      expect(entry.authProfileOverride).toBe(expectedProfile);
+      expect(entry.authProfileOverrideSource).toBe(expectedProfile ? "user" : undefined);
+      expect(entry.authProfileOverrideCompactionCount).toBe(expectedProfile ? 2 : undefined);
+    },
+  );
 });
 
 describe("repairProviderWrappedModelOverride", () => {

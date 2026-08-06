@@ -40,4 +40,24 @@ describe("SnapshotSchema", () => {
       ),
     ).toBe(true);
   });
+
+  it("accepts persistent event-loop health duration", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      health: {
+        eventLoop: {
+          degraded: true,
+          degradedSinceMs: 61_000,
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          delayP99Ms: 1_200,
+          delayMaxMs: 1_500,
+          utilization: 0.75,
+          cpuCoreRatio: 0.5,
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+  });
 });

@@ -25,11 +25,9 @@ export function resolveMemoryFlushContextWindowTokens(params: {
 }
 
 export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const compaction = cfg?.agents?.defaults?.compaction;
-  if (compaction?.truncateAfterCompaction !== true) {
-    return undefined;
-  }
-  const parsed = parseNonNegativeByteSize(compaction.maxActiveTranscriptBytes);
+  const parsed = parseNonNegativeByteSize(
+    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
+  );
   return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
@@ -131,7 +129,7 @@ function resolveMemoryFlushGateState<
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlush"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -178,9 +176,9 @@ export function shouldRunPreflightCompaction(params: {
  * important for both the token-based and transcript-size–based trigger paths.
  */
 export function hasAlreadyFlushedForCurrentCompaction(
-  entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
+  entry: Pick<SessionEntry, "compactionCount" | "memoryFlush">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
-  const lastFlushAt = entry.memoryFlushCompactionCount;
+  const lastFlushAt = entry.memoryFlush?.compactionCount;
   return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
 }

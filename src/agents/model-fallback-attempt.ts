@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
+import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -31,6 +32,7 @@ import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
 import { isCliProvider } from "./model-selection-cli.js";
 import { isAgentRunDirectAbortReason, isAgentRunRestartAbortReason } from "./run-termination.js";
+import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import {
   runWithDeferredSessionSuspension,
   suspendSession,
@@ -212,6 +214,10 @@ function isCallerAbortSignal(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+function isAgentRunTerminalTimeout(err: unknown): boolean {
+  return findAgentRunTerminalOutcome(err)?.status === "timeout";
+}
+
 function buildFallbackSuccess<T>(params: {
   result: T;
   provider: string;
@@ -225,6 +231,7 @@ async function runFallbackCandidate<T>(params: {
   run: ModelFallbackRunFn<T>;
   provider: string;
   model: string;
+  captureHarnessPreflight?: boolean;
   options?: ModelFallbackRunOptions;
   deferSessionSuspension?: boolean;
   onDeferredSessionSuspension?: (params: SessionSuspensionParams) => void;
@@ -241,7 +248,15 @@ async function runFallbackCandidate<T>(params: {
       : await run();
     return { ok: true, result };
   } catch (err) {
-    if (isCommandLaneTaskTimeoutError(err) || isAgentHarnessPreflightError(err)) {
+    if (params.captureHarnessPreflight && isAgentHarnessPreflightError(err)) {
+      return { ok: false, error: err };
+    }
+    if (
+      isAgentRunTerminalTimeout(err) ||
+      isCommandLaneTaskTimeoutError(err) ||
+      isAgentHarnessPreflightError(err) ||
+      isSandboxProvisioningError(err)
+    ) {
       throw err;
     }
     const fallbackError = resolveModelFallbackError(err, {
@@ -269,6 +284,7 @@ export async function runFallbackAttempt<T>(params: {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  captureHarnessPreflight?: boolean;
   options?: ModelFallbackRunOptions;
   deferSessionSuspension?: boolean;
   onDeferredSessionSuspension?: (params: SessionSuspensionParams) => void;
@@ -392,10 +408,8 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
 export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   params: ModelFallbackRuntimeContext & ModelCandidate,
 ): Promise<{ skipsProviderAuthCooldown: boolean; agentHarnessRuntimeOverride?: string }> {
-  const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
-    params.provider,
-    params.model,
-  );
+  const { agentHarnessRuntimeOverride, explicitAgentRuntime, runtime, runtimeSource } =
+    resolveModelFallbackCandidateAgentRuntime(params);
   const result = (skipsProviderAuthCooldown: boolean) => ({
     skipsProviderAuthCooldown,
     agentHarnessRuntimeOverride,
@@ -403,27 +417,16 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   if (!params.cfg) {
     return result(false);
   }
-  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
-  const explicitAgentRuntime =
-    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
-      ? agentRuntimeOverride
-      : undefined;
   if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
     return result(true);
   }
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const agentRuntime = explicitAgentRuntime ?? harnessPolicy.runtime;
-  const agentRuntimeSource = explicitAgentRuntime ? "model" : harnessPolicy.runtimeSource;
+  if (!runtime) {
+    return result(false);
+  }
   if (
-    agentRuntime === "openclaw" ||
-    agentRuntime === "auto" ||
-    (agentRuntime === "codex" && agentRuntimeSource === "implicit")
+    runtime === "openclaw" ||
+    runtime === "auto" ||
+    (runtime === "codex" && runtimeSource === "implicit")
   ) {
     return result(false);
   }
@@ -432,17 +435,56 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (getRegisteredAgentHarness(agentRuntime)) {
+  if (getRegisteredAgentHarness(runtime)) {
     // A prepared harness owns its transport/auth even when a CLI backend happens
     // to reuse the same id. Runtime identity must be resolved before auth preflight.
     return result(true);
   }
-  if (isCliAgentRuntime(agentRuntime, params.cfg)) {
+  if (isCliAgentRuntime(runtime, params.cfg)) {
     // CLI runtimes own their transport/auth, so stale OpenClaw provider
     // profile state must not block the candidate before the CLI starts.
     return result(true);
   }
-  throw new MissingAgentHarnessError(agentRuntime);
+  throw new MissingAgentHarnessError(runtime);
+}
+
+export function resolveModelFallbackCandidateAgentRuntime(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): {
+  agentHarnessRuntimeOverride?: string;
+  explicitAgentRuntime?: string;
+  runtime?: string;
+  runtimeSource?: "model" | "provider" | "implicit";
+} {
+  const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
+    params.provider,
+    params.model,
+  );
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
+  const explicitAgentRuntime =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? agentRuntimeOverride
+      : undefined;
+  if (!params.cfg) {
+    return {
+      agentHarnessRuntimeOverride,
+      explicitAgentRuntime,
+      runtime: explicitAgentRuntime,
+    };
+  }
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  return {
+    agentHarnessRuntimeOverride,
+    explicitAgentRuntime,
+    runtime: explicitAgentRuntime ?? harnessPolicy.runtime,
+    runtimeSource: explicitAgentRuntime ? "model" : harnessPolicy.runtimeSource,
+  };
 }
 
 function resolveCandidateAttemptError(
@@ -640,6 +682,7 @@ export function shouldDiscardDeferredSessionSuspension(params: {
   return (
     isTerminalAbort(params.abortSignal) ||
     isCallerAbortSignal(params.abortSignal) ||
+    isAgentRunTerminalTimeout(params.error) ||
     isAgentRunDirectAbortReason(params.error) ||
     isAgentRunRestartAbortReason(params.error) ||
     isTerminalAbortFromError(params.error) ||

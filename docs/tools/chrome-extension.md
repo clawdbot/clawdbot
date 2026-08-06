@@ -91,6 +91,37 @@ openclaw config set browser.defaultProfile chrome
 - Revoke: click the button again, drag the tab out of the group, or dismiss
   Chrome's debugging banner. The agent loses access to that tab immediately.
 
+### External CDP clients (chrome-devtools-mcp, Puppeteer)
+
+The relay is a standard CDP browser endpoint, so tools other than OpenClaw can
+drive the paired Chrome through it — same consent model (shared tabs only),
+same host-local token, and still no "Allow remote debugging?" prompt. Print the
+endpoint and auth header:
+
+```bash
+openclaw browser extension cdp
+```
+
+For example, Google's [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+connects with:
+
+```bash
+npx chrome-devtools-mcp --wsEndpoint ws://127.0.0.1:18799/cdp \
+  --wsHeaders '{"Authorization":"Bearer <token>"}'
+```
+
+`openclaw browser extension cdp --json` emits `{ browserUrl, wsEndpoint,
+headers }` for scripting. The token is the same host-local relay secret the
+pairing string carries: treat it as private, and rotate it by deleting
+`credentials/browser-extension-relay.secret` and pairing again.
+
+[mcporter](https://github.com/openclaw/mcporter) needs no wiring at all: when a
+paired relay answers on this host, it transparently rewrites
+`chrome-devtools-mcp --autoConnect` server commands to the relay endpoint, so
+agents calling Chrome DevTools through mcporter skip the remote-debugging
+prompt automatically (set `MCPORTER_DISABLE_CHROME_DEVTOOLS_RELAY=1` there to
+opt out).
+
 ### Tab copilot side panel
 
 After pairing the extension, click **Open tab copilot** in its toolbar popup.
@@ -133,7 +164,7 @@ different Gateway. After a browser crash, the next launch archives sessions
 left by the previous browser instance. Archived sessions reject new work, while
 their transcripts remain available in session history. Browser-copilot keys are
 thread sessions, so normal age and entry-count maintenance preserves them. The
-per-agent session disk budget still applies (default `2gb`) and may evict the
+per-agent session disk budget still applies (default `10gb`) and may evict the
 oldest sessions under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
 
 The side panel currently requires either a Gateway-hosted extension relay or a

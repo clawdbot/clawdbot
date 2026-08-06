@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../../../agents/agent-scope-config.js";
 import { listRuntimeExternalAuthProfiles } from "../../../agents/auth-profiles/external-auth.js";
-import { resolveAuthProfileOrder } from "../../../agents/auth-profiles/order.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "../../../agents/auth-profiles/order.js";
 import {
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
@@ -39,6 +42,12 @@ import {
 type StaleConfiguredAuthOrder = {
   provider: string;
   staleProfileCount: number;
+};
+
+type UndeclaredConfiguredAuthOrder = {
+  provider: string;
+  undeclaredProfileIds: string[];
+  declaredProviderProfileIds: string[];
 };
 
 type LoadedAuthStores =
@@ -492,6 +501,90 @@ function removeAuthOrderKeys(cfg: OpenClawConfig, providers: ReadonlySet<string>
   };
 }
 
+function scanUndeclaredConfiguredAuthOrders(
+  cfg: OpenClawConfig,
+  loaded?: Extract<LoadedAuthStores, { status: "ready" }>,
+): UndeclaredConfiguredAuthOrder[] {
+  const order = readValidConfiguredAuthOrder(cfg);
+  if (!order || !hasValidConfiguredAuthProfiles(cfg) || !cfg.auth?.profiles) {
+    return [];
+  }
+  const configuredProfileIds = new Set(Object.keys(cfg.auth.profiles));
+  return Object.entries(order).flatMap(([provider, profileIds]) => {
+    const undeclaredProfileIds = profileIds.filter((profileId) => {
+      if (configuredProfileIds.has(profileId) || loaded?.runtimeProfileIds.has(profileId)) {
+        return false;
+      }
+      return !loaded?.stores.some(
+        (store) => resolveAuthProfileEligibility({ cfg, store, provider, profileId }).eligible,
+      );
+    });
+    if (undeclaredProfileIds.length === 0) {
+      return [];
+    }
+    const canonicalProvider = resolveProviderIdForAuth(provider, { config: cfg });
+    const declaredProviderProfileIds = Object.entries(cfg.auth?.profiles ?? {})
+      .filter(
+        ([, profile]) =>
+          resolveProviderIdForAuth(profile.provider, { config: cfg }) === canonicalProvider,
+      )
+      .map(([profileId]) => profileId);
+    return [{ provider, undeclaredProfileIds, declaredProviderProfileIds }];
+  });
+}
+
+function repairUndeclaredConfiguredAuthOrders(
+  cfg: OpenClawConfig,
+  loaded?: Extract<LoadedAuthStores, { status: "ready" }>,
+): {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings: string[];
+} {
+  const hits = scanUndeclaredConfiguredAuthOrders(cfg, loaded);
+  const order = readValidConfiguredAuthOrder(cfg) ?? {};
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const hit of hits) {
+    if (hit.declaredProviderProfileIds.length !== 1) {
+      const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
+      warnings.push(
+        `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`,
+      );
+      continue;
+    }
+    const replacement = hit.declaredProviderProfileIds[0];
+    if (!replacement) {
+      continue;
+    }
+    const undeclared = new Set(hit.undeclaredProfileIds);
+    order[hit.provider] = [
+      ...new Set(
+        (order[hit.provider] ?? []).map((profileId) =>
+          undeclared.has(profileId) ? replacement : profileId,
+        ),
+      ),
+    ];
+    changes.push(
+      `auth.order.${hit.provider}: replaced undeclared ${hit.undeclaredProfileIds.join(", ")} with ${replacement}.`,
+    );
+  }
+  return {
+    config:
+      changes.length === 0
+        ? cfg
+        : {
+            ...cfg,
+            auth: {
+              ...cfg.auth,
+              order,
+            },
+          },
+    changes,
+    warnings,
+  };
+}
+
 /** Find nonempty config orders that only reference removed profiles. */
 function scanStaleConfiguredAuthOrders(params: {
   cfg: OpenClawConfig;
@@ -582,14 +675,25 @@ export function maybeRepairStaleConfiguredAuthOrders(params: {
   if (!hasNonemptyConfiguredAuthOrder(params.cfg)) {
     return { config: params.cfg, changes: [] };
   }
-  const loaded = loadConfiguredAgentAuthStores(params.cfg, params.env ?? process.env);
-  if (!loaded) {
+  const initialLoaded = loadConfiguredAgentAuthStores(params.cfg, params.env ?? process.env);
+  if (!initialLoaded) {
     return { config: params.cfg, changes: [] };
   }
-  if (loaded.status === "blocked") {
-    return { config: params.cfg, changes: [], warnings: loaded.warnings };
+  if (initialLoaded.status === "blocked") {
+    return { config: params.cfg, changes: [], warnings: initialLoaded.warnings };
   }
-  return repairStaleConfiguredAuthOrders({ cfg: params.cfg, ...loaded });
+  const declaredRepair = repairUndeclaredConfiguredAuthOrders(params.cfg, initialLoaded);
+  const cfg = declaredRepair.config;
+  const staleRepair = repairStaleConfiguredAuthOrders({ cfg, ...initialLoaded });
+  const remainingDeclaredWarnings = repairUndeclaredConfiguredAuthOrders(
+    staleRepair.config,
+    initialLoaded,
+  ).warnings;
+  return {
+    config: staleRepair.config,
+    changes: [...declaredRepair.changes, ...staleRepair.changes],
+    ...(remainingDeclaredWarnings.length > 0 ? { warnings: remainingDeclaredWarnings } : {}),
+  };
 }
 
 /** Build preview warnings for stale config auth orders. */
@@ -608,10 +712,20 @@ export function collectStaleConfiguredAuthOrderWarnings(params: {
   if (loaded.status === "blocked") {
     return loaded.warnings;
   }
-  return scanStaleConfiguredAuthOrders({ cfg: params.cfg, ...loaded }).map(
-    (hit) =>
-      `- auth.order.${hit.provider} references only missing profiles while compatible stored credentials exist; run ${params.doctorFixCommand} to remove the stale override and restore automatic selection.`,
-  );
+  const declaredWarnings = scanUndeclaredConfiguredAuthOrders(params.cfg, loaded).map((hit) => {
+    if (hit.declaredProviderProfileIds.length === 1) {
+      return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; run ${params.doctorFixCommand} to replace it with ${hit.declaredProviderProfileIds[0]}.`;
+    }
+    const candidates = hit.declaredProviderProfileIds.join(", ") || "none";
+    return `- auth.order.${hit.provider} references undeclared ${hit.undeclaredProfileIds.join(", ")}; declared profiles for this provider are ambiguous (${candidates}). Set auth.order.${hit.provider} explicitly.`;
+  });
+  return [
+    ...declaredWarnings,
+    ...scanStaleConfiguredAuthOrders({ cfg: params.cfg, ...loaded }).map(
+      (hit) =>
+        `- auth.order.${hit.provider} references only missing profiles while compatible stored credentials exist; run ${params.doctorFixCommand} to remove the stale override and restore automatic selection.`,
+    ),
+  ];
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

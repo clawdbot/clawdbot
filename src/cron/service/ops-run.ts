@@ -20,11 +20,14 @@ import {
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
-import type { CronServiceState, CronWakeMode } from "./state.js";
+import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
-import { resolveCronRunScheduleOwnership } from "./timer-outcomes.js";
+import {
+  resolveCronRunScheduleOwnership,
+  resolveCronRunTriggerOwnership,
+} from "./timer-outcomes.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -83,7 +86,10 @@ async function finishPreparedManualRun(
       if (!tracker || tracker.emitted) {
         return;
       }
-      const job = state.store?.jobs.find((entry) => entry.id === jobId);
+      const job =
+        prepared.activeJobMarker?.jobRemoved === true
+          ? executionJob
+          : state.store?.jobs.find((entry) => entry.id === jobId);
       // enqueueRun acknowledges a concrete run id, so every accepted request
       // needs one terminal event even if the job or service owner changes mid-run.
       emitCronRunFinished(
@@ -140,7 +146,10 @@ async function finishPreparedManualRun(
     let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
       await ensureLoaded(state, { skipRecompute: true });
-      if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+      if (
+        !isCronActiveJobMarkerCurrent(prepared.activeJobMarker) ||
+        prepared.activeJobMarker?.jobRemoved === true
+      ) {
         notifySetupTimeout = false;
         return;
       }
@@ -154,8 +163,18 @@ async function finishPreparedManualRun(
         currentJob: job,
         activeJobMarker: prepared.activeJobMarker,
       });
+      const triggerOwnership = resolveCronRunTriggerOwnership({
+        admittedJob: prepared.admittedJob,
+        currentJob: job,
+        activeJobMarker: prepared.activeJobMarker,
+      });
       const scheduleMode =
-        mode === "force" || scheduleOwnership === "stale" ? "preserve" : "advance";
+        scheduleOwnership === "stale"
+          ? "stale-preserve"
+          : mode === "force"
+            ? "force-preserve"
+            : "advance";
+      const postPersistNotifications: DeferredCronNotifications = [];
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -169,7 +188,11 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode },
+          {
+            scheduleMode,
+            triggerOwnership,
+            deferredNotifications: postPersistNotifications,
+          },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -181,9 +204,12 @@ async function finishPreparedManualRun(
             endedAt,
           },
           {
-            scheduleMode,
+            // Stale edits are preserved by scheduleOwnership inside applyJobResult;
+            // only a real forced run may request a force-preserved cadence marker.
+            scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+            deferredNotifications: postPersistNotifications,
           },
         );
         applyTriggerRunResult(
@@ -193,9 +219,9 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleOwnership },
+          { scheduleOwnership, triggerOwnership },
         );
-        applyScriptRunResult(job, coreResult);
+        applyScriptRunResult(job, coreResult, { triggerOwnership });
 
         // Stream payloads are event-owned by their batch. Generic recurring
         // error backoff must not synthesize a later run without that batch.
@@ -267,13 +293,16 @@ async function finishPreparedManualRun(
       });
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
+        deferredNotifications: postPersistNotifications,
         ...(mode === "force"
           ? {
               preserveExpiredPacedNextRunJobId: jobId,
             }
           : {}),
       });
-      await persistOrRestore(state, rollbackSnapshot);
+      await persistOrRestore(state, rollbackSnapshot, {
+        postPersistNotifications,
+      });
       if (removedJob) {
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }

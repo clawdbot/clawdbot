@@ -663,6 +663,81 @@ describe("streamProxy loopback /api/stream", () => {
     return address.port;
   }
 
+  async function listenProxyErrorBody(bytes: Buffer, splitAt: number) {
+    const request: {
+      method?: string;
+      path?: string;
+      authorization?: string;
+    } = {};
+
+    server = http.createServer((req, res) => {
+      request.method = req.method;
+      request.path = req.url;
+      request.authorization = req.headers.authorization;
+      if (req.method !== "POST" || req.url !== "/api/stream") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      res.writeHead(502, "Bad Gateway", { "Content-Type": "application/json" });
+      res.write(bytes.subarray(0, splitAt));
+      res.end(bytes.subarray(splitAt));
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    return { port: address.port, request };
+  }
+
+  it("falls back to the HTTP status for malformed UTF-8 proxy errors", async () => {
+    const prefix = Buffer.from('{"error":"corrupted ');
+    const bytes = Buffer.concat([prefix, Buffer.from([0xff]), Buffer.from(' upstream"}')]);
+    const { port, request } = await listenProxyErrorBody(bytes, prefix.length);
+
+    const result = await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: `http://127.0.0.1:${port}`,
+      timeoutMs: 3_000,
+    }).result();
+
+    expect(request).toEqual({
+      method: "POST",
+      path: "/api/stream",
+      authorization: "Bearer token",
+    });
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Proxy error: 502 Bad Gateway",
+    });
+  });
+
+  it("preserves a valid replacement character in proxy error responses", async () => {
+    const error = "upstream legitimately contains \uFFFD";
+    const bytes = Buffer.from(JSON.stringify({ error }));
+    const { port, request } = await listenProxyErrorBody(bytes, bytes.indexOf(0xef) + 1);
+
+    const result = await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: `http://127.0.0.1:${port}`,
+      timeoutMs: 3_000,
+    }).result();
+
+    expect(request).toEqual({
+      method: "POST",
+      path: "/api/stream",
+      authorization: "Bearer token",
+    });
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: `Proxy error: ${error}`,
+    });
+  });
+
   it("cancels a dripping native SSE body when the outer abort signal fires", async () => {
     const port = await listenDripProxy();
     const controller = new AbortController();

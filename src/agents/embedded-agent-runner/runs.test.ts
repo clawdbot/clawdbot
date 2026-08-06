@@ -1,8 +1,5 @@
 // Embedded run registry tests cover active run handles, queueing, abort/drain,
 // abandonment tracking, diagnostics, and snapshots.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,7 +7,6 @@ import {
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
@@ -41,7 +37,6 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
-  updateActiveEmbeddedRunSessionFile,
   waitForActiveEmbeddedRuns,
   waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
@@ -57,10 +52,7 @@ function createRunHandle(
     isStreaming?: boolean;
     isStopped?: () => boolean;
     runId?: string;
-    queueMessage?: (
-      text: string,
-      options?: Parameters<RunHandle["queueMessage"]>[1],
-    ) => Promise<void>;
+    queueMessage?: RunHandle["queueMessage"];
     supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
   } = {},
@@ -400,30 +392,6 @@ describe("embedded-agent runner run registry", () => {
     expect(abort).not.toHaveBeenCalled();
   });
 
-  it("resolves active embedded runs by canonical session file", async () => {
-    // Session-file lookup canonicalizes symlinks so heartbeat/diagnostic callers
-    // can find the active handle from the file path they observe.
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-registry-"));
-    try {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const symlinkFile = path.join(tempDir, "session-link.jsonl");
-      await fs.writeFile(sessionFile, '{"type":"session"}\n', "utf8");
-      await fs.symlink(sessionFile, symlinkFile);
-      const handle = createRunHandle();
-
-      setActiveEmbeddedRun("session-file-run", handle, "agent:main:visible", sessionFile);
-
-      expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(symlinkFile)).toBe(
-        "session-file-run",
-      );
-
-      clearActiveEmbeddedRun("session-file-run", handle, "agent:main:visible", sessionFile);
-      expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(symlinkFile)).toBeUndefined();
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("records active run session files in diagnostic state for heartbeat recovery", () => {
     setDiagnosticsEnabledForProcess(true);
     const sessionFile = "/tmp/openclaw-run-registry-session.jsonl";
@@ -433,16 +401,6 @@ describe("embedded-agent runner run registry", () => {
 
     expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
       sessionFile,
-    );
-
-    updateActiveEmbeddedRunSessionFile(
-      "session-file-diagnostics",
-      "/tmp/openclaw-run-registry-rotated.jsonl",
-      getAgentEventLifecycleGeneration(),
-    );
-
-    expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
-      "/tmp/openclaw-run-registry-rotated.jsonl",
     );
   });
 
@@ -790,6 +748,31 @@ describe("embedded-agent runner run registry", () => {
     );
   });
 
+  it("reports accepted steering without transcript confirmation as non-replayable", async () => {
+    setActiveEmbeddedRun("session-unconfirmed", {
+      ...createRunHandle(),
+      queueMessage: async () => ({
+        transcriptCommit: "unconfirmed",
+        errorMessage: "receipt unavailable",
+      }),
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-unconfirmed",
+      "continue",
+    );
+
+    expect(outcome).toEqual({
+      queued: true,
+      sessionId: "session-unconfirmed",
+      target: "embedded_run",
+      gatewayHealth: "live",
+      transcriptCommit: "unconfirmed",
+      errorMessage: "receipt unavailable",
+      enqueuedAtMs: expect.any(Number),
+    });
+  });
+
   it("rejects transcript-commit waits for active handles without support", async () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-no-transcript-wait", {
@@ -1048,6 +1031,19 @@ describe("embedded-agent runner run registry", () => {
 
     expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
+  it("clears a relative compatibility file key after normalization", () => {
+    const handle = createRunHandle();
+    const sessionFile = "relative-session-token";
+
+    setActiveEmbeddedRun("session-relative", handle, "agent:main:relative", sessionFile);
+    expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile)).toBe(
+      "session-relative",
+    );
+
+    clearActiveEmbeddedRun("session-relative", handle, "agent:main:relative", sessionFile);
+    expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile)).toBeUndefined();
   });
 
   it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {

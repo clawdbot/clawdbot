@@ -1,5 +1,6 @@
 import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
@@ -38,7 +39,6 @@ export function prepareEmbeddedRunTerminal(input: {
   outerContextTokenMeta: { contextTokens?: number };
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
-  lastTurnTotal?: number;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   terminalState: EmbeddedRunTerminalState;
@@ -71,13 +71,27 @@ export function prepareEmbeddedRunTerminal(input: {
     usageAccumulator: input.usageAccumulator,
     lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
-    lastTurnTotal: input.lastTurnTotal,
   });
   const reportedModelRef = resolveReportedModelRef({
     provider: input.provider,
     model: input.model,
     assistant: terminalAssistant,
   });
+  const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
+  const terminalAssistantCanOwnFinalText =
+    finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
+  const costUsd = estimateUsageCost({
+    usage: usageMeta.usage,
+    cost: resolveModelCostConfig({
+      provider: reportedModelRef.provider,
+      model: reportedModelRef.model,
+      config: runParams.config,
+      agentDir: runParams.agentDir,
+    }),
+  });
+  // Attempt normalization already folded every attempt (terminal included)
+  // into the accumulator, so read it directly instead of re-adding the attempt.
+  const runAssistantTurns = input.usageAccumulator.assistantTurns;
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -96,14 +110,25 @@ export function prepareEmbeddedRunTerminal(input: {
         ? input.contextRecoveryState.autoCompactionCount
         : undefined,
     compactionTokensAfter: input.contextRecoveryState.lastCompactionTokensAfter,
+    // Absent attempt engagement (plugin harness routes) intentionally reads as
+    // false so config-enabled-but-unengaged code mode is visible to consumers.
+    codeModeEngaged: attempt.codeModeEngaged === true,
+    ...(runAssistantTurns > 0 ? { assistantTurns: runAssistantTurns } : {}),
+    ...(input.usageAccumulator.bridgeCalls
+      ? { bridgeCalls: { ...input.usageAccumulator.bridgeCalls } }
+      : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
   };
   const attemptFinalText = attempt.assistantTexts
     .toReversed()
     .map((text) => text.trim())
     .find((text) => text.length > 0);
-  const finalAssistantVisibleText =
-    resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText;
-  const finalAssistantRawText = resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText;
+  const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
+    ? (resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText)
+    : undefined;
+  const finalAssistantRawText = terminalAssistantCanOwnFinalText
+    ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
+    : undefined;
   // A yielded attempt ends before message_end. Its aborted tool-call assistant,
   // not an earlier completed cycle, owns paused-turn classification.
   const payloadAssistant = attempt.yieldDetected
@@ -154,7 +179,6 @@ export function prepareEmbeddedRunTerminal(input: {
     toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
   });
-  const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const recoveredFinalAssistantTextAfterPromptTimeout =
     timedOutDuringPrompt && ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
       ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()

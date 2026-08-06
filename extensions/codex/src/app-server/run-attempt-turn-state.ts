@@ -1,7 +1,8 @@
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  interruptCodexTurnBestEffort,
+  closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 import {
@@ -44,6 +45,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
+    localCompletionRequested: false,
     terminalTurnNotificationQueued: false,
     // App-server collapses user interrupts and replacements to "interrupted";
     // this marker remains the user-interrupt hint until Codex exposes abortReason.
@@ -57,11 +59,11 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnWatchTimeoutDetails: undefined as Record<string, unknown> | undefined,
     turnCompletionIdleTimeoutMessage: undefined as string | undefined,
     clientClosedPromptError: undefined as string | undefined,
+    clientClosedDiagnostic: undefined as string | undefined,
     clientClosedAbort: false,
     shouldDelayNativeHookRelayUnregister: false,
     lifecycleStarted: false,
     lifecycleTerminalEmitted: false,
-    resolveCompletion: undefined as (() => void) | undefined,
     nativeHookRelayLastRenewedAt: 0,
     activeAppServerTurnRequests: 0,
     unsettledFinalizationHookCount: 0,
@@ -77,8 +79,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     terminalDynamicToolReleaseCheckScheduled: false,
     currentTurnHadNonTerminalDynamicToolResult: false,
   };
+  let resolveCompletion!: () => void;
   const completion = new Promise<void>((resolve) => {
-    state.resolveCompletion = resolve;
+    resolveCompletion = resolve;
   });
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
@@ -108,6 +111,31 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const turnIdRef: { current?: string } = {};
   const userInputBridgeRef: { current?: ReturnType<typeof createCodexUserInputBridge> } = {};
   const steeringQueueRef: { current?: ReturnType<typeof createCodexSteeringQueue> } = {};
+  const completeTurn = () => {
+    if (state.completed) {
+      return;
+    }
+    state.completed = true;
+    turnWatches.clearAllTimers();
+    resolveCompletion();
+  };
+  const interruptTurn = async (
+    turnId: string,
+    completionOptions?: { locallyCompleted?: boolean; timeoutMs?: number },
+  ) => {
+    if (completionOptions?.locallyCompleted) {
+      state.localCompletionRequested = true;
+    }
+    const completed = await interruptCodexTurnAndWaitBestEffort(resourceState.client, {
+      threadId: resourceState.thread.threadId,
+      turnId,
+      timeoutMs: completionOptions?.timeoutMs,
+    });
+    if (!completed) {
+      await closeCodexStartupClientBestEffort(resourceState.client);
+    }
+    return completed;
+  };
   const renewNativeHookRelayForTurnProgress = () => {
     if (!resourceState.nativeHookRelay || options.nativeHookRelay?.ttlMs !== undefined) {
       return;
@@ -147,7 +175,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnAttemptIdleTimeoutMs,
     turnTerminalIdleTimeoutMs,
     interruptTimeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-    onInterruptTurn: (input) => interruptCodexTurnBestEffort(resourceState.client, input),
+    onInterruptTurn: ({ turnId, timeoutMs }) =>
+      interruptTurn(turnId, { locallyCompleted: true, timeoutMs }),
     onTimeout: (timeout) => {
       state.timedOut = true;
       state.turnCompletionIdleTimedOut = true;
@@ -158,13 +187,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       state.turnWatchTimeoutDetails = timeout.details;
       state.turnCompletionIdleTimeoutMessage =
         "codex app-server turn idle timed out waiting for turn/completed";
+      projectorRef.current?.markTimedOut();
     },
-    onMarkTimedOut: () => projectorRef.current?.markTimedOut(),
     onAbort: (reason) => runAbortController.abort(reason),
-    onCompleted: () => {
-      state.completed = true;
-    },
-    onResolveCompletion: () => state.resolveCompletion?.(),
+    onCompleted: completeTurn,
     onRecordEvent: (name, fields) => trajectoryRecorder?.recordEvent(name, fields),
     onAttemptProgress: (reason) => {
       renewNativeHookRelayForTurnProgress();
@@ -202,6 +228,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     turnIdRef,
     userInputBridgeRef,
     steeringQueueRef,
+    completeTurn,
+    interruptTurn,
     renewNativeHookRelayForTurnProgress,
     turnWatches,
   };

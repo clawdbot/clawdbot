@@ -105,6 +105,7 @@ const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
 const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
 const DEFAULT_HASH_OUTPUT = "docs/.generated/config-baseline.sha256";
 const DEFAULT_COUNTS_OUTPUT = "docs/.generated/config-baseline.counts.json";
+// A successful schema snapshot is process-stable; failures clear below so tooling can retry.
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],

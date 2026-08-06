@@ -40,6 +40,7 @@ type ClearedLaneResume = {
 type SessionSuspensionRuntimeState = {
   laneResumeTimers: Map<string, LaneResumeTimer>;
   clearedLaneResumes: Map<string, ClearedLaneResume>;
+  gatewayLaneResumeConcurrencies: Map<string, number>;
   pendingSuspensionWrites: Map<
     string,
     {
@@ -66,6 +67,7 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
     () => ({
       laneResumeTimers: new Map<string, LaneResumeTimer>(),
       clearedLaneResumes: new Map<string, ClearedLaneResume>(),
+      gatewayLaneResumeConcurrencies: new Map<string, number>(),
       pendingSuspensionWrites: new Map<
         string,
         {
@@ -82,6 +84,9 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
   );
   if (!state.clearedLaneResumes) {
     state.clearedLaneResumes = new Map<string, ClearedLaneResume>();
+  }
+  if (!state.gatewayLaneResumeConcurrencies) {
+    state.gatewayLaneResumeConcurrencies = new Map<string, number>();
   }
   if (!state.pendingSuspensionWrites) {
     state.pendingSuspensionWrites = new Map<
@@ -129,6 +134,7 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
       return resolveSubagentMaxConcurrent(cfg);
     case "cron":
     case "cron-nested":
+    case "hook-dispatch":
       return resolveCronMaxConcurrentRuns();
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
@@ -144,6 +150,7 @@ function isGatewayManagedLane(laneId: string): boolean {
     lane === CommandLane.Subagent ||
     lane === CommandLane.Cron ||
     lane === CommandLane.CronNested ||
+    lane === CommandLane.HookDispatch ||
     lane === CommandLane.Nested
   );
 }
@@ -188,21 +195,31 @@ function scheduleLaneAutoResume(
   if (existing) {
     clearTimeout(existing.timer);
   }
+  const canonicalResumeConcurrency = isGatewayManagedLane(laneId)
+    ? (state.gatewayLaneResumeConcurrencies.get(laneId) ?? resumeConcurrency)
+    : resumeConcurrency;
+  const entry = {
+    timer: undefined as unknown as ReturnType<typeof setTimeout>,
+    resumeConcurrency: canonicalResumeConcurrency,
+    resumeAtMs: nowMs + delayMs,
+  };
   const timer = setTimeout(() => {
-    if (state.laneResumeTimers.get(laneId)?.timer === timer) {
-      state.laneResumeTimers.delete(laneId);
+    if (state.laneResumeTimers.get(laneId) !== entry) {
+      return;
     }
-    setCommandLaneConcurrency(laneId, resumeConcurrency);
+    state.laneResumeTimers.delete(laneId);
+    setCommandLaneConcurrency(laneId, entry.resumeConcurrency);
     log.info("auto-resumed lane after suspension TTL", {
       laneId,
       delayMs,
-      resumeConcurrency,
+      resumeConcurrency: entry.resumeConcurrency,
     });
   }, delayMs);
+  entry.timer = timer;
   if (typeof timer.unref === "function") {
     timer.unref();
   }
-  state.laneResumeTimers.set(laneId, { timer, resumeConcurrency, resumeAtMs: nowMs + delayMs });
+  state.laneResumeTimers.set(laneId, entry);
 }
 
 export function clearSessionSuspensionTimers(): number {
@@ -222,38 +239,57 @@ export function clearSessionSuspensionTimers(): number {
   return cleared;
 }
 
-export function enableSessionSuspensionTimersForGatewayStart(
-  resolveResumeConcurrency: (laneId: string, savedResumeConcurrency: number) => number = (
-    _laneId,
-    savedResumeConcurrency,
-  ) => savedResumeConcurrency,
-): Set<string> {
+export function enableSessionSuspensionTimersForGatewayStart(): Set<string> {
   const state = getSessionSuspensionState();
   state.cleanupGeneration += 1;
   state.cleanupActive = false;
   const suspendedLaneIds = new Set<string>();
   const nowMs = Date.now();
   for (const [laneId, cleared] of state.clearedLaneResumes) {
-    const resumeConcurrency = resolveResumeConcurrency(laneId, cleared.resumeConcurrency);
     const remainingMs = resolveTimerTimeoutMs(cleared.resumeAtMs - nowMs, 0, 0);
     if (remainingMs > 0) {
       setCommandLaneConcurrency(laneId, 0);
-      scheduleLaneAutoResume(laneId, remainingMs, resumeConcurrency, { nowMs });
+      scheduleLaneAutoResume(laneId, remainingMs, cleared.resumeConcurrency, { nowMs });
       suspendedLaneIds.add(laneId);
       continue;
     }
     if (isGatewayManagedLane(laneId)) {
       continue;
     }
-    setCommandLaneConcurrency(laneId, resumeConcurrency);
+    setCommandLaneConcurrency(laneId, cleared.resumeConcurrency);
   }
   state.clearedLaneResumes.clear();
   return suspendedLaneIds;
 }
 
-export function getCleanupSuspendedLaneIdsForGatewayPublication(): Set<string> {
+export function setGatewayLaneResumeConcurrencies(
+  concurrencies: Readonly<Record<string, number>>,
+): void {
+  // Gateway publication owns the desired post-suspension widths. Record them
+  // even when no timer exists yet so an asynchronous suspension write that
+  // finishes after a config reload cannot schedule a stale resume target.
   const state = getSessionSuspensionState();
-  return state.cleanupActive ? new Set(state.clearedLaneResumes.keys()) : new Set<string>();
+  for (const [laneId, rawConcurrency] of Object.entries(concurrencies)) {
+    if (!isGatewayManagedLane(laneId)) {
+      continue;
+    }
+    const resumeConcurrency = Math.max(0, Math.floor(rawConcurrency));
+    state.gatewayLaneResumeConcurrencies.set(laneId, resumeConcurrency);
+    const activeTimer = state.laneResumeTimers.get(laneId);
+    if (activeTimer) {
+      activeTimer.resumeConcurrency = resumeConcurrency;
+    }
+    const clearedResume = state.clearedLaneResumes.get(laneId);
+    if (clearedResume) {
+      clearedResume.resumeConcurrency = resumeConcurrency;
+    }
+  }
+}
+
+export function getSuspendedLaneIdsForGatewayPublication(): Set<string> {
+  const state = getSessionSuspensionState();
+  const suspended = state.cleanupActive ? state.clearedLaneResumes : state.laneResumeTimers;
+  return new Set(suspended.keys());
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
@@ -415,14 +451,17 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
 
 function resetSessionSuspensionStateForTest(): void {
   const state = getSessionSuspensionState();
+  // Invalidate in-flight writes before clearing test state. Rewinding to a
+  // reused generation lets a fire-and-forget suspension regain ownership.
+  state.cleanupGeneration += 1;
   for (const entry of state.laneResumeTimers.values()) {
     clearTimeout(entry.timer);
   }
   state.laneResumeTimers.clear();
   state.clearedLaneResumes.clear();
+  state.gatewayLaneResumeConcurrencies.clear();
   state.pendingSuspensionWrites.clear();
   state.suspensionWriteChain = Promise.resolve();
-  state.cleanupGeneration = 0;
   state.cleanupActive = false;
 }
 

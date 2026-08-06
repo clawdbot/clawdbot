@@ -391,6 +391,21 @@ describe("readClawManifestFile", () => {
       throw new Error("expected package to parse");
     }
     expect(result.source).not.toHaveProperty("manifestFormatPath");
+    expect(result.clawMarkdownBody?.toString("utf8")).toBe("\n# GitHub Triage");
+    const plan = await buildClawAddPlan({
+      manifest: result.manifest,
+      clawMarkdownBody: result.clawMarkdownBody,
+      source: result.source,
+      context: { workspace: join(root, "workspace-triage") },
+    });
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        sourceKind: "clawMarkdownBody",
+        digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+    );
   });
 
   it("accepts a UTF-8 BOM and includes its bytes in snapshot integrity", async () => {
@@ -484,7 +499,7 @@ describe("readClawManifestFile", () => {
     );
   });
 
-  it("hashes original CLAW.md bytes rather than decoded text", async () => {
+  it("rejects a CLAW.md body that is not valid UTF-8", async () => {
     const root = tempDirs.make("openclaw-claw-markdown-original-bytes-");
     const path = join(root, "CLAW.md");
     const frontmatter = Buffer.from(
@@ -501,15 +516,41 @@ describe("readClawManifestFile", () => {
       ].join("\n"),
     );
     await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x80])]));
-    const first = await readClawManifestFile(path);
-    await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x81])]));
-    const second = await readClawManifestFile(path);
+    const result = await readClawManifestFile(path);
 
-    expect(first.ok && second.ok).toBe(true);
-    if (!first.ok || !second.ok) {
-      throw new Error("expected CLAW.md bodies to parse");
-    }
-    expect(second.source.integrity).not.toBe(first.source.integrity);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "invalid_claw_markdown_utf8" }),
+    );
+  });
+
+  it("rejects two competing SOUL.md sources", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-soul-conflict-");
+    const path = join(root, "CLAW.md");
+    await writeFile(
+      path,
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent: { id: triage }",
+        "workspace:",
+        "  bootstrapFiles:",
+        "    SOUL.md: { source: workspace/SOUL.md }",
+        "packages: []",
+        "mcpServers: {}",
+        "cronJobs: []",
+        "---",
+        "Portable soul",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(path);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "claw_body_soul_conflict" }),
+    );
   });
 
   it("synthesizes explicit development identity for a standalone manifest", async () => {
@@ -736,6 +777,46 @@ describe("buildClawAddPlan", () => {
           }),
         }),
       ]),
+    );
+  });
+
+  it("includes package setup requirements in plan readiness", async () => {
+    const { source, workspace } = await createPlanSource();
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: {
+        workspace,
+        packagePreflight: async (pkg) => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${"a".repeat(64)}`,
+          ...(pkg.kind === "plugin"
+            ? {
+                installId: "github",
+                requirements: [
+                  {
+                    kind: "plugin-setup" as const,
+                    plugin: "github",
+                    provider: "github",
+                    envVars: ["GITHUB_TOKEN"],
+                    authMethods: ["token"],
+                  },
+                ],
+              }
+            : {}),
+        }),
+      },
+    });
+
+    expect(plan.readiness.ready).toBe(false);
+    expect(plan.readiness.requirements).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "plugin-setup", plugin: "github" })]),
+    );
+    expect(plan.actions.find((action) => action.id === "plugin:@acme/github")?.details).toEqual(
+      expect.objectContaining({
+        prerequisites: expect.arrayContaining([expect.objectContaining({ kind: "plugin-setup" })]),
+      }),
     );
   });
 

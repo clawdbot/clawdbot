@@ -5,23 +5,30 @@ import type {
   Llama,
   LlamaContext,
   LlamaContextSequence,
+  LlamaChatResponseChunk,
+  LlamaChatResponseFunctionCallParamsChunk,
   LlamaModel,
 } from "node-llama-cpp";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type {
-  AssistantMessage,
-  Context,
-  StopReason,
-  ToolCall,
-  Usage,
-} from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Context, StopReason, ToolCall } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, parseStreamingJson } from "openclaw/plugin-sdk/llm";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
+import {
+  buildMessage,
+  runtimeUnavailableErrorMessage,
+  runtimeUnavailableMessage,
+  zeroCostUsage,
+} from "./inference-messages.js";
+import {
+  createLlamaCppInferenceRuntimeToken,
+  type LlamaCppInferenceRuntimeToken,
+} from "./inference-runtime-coordinator.js";
 import {
   formatLlamaCppSetupError,
   importNodeLlamaCpp,
@@ -38,41 +45,24 @@ type LoadedModel = {
 
 type LlamaJsonSchemaInput = Parameters<Llama["createGrammarForJsonSchema"]>[0];
 
-// Process-owned, single-slot cache. A model/context pair lives until another
-// model replaces it or the process exits, bounding resident model memory.
-let loadedModel: LoadedModel | undefined;
-let llamaInstance: Llama | undefined;
-let operationQueue: Promise<void> = Promise.resolve();
+type LlamaCppInferenceRuntimeState = {
+  admission: LlamaCppInferenceRuntimeToken;
+  loadedModel?: LoadedModel;
+  llamaInstance?: Llama;
+  operationQueue: Promise<void>;
+  lifecycle: "open" | "closing" | "closed";
+  cleanupFailure?: { error: Error };
+  retiringRuntimeFailure?: boolean;
+  disposePromise?: Promise<void>;
+};
 
-function zeroCostUsage(input = 0, output = 0): Usage {
-  return {
-    input,
-    output,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: input + output,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
+type LlamaCppInferenceRuntime = {
+  createStreamFn: (params: { providerConfig?: ModelProviderConfig }) => StreamFn;
+  dispose: () => Promise<void>;
+};
 
-function buildMessage(params: {
-  model: Parameters<StreamFn>[0];
-  content: AssistantMessage["content"];
-  stopReason: StopReason;
-  usage?: Usage;
-  errorMessage?: string;
-}): AssistantMessage {
-  return {
-    role: "assistant",
-    content: params.content,
-    api: params.model.api,
-    provider: params.model.provider,
-    model: params.model.id,
-    stopReason: params.stopReason,
-    usage: params.usage ?? zeroCostUsage(),
-    timestamp: Date.now(),
-    ...(params.errorMessage ? { errorMessage: params.errorMessage } : {}),
-  };
+function runtimeRequiresRestart(state: LlamaCppInferenceRuntimeState): boolean {
+  return Boolean(state.cleanupFailure || state.retiringRuntimeFailure);
 }
 
 function extractText(content: unknown): string {
@@ -219,24 +209,47 @@ function resolveContextSize(
   if (typeof configured === "number") {
     return configured;
   }
+  const advertisedCap =
+    typeof model.contextWindow === "number" && model.contextWindow > 0
+      ? Math.floor(model.contextWindow)
+      : DEFAULT_LLAMA_CPP_CONTEXT_SIZE;
+  // Advertised capacity is a ceiling, not permission to silently exceed the
+  // established local-memory default; explicit runtime caps can still opt in.
   const modelCap =
     typeof model.contextTokens === "number" && model.contextTokens > 0
       ? Math.floor(model.contextTokens)
-      : DEFAULT_LLAMA_CPP_CONTEXT_SIZE;
+      : Math.min(advertisedCap, DEFAULT_LLAMA_CPP_CONTEXT_SIZE);
   return { max: modelCap };
 }
 
-async function disposeLoadedModel(): Promise<void> {
-  if (!loadedModel) {
+async function disposeLoadedModel(state: LlamaCppInferenceRuntimeState): Promise<void> {
+  if (!state.loadedModel) {
     return;
   }
-  const previous = loadedModel;
-  loadedModel = undefined;
-  await previous.context.dispose();
-  await previous.model.dispose();
+  const previous = state.loadedModel;
+  state.loadedModel = undefined;
+  try {
+    await previous.context.dispose();
+    await previous.model.dispose();
+  } catch (error) {
+    recordCleanupFailure(state, error);
+    throw error;
+  }
+}
+
+function recordCleanupFailure(state: LlamaCppInferenceRuntimeState, error: unknown): void {
+  state.cleanupFailure ??= { error: error instanceof Error ? error : new Error(String(error)) };
+  state.lifecycle = "closed";
+  state.admission.fail(state.cleanupFailure.error);
+}
+
+function recordRetiringRuntimeFailure(state: LlamaCppInferenceRuntimeState): void {
+  state.retiringRuntimeFailure = true;
+  state.lifecycle = "closed";
 }
 
 async function getLoadedModel(params: {
+  state: LlamaCppInferenceRuntimeState;
   runtime: NodeLlamaCppModule;
   model: Parameters<StreamFn>[0];
   providerConfig?: ModelProviderConfig;
@@ -249,12 +262,12 @@ async function getLoadedModel(params: {
   });
   const contextSize = resolveContextSize(params.model, params.providerConfig);
   const key = `${modelPath}\0${JSON.stringify(contextSize)}`;
-  if (loadedModel?.key === key) {
-    return loadedModel;
+  if (params.state.loadedModel?.key === key) {
+    return params.state.loadedModel;
   }
-  await disposeLoadedModel();
-  const llama = llamaInstance ?? (await params.runtime.getLlama());
-  llamaInstance = llama;
+  await disposeLoadedModel(params.state);
+  const llama = params.state.llamaInstance ?? (await params.runtime.getLlama());
+  params.state.llamaInstance = llama;
   const fitContextSize = typeof contextSize === "number" ? contextSize : contextSize.max;
   const model = await llama.loadModel({
     modelPath,
@@ -267,35 +280,83 @@ async function getLoadedModel(params: {
     // Serialized requests reuse this one sequence. Disposing/reallocating it per
     // turn races node-llama-cpp's asynchronous sequence-id reclamation.
     const sequence = context.getSequence();
-    loadedModel = { key, llama, model, context, sequence };
-    return loadedModel;
+    params.state.loadedModel = { key, llama, model, context, sequence };
+    return params.state.loadedModel;
   } catch (error) {
-    await context?.dispose();
-    await model.dispose();
+    try {
+      await context?.dispose();
+      await model.dispose();
+    } catch (cleanupError) {
+      recordCleanupFailure(params.state, cleanupError);
+      throw cleanupError;
+    }
     throw error;
   }
 }
 
-async function serialize(operation: () => Promise<void>): Promise<void> {
-  const current = operationQueue.then(operation, operation);
-  operationQueue = current.catch(() => undefined);
+async function serialize(
+  state: LlamaCppInferenceRuntimeState,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const current = state.operationQueue.then(operation, operation);
+  state.operationQueue = current.catch(() => undefined);
   await current;
 }
 
-async function clearLlamaCppInferenceCacheForTests(): Promise<void> {
-  await serialize(async () => {
-    await disposeLoadedModel();
-    if (llamaInstance) {
-      await llamaInstance.dispose();
-      llamaInstance = undefined;
+function disposeLlamaCppInferenceRuntime(state: LlamaCppInferenceRuntimeState): Promise<void> {
+  if (state.disposePromise) {
+    return state.disposePromise;
+  }
+  if (state.cleanupFailure) {
+    state.disposePromise = Promise.reject(state.cleanupFailure.error);
+    return state.disposePromise;
+  }
+  state.lifecycle = "closing";
+  state.admission.close();
+  // node-llama-cpp disposers are one-shot and child cleanup releases the
+  // parent's disposal guard. Do not force parent cleanup after a child rejects:
+  // the retained guard can make that parent disposer wait forever.
+  state.disposePromise = serialize(state, async () => {
+    if (state.cleanupFailure) {
+      throw state.cleanupFailure.error;
     }
-  });
+    await disposeLoadedModel(state);
+    if (state.llamaInstance) {
+      const previous = state.llamaInstance;
+      await previous.dispose();
+      if (state.llamaInstance === previous) {
+        state.llamaInstance = undefined;
+      }
+    }
+    state.admission.release();
+  })
+    .catch((error: unknown) => {
+      recordCleanupFailure(state, error);
+      throw error;
+    })
+    .finally(() => {
+      state.lifecycle = "closed";
+    });
+  return state.disposePromise;
 }
 
-export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderConfig }): StreamFn {
-  return (model, context, options) => {
+function createLlamaCppStreamFnForRuntime(
+  state: LlamaCppInferenceRuntimeState,
+  params: { providerConfig?: ModelProviderConfig },
+): StreamFn {
+  return createPlainTextToolCallCompatWrapper((model, context, options) => {
     const stream = createAssistantMessageEventStream();
+    if (state.lifecycle !== "open") {
+      stream.push({
+        type: "error",
+        reason: "error",
+        error: runtimeUnavailableMessage(model, runtimeRequiresRestart(state)),
+      });
+      stream.end();
+      return stream;
+    }
     let streamedText = "";
+    const streamedContent: AssistantMessage["content"] = [];
     let generationAborted = false;
     let started = false;
     let ended = false;
@@ -328,8 +389,25 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
       started = true;
       signal?.removeEventListener("abort", abortWhileQueued);
       try {
+        if (state.lifecycle !== "open") {
+          stream.push({
+            type: "error",
+            reason: "error",
+            error: runtimeUnavailableMessage(model, runtimeRequiresRestart(state)),
+          });
+          return;
+        }
+        await state.admission.acquire({
+          signal,
+          isLive: () => state.lifecycle === "open",
+          onRestartRequired: () => recordRetiringRuntimeFailure(state),
+        });
+        if (state.lifecycle !== "open") {
+          throw new Error("llama.cpp runtime is stopping");
+        }
         const runtime = await importNodeLlamaCpp();
         const loaded = await getLoadedModel({
+          state,
           runtime,
           model,
           providerConfig: params.providerConfig,
@@ -343,24 +421,148 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
         });
         const before = sequence.tokenMeter.getState();
         const functions = mapToolsToLlamaFunctions(context);
-        let textStarted = false;
+        const streamedToolCalls = new Map<
+          number,
+          { toolCall: ToolCall; contentIndex: number; partialArgs: string }
+        >();
+        let streamStarted = false;
+        let activeThinking: { contentIndex: number; thinking: string } | undefined;
+        let activeText: { contentIndex: number; text: string } | undefined;
         const partial = () =>
           buildMessage({
             model,
-            content: streamedText ? [{ type: "text", text: streamedText }] : [],
+            content: [...streamedContent],
             stopReason: "stop",
           });
+        const ensureStreamStarted = () => {
+          if (streamStarted) {
+            return;
+          }
+          streamStarted = true;
+          stream.push({ type: "start", partial: partial() });
+        };
+        const closeThinkingBlock = () => {
+          if (!activeThinking) {
+            return;
+          }
+          const thinking = activeThinking;
+          activeThinking = undefined;
+          stream.push({
+            type: "thinking_end",
+            contentIndex: thinking.contentIndex,
+            content: thinking.thinking,
+            partial: partial(),
+          });
+        };
+        const closeTextBlock = () => {
+          if (!activeText) {
+            return;
+          }
+          const text = activeText;
+          activeText = undefined;
+          stream.push({
+            type: "text_end",
+            contentIndex: text.contentIndex,
+            content: text.text,
+            partial: partial(),
+          });
+        };
+        const appendThinkingChunk = (chunk: LlamaChatResponseChunk) => {
+          if (chunk.type !== "segment" || chunk.segmentType !== "thought") {
+            return;
+          }
+          if (chunk.text) {
+            closeTextBlock();
+            if (!activeThinking) {
+              ensureStreamStarted();
+              activeThinking = { contentIndex: streamedContent.length, thinking: "" };
+              streamedContent.push({ type: "thinking", thinking: "" });
+              stream.push({
+                type: "thinking_start",
+                contentIndex: activeThinking.contentIndex,
+                partial: partial(),
+              });
+            }
+            activeThinking.thinking += chunk.text;
+            streamedContent[activeThinking.contentIndex] = {
+              type: "thinking",
+              thinking: activeThinking.thinking,
+            };
+            stream.push({
+              type: "thinking_delta",
+              contentIndex: activeThinking.contentIndex,
+              delta: chunk.text,
+              partial: partial(),
+            });
+          }
+          if (chunk.segmentEndTime) {
+            closeThinkingBlock();
+          }
+        };
         const appendTextDelta = (delta: string) => {
           if (!delta) {
             return;
           }
-          if (!textStarted) {
-            textStarted = true;
-            stream.push({ type: "start", partial: partial() });
-            stream.push({ type: "text_start", contentIndex: 0, partial: partial() });
+          closeThinkingBlock();
+          if (!activeText) {
+            ensureStreamStarted();
+            activeText = { contentIndex: streamedContent.length, text: "" };
+            streamedContent.push({ type: "text", text: "" });
+            stream.push({
+              type: "text_start",
+              contentIndex: activeText.contentIndex,
+              partial: partial(),
+            });
           }
           streamedText += delta;
-          stream.push({ type: "text_delta", contentIndex: 0, delta });
+          activeText.text += delta;
+          streamedContent[activeText.contentIndex] = { type: "text", text: activeText.text };
+          stream.push({
+            type: "text_delta",
+            contentIndex: activeText.contentIndex,
+            delta,
+          });
+        };
+        const appendFunctionCallParamsChunk = (chunk: LlamaChatResponseFunctionCallParamsChunk) => {
+          closeThinkingBlock();
+          closeTextBlock();
+          let callState = streamedToolCalls.get(chunk.callIndex);
+          if (!callState) {
+            ensureStreamStarted();
+            callState = {
+              toolCall: {
+                type: "toolCall",
+                id: `llama_cpp_call_${randomUUID()}`,
+                name: chunk.functionName,
+                arguments: {},
+              },
+              contentIndex: streamedContent.length,
+              partialArgs: "",
+            };
+            streamedToolCalls.set(chunk.callIndex, callState);
+            streamedContent.push(callState.toolCall);
+            stream.push({
+              type: "toolcall_start",
+              contentIndex: callState.contentIndex,
+              partial: partial(),
+            });
+          }
+          if (chunk.paramsChunk) {
+            callState.partialArgs += chunk.paramsChunk;
+            // Replace the block so already queued partial snapshots retain the
+            // exact argument state they exposed before this streamed delta.
+            callState.toolCall = {
+              ...callState.toolCall,
+              arguments: parseStreamingJson(callState.partialArgs),
+            };
+            streamedContent[callState.contentIndex] = callState.toolCall;
+            stream.push({
+              type: "toolcall_delta",
+              contentIndex: callState.contentIndex,
+              delta: chunk.paramsChunk,
+              partial: partial(),
+            });
+          }
         };
         try {
           // node-llama-cpp makes grammar and functions mutually exclusive. Tool
@@ -378,8 +580,13 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
             temperature: options?.temperature,
             customStopTriggers: options?.stop,
             onTextChunk: appendTextDelta,
+            ...(model.reasoning ? { onResponseChunk: appendThinkingChunk } : {}),
             ...(functions
-              ? { functions, documentFunctionParams: true as const }
+              ? {
+                  functions,
+                  documentFunctionParams: true as const,
+                  onFunctionCallParamsChunk: appendFunctionCallParamsChunk,
+                }
               : grammar
                 ? { grammar }
                 : {}),
@@ -396,29 +603,52 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           if (!streamedText && result.response) {
             appendTextDelta(result.response);
           }
-          const content: AssistantMessage["content"] = streamedText
-            ? [{ type: "text", text: streamedText }]
-            : [];
-          if (textStarted) {
+          closeThinkingBlock();
+          closeTextBlock();
+          // A max-token result can contain previously completed calls while a
+          // later call was truncated. Its terminal owns the entire generation.
+          const confirmedCalls =
+            result.metadata.stopReason === "maxTokens" ? [] : (result.functionCalls ?? []);
+          const toolCalls: ToolCall[] = confirmedCalls.map((call, callIndex) => {
+            let callState = streamedToolCalls.get(callIndex);
+            const argumentsObject = normalizeArguments(call.params);
+            if (!callState) {
+              appendFunctionCallParamsChunk({
+                callIndex,
+                functionName: call.functionName,
+                paramsChunk: JSON.stringify(argumentsObject),
+                done: true,
+              });
+              callState = streamedToolCalls.get(callIndex);
+            }
+            if (!callState) {
+              throw new Error("llama.cpp native tool call stream state is missing");
+            }
+            callState.toolCall = {
+              ...callState.toolCall,
+              name: call.functionName,
+              arguments: argumentsObject,
+            };
+            streamedContent[callState.contentIndex] = callState.toolCall;
+            // The dependency reports its final argument chunk before checking the
+            // token budget; only this authoritative result can complete a call.
             stream.push({
-              type: "text_end",
-              contentIndex: 0,
-              content: streamedText,
+              type: "toolcall_end",
+              contentIndex: callState.contentIndex,
+              toolCall: callState.toolCall,
               partial: partial(),
             });
-          }
-          const toolCalls: ToolCall[] = (result.functionCalls ?? []).map((call) => ({
-            type: "toolCall",
-            id: `llama_cpp_call_${randomUUID()}`,
-            name: call.functionName,
-            arguments: normalizeArguments(call.params),
-          }));
-          content.push(...toolCalls);
+            return callState.toolCall;
+          });
+          const confirmedToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+          const content = streamedContent.filter(
+            (block) => block.type !== "toolCall" || confirmedToolCallIds.has(block.id),
+          );
           const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-            toolCalls.length > 0
-              ? "toolUse"
-              : result.metadata.stopReason === "maxTokens"
-                ? "length"
+            result.metadata.stopReason === "maxTokens"
+              ? "length"
+              : toolCalls.length > 0
+                ? "toolUse"
                 : "stop";
           const message = buildMessage({
             model,
@@ -433,13 +663,17 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
       } catch (error) {
         const aborted = generationAborted || options?.signal?.aborted === true;
         const reason = aborted ? "aborted" : "error";
-        const errorMessage = aborted ? "Request was aborted" : formatLlamaCppSetupError(error);
+        const errorMessage = aborted
+          ? "Request was aborted"
+          : state.lifecycle !== "open"
+            ? runtimeUnavailableErrorMessage(runtimeRequiresRestart(state))
+            : formatLlamaCppSetupError(error);
         stream.push({
           type: "error",
           reason,
           error: buildMessage({
             model,
-            content: streamedText ? [{ type: "text", text: streamedText }] : [],
+            content: streamedContent.filter((block) => block.type !== "toolCall"),
             stopReason: reason,
             errorMessage,
           }),
@@ -450,16 +684,29 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
       }
     };
     if (!ended) {
-      queueMicrotask(() => void serialize(run));
+      void serialize(state, run);
     }
     return stream;
+  });
+}
+
+export function createLlamaCppInferenceRuntime(): LlamaCppInferenceRuntime {
+  const state: LlamaCppInferenceRuntimeState = {
+    admission: createLlamaCppInferenceRuntimeToken(),
+    operationQueue: Promise.resolve(),
+    lifecycle: "open",
+  };
+  return {
+    createStreamFn: (params) => createLlamaCppStreamFnForRuntime(state, params),
+    dispose: () => disposeLlamaCppInferenceRuntime(state),
   };
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.llamaCppInferenceTestApi")] = {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const testApiKey = Symbol.for("openclaw.llamaCppInferenceTestApi");
+  Object.assign((globalStore[testApiKey] ??= {}), {
     mapContextToLlamaChatHistory,
     mapToolsToLlamaFunctions,
-    clearLlamaCppInferenceCacheForTests,
-  };
+  });
 }

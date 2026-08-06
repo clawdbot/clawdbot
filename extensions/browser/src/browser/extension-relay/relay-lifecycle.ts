@@ -55,7 +55,7 @@ export async function ensureExtensionRelayForProfile(
     // Resolve one canonical desired profile after applying that token so the
     // intentional auth-derived cdpUrl change is not mistaken for config drift.
     const { ensureExtensionRelayToken, readExtensionRelayToken } = await import("./relay-auth.js");
-    const token = readExtensionRelayToken() ?? ensureExtensionRelayToken();
+    const token = readExtensionRelayToken() ?? (await ensureExtensionRelayToken());
     if (state.resolved.extensionRelayToken !== token) {
       state.resolved = { ...state.resolved, extensionRelayToken: token };
     }

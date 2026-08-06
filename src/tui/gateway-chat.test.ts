@@ -665,7 +665,7 @@ describe("GatewayChatClient", () => {
     expect(stopped).toBe(true);
   });
 
-  it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", async () => {
+  it("identifies the TUI and forwards one structured connect failure per failed socket", async () => {
     const constructedOptions: Array<Record<string, unknown>> = [];
 
     vi.resetModules();
@@ -705,6 +705,45 @@ describe("GatewayChatClient", () => {
         tlsFingerprint: "sha256:11:22:33:44",
         deviceIdentity: null,
       });
+      const onConnectError = vi.fn();
+      const onDisconnected = vi.fn();
+      client.onConnectError = onConnectError;
+      client.onDisconnected = onDisconnected;
+      const connectError = new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: "pair-1" },
+      });
+      const options = constructedOptions[0] as {
+        onConnectError?: (error: Error) => void;
+        onHelloOk?: (hello: unknown) => void;
+        onClose?: (code: number, reason: string) => void;
+      };
+
+      options.onConnectError?.(connectError);
+      options.onConnectError?.(new Error("duplicate failure for the same socket"));
+      options.onClose?.(1008, "pairing required");
+
+      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(connectError);
+      expect(onDisconnected).not.toHaveBeenCalled();
+
+      const retryError = new Error("retry failed");
+      options.onConnectError?.(retryError);
+      expect(onConnectError).toHaveBeenCalledOnce();
+      options.onHelloOk?.({});
+      options.onConnectError?.(retryError);
+      expect(onConnectError).toHaveBeenNthCalledWith(2, retryError);
+
+      options.onHelloOk?.({});
+      onDisconnected.mockClear();
+      client.onConnectError = (error) => {
+        onConnectError(error);
+        client.onConnectError = undefined;
+      };
+      (
+        client as unknown as { notifyUnclosedConnectError: (error: Error) => void }
+      ).notifyUnclosedConnectError(new Error("one-shot structured failure"));
+      expect(onDisconnected).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();

@@ -2,6 +2,7 @@ import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./router-outlet.ts";
 
 type RouteId = "page" | "next";
@@ -46,10 +47,9 @@ afterEach(() => {
 });
 
 async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    await Promise.resolve();
-    await outlet.updateComplete;
-  }
+  // The outlet resolves route work in promise chains that each schedule another render,
+  // so drain to Lit's settled state rather than pumping a fixed number of cycles.
+  await settleLitElement(outlet);
 }
 
 describe("openclaw-router-outlet", () => {

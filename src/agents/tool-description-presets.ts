@@ -2,7 +2,7 @@
 // descriptions when a longer contextual description is assembled elsewhere.
 export const EXEC_TOOL_DISPLAY_SUMMARY = "Run shell now.";
 export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
-export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.";
+export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, automations, wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
@@ -15,6 +15,33 @@ export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track short work plan.";
 export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answer.";
 export const SPAWN_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
+
+// Mirrors plugin-sdk SessionToolsVisibility; kept local because importing that
+// module here would close an agents<->plugin-sdk madge cycle. Call sites pass
+// the policy union, so a new mode fails compilation at every consumer.
+type SessionVisibilityScope = "self" | "tree" | "agent" | "all";
+
+// Single source for model-facing session-visibility scope wording; every tool
+// description or warning that explains visibility renders through this so the
+// prose cannot drift from the session-visibility checker (openclaw#114797).
+const SESSION_VISIBILITY_SCOPE_COPY = {
+  self: "current session only",
+  tree: "current session + own spawn subtree; reads also cover any watched same-agent group sessions",
+  agent: "all sessions of this agent",
+  all: "all sessions, cross-agent per tools.agentToAgent",
+} satisfies Record<SessionVisibilityScope, string>;
+
+export function describeSessionVisibilityScope(
+  visibility: SessionVisibilityScope,
+  options?: { spawnRestricted?: boolean },
+): string {
+  // Sandboxed sessions under the "spawned" clamp list/read only spawned rows,
+  // so the tree watched-read clause would promise reads that context denies.
+  if (options?.spawnRestricted && visibility === "tree") {
+    return "current session + own spawn subtree (sandbox: spawned sessions only)";
+  }
+  return SESSION_VISIBILITY_SCOPE_COPY[visibility];
+}
 
 /** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(): string {
@@ -57,7 +84,14 @@ export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
   threadAvailable?: boolean;
   swarmEnabled?: boolean;
+  sessionToolsVisibility?: SessionVisibilityScope;
+  spawnRestricted?: boolean;
 }): string {
+  // Callers that resolve the effective visibility get it rendered as fact;
+  // without it the copy must keep the "default" hedge instead of asserting tree.
+  const visibilityLine = options?.sessionToolsVisibility
+    ? `Session listing/addressing obeys \`tools.sessions.visibility\` (${options.sessionToolsVisibility}: ${describeSessionVisibilityScope(options.sessionToolsVisibility, { spawnRestricted: options.spawnRestricted })}).`
+    : `Session listing/addressing obeys \`tools.sessions.visibility\` (\`tree\` default: ${describeSessionVisibilityScope("tree")}).`;
   const runtimeDescription =
     options?.acpAvailable === false
       ? 'Spawn clean child; default `runtime="subagent"`.'
@@ -75,8 +109,8 @@ export function describeSessionsSpawnTool(options?: {
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
-    '`visible=true`: persistent dashboard session; subagent only; omit `mode` (no `mode="run"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherited tool allow/denylist blocks it at spawn with no config override; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`.',
-    "Session listing/addressing obeys `tools.sessions.visibility` (`tree` default: current + own spawn subtree).",
+    '`visible=true`: persistent sidebar dashboard session; use when the user asks to create/open a thread; subagent only; omit `mode` (no `mode="run"`), `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`.',
+    visibilityLine,
     ...(options?.swarmEnabled
       ? [
           "`collect=true` (swarm): parallel fan-out collector children; structured result per `outputSchema`; `groupId` groups a batch; await with agents_wait.",

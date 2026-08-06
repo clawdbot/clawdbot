@@ -40,6 +40,12 @@ class SidebarWorkboardCatalog implements SidebarWorkboardRuntime {
     const reconnecting = connected && !this.connected && this.snapshot.ready;
     this.connected = connected;
     if (!connected || !client) {
+      if (this.load) {
+        // Preserve the cached catalog, but prevent an old request from publishing
+        // after disconnect or blocking a fresh load on a fast reconnect.
+        this.generation += 1;
+        this.load = null;
+      }
       this.clearRetry();
       return;
     }
@@ -92,7 +98,7 @@ class SidebarWorkboardCatalog implements SidebarWorkboardRuntime {
   }
 
   private async ensure(client: GatewayBrowserClient, force: boolean): Promise<boolean> {
-    if (this.disposed || this.client !== client) {
+    if (this.disposed || !this.connected || this.client !== client) {
       return false;
     }
     if (!force && this.snapshot.ready) {
@@ -101,7 +107,7 @@ class SidebarWorkboardCatalog implements SidebarWorkboardRuntime {
     const currentLoad = this.load;
     if (currentLoad?.client === client) {
       const loaded = await currentLoad.promise;
-      if (this.disposed || this.client !== client) {
+      if (this.disposed || !this.connected || this.client !== client) {
         return false;
       }
       if (!force) {
@@ -119,7 +125,13 @@ class SidebarWorkboardCatalog implements SidebarWorkboardRuntime {
     const pending = (async () => {
       try {
         const boards = normalizeBoardsPayload(await client.request("workboard.boards.list", {}));
-        if (!boards || this.disposed || this.client !== client || generation !== this.generation) {
+        if (
+          !boards ||
+          this.disposed ||
+          !this.connected ||
+          this.client !== client ||
+          generation !== this.generation
+        ) {
           return false;
         }
         this.publishCatalog(boards, true);

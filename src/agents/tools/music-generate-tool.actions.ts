@@ -14,9 +14,8 @@ import {
   findDuplicateGuardMusicGenerationTaskForSession,
 } from "../music-generation-task-status.js";
 import {
-  createMediaGenerateDuplicateGuardResult,
   createMediaGenerateProviderListActionResult,
-  createMediaGenerateTaskStatusActions,
+  createMediaGenerateTaskActions,
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
@@ -82,31 +81,16 @@ export function createMusicGenerateListActionResult(
   });
 }
 
-const musicGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
+/** Builds status and duplicate-guard output for music-generation tasks. */
+export const {
+  createStatusActionResult: createMusicGenerateStatusActionResult,
+  createDuplicateGuardResult: createMusicGenerateDuplicateGuardResult,
+} = createMediaGenerateTaskActions({
   inactiveText: "No active music generation task is currently running for this session.",
-  findActiveTask: (sessionKey) => findActiveMusicGenerationTaskForSession(sessionKey) ?? undefined,
+  findActiveTask: findActiveMusicGenerationTaskForSession,
+  // Prompt-only imports must not resolve duplicate guards until an action runs.
+  findDuplicateTask: (sessionKey, request) =>
+    findDuplicateGuardMusicGenerationTaskForSession(sessionKey, request),
   buildStatusText: buildMusicGenerationTaskStatusText,
   buildStatusDetails: buildMusicGenerationTaskStatusDetails,
 });
-
-/** Builds status output for the active music-generation task in the current session. */
-export function createMusicGenerateStatusActionResult(
-  sessionKey?: string,
-): MusicGenerateActionResult {
-  return musicGenerateTaskStatusActions.createStatusActionResult(sessionKey);
-}
-
-/** Returns duplicate-guard status output when a matching music task is already active. */
-export function createMusicGenerateDuplicateGuardResult(
-  sessionKey?: string,
-  params?: { prompt?: string; requestKey?: string },
-): MusicGenerateActionResult | undefined {
-  return createMediaGenerateDuplicateGuardResult({
-    sessionKey,
-    prompt: params?.prompt,
-    requestKey: params?.requestKey,
-    findDuplicateTask: findDuplicateGuardMusicGenerationTaskForSession,
-    buildStatusText: buildMusicGenerationTaskStatusText,
-    buildStatusDetails: buildMusicGenerationTaskStatusDetails,
-  });
-}

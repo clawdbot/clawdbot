@@ -20,8 +20,8 @@ export function classifyRunForRevive(params: {
     head_repository?: { full_name?: string };
   };
   prCreatedAt: string;
-  prHeadBranch?: string;
-  repoFullName?: string;
+  prHeadBranch: string;
+  repoFullName: string;
 }): { action: "revive" | "skip"; reason: string };
 export function runPrCiSweeper(params: {
   github: Record<string, unknown>;

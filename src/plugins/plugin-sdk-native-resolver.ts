@@ -119,6 +119,10 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
   },
 ] as const;
 const pluginSdkNativeAliases = new Map<string, NativeAliasEntry[]>();
+const pluginSdkNativeAliasesByMap = new WeakMap<
+  Record<string, string>,
+  Array<readonly [string, string]>
+>();
 const internalCorePackageHostRoots = new PluginLruCache<string>(128);
 const registeredInternalCorePackageHosts = new PluginLruCache<true>(128);
 let installed = false;
@@ -290,17 +294,20 @@ function listPluginSdkNativeAliases(
   options: InstallOpenClawPluginSdkNativeResolverOptions,
 ): Array<readonly [string, string]> {
   const modulePath = options.pluginModulePath ?? resolveLoaderModulePath(options);
-  return Object.entries(
-    buildPluginLoaderAliasMap(
-      modulePath,
-      options.argv1 ?? process.argv[1],
-      options.moduleUrl,
-      // Native require hooks must point at JavaScript artifacts, even when the
-      // plugin loader itself is configured to prefer source imports.
-      "dist",
-      options.devSourceRoot,
-    ),
-  )
+  const aliasMap = buildPluginLoaderAliasMap(
+    modulePath,
+    options.argv1 ?? process.argv[1],
+    options.moduleUrl,
+    // Native require hooks must point at JavaScript artifacts, even when the
+    // plugin loader itself is configured to prefer source imports.
+    "dist",
+    options.devSourceRoot,
+  );
+  const cached = pluginSdkNativeAliasesByMap.get(aliasMap);
+  if (cached) {
+    return cached;
+  }
+  const aliases = Object.entries(aliasMap)
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
     .filter(([, target]) => isNativeLoadableSdkTarget(target))
     .flatMap(([specifier, target]) => {
@@ -312,6 +319,8 @@ function listPluginSdkNativeAliases(
         [`${specifier}.js`, target],
       ] as Array<readonly [string, string]>;
     });
+  pluginSdkNativeAliasesByMap.set(aliasMap, aliases);
+  return aliases;
 }
 
 function listInternalCorePackageNativeAliases(

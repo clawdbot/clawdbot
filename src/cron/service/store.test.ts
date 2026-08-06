@@ -1,13 +1,14 @@
 // Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-store-seam",
@@ -63,6 +64,16 @@ describe("cron service store seam coverage", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not drain post-persist notifications when there is no store to write", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createStoreTestState(storePath);
+    const notify = vi.fn();
+
+    await expect(persist(state, { postPersistNotifications: [notify] })).resolves.toBe(false);
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
     const { storePath } = await makeStorePath();
 
@@ -115,6 +126,33 @@ describe("cron service store seam coverage", () => {
     await persist(state);
   });
 
+  it("quarantines malformed SQLite rows atomically without creating JSON state", async () => {
+    const { storePath } = await makeStorePath();
+    const malformed = createReloadCronJob({ id: "malformed-sqlite-row" });
+    const surviving = createReloadCronJob({
+      id: "surviving-sqlite-row",
+      state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET schedule_kind = ? WHERE job_id = ?")
+      .run("unsupported", malformed.id);
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({
+        sourceIndex: 0,
+        reason: "invalid-schedule",
+        job: expect.objectContaining({ id: malformed.id }),
+      }),
+    ]);
+    await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
+  });
+
   it("publishes durable wake changes only after save and exactly once after retry", async () => {
     const { storePath } = await makeStorePath();
     const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
@@ -164,6 +202,59 @@ describe("cron service store seam coverage", () => {
     );
     expect(state.durableNextRunAtMsByJobId.has(job.id)).toBe(true);
     expect(state.durableNextRunAtMsByJobId.get(job.id)).toBeUndefined();
+  });
+
+  it("drains post-persist notifications only after a successful state-only write", async () => {
+    const { storePath } = await makeStorePath();
+    await writeSingleJobStore(storePath, createReloadCronJob());
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const notify = vi.fn();
+    const order: string[] = [];
+    const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
+    vi.spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockImplementationOnce(async (...args) => {
+        expect(notify).not.toHaveBeenCalled();
+        await saveCronJobsStore(...args);
+        order.push("persist");
+      });
+    notify.mockImplementation(() => order.push("notify"));
+    const postPersistNotifications = [notify];
+
+    await expect(persist(state, { stateOnly: true, postPersistNotifications })).rejects.toThrow(
+      "disk full",
+    );
+    expect(notify).not.toHaveBeenCalled();
+
+    await persist(state, { stateOnly: true, postPersistNotifications });
+
+    expect(order).toEqual(["persist", "notify"]);
+    expect(notify).toHaveBeenCalledOnce();
+  });
+
+  it("does not restore speculative state after a post-persist notification throws", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW + 120_000;
+    await writeSingleJobStore(storePath, createReloadCronJob());
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
+    const job = findJobOrThrow(state, "reload-cron-expr-job");
+    job.state.nextRunAtMs = nextRunAtMs;
+
+    await expect(
+      persistOrRestore(state, snapshot, {
+        postPersistNotifications: [
+          () => {
+            throw new Error("notification failed");
+          },
+        ],
+      }),
+    ).rejects.toThrow("notification failed");
+
+    expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
   });
 
   it("advances durable wake state while suppressing duplicate scheduled delivery", async () => {
@@ -324,21 +415,37 @@ describe("cron service store seam coverage", () => {
     state.pendingQuarantineConfigJobs = [
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
     ];
-    vi.spyOn(cronStoreModule, "saveCronQuarantineFile").mockRejectedValueOnce(
-      new Error("quarantine unavailable"),
-    );
-    const saveStore = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    const saveStore = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockRejectedValueOnce(new Error("quarantine unavailable"));
+    const notify = vi.fn();
+    const postPersistNotifications = [notify];
 
-    await persist(state, { stateOnly: true });
+    await persist(state, { stateOnly: true, postPersistNotifications });
 
-    expect(saveStore).not.toHaveBeenCalled();
+    expect(saveStore).toHaveBeenCalledTimes(1);
     expect(onEvent).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
     expect(state.durableNextRunAtMsByJobId.get(job.id)).toBe(initialNextRunAtMs);
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(initialNextRunAtMs);
 
-    await persist(state, { stateOnly: true });
+    await persist(state, { stateOnly: true, postPersistNotifications });
 
-    expect(saveStore).toHaveBeenCalledWith(storePath, state.store, undefined);
+    expect(saveStore).toHaveBeenLastCalledWith(
+      storePath,
+      state.store,
+      expect.objectContaining({
+        quarantine: expect.objectContaining({
+          entries: [expect.objectContaining({ reason: "invalid-schedule" })],
+        }),
+      }),
+    );
+    expect(state.pendingQuarantineConfigJobs).toEqual([]);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
+      expect.objectContaining({ reason: "invalid-schedule" }),
+    ]);
     expect(onEvent).toHaveBeenCalledTimes(1);
     expect(onEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({

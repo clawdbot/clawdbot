@@ -9,10 +9,12 @@ import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-name
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
+  attachToolAllowlistIntersection,
   couldNormalizeToolNamePrefixToAllowedTool,
   expandToolGroups,
   normalizeToolList,
   normalizeToolName,
+  readToolAllowlistIntersection,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy-shared.js";
@@ -55,16 +57,17 @@ const SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS = new Map<string, readonly string[
 
 /** Returns true when an allow policy is narrower than all/default plugin tools. */
 export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
-  return (
-    Array.isArray(policy?.allow) &&
-    policy.allow.some((entry) => {
-      const normalized = normalizeToolName(entry);
-      return (
-        Boolean(normalized) &&
-        normalized !== "*" &&
-        normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
-      );
-    })
+  if (!Array.isArray(policy?.allow)) {
+    return false;
+  }
+  const normalizedAllow = policy.allow.map((entry) => normalizeToolName(entry));
+  // A wildcard remains allow-all when additive entries are present. Treating
+  // those extras as restrictive would unnecessarily cap delegated sessions.
+  if (normalizedAllow.includes("*")) {
+    return false;
+  }
+  return normalizedAllow.some(
+    (entry) => Boolean(entry) && entry !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   );
 }
 

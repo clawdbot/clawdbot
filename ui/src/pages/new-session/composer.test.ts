@@ -14,13 +14,18 @@ const textareaControllers: NewSessionComposerTextareaController[] = [];
 
 function renderComposer(
   overrides: {
+    canSubmit?: boolean;
+    requiresModifier?: boolean;
+    submitDisabledReason?: string;
     submitting?: boolean;
     messageLocked?: boolean;
+    incognitoDisabledReason?: string;
     visibility?: NewSessionVisibility;
     draftAvailable?: boolean;
     onVisibilityChange?: (visibility: NewSessionVisibility) => void;
     message?: string;
     onInput?: (message: string) => void;
+    onSubmit?: () => void;
     textareaController?: NewSessionComposerTextareaController;
   } = {},
 ) {
@@ -36,20 +41,22 @@ function renderComposer(
     renderNewSessionDraftComposer({
       agentId: "main",
       attachmentDraft,
-      canSubmit: true,
+      canSubmit: overrides.canSubmit ?? true,
       context: undefined,
       isCatalogTarget: true,
       message: overrides.message ?? "",
       visibility: overrides.visibility,
       draftAvailable: overrides.draftAvailable,
       modelControl: new NewSessionModelControl(() => undefined),
-      requiresModifier: false,
+      requiresModifier: overrides.requiresModifier ?? false,
+      submitDisabledReason: overrides.submitDisabledReason,
       submitting: overrides.submitting ?? false,
       textareaController,
       messageLocked: overrides.messageLocked,
+      incognitoDisabledReason: overrides.incognitoDisabledReason,
       onInput: overrides.onInput ?? (() => undefined),
       onVisibilityChange: overrides.onVisibilityChange,
-      onSubmit: () => undefined,
+      onSubmit: overrides.onSubmit ?? (() => undefined),
     }),
     container,
   );
@@ -79,6 +86,66 @@ afterEach(() => {
   textareaControllers.length = 0;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("new-session composer keyboard submission", () => {
+  it.each([
+    { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
+    { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
+    { label: "Meta+Enter", requiresModifier: true, ctrlKey: false, metaKey: true },
+  ])("keeps $label native when starting a session is disabled", (testCase) => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
+      canSubmit: false,
+      onSubmit,
+      requiresModifier: testCase.requiresModifier,
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: testCase.ctrlKey,
+      key: "Enter",
+      metaKey: testCase.metaKey,
+    });
+
+    textarea.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
+    { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
+    { label: "Meta+Enter", requiresModifier: true, ctrlKey: false, metaKey: true },
+  ])("submits once with $label when starting a session is enabled", (testCase) => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({
+      canSubmit: true,
+      onSubmit,
+      requiresModifier: testCase.requiresModifier,
+    });
+    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("Expected composer textarea");
+    }
+    const event = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: testCase.ctrlKey,
+      key: "Enter",
+      metaKey: testCase.metaKey,
+    });
+
+    textarea.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
 });
 
 describe("new-session composer sizing lifecycle", () => {
@@ -183,6 +250,22 @@ describe("new-session composer sizing lifecycle", () => {
 });
 
 describe("new-session composer attachment drops", () => {
+  it("surfaces authorization reasons on disabled session controls", () => {
+    const { composer } = renderComposer({
+      canSubmit: false,
+      incognitoDisabledReason: "This action requires operator.admin access.",
+      submitDisabledReason: "This action requires operator.write access.",
+    });
+    const submitTooltip = composer.querySelector<HTMLElement>("openclaw-tooltip");
+    const incognito = composer.querySelector<HTMLButtonElement>('[role="switch"]');
+
+    expect((submitTooltip as HTMLElement & { content?: string })?.content).toBe(
+      "This action requires operator.write access.",
+    );
+    expect(incognito?.disabled).toBe(true);
+    expect(incognito?.title).toBe("This action requires operator.admin access.");
+  });
+
   it("renders only the incognito pill when drafts are unavailable, off by default", () => {
     const onVisibilityChange = vi.fn();
     const { composer } = renderComposer({ onVisibilityChange });

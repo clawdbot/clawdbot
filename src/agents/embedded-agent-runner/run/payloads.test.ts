@@ -76,12 +76,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
       assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+      assistantMessageIndex: 1,
     });
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Attached image");
     expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
     expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
+    });
   });
 
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {

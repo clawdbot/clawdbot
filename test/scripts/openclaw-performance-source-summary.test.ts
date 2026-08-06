@@ -46,6 +46,8 @@ function writeSourceFixture(sourceDir: string) {
           cpuCoreRatio: { p95: 0.25 },
           startupTrace: {
             "memory.ready.heapUsedMb": { p50: 30, p95: 32 },
+            "phase.load.total": { p50: 70, p95: 80 },
+            "phase.load.itemCount": { p50: 40, p95: 50 },
             "phase.load": { p50: 7, p95: 8 },
           },
         },
@@ -71,6 +73,9 @@ function writeSourceFixture(sourceDir: string) {
     },
   });
   writeJson(path.join(sourceDir, "extension-memory.json"), {
+    baseline: { maxRssMb: 50, status: "ok" },
+    combined: { maxRssMb: 180, status: "ok" },
+    counts: { totalEntries: 12 },
     topByDeltaMb: [
       { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
     ],
@@ -165,6 +170,17 @@ describe("buildMarkdown", () => {
     expect(buildMarkdown(sourceDir, null)).toContain("gateway health json");
     expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
     expect(buildMarkdown(sourceDir, null)).toContain("4100");
+    expect(buildMarkdown(sourceDir, null)).toContain("| default | phase.load | 7.0ms | 8.0ms |");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.total");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.itemCount");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("memory.ready.heapUsedMb");
+    expect(buildMarkdown(sourceDir, null)).toContain(
+      "Per-plugin rows are isolated cold imports and are not additive.",
+    );
+    expect(buildMarkdown(sourceDir, null)).toContain(
+      "| all 12 bundled plugins | 180.0MB | 130.0MB | ok |",
+    );
+    expect(buildMarkdown(sourceDir, null)).toContain("isolated delta from empty process");
   });
 
   it("rejects a missing source directory", () => {
@@ -221,6 +237,20 @@ describe("buildMarkdown", () => {
 
     expect(() => buildMarkdown(sourceDir, null)).toThrow(
       "[source-performance] incomplete gateway startup metrics for default:",
+    );
+  });
+
+  it("rejects extension memory artifacts without combined-process context", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeJson(path.join(sourceDir, "extension-memory.json"), {
+      topByDeltaMb: [
+        { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
+      ],
+    });
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] incomplete extension memory context:",
     );
   });
 

@@ -2,9 +2,9 @@
 
 import path from "node:path";
 import ts from "typescript";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
-  resolveRepoRoot,
   resolveSourceRoots,
   runAsScript,
   toLine,
@@ -66,7 +66,6 @@ const gatewaySessionServerMethodFiles = [
   "src/gateway/server-methods/sessions-read.ts",
   "src/gateway/server-methods/sessions-shared.ts",
   "src/gateway/server-methods/sessions-subscriptions.ts",
-  "src/gateway/server-methods/sessions.ts",
 ];
 
 export const migratedSessionTranscriptReaderFiles = new Set([
@@ -74,8 +73,8 @@ export const migratedSessionTranscriptReaderFiles = new Set([
   "src/agents/subagent-announce-output.test.ts",
   "src/agents/subagent-announce-output.ts",
   "src/agents/subagent-announce.runtime.ts",
-  "src/agents/subagent-orphan-recovery.test.ts",
-  "src/agents/subagent-orphan-recovery.ts",
+  "src/agents/subagent-registry-restart-recovery.test.ts",
+  "src/agents/subagent-registry-restart-recovery.ts",
   "src/agents/tools/embedded-gateway-stub.runtime.ts",
   "src/agents/tools/embedded-gateway-stub.test.ts",
   "src/agents/tools/embedded-gateway-stub.ts",

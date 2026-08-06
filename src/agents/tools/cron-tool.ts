@@ -12,7 +12,7 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normal
 import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
-import { recordCronNextCheckProposal } from "../../infra/agent-events.js";
+import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
@@ -20,10 +20,12 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
   readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readStringParam,
 } from "./common.js";
 import {
@@ -38,7 +40,11 @@ import {
   stripExistingContext,
 } from "./cron-tool-context.js";
 import { capCronJobToolsAllowOnCreate } from "./cron-tool-creator-cap.js";
-import { assertCronPacingInput, createCronToolSchema } from "./cron-tool-schema.js";
+import {
+  assertCronPacingInput,
+  createCronToolSchema,
+  CRON_TOOL_LIST_MAX_LIMIT,
+} from "./cron-tool-schema.js";
 import { assertNoCronShellExecution, updateCronJobFromAgentTool } from "./cron-tool-write.js";
 import type {
   CronCreatorToolAllowlistEntry,
@@ -136,15 +142,15 @@ function assertCronToolSessionRefsMatchScope(
 ): void {
   const sessionAgentId = readAgentIdFromCronToolSessionRef(value.sessionKey);
   if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
-    throw new Error("cron sessionKey must match the calling agent");
+    throw new Error("automations sessionKey must match the calling agent");
   }
   const sessionTargetAgentId = readAgentIdFromCronToolSessionTarget(value.sessionTarget);
   if (sessionTargetAgentId && normalizeAgentId(sessionTargetAgentId) !== callerScope.agentId) {
-    throw new Error("cron sessionTarget must match the calling agent");
+    throw new Error("automations sessionTarget must match the calling agent");
   }
 }
 
-const CRON_SELF_REMOVE_SCOPE_ERROR = "Cron tool is restricted to the current cron job.";
+const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
 
 function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
   return opts?.selfRemoveOnlyJobId?.trim() || undefined;
@@ -221,7 +227,7 @@ function formatCronTerminalPresentation(
   switch (params.action) {
     case "status": {
       const enabled = result.details.enabled === true ? "yes" : "no";
-      return { text: `Cron scheduler status.\nEnabled: ${enabled}` };
+      return { text: `Automations scheduler status.\nEnabled: ${enabled}` };
     }
     case "list": {
       const total =
@@ -233,18 +239,18 @@ function formatCronTerminalPresentation(
       const count =
         total ?? (Array.isArray(result.details.jobs) ? result.details.jobs.length : undefined);
       return count === undefined
-        ? { text: "Cron jobs listed." }
-        : { text: `Cron jobs listed.\nCount: ${count}` };
+        ? { text: "Automations listed." }
+        : { text: `Automations listed.\nCount: ${count}` };
     }
     case "get":
-      return { text: "Cron job loaded." };
+      return { text: "Automation loaded." };
     case "runs": {
       const entries = Array.isArray(result.details.entries)
         ? result.details.entries.length
         : undefined;
       return entries === undefined
-        ? { text: "Cron run history loaded." }
-        : { text: `Cron run history loaded.\nCount: ${entries}` };
+        ? { text: "Automation run history loaded." }
+        : { text: `Automation run history loaded.\nCount: ${entries}` };
     }
     default:
       return undefined;
@@ -279,12 +285,12 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   const tool: AnyAgentTool = {
-    label: "Cron",
-    name: "cron",
+    label: "Automations",
+    name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.
 
-ACTIONS: status | list [includeDisabled] | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
+ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
 ADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.
 
@@ -308,7 +314,7 @@ TRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.e
 
 DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:"none". webhook posts finished-run event to URL in \`to\`.
 
-Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`,
+Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`,
     parameters: createCronToolSchema(),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -351,7 +357,16 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
             }
             const listAgentId = callerScope?.agentId ?? explicitAgentId;
             const includeDisabled = Boolean(params.includeDisabled);
-            let offset = 0;
+            const requestedLimit = selfRemoveOnlyJobId
+              ? undefined
+              : readPositiveIntegerParam(params, "limit", {
+                  max: CRON_TOOL_LIST_MAX_LIMIT,
+                  message: `limit must be a positive integer no greater than ${CRON_TOOL_LIST_MAX_LIMIT}`,
+                });
+            const requestedOffset = selfRemoveOnlyJobId
+              ? undefined
+              : readNonNegativeIntegerParam(params, "offset");
+            let offset = requestedOffset ?? 0;
             let result: unknown;
             let shouldContinue = true;
             let useCompactList = true;
@@ -361,7 +376,12 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
                   includeDisabled,
                   ...(useCompactList ? { compact: true } : {}),
                   ...(listAgentId ? { agentId: listAgentId } : {}),
-                  ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
+                  ...(selfRemoveOnlyJobId
+                    ? { limit: CRON_TOOL_LIST_MAX_LIMIT, offset }
+                    : {
+                        ...(requestedLimit !== undefined ? { limit: requestedLimit } : {}),
+                        ...(requestedOffset !== undefined ? { offset: requestedOffset } : {}),
+                      }),
                 });
               } catch (error) {
                 if (!useCompactList || !isOlderGatewayWithoutCompactCronList(error)) {
@@ -456,7 +476,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
               if (callerScope) {
                 assertCronToolAgentFieldMatchesScope({
                   value: (job as { agentId?: unknown }).agentId,
-                  field: "cron job agentId",
+                  field: "automation agentId",
                   callerScope,
                 });
                 (job as { agentId?: string }).agentId = callerScope.agentId;
@@ -579,7 +599,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
               throw new Error("patch required");
             }
             if (callerScope && "agentId" in patch) {
-              throw new Error("cron patch agentId cannot be changed by the agent cron tool");
+              throw new Error("automation patch agentId cannot be changed by the automations tool");
             }
             if (callerScope) {
               assertCronToolSessionRefsMatchScope(patch, callerScope);

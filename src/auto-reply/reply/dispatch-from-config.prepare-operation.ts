@@ -14,10 +14,12 @@ import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
-import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
-import { loadAbortRuntime } from "./dispatch-from-config.runtime-loaders.js";
+import {
+  loadAbortRuntime,
+  loadFastApproveRuntime,
+} from "./dispatch-from-config.runtime-loaders.js";
 import { extractShortModelName } from "./response-prefix-template.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -28,33 +30,21 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     commitInboundDedupeIfClaimed,
     completeDispatchReplyOperation,
     ctx,
-    deliverBindingPayload,
     deliverySuppressionReason,
     dispatcher,
     emitMessageReceivedHooks,
-    ensureDispatchReplyOperation,
-    explicitCommandTurnCtx,
     finishReplyOperationAbortedDispatch,
-    finishReplyOperationBusyDispatch,
     hookRunner,
     isPreDispatchOperationAborted,
-    isRoutedReplyDelivered,
     markIdle,
-    markInboundDedupeReplayUnsafe,
     params,
     persistPluginBindingUserTurn,
     pluginOwnedBinding,
-    prepareHookMediaMetadata,
     recordProcessed,
-    routeReplyToOriginating,
-    runWithDispatchLifecycleAdmission,
     sendBindingNotice,
-    sendPolicyDenied,
     sessionAgentId,
     sessionKey,
     sessionStoreEntry,
-    shouldDeliverPluginBindingReply,
-    suppressAutomaticSourceDelivery,
     suppressDelivery,
   } = state;
   const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
@@ -64,15 +54,18 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   if (!fastAbortResolver || !formatAbortReplyTextResolver) {
     throw new Error("abort runtime unavailable");
   }
-  const fastAbort = await fastAbortResolver({ ctx, cfg });
-  if (fastAbort.handled) {
+  const finishFastCommand = async (fast: {
+    payload?: ReplyPayload;
+    reason: "fast_abort" | "before_dispatch_handled";
+    logKind: "fast_abort" | "fast_approve";
+  }) => {
     if (pluginOwnedBinding) {
       touchConversationBindingRecord(pluginOwnedBinding.bindingId);
     }
     emitMessageReceivedHooks();
     let queuedFinal = false;
     let routedFinalCount = 0;
-    if (!suppressDelivery) {
+    if (!suppressDelivery && fast.payload) {
       const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
       const modelSelection = {
         ...selectedModel,
@@ -85,35 +78,32 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         modelFull: `${selectedModel.provider}/${selectedModel.model}`,
         thinkingLevel: modelSelection.thinkLevel ?? "off",
       };
-      const payload = {
-        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
-      } satisfies ReplyPayload;
       // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
       // their prefix, so seed that live context only when no cross-channel route is used.
-      const result = await routeReplyToOriginating(payload, { responsePrefixContext });
+      const result = await state.routeReplyToOriginating(fast.payload, { responsePrefixContext });
       if (result) {
         queuedFinal = result.ok;
-        if (isRoutedReplyDelivered(result)) {
+        if (state.isRoutedReplyDelivered(result)) {
           routedFinalCount += 1;
         }
         if (!result.ok) {
           logVerbose(
-            `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
+            `dispatch-from-config: route-reply (${fast.logKind}) failed: ${result.error ?? "unknown error"}`,
           );
         }
       } else {
-        markInboundDedupeReplayUnsafe();
+        state.markInboundDedupeReplayUnsafe();
         params.replyOptions?.onModelSelected?.(modelSelection);
-        queuedFinal = dispatcher.sendFinalReply(payload);
+        queuedFinal = dispatcher.sendFinalReply(fast.payload);
       }
-    } else {
+    } else if (suppressDelivery) {
       logVerbose(
-        `dispatch-from-config: fast_abort reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
+        `dispatch-from-config: ${fast.logKind} reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
       );
     }
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
-    recordProcessed("completed", { reason: "fast_abort" });
+    recordProcessed("completed", { reason: fast.reason });
     markIdle("message_completed");
     commitInboundDedupeIfClaimed();
     completeDispatchReplyOperation();
@@ -121,17 +111,48 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
     };
+  };
+  const fastAbort = await fastAbortResolver({ ctx, cfg });
+  if (fastAbort.handled) {
+    return await finishFastCommand({
+      payload: {
+        text: formatAbortReplyTextResolver(
+          fastAbort.stoppedSubagents,
+          fastAbort.rejectionReason,
+          fastAbort.failedSubagents,
+        ),
+      },
+      reason: "fast_abort",
+      logKind: "fast_abort",
+    });
+  }
+  if (/^\s*\/approve(?:@[^\s]+)?(?:\s|$)/i.test(ctx.commandText)) {
+    const fastApprove = await (
+      await loadFastApproveRuntime()
+    ).tryFastApproveFromMessage({
+      ctx,
+      cfg,
+      agentId: sessionAgentId,
+      sessionKey,
+    });
+    if (fastApprove.handled) {
+      return await finishFastCommand({
+        ...(fastApprove.reply ? { payload: fastApprove.reply } : {}),
+        reason: "before_dispatch_handled",
+        logKind: "fast_approve",
+      });
+    }
   }
   // Own the session before plugin-bound handlers or message hooks can perform
-  // work. Fast abort and inbound dedupe intentionally remain ahead of this gate.
-  const preDispatchAcquisition = await ensureDispatchReplyOperation("pre_dispatch");
+  // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
+  const preDispatchAcquisition = await state.ensureDispatchReplyOperation("pre_dispatch");
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
   if (preDispatchAcquisition.status === "busy") {
     return {
       status: "complete" as const,
-      result: finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
+      result: state.finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
     };
   }
 
@@ -144,7 +165,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
-    } else if (sendPolicyDenied || (suppressDelivery && !suppressAutomaticSourceDelivery)) {
+    } else if (
+      state.sendPolicyDenied ||
+      (suppressDelivery && !state.suppressAutomaticSourceDelivery)
+    ) {
       // Plugin-bound inbound handlers typically emit outbound replies we
       // cannot rewind. When automatic delivery is explicitly denied, skip the
       // plugin claim and fall through to normal suppressed agent processing.
@@ -166,20 +190,20 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       });
       const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
         ? await (async () => {
-            await prepareHookMediaMetadata();
+            await state.prepareHookMediaMetadata();
             if (isPreDispatchOperationAborted()) {
               throw new DispatchReplyOperationAbortedError();
             }
             const authorizedInboundClaimEvent = {
-              ...state.inboundClaimEvent,
+              ...state.hookState.inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
             };
-            return await runWithDispatchLifecycleAdmission(
+            return await state.runWithDispatchLifecycleAdmission(
               async () =>
                 await hookRunner.runInboundClaimForPluginOutcome(
                   pluginOwnedBinding.pluginId,
                   authorizedInboundClaimEvent,
-                  { ...state.inboundClaimContext, pluginBinding: pluginOwnedBinding },
+                  { ...state.hookState.inboundClaimContext, pluginBinding: pluginOwnedBinding },
                 ),
             );
           })()
@@ -199,12 +223,12 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       switch (targetedClaimOutcome.status) {
         case "handled": {
           const transcriptOwner = await persistPluginBindingUserTurn();
-          if (targetedClaimOutcome.result.reply && shouldDeliverPluginBindingReply) {
+          if (targetedClaimOutcome.result.reply && state.shouldDeliverPluginBindingReply) {
             // A bound plugin's reply is the explicit output for this claimed turn,
             // not an automatic agent final; message-tool-only suppression must not
             // turn normal user-request bindings into silent channel responses.
             // Ambient room events keep the same privacy guard as final replies.
-            await deliverBindingPayload(
+            await state.deliverBindingPayload(
               targetedClaimOutcome.result.reply,
               "terminal",
               transcriptOwner,
@@ -224,19 +248,19 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         }
         case "missing_plugin":
         case "no_handler": {
-          state.pluginFallbackReason =
+          state.bindingState.pluginFallbackReason =
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
           const isUnmentionedGroupFallback =
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !explicitCommandTurnCtx;
+            !state.explicitCommandTurnCtx;
           const shouldSuppressUnmentionedFallback =
             isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
           if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
-            recordProcessed("completed", { reason: state.pluginFallbackReason });
+            recordProcessed("completed", { reason: state.bindingState.pluginFallbackReason });
             commitInboundDedupeIfClaimed();
             completeDispatchReplyOperation();
             return {
@@ -304,8 +328,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   }
 
   emitMessageReceivedHooks();
-  const nextState = extendPreparedDispatchState(state, {}, {});
-  return { status: "ready" as const, state: nextState };
+  return { status: "ready" as const, state };
 }
 
 type PrepareDispatchOperationResult = Awaited<ReturnType<typeof prepareDispatchOperation>>;

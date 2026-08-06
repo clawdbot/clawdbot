@@ -8,7 +8,6 @@ import {
   mocks,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
-  runtimePluginMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -59,9 +58,8 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
-    runtimePluginMocks.ensureRuntimePluginsLoaded.mockReset();
     mocks.routeReply.mockReset();
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     mocks.tryFastAbortFromMessage.mockReset();
     setNoAbort();
     diagnosticMocks.requestStuckDiagnosticSessionRecovery.mockReset();
@@ -140,31 +138,34 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("sends overload feedback when stuck recovery expires the active reply", async () => {
-    let resolverStarted: () => void = () => {};
-    const resolverStartedPromise = new Promise<void>((resolve) => {
-      resolverStarted = resolve;
-    });
-    const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
-      resolverStarted();
-      await new Promise<void>((resolve) => {
-        options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+  it.each(["no_activity", "stuck_recovery"] as const)(
+    "sends truthful stalled feedback when %s expires the active reply",
+    async (reason) => {
+      let resolverStarted: () => void = () => {};
+      const resolverStartedPromise = new Promise<void>((resolve) => {
+        resolverStarted = resolve;
       });
-      const error = new Error("reply expired");
-      error.name = "AbortError";
-      throw error;
-    });
+      const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
+        resolverStarted();
+        await new Promise<void>((resolve) => {
+          options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        const error = new Error("reply expired");
+        error.name = "AbortError";
+        throw error;
+      });
 
-    const dispatchPromise = dispatchReplyFromConfig(dispatchParams);
-    await resolverStartedPromise;
-    const operation = replyRunRegistry.get(sessionKey);
-    expect(operation).toBeDefined();
-    expect(expireStaleReplyOperation(operation!, "stuck_recovery")).toBe(true);
+      const dispatchPromise = dispatchReplyFromConfig(dispatchParams);
+      await resolverStartedPromise;
+      const operation = replyRunRegistry.get(sessionKey);
+      expect(operation).toBeDefined();
+      expect(expireStaleReplyOperation(operation!, reason)).toBe(true);
 
-    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "⚠️ Your reply was dropped because the gateway was overloaded. Please retry.",
-      isError: true,
-    });
-  });
+      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
+      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
+        text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+        isError: true,
+      });
+    },
+  );
 });

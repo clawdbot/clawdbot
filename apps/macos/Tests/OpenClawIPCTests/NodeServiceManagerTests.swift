@@ -11,13 +11,13 @@ import Testing
             let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
             try makeExecutableForTests(at: openclawPath)
 
-            let start = NodeServiceManager._testServiceCommand(["start"])
+            let start = await NodeServiceManager._testServiceCommand(["start"])
             #expect(start == [openclawPath.path, "node", "start", "--json"])
 
-            let stop = NodeServiceManager._testServiceCommand(["stop"])
+            let stop = await NodeServiceManager._testServiceCommand(["stop"])
             #expect(stop == [openclawPath.path, "node", "stop", "--json"])
 
-            let restart = NodeServiceManager._testServiceCommand(["restart"])
+            let restart = await NodeServiceManager._testServiceCommand(["restart"])
             #expect(restart == [openclawPath.path, "node", "restart", "--json"])
         }
     }

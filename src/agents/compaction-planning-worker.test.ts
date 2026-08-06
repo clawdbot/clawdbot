@@ -2,11 +2,15 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { buildSummaryChunksWithWorker } from "./compaction-planning-worker.js";
+import {
+  buildOversizedFallbackPlanWithWorker,
+  buildSummaryChunksWithWorker,
+} from "./compaction-planning-worker.js";
 import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.test-support.js";
 import { estimateMessagesTokens } from "./compaction-planning.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function makeMessage(id: number, text = "x".repeat(4000)): AgentMessage {
   return {
@@ -53,11 +57,23 @@ describe("compaction planning worker", () => {
     ).toBe("/repo/dist/agents/compaction-planning.worker.js");
   });
 
-  it("rejects invalid worker input", () => {
-    expect(runCompactionPlanningWorkerInput({ kind: "summaryChunks" })).toEqual({
-      status: "failed",
-      error: "invalid compaction planning worker input",
-    });
+  it("rejects invalid and retired worker input", () => {
+    for (const input of [
+      { kind: "summaryChunks" },
+      {
+        kind: "historyPrune",
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        tokensBefore: 0,
+        contextWindowTokens: 1,
+        maxHistoryShare: 0.5,
+      },
+    ]) {
+      expect(runCompactionPlanningWorkerInput(input)).toEqual({
+        status: "failed",
+        error: "invalid compaction planning worker input",
+      });
+    }
   });
 
   it("plans summary chunks in the packaged worker", () => {
@@ -162,6 +178,49 @@ describe("compaction planning worker", () => {
     expect(value.chunkIndexes.flat()).toEqual([0, 1, 2]);
     expect(value.chunkIndexes.length).toBeGreaterThan(1);
   });
+
+  it.each([
+    { kind: "oversizedFallback", messages: [makeMessage(1)], contextWindow: 1200 },
+    { kind: "stageSplit", messages: [makeMessage(1)], maxChunkTokens: 1200 },
+    { kind: "adaptiveChunkRatio", messages: [makeMessage(1)], contextWindow: 1200 },
+  ])("plans $kind for worker input", (input) => {
+    expect(runCompactionPlanningWorkerInput(input)).toMatchObject({
+      status: "ok",
+      value: { kind: input.kind },
+    });
+  });
+
+  it("preserves original user identity while worker fallback omits an oversized tool batch", async () => {
+    const displacedUser = makeMessage(2, "keep the latest real user request");
+    const messages: AgentMessage[] = [
+      makeAgentAssistantMessage({
+        content: [
+          { type: "text", text: "x".repeat(12_000) },
+          { type: "toolCall", id: "call_large", name: "read", arguments: {} },
+        ],
+        model: "gpt-5.6-luna",
+        stopReason: "stop",
+        timestamp: 1,
+      }),
+      displacedUser,
+      {
+        role: "toolResult",
+        toolCallId: "call_large",
+        toolName: "read",
+        content: [{ type: "text", text: "small result" }],
+        isError: false,
+        timestamp: 3,
+      },
+      ...Array.from({ length: 61 }, (_, index) => makeMessage(index + 4, "keep")),
+    ];
+
+    const plan = await buildOversizedFallbackPlanWithWorker({ messages, contextWindow: 2_000 });
+
+    expect(plan.smallMessages).toHaveLength(62);
+    expect(plan.smallMessages[0]).toBe(displacedUser);
+    expect(plan.smallMessages.every((message) => message.role === "user")).toBe(true);
+    expect(plan.oversizedNotes).toEqual([expect.stringContaining("Large assistant")]);
+  }, 45_000);
 
   it("clamps oversized worker timeouts before scheduling", async () => {
     const workerUrl = createSyntheticWorkerUrl(`

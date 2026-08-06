@@ -8,7 +8,7 @@ import {
   jsonResponse,
   stubFetch,
   stubVydraApiKey,
-} from "./provider-test-helpers.test.js";
+} from "./provider-test-helpers.js";
 import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index: number) {

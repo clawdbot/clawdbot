@@ -1750,6 +1750,65 @@ describe("Anthropic provider", () => {
     expect(result.errorMessage).toContain("ended before message_stop");
   });
 
+  it("terminates the stream when the thrown error is a circular structure", async () => {
+    // Socket/HTTP layers raise self-referential error objects; a bare
+    // JSON.stringify in stream teardown throws and strands the run (#106568).
+    const circular: Record<string, unknown> = { code: "ECONNRESET" };
+    circular.self = circular;
+    // Transport layers reject with plain objects, not Error instances, which is
+    // what sends the formatter down the JSON.stringify branch.
+    const asResponse = vi.fn().mockRejectedValue(circular);
+    const client = {
+      messages: {
+        create: vi.fn(() => ({ asResponse })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    // Keep salient transport fields while replacing the cycle, so the terminal
+    // diagnostic remains actionable without stranding the stream.
+    expect(result.errorMessage).toBeTruthy();
+    expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
+  });
+
+  it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
+    // formatProviderError only substitutes status+body when a body is present, so
+    // ordinary Error rejections must still surface error.message — retry
+    // classification in src/llm/utils/retry.ts parses this string.
+    const asResponse = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
+    const client = {
+      messages: {
+        create: vi.fn(() => ({ asResponse })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.errorMessage).toBe("Overloaded");
+  });
+
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
     let capturedPayload: unknown;
     const stream = streamAnthropic(
@@ -2306,6 +2365,54 @@ describe("Anthropic provider", () => {
       'Anthropic tool_choice requested unavailable tool "unreadable_plugin_tool"',
     );
     expect(onPayload).not.toHaveBeenCalled();
+  });
+
+  it("keeps Anthropic wire tool bytes and their cache breakpoint stable across discovery orders", async () => {
+    const tools = [
+      {
+        name: "zeta_lookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "alpha_lookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ] as Tool[];
+    const captureTools = async (orderedTools: Tool[]) => {
+      let capturedPayload: unknown;
+      const stream = streamSimpleAnthropic(
+        makeAnthropicModel(),
+        {
+          systemPrompt: "stable system",
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: orderedTools,
+        },
+        {
+          apiKey: "sk-ant-provider",
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
+        },
+      );
+      await stream.result();
+      return (capturedPayload as { tools: unknown[] }).tools;
+    };
+
+    const first = await captureTools(tools);
+    const reversed = await captureTools(tools.toReversed());
+
+    expect(reversed).toEqual(first);
+    expect(first).toEqual([
+      expect.objectContaining({ name: "alpha_lookup" }),
+      expect.objectContaining({
+        name: "zeta_lookup",
+        cache_control: { type: "ephemeral" },
+      }),
+    ]);
+    expect(first[0]).not.toHaveProperty("cache_control");
   });
 
   it("splits the system prompt cache boundary into cached and uncached Anthropic blocks", async () => {

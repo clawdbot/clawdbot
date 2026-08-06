@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
@@ -10,6 +13,7 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { openMemoryCoreStateStore } from "./dreaming-state.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
@@ -36,6 +40,31 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   }
   expect(error).toBeInstanceOf(Error);
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
+async function seedCliBackfillTranscript(sessionId: string, days: string[]): Promise<void> {
+  const agentId = "main";
+  const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const sessionKey = `agent:${agentId}:cli-session-backfill:${sessionId}`;
+  const entry = { sessionId, updatedAt: Date.parse(`${days.at(-1)}T12:00:00.000Z`) };
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
+  for (const day of days) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      message: {
+        role: "user",
+        content: `CLI lifecycle note for ${day}`,
+        timestamp: `${day}T12:00:00.000Z`,
+        __openclaw: { senderIsOwner: true },
+      },
+    });
+  }
+  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
 }
 
 vi.mock("./cli.host.runtime.js", async () => {
@@ -119,6 +148,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   process.exitCode = undefined;
   setVerbose(false);
 });
@@ -170,7 +200,12 @@ describe("memory cli", () => {
   }
 
   function mockManager(manager: Record<string, unknown>) {
-    getMemorySearchManager.mockResolvedValueOnce({ manager });
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        ...(manager.search && !manager.status ? { status: () => makeMemoryStatus() } : {}),
+        ...manager,
+      },
+    });
   }
 
   function setupMemoryStatusWithInactiveSecretDiagnostics(close: ReturnType<typeof vi.fn>) {
@@ -240,6 +275,40 @@ describe("memory cli", () => {
     registerMemoryCli(program, hostOptions);
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
+
+  it("drains session backfill in one apply command before preview", async () => {
+    const workspaceDir = path.join(workspaceFixtureRoot, `session-backfill-${workspaceCaseId++}`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await seedCliBackfillTranscript("drain", ["2026-01-01", "2026-01-02", "2026-01-03"]);
+
+    mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close: vi.fn() });
+    const applyJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli([
+      "session-backfill",
+      "--agent",
+      "main",
+      "--limit-days",
+      "1",
+      "--apply",
+      "--json",
+    ]);
+    const applied = firstWrittenJsonArg<{
+      batchCount: number;
+      batches: Array<{ candidates: number }>;
+      candidateCount: number;
+    }>(applyJson);
+    expect(applied).toMatchObject({ batchCount: 3, candidateCount: 3 });
+    expect(applied?.batches.map((batch) => batch.candidates)).toEqual([1, 1, 1]);
+
+    mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close: vi.fn() });
+    applyJson.mockClear();
+    await runMemoryCli(["session-backfill", "--agent", "main", "--limit-days", "1", "--json"]);
+    expect(firstWrittenJsonArg<{ candidateCount: number }>(applyJson)).toMatchObject({
+      candidateCount: 0,
+    });
+  });
 
   it("rejects invalid memory search numeric options before running the command", async () => {
     const program = new Command();
@@ -434,6 +503,8 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
 
+    expect(getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expectLogged(log, "Vector store: ready");
     expectLogged(log, "Semantic vectors: ready");
@@ -442,6 +513,34 @@ describe("memory cli", () => {
     expectLogged(log, "FTS: ready");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("still aborts status when its own memory SecretRef cannot be resolved", async () => {
+    getRuntimeConfig.mockReturnValue({
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+          },
+        },
+      },
+    });
+    resolveCommandSecretRefsViaGateway.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Secret owner capability:memory-provider:main is configured but unavailable: code=SECRET_SURFACE_UNAVAILABLE",
+        ),
+        {
+          code: "SECRET_SURFACE_UNAVAILABLE",
+          ownerKind: "capability",
+          ownerId: "memory-provider:main",
+          paths: ["memory.search.remote.apiKey"],
+        },
+      ),
+    );
+
+    await expect(runMemoryCli(["status", "--deep"])).rejects.toThrow("SECRET_SURFACE_UNAVAILABLE");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 
   it("prints index identity mismatch reasons", async () => {
@@ -513,6 +612,52 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("fans JSON status out to every keyed agent entry", async () => {
+    const agentIds = ["main", ...Array.from({ length: 21 }, (_, index) => `agent-${index + 1}`)];
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        entries: Object.fromEntries(
+          agentIds.map((agentId, index) => [agentId, { default: index === 0 }]),
+        ),
+      },
+    });
+    getMemorySearchManager.mockImplementation(async ({ agentId }: { agentId: string }) => ({
+      manager: {
+        status: () =>
+          makeMemoryStatus({
+            workspaceDir: undefined,
+            dbPath: `/state/agents/${agentId}/agent/openclaw-agent.sqlite`,
+          }),
+        close: vi.fn(async () => {}),
+      },
+    }));
+    const json = spyRuntimeJson(defaultRuntime);
+    const keyedStore = {};
+    const openKeyedStore = vi.fn(() => keyedStore);
+    resetMemoryCoreDreamingStateForTests();
+
+    try {
+      await runMemoryCli(["status", "--json"], { openKeyedStore: openKeyedStore as never });
+
+      expect(
+        getMemorySearchManager.mock.calls.map(
+          ([params]) => (params as { agentId: string }).agentId,
+        ),
+      ).toEqual(agentIds);
+      const payload =
+        firstWrittenJsonArg<Array<{ agentId: string; status: { dbPath: string } }>>(json);
+      expect(payload?.map(({ agentId }) => agentId)).toEqual(agentIds);
+      expect(payload?.map(({ status }) => status.dbPath)).toEqual(
+        agentIds.map((agentId) => `/state/agents/${agentId}/agent/openclaw-agent.sqlite`),
+      );
+      const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
+      expect(openMemoryCoreStateStore(storeOptions)).toBe(keyedStore);
+      expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
+    } finally {
+      await configureMemoryCoreDreamingStateForTests();
+    }
+  });
+
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
     const config = {
       memory: {
@@ -540,12 +685,51 @@ describe("memory cli", () => {
     const secretRefsCall = firstMockCallArg(
       resolveCommandSecretRefsViaGateway,
       "resolve command secret refs",
-    ) as { config?: unknown; commandName?: unknown; targetIds?: unknown };
+    ) as { config?: unknown; commandName?: unknown; targetIds?: unknown; mode?: unknown };
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
     expect(secretRefsCall.targetIds).toStrictEqual(
       new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
     );
+    expect(secretRefsCall.mode).toBe("read_only_status");
+  });
+
+  it("keeps status available when a memory SecretRef owner is degraded", async () => {
+    const close = vi.fn(async () => {});
+    getRuntimeConfig.mockReturnValue({
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "HEALTHY_MEMORY_API_KEY" },
+          },
+        },
+      },
+    });
+    resolveCommandSecretRefsViaGateway.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "Secret owner agent:main:openai:manual is configured but unavailable: code=SECRET_SURFACE_UNAVAILABLE",
+        ),
+        { code: "SECRET_SURFACE_UNAVAILABLE" },
+      ),
+    );
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      probeEmbeddingAvailability: vi.fn(async () => ({
+        ok: false,
+        error: "embedding provider unavailable",
+      })),
+      status: () => makeMemoryStatus({ workspaceDir: undefined }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(loggedOutput(log)).toContain("agent:main:openai:manual");
+    expect(loggedOutput(log)).toContain("healthy memory surfaces remain visible");
+    expect(loggedOutput(log)).toContain("Embeddings: unavailable");
+    expect(close).toHaveBeenCalled();
   });
 
   it("logs gateway secret diagnostics for non-json status output", async () => {
@@ -803,7 +987,8 @@ describe("memory cli", () => {
       await runMemoryCli(["status"]);
 
       expectLogged(log, "Recall store: 1 entries");
-      expectLogged(log, "Dreaming: off");
+      // Dreaming is on by default, so status prints the phase-config detail line.
+      expectLogged(log, "Dreaming: light=");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1010,6 +1195,12 @@ describe("memory cli", () => {
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03.md"),
+        "QMD router cache note\n",
+        "utf-8",
+      );
       await shortTermTesting.writeRawRecallStore(workspaceDir, {
         version: 1,
         updatedAt: "2026-04-04T00:00:00.000Z",
@@ -1313,6 +1504,34 @@ describe("memory cli", () => {
     });
   });
 
+  it("suggests reindexing instead of --fix when the qmd index is missing", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const missingDbPath = path.join(qmdFixtureRoot, `missing-${qmdCaseId++}.sqlite`);
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () =>
+          makeMemoryStatus({
+            backend: "qmd",
+            provider: "qmd",
+            model: "qmd",
+            requestedProvider: "qmd",
+            workspaceDir,
+            dbPath: missingDbPath,
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expectLogged(log, "QMD index file is missing.");
+      expectLogged(log, "Fix: openclaw memory index --agent main");
+      expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("fails index when qmd db file is empty", async () => {
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
@@ -1558,6 +1777,50 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("qualifies json search results when the index remains stale", async () => {
+    const close = vi.fn(async () => {});
+    const reason = "index was built for model old-embed, expected new-embed";
+    mockManager({
+      search: vi.fn(async () => []),
+      status: () =>
+        makeMemoryStatus({
+          dirty: true,
+          custom: { indexIdentity: { status: "mismatched", reason } },
+        }),
+      close,
+    });
+
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli(["search", "hidden codeword", "--agent", "main", "--json"]);
+
+    expect(getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+
+    expect(firstWrittenJsonArg(writeJson)).toEqual({
+      results: [],
+      stale: true,
+      warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
+      action: "Run: openclaw memory status --index --agent main",
+    });
+  });
+
+  it("warns before reporting no matches from a dirty index", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      search: vi.fn(async () => []),
+      status: () => makeMemoryStatus({ dirty: true }),
+      close,
+    });
+
+    const error = spyRuntimeErrors(defaultRuntime);
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["search", "hidden codeword"]);
+
+    expect(error).toHaveBeenCalledWith(
+      "Memory index is dirty. Search results may be incomplete. Run: openclaw memory status --index --agent main",
+    );
+    expect(log).toHaveBeenCalledWith("No matches.");
+  });
+
   it("prints no candidates when promote has no short-term recall data", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const close = vi.fn(async () => {});
@@ -1770,8 +2033,10 @@ describe("memory cli", () => {
       expect(payload?.sourceFiles).toEqual([historyPath]);
       expect(payload?.historicalImport?.importedFileCount).toBe(1);
       expect(payload?.historicalImport?.importedSignalCount).toBeGreaterThan(0);
-      expect(payload?.deep?.candidates?.[0]?.snippet).toContain("Happy Together");
-      expect(payload?.deep?.candidates?.[0]?.path).toBe("memory/2025-01-01-vendor-pitch.md");
+      const calendarCandidate = payload?.deep?.candidates?.find((candidate) =>
+        candidate.snippet?.includes("Happy Together"),
+      );
+      expect(calendarCandidate?.path).toBe("memory/2025-01-01-vendor-pitch.md");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -2351,18 +2616,7 @@ describe("memory cli", () => {
     });
   });
 
-  async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
-    let value: T | undefined;
-    await vi.waitFor(
-      async () => {
-        value = await task();
-      },
-      { interval: 1, timeout: timeoutMs },
-    );
-    return value as T;
-  }
-
-  it("records short-term recall entries from memory search hits", async () => {
+  it("awaits short-term recall persistence before memory search returns", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const close = vi.fn(async () => {});
       const search = vi.fn(async () => [
@@ -2396,11 +2650,7 @@ describe("memory cli", () => {
 
       await runMemoryCli(["search", "glacier", "--json"]);
 
-      const entries = await waitFor(async () => {
-        const recalled = await readShortTermRecallEntries({ workspaceDir });
-        expect(recalled).toHaveLength(1);
-        return recalled;
-      });
+      const entries = await readShortTermRecallEntries({ workspaceDir });
       expect(entries).toHaveLength(1);
       const entry = entries[0];
       if (!entry) {
@@ -2418,6 +2668,8 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         recallDays: ["<today>"],
         queryHashes: ["<hash>"],
+        claimHash: entry.claimHash ? "<claim>" : undefined,
+        provenance: entry.provenance ? { ...entry.provenance, observedAt: 0 } : undefined,
       }).toEqual({
         key: "memory:memory/2026-04-03.md:1:2",
         path: "memory/2026-04-03.md",
@@ -2434,7 +2686,11 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         queryHashes: ["<hash>"],
         recallDays: ["<today>"],
+        claimHash: "<claim>",
         conceptTags: ["backup", "backups", "glacier", "s3"],
+        // Memory-source recalls default to agent provenance (workspace files
+        // are owner-controlled); see mergeRecallProvenance.
+        provenance: { originClass: "agent", sessionKind: "unknown", observedAt: 0 },
       });
       expect(close).toHaveBeenCalled();
     });

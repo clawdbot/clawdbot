@@ -100,6 +100,33 @@ export function renderCustodianEventNudge(params: {
   </div>`;
 }
 
+export function renderCustodianChannelOnboardingNudge(params: {
+  onOpenChannels: () => void;
+  onDismiss: () => void;
+}) {
+  return html`<div class="custodian__nudge custodian__nudge--channel-onboarding" role="status">
+    <div class="custodian__nudge-copy">
+      <strong>${t("custodian.nudge.channelSetupTitle")}</strong>
+      <span>${t("custodian.nudge.channelSetupBody")}</span>
+    </div>
+    <button
+      class="btn btn--sm primary custodian__nudge-cta"
+      type="button"
+      @click=${params.onOpenChannels}
+    >
+      ${t("custodian.nudge.channelSetupAction")}
+    </button>
+    <button
+      class="custodian__nudge-dismiss"
+      type="button"
+      aria-label=${t("custodian.nudge.channelSetupDismiss")}
+      @click=${params.onDismiss}
+    >
+      ×
+    </button>
+  </div>`;
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 const CONSEQUENTIAL_CHANNEL_STATES = new Set([

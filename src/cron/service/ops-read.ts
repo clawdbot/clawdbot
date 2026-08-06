@@ -5,7 +5,7 @@ import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.j
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { findJobOrThrow, isJobEnabled, nextWakeAtMs } from "./jobs.js";
+import { findJobOrThrow, isJobEnabled, nextWakeAtMs, resolveJobLastRunStatus } from "./jobs.js";
 import { sortCronJobs } from "./list-page-sort.js";
 import type {
   CronJobsEnabledFilter,
@@ -23,7 +23,7 @@ import {
   resolveCurrentDefaultAgentId,
   resolveEffectiveJobAgentId,
 } from "./ops-shared.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { applyJobResult, armTimer } from "./timer.js";
@@ -50,7 +50,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
-    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return sortCronJobs(jobs, "nextRunAtMs", "asc");
   });
 }
 
@@ -110,6 +110,7 @@ export async function recordExternalFailure(
       return;
     }
     const snapshot = snapshotStoreForRollback(state);
+    const postPersistNotifications: DeferredCronNotifications = [];
     const now = state.deps.nowMs();
     const sourceIdentity = job.state.streamSourceIdentity;
     Object.assign(job.state, statePatch);
@@ -117,13 +118,18 @@ export async function recordExternalFailure(
     // Source restarts are counted separately, but terminal exhaustion should
     // enter the same alert/history path as a fifth consecutive payload error.
     job.state.consecutiveErrors = Math.max(job.state.consecutiveErrors ?? 0, 4);
-    applyJobResult(state, job, {
-      status: "error",
-      error,
-      executionStarted: false,
-      startedAt: now,
-      endedAt: now,
-    });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error,
+        executionStarted: false,
+        startedAt: now,
+        endedAt: now,
+      },
+      { deferredNotifications: postPersistNotifications },
+    );
     // Stream schedules are event-driven; applyJobResult's generic recurring
     // backoff must never turn source failure into a time-due payload run.
     job.state.nextRunAtMs = undefined;
@@ -137,7 +143,7 @@ export async function recordExternalFailure(
       durationMs: 0,
       failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
     });
-    await persistOrRestore(state, snapshot);
+    await persistOrRestore(state, snapshot, { postPersistNotifications });
     armTimer(state);
   });
 }
@@ -251,10 +257,6 @@ function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRun
   return "all";
 }
 
-function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
-  return job.state.lastRunStatus ?? job.state.lastStatus ?? "unknown";
-}
-
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
@@ -283,14 +285,23 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
         return false;
       }
-      if (lastRunStatusFilter !== "all" && resolveJobLastRunStatus(job) !== lastRunStatusFilter) {
+      if (
+        lastRunStatusFilter !== "all" &&
+        (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
+      ) {
         return false;
       }
       if (!query) {
         return true;
       }
       const haystack = normalizeLowercaseStringOrEmpty(
-        [job.id, job.name, job.description ?? "", job.agentId ?? ""].join(" "),
+        [
+          job.id,
+          job.name,
+          job.description ?? "",
+          job.agentId ?? "",
+          ...(job.displayName ? [job.displayName] : []),
+        ].join(" "),
       );
       return haystack.includes(query);
     });

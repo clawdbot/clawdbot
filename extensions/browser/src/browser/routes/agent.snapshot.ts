@@ -8,6 +8,7 @@ import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getImageMetadata } from "../../media/media-services.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
+import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import {
   captureScreenshot,
   getMainFrameDocumentIdentityViaCdp,
@@ -65,7 +66,7 @@ import {
   shouldUsePlaywrightForScreenshot,
 } from "./agent.snapshot.plan.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, runProfileRouteOperation, toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -329,6 +330,16 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
+    let timeoutMs: number | undefined;
+    try {
+      const requestedTimeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      timeoutMs =
+        requestedTimeoutMs === undefined
+          ? undefined
+          : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
+    } catch (err) {
+      return jsonError(res, 400, String(err instanceof Error ? err.message : err));
+    }
     await withRouteTabContext({
       req,
       res,
@@ -343,6 +354,7 @@ export function registerBrowserAgentSnapshotRoutes(
             profile: profileCtx.profile,
             targetId: tab.targetId,
             url,
+            timeoutMs,
             signal,
           });
           await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
@@ -356,6 +368,7 @@ export function registerBrowserAgentSnapshotRoutes(
           cdpUrl,
           targetId: tab.targetId,
           url,
+          timeoutMs,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         const currentTargetId = await resolveTargetIdAfterNavigate({

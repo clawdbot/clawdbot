@@ -248,6 +248,16 @@ export const BrowserToolOutputSchema = Type.Object(
       ),
     ),
     aborted: Type.Optional(BrowserBatchAbortSchema),
+    pageState: Type.Optional(
+      Type.Object(
+        {},
+        {
+          additionalProperties: true,
+          description:
+            "Inline snapshot details attached when the action changed the page document.",
+        },
+      ),
+    ),
     enabled: Type.Optional(Type.Boolean()),
     running: Type.Optional(Type.Boolean()),
     profile: Type.Optional(Type.String()),

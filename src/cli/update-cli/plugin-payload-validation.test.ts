@@ -129,6 +129,44 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result).toEqual({ checked: ["codex"], failures: [] });
   });
 
+  it.each([
+    { dependencyField: "dependencies", expectedFailures: 0 },
+    { dependencyField: "peerDependencies", expectedFailures: 1 },
+  ] as const)(
+    "keeps $dependencyField host checks aligned with selected-manifest ownership provenance",
+    async ({ dependencyField, expectedFailures }) => {
+      const dir = path.join(tmpRoot, `manifest-${dependencyField}`);
+      await writePackage(
+        dir,
+        {
+          name: "@clawemail/email",
+          [dependencyField]: { openclaw: "2026.7.1" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        "export default {};",
+      );
+      const staleHostDir = path.join(dir, "node_modules", "openclaw");
+      await fs.mkdir(staleHostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleHostDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+      );
+
+      const manifestResult = await runPluginPayloadSmokeCheckForManifestRecords({
+        plugins: [{ id: "email", rootDir: dir }],
+        env: {},
+      });
+      const authoritativeResult = await runPluginPayloadSmokeCheck({
+        records: { email: { source: "npm", installPath: dir } },
+        env: {},
+      });
+
+      expect(manifestResult.failures).toHaveLength(expectedFailures);
+      expect(authoritativeResult.failures).toHaveLength(1);
+      expect(authoritativeResult.failures[0]?.reason).toBe("missing-openclaw-peer-link");
+    },
+  );
+
   it("reports a failure when the package directory is missing", async () => {
     const dir = path.join(tmpRoot, "brave");
     const result = await runPluginPayloadSmokeCheck({
@@ -390,7 +428,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     ]);
   });
 
-  it("reports missing main entry when extension entries are valid", async () => {
+  it("accepts a valid declared extension when an unrelated npm main is missing", async () => {
     const dir = path.join(tmpRoot, "brave");
     await writePackage(dir, {
       name: "@openclaw/brave-plugin",
@@ -402,12 +440,33 @@ describe("runPluginPayloadSmokeCheck", () => {
       records: { brave: { source: "npm", installPath: dir } },
       env: {},
     });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("does not accept an existing npm main in place of a missing declared extension", async () => {
+    const dir = path.join(tmpRoot, "missing-declared-extension");
+    await writePackage(
+      dir,
+      {
+        name: "missing-declared-extension",
+        openclaw: { extensions: ["./missing-extension.js"] },
+        main: "./index.js",
+      },
+      "export default {};\n",
+    );
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { "missing-declared-extension": { source: "npm", installPath: dir } },
+      env: {},
+    });
+
     expect(result.failures).toStrictEqual([
       {
-        pluginId: "brave",
+        pluginId: "missing-declared-extension",
         installPath: dir,
-        reason: "missing-main-entry",
-        detail: `Plugin main entry "dist/index.js" not found at ${path.join(dir, "dist/index.js")}`,
+        reason: "missing-extension-entry",
+        detail:
+          "Plugin extension entry validation failed: extension entry not found: ./missing-extension.js",
       },
     ]);
   });
@@ -488,6 +547,69 @@ describe("runPluginPayloadSmokeCheck", () => {
       `instead of ${await resolveRealPath(resolveTestHostRoot())}`,
     );
   });
+
+  it("reports a failure when a direct openclaw dependency resolves to a stale copied host", async () => {
+    const dir = path.join(tmpRoot, "email");
+    await writePackage(
+      dir,
+      {
+        name: "@clawemail/email",
+        main: "dist/index.js",
+        dependencies: { openclaw: "2026.7.1" },
+      },
+      "export default {};\n",
+    );
+    const staleHostDir = path.join(dir, "node_modules", "openclaw");
+    await fs.mkdir(staleHostDir, { recursive: true });
+    await fs.writeFile(
+      path.join(staleHostDir, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+      "utf8",
+    );
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { email: { source: "npm", installPath: dir } },
+      env: {},
+    });
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "email",
+      installPath: dir,
+      reason: "missing-openclaw-peer-link",
+    });
+    expect(result.failures[0]?.detail).toContain(`${staleHostDir} points to`);
+  });
+
+  it.each(["git", "clawhub", "marketplace"] as const)(
+    "does not quarantine a shipped %s plugin for an unmanaged direct host dependency",
+    async (source) => {
+      const dir = path.join(tmpRoot, `${source}-email`);
+      await writePackage(
+        dir,
+        {
+          name: "@clawemail/email",
+          main: "dist/index.js",
+          dependencies: { openclaw: "2026.7.1" },
+        },
+        "export default {};\n",
+      );
+      const staleHostDir = path.join(dir, "node_modules", "openclaw");
+      await fs.mkdir(staleHostDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleHostDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.2" }),
+        "utf8",
+      );
+
+      const result = await runPluginPayloadSmokeCheck({
+        records: { email: { source, installPath: dir } },
+        env: {},
+      });
+
+      expect(result.failures).toEqual([]);
+    },
+  );
 
   it("reports a failure when an openclaw peer link points at the wrong package root", async () => {
     const dir = path.join(tmpRoot, "codex");

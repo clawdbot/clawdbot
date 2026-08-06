@@ -74,6 +74,10 @@ describe("loop command", () => {
     expect(rewrittenBody(params)).toContain('sessionTarget:"current"');
     expect(rewrittenBody(params)).toContain(`"${LOOP_PREFIX} check ci"`);
     expect(rewrittenBody(params)).toContain("do not use the message tool");
+    // Loop work orders are model-facing prompts: they must teach the canonical
+    // automations tool, never the legacy cron alias (RFC 0026).
+    expect(rewrittenBody(params)).toContain("with the automations tool");
+    expect(rewrittenBody(params)).not.toMatch(/\bcron tool\b/);
   });
 
   it("preserves parseDurationMs unitless millisecond intervals", async () => {
@@ -98,6 +102,8 @@ describe("loop command", () => {
     expect(await handleLoopCommand(params, true)).toEqual({ shouldContinue: true });
     expect(rewrittenBody(params)).toContain('action:"list", includeDisabled:true');
     expect(rewrittenBody(params)).toContain(`name starts with "${LOOP_PREFIX}"`);
+    expect(rewrittenBody(params)).toContain("Use the automations tool");
+    expect(rewrittenBody(params)).not.toMatch(/\bcron\b/i);
   });
 
   it("rewrites /loop stop as a scoped cron removal work order", async () => {

@@ -18,8 +18,7 @@
   "devDependencies": {
     "@microsoft/teams.common": "2.0.14",
     "@openclaw/plugin-sdk": "workspace:*",
-    "jose": "6.2.3",
-    "jwks-rsa": "4.1.0",
+    "jose": "6.2.4",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

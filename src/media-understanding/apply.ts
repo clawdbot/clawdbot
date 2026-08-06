@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
+import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { wrapExternalContent } from "../security/external-content.js";
 import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
@@ -412,7 +413,12 @@ async function extractFileContext(params: {
     if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
       continue;
     }
-    if (!limits.allowUrl && attachment.url && !attachment.path) {
+    if (
+      !limits.allowUrl &&
+      attachment.url &&
+      !attachment.path &&
+      !classifyMediaReferenceSource(attachment.url).isMediaStoreUrl
+    ) {
       if (shouldLogVerbose()) {
         logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
       }

@@ -85,6 +85,9 @@
               "output": 15,
               "cacheRead": 0.3,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -127,6 +130,9 @@
               "output": 4.4,
               "cacheRead": 0.26,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -141,6 +147,9 @@
               "output": 3.2,
               "cacheRead": 0.135,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {
@@ -155,6 +164,9 @@
               "output": 0.28,
               "cacheRead": 0.028,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {

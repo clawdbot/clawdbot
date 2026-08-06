@@ -149,7 +149,9 @@ Session tools are scoped to limit what the agent can see:
 
 Default is `tree`. Sandboxed sessions are clamped to `tree` regardless of config.
 With the default `session.dmScope: "main"`, group activity makes watched
-same-agent group sessions readable from the main session.
+same-agent group sessions readable from the main session, and the main
+session's system prompt lists those watched sessions so the agent knows it can
+read them.
 
 ## Further reading
 

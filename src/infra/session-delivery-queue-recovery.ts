@@ -106,6 +106,19 @@ function canReconcileStartedAgentAttemptAtRetryLimit(entry: QueuedSessionDeliver
   );
 }
 
+function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: number) {
+  if (entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion") {
+    if (now >= entry.owner.deadlineAt) {
+      return { eligible: true } as const;
+    }
+    const remainingBackoffMs = Math.max(0, (entry.availableAt ?? 0) - now);
+    return remainingBackoffMs > 0
+      ? ({ eligible: false, remainingBackoffMs } as const)
+      : ({ eligible: true } as const);
+  }
+  return isDeliveryRecoveryRetryEligible(entry, now);
+}
+
 async function drainQueuedEntry(opts: {
   entry: QueuedSessionDelivery;
   deliver: DeliverSessionDeliveryFn;
@@ -158,7 +171,12 @@ async function drainQueuedEntry(opts: {
       if (getErrnoCode(failErr) === "ENOENT") {
         return "already-gone";
       }
-      return "failed";
+      // A non-ENOENT persistence failure here means the retry metadata
+      // (retryCount/lastAttemptAt) never advanced, so swallowing it as "failed"
+      // re-drives the same entry forever without progressing toward the
+      // max-retries terminal move. Surface it like the sibling moveToFailed
+      // paths below, which also re-throw non-ENOENT.
+      throw failErr;
     }
   }
 }
@@ -211,7 +229,7 @@ export async function drainPendingSessionDeliveries(opts: {
         }
 
         if (!pendingSettlementOutcome && !currentDecision.bypassBackoff) {
-          const retryEligibility = isDeliveryRecoveryRetryEligible(currentEntry, Date.now());
+          const retryEligibility = resolveSessionRetryEligibility(currentEntry, Date.now());
           if (!retryEligibility.eligible) {
             opts.log.info(
               `${opts.logLabel}: entry ${currentEntry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
@@ -294,7 +312,7 @@ export async function recoverPendingSessionDeliveries(opts: {
       }
 
       if (!pendingSettlementOutcome) {
-        const retryEligibility = isDeliveryRecoveryRetryEligible(currentEntry, Date.now());
+        const retryEligibility = resolveSessionRetryEligibility(currentEntry, Date.now());
         if (!retryEligibility.eligible) {
           summary.deferredBackoff += 1;
           return "continue";

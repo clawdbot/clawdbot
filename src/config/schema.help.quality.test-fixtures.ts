@@ -91,6 +91,11 @@ export const TARGET_KEYS = [
   "cron",
   "cron.enabled",
   "cron.webhookToken",
+  "cron.webhookSsrfPolicy",
+  "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork",
+  "cron.webhookSsrfPolicy.allowedHostnames",
+  "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange",
+  "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange",
   "cron.sessionRetention",
   "session",
   "session.scope",
@@ -306,6 +311,8 @@ export const TARGET_KEYS = [
   "plugins.entries.*.llm",
   "plugins.entries.*.llm.allowModelOverride",
   "plugins.entries.*.llm.allowedModels",
+  "plugins.entries.*.llm.allowedCompletionModels",
+  "plugins.entries.*.llm.allowAuthProfileOverride",
   "plugins.entries.*.llm.allowAgentIdOverride",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
@@ -340,7 +347,6 @@ export const TARGET_KEYS = [
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
-  "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
@@ -349,6 +355,7 @@ export const TARGET_KEYS = [
 ] as const;
 
 export const ENUM_EXPECTATIONS: Record<string, string[]> = {
+  "skills.workshop.autonomous.mode": ['"off"', '"propose"', '"auto"'],
   "memory.citations": ['"auto"', '"on"', '"off"'],
   "memory.backend": ['"builtin"', '"qmd"'],
   "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],
@@ -372,7 +379,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"existing-session"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
-  "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
+  "diagnostics.otel.protocol": ['"http/protobuf"'],
   "diagnostics.otel.logsExporter": ['"otlp"', '"stdout"', '"both"'],
   "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
   "logging.consoleLevel": [

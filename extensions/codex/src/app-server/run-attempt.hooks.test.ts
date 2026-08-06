@@ -6,7 +6,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -115,7 +115,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
@@ -311,7 +311,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         return {};
       });
       const params = createParams(sessionFile, workspaceDir);
-      const sessionManager = SessionManager.open(sessionFile);
+      const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
       sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
@@ -943,7 +943,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    openFileBackedSessionManagerForTest(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()),
     );
     createStartedThreadHarness(async (method) => {

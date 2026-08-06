@@ -59,6 +59,7 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   ensureAgentWorkspace,
+  isExpectedAbsentBootstrapFile,
   isWorkspaceSetupCompleted,
   WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "../../agents/workspace.js";
@@ -96,7 +97,7 @@ import {
   isConfiguredAgent,
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
-import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
+import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 // Derived from the canonical workspace list so retiring a bootstrap file cannot
@@ -244,6 +245,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
     name: string;
     path: string;
     missing: boolean;
+    expectedAbsent?: boolean;
     size?: number;
     updatedAtMs?: number;
   }> = [];
@@ -256,6 +258,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
       name,
       path: path.join(workspaceDir, name),
       missing: true,
+      expectedAbsent: isExpectedAbsentBootstrapFile(name),
     }));
   }
 
@@ -272,7 +275,12 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
         updatedAtMs: meta.updatedAtMs,
       });
     } else {
-      files.push({ name, path: filePath, missing: true });
+      files.push({
+        name,
+        path: filePath,
+        missing: true,
+        expectedAbsent: isExpectedAbsentBootstrapFile(name),
+      });
     }
   }
 
@@ -764,7 +772,14 @@ function respondWorkspaceFileMissing(params: {
     {
       agentId: params.agentId,
       workspace: params.workspaceDir,
-      file: { name: params.name, path: params.filePath, missing: true },
+      // Clients merge this entry over the listed one, so it must carry the same
+      // absence classification or a picked optional file re-renders as a fault.
+      file: {
+        name: params.name,
+        path: params.filePath,
+        missing: true,
+        expectedAbsent: isExpectedAbsentBootstrapFile(params.name),
+      },
     },
     undefined,
   );
@@ -864,9 +879,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
-    const modelCatalog = await loadOptionalServerMethodModelCatalog(context, "agents.list", {
-      logOnceKey: "agents.list",
-    });
+    const modelCatalog = await readPreparedServerMethodModelCatalog(context);
     const result = listAgentsForGateway(cfg, modelCatalog, {
       includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
     });

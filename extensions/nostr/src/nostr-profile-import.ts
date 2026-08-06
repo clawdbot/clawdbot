@@ -153,10 +153,15 @@ export async function importProfileFromRelays(
       };
     }
 
-    // Find the event with the highest created_at (newest wins for replaceable events)
-    const bestEvent = events.reduce((current, candidate) =>
-      candidate.event.created_at > current.event.created_at ? candidate : current,
-    );
+    // Find the canonical latest replaceable event: newest timestamp, then lowest id.
+    const bestEvent = events.reduce((current, candidate) => {
+      const candidateIsNewer = candidate.event.created_at > current.event.created_at;
+      // NIP-01 breaks replaceable-event timestamp ties with the lowest event id.
+      const candidateWinsTie =
+        candidate.event.created_at === current.event.created_at &&
+        candidate.event.id < current.event.id;
+      return candidateIsNewer || candidateWinsTie ? candidate : current;
+    });
 
     // Parse the profile content
     let parsedContent: unknown;

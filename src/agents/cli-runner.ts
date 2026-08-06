@@ -3,6 +3,8 @@
  */
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
@@ -24,6 +26,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   resolveCliRuntimeArtifactFingerprint,
@@ -498,39 +501,43 @@ async function runCliAgentInternal(
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();
   const hookStartedAt = Date.now();
-  const hookResult = await runBeforeAgentReplyForTurn({
-    runId: params.runId,
-    trigger: params.trigger,
-    event: { cleanedBody: params.prompt },
-    context: {
-      runId: params.runId,
-      jobId: params.jobId,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      workspaceDir: params.workspaceDir,
-      trigger: params.trigger,
-      ...buildAgentHookContextChannelFields(params),
-      ...buildAgentHookContextIdentityFields({
+  // Prompt-only inference cannot enter agent hooks: they may replace the turn
+  // or add side effects before the exact zero-tool process even starts.
+  const hookResult = params.isolatedCompletion
+    ? undefined
+    : await runBeforeAgentReplyForTurn({
+        runId: params.runId,
         trigger: params.trigger,
-        senderId: params.senderId,
-        chatId: params.chatId,
-        channelContext: params.channelContext,
-      }),
-    },
-    onDispatch: () =>
-      params.onExecutionPhase?.({
-        phase: "before_agent_reply",
-        provider: params.provider,
-        model: params.model ?? "",
-      }),
-    onDeclined: () =>
-      params.onExecutionPhase?.({
-        phase: "runtime_plugins",
-        provider: params.provider,
-        model: params.model ?? "",
-      }),
-  });
+        event: { cleanedBody: params.prompt },
+        context: {
+          runId: params.runId,
+          jobId: params.jobId,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          trigger: params.trigger,
+          ...buildAgentHookContextChannelFields(params),
+          ...buildAgentHookContextIdentityFields({
+            trigger: params.trigger,
+            senderId: params.senderId,
+            chatId: params.chatId,
+            channelContext: params.channelContext,
+          }),
+        },
+        onDispatch: () =>
+          params.onExecutionPhase?.({
+            phase: "before_agent_reply",
+            provider: params.provider,
+            model: params.model ?? "",
+          }),
+        onDeclined: () =>
+          params.onExecutionPhase?.({
+            phase: "runtime_plugins",
+            provider: params.provider,
+            model: params.model ?? "",
+          }),
+      });
   if (hookResult?.handled) {
     const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
     const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
@@ -578,9 +585,15 @@ async function runCliAgentInternal(
     }
   }
   if (params.cleanupBundleMcpOnRunEnd === true) {
+    // The run's session ID is immutable; its session key can already belong to
+    // a newer run. Never retire the newer runtime or close the shared listener.
     try {
-      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-      await closeMcpLoopbackServer();
+      const { retireSessionMcpRuntime } = await import("./agent-bundle-mcp-tools.js");
+      await retireSessionMcpRuntime({
+        sessionId: params.sessionId,
+        reason: "cli-run-end",
+        onError: recordCleanupError,
+      });
     } catch (error) {
       recordCleanupError(error);
     }
@@ -612,7 +625,8 @@ export async function runPreparedCliAgent(
     isClaudeCliProvider(params.provider) && context.contextWindowInfo
       ? { contextTokens: context.contextWindowInfo.tokens }
       : {};
-  const hookRunner = getGlobalHookRunner();
+  const isolatedCompletion = params.isolatedCompletion === true;
+  const hookRunner = isolatedCompletion ? undefined : getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
@@ -620,7 +634,9 @@ export async function runPreparedCliAgent(
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
   // Prior turn maintenance can rewrite transcript entries after finalization.
   // Reads for the next same-session inference must observe that rewrite.
-  await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
+  if (!isolatedCompletion) {
+    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
+  }
   const historyMessages = needsHookHistory
     ? await loadCliSessionHistoryMessages({
         sessionId: params.sessionId,
@@ -889,7 +905,44 @@ export async function runPreparedCliAgent(
     }
 
     try {
-      const sessionManager = SessionManager.open(params.sessionFile);
+      const sessionKey = params.sessionKey?.trim() || params.sessionId;
+      const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+      let sessionManager = params.sessionManager;
+      if (!sessionManager) {
+        const sessionTarget = params.sessionTarget ?? {
+          agentId,
+          sessionId: params.sessionId,
+          sessionKey,
+          storePath:
+            params.storePath ??
+            resolveStorePath(params.config?.session?.store, {
+              agentId,
+            }),
+        };
+        const persistedEntry = await patchSessionEntry(
+          sessionTarget,
+          (entry, patchContext) => {
+            if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
+              return null;
+            }
+            return {
+              sessionId: sessionTarget.sessionId,
+              updatedAt: Date.now(),
+            };
+          },
+          {
+            fallbackEntry: params.sessionEntry
+              ? undefined
+              : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
+            skipMaintenance: true,
+          },
+        );
+        if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
+          // Skip only this stale blocked-message write; the outer runner still returns blocked.
+          return;
+        }
+        sessionManager = SessionManager.open(sessionTarget);
+      }
       sessionManager.appendMessage(
         redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
       );
@@ -1169,6 +1222,9 @@ export async function runPreparedCliAgent(
           stopReason,
           refusal: false,
         },
+        ...(resultParams.output.toolSummary
+          ? { toolSummary: resultParams.output.toolSummary }
+          : {}),
         agentMeta: {
           sessionId: agentSessionId,
           provider: params.provider,
@@ -1233,6 +1289,15 @@ export async function runPreparedCliAgent(
   };
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
+    if (isolatedCompletion) {
+      const { output, usedHistoryPrompt } = await executeCliAttempt();
+      return buildCliRunResult({
+        output,
+        bindingFlushOk: true,
+        assistantTranscriptOwned: false,
+        usedHistoryPrompt,
+      });
+    }
     await bootstrapHarnessContextEngine({
       hadSessionFile: context.hadSessionFile,
       contextEngine: context.contextEngine,

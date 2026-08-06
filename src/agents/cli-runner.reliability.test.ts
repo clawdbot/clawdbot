@@ -10,7 +10,11 @@ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { loadTranscriptEvents, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -45,6 +49,7 @@ import {
   runPreparedCliAgent,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
+import { createClaudeInputStartedEvent } from "./cli-runner.test-helpers.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
@@ -93,6 +98,8 @@ vi.mock("../skills/research/autocapture.js", () => ({
 
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
@@ -250,6 +257,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label}`);
   }
   return value as Record<string, unknown>;
+}
+
+function claudeInputStartedJson(data: string): string {
+  const event = createClaudeInputStartedEvent(data);
+  if (!event) {
+    throw new Error("expected Claude user input UUID");
+  }
+  return JSON.stringify(event);
 }
 
 function requireArray(value: unknown, label: string): Array<unknown> {
@@ -1995,7 +2010,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it("forks a synthetic-stalled resume without rebuilding its cached conversation", async () => {
+  it("forks a lifecycle-started resume stall without rebuilding its cached conversation", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const transcriptProbe = vi.fn(async () => false);
@@ -2056,15 +2071,7 @@ describe("runCliAgent reliability", () => {
                     subtype: "init",
                     session_id: "stale-live",
                   }),
-                  JSON.stringify({
-                    type: "assistant",
-                    session_id: "stale-live",
-                    message: {
-                      model: "<synthetic>",
-                      role: "assistant",
-                      content: [{ type: "text", text: "No response requested." }],
-                    },
-                  }),
+                  claudeInputStartedJson(dataValue),
                 ].join("\n") + "\n",
               );
               cb?.();
@@ -2097,6 +2104,7 @@ describe("runCliAgent reliability", () => {
             stdoutListener?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: "forked-live" }),
+                claudeInputStartedJson(dataValue),
                 JSON.stringify({
                   type: "assistant",
                   uuid: "assistant-after-recovery",
@@ -2228,7 +2236,7 @@ describe("runCliAgent reliability", () => {
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
-  it("falls back to transcript reseeding when the cache-preserving fork also stalls", async () => {
+  it("falls back to transcript reseeding when the lifecycle-started fork also stalls", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
     const spawnedArgv: string[][] = [];
@@ -2271,18 +2279,9 @@ describe("runCliAgent reliability", () => {
             input.onStdout?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                claudeInputStartedJson(dataValue),
                 ...(spawnIndex < 3
-                  ? [
-                      JSON.stringify({
-                        type: "assistant",
-                        session_id: sessionId,
-                        message: {
-                          model: "<synthetic>",
-                          role: "assistant",
-                          content: [{ type: "text", text: "No response requested." }],
-                        },
-                      }),
-                    ]
+                  ? []
                   : [
                       JSON.stringify({
                         type: "result",
@@ -2428,6 +2427,7 @@ describe("runCliAgent reliability", () => {
             input.onStdout?.(
               [
                 JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+                claudeInputStartedJson(dataValue),
                 ...(spawnIndex === 1
                   ? []
                   : [
@@ -3292,7 +3292,7 @@ describe("runCliAgent reliability", () => {
           skills: {
             workshop: {
               autonomous: {
-                enabled: true,
+                mode: "propose",
               },
             },
           },
@@ -3430,10 +3430,10 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          storePath,
           workspaceDir: dir,
           prompt: "runtime prompt",
           persistAssistantTranscript: true,
-          storePath,
           userTurnTranscriptRecorder: recorder,
           onUserMessagePersisted,
         },
@@ -4413,6 +4413,7 @@ describe("runCliAgent reliability", () => {
     const { dir, sessionFile } = createSessionFile({
       history: [{ role: "user", content: "earlier context" }],
     });
+    const storePath = path.join(dir, "sessions.json");
 
     try {
       let resolved = false;
@@ -4429,6 +4430,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          storePath,
           workspaceDir: dir,
           prompt: "secret prompt",
         },
@@ -4457,6 +4459,27 @@ describe("runCliAgent reliability", () => {
       expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      const transcriptEvents = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: context.params.sessionId,
+        sessionKey: "agent:main:main",
+        storePath,
+      });
+      expect(transcriptEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+                }),
+              ]),
+            }),
+          }),
+        ]),
+      );
       const beforeRunEvent = requireRecord(
         callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
         "before_agent_run event",
@@ -4499,20 +4522,79 @@ describe("runCliAgent reliability", () => {
       expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
       expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
 
-      const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-      const blockedLine = JSON.parse(
-        expectDefined(lines[lines.length - 1], "lines[lines.length - 1] test invariant"),
+      const blockedLine = requireRecord(
+        expectDefined(
+          transcriptEvents.find(
+            (entry) => requireRecord(entry, "transcript entry").type === "message",
+          ),
+          "blocked transcript message",
+        ),
+        "blocked transcript message",
       );
-      expect(blockedLine.message.content[0].text).toBe(
+      const blockedMessage = requireRecord(blockedLine.message, "blocked message");
+      const blockedContent = requireArray(blockedMessage.content, "blocked content");
+      expect(requireRecord(blockedContent[0], "blocked text").text).toBe(
         "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
       );
       expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
       expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
-      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked.blockedBy).toBe(
-        "policy-plugin",
+      const blockedMetadata = requireRecord(blockedMessage["__openclaw"], "blocked metadata");
+      const blockedState = requireRecord(blockedMetadata.beforeAgentRunBlocked, "blocked state");
+      expect(blockedState.blockedBy).toBe("policy-plugin");
+      expect(blockedState).not.toHaveProperty("reason");
+      expect(Object.hasOwn(blockedMetadata, "beforeAgentRunBlocked")).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not rebind a reset session when a stale before_agent_run hook blocks", async () => {
+    supervisorSpawnMock.mockClear();
+    const { dir, sessionFile, storePath } = createSessionFile();
+    const sessionKey = "agent:main:main";
+    const context = buildPreparedContext({
+      sessionKey,
+      runId: "run-blocked-cli-rebound",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.params.sessionEntry = { sessionId: "s1", updatedAt: 1 };
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId: "replacement-session", updatedAt: 2 },
+        );
+        return {
+          pluginId: "policy-plugin",
+          decision: {
+            outcome: "block" as const,
+            message: "Blocked after reset.",
+          },
+        };
+      }),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile,
+            storePath,
+            workspaceDir: dir,
+            prompt: "secret prompt",
+          },
+        }),
+      ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+
+      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
+        "replacement-session",
       );
-      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked).not.toHaveProperty("reason");
-      expect(Object.hasOwn(blockedLine.message["__openclaw"], "beforeAgentRunBlocked")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

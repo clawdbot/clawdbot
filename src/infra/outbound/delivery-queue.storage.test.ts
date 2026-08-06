@@ -4,13 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  failPendingDelivery,
-  loadPendingDelivery,
-  loadPendingDeliveries,
-  moveToFailed,
-  reserveDeliveryAttempt,
-} from "./delivery-queue-storage.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -19,11 +14,18 @@ import {
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
+  failPendingDelivery,
+  loadPendingDelivery,
+  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
-} from "./delivery-queue.js";
+  moveToFailed,
+  reserveDeliveryAttempt,
+  type QueuedDelivery,
+} from "./delivery-queue-storage.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
@@ -35,8 +37,8 @@ describe("delivery-queue storage", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
     });
     const row = db
-      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
-      .get(id) as { status?: string } | undefined;
+      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+      .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { status?: string } | undefined;
     return row?.status;
   }
 
@@ -183,6 +185,52 @@ describe("delivery-queue storage", () => {
       expect(readQueuedEntry(tmpDir(), id).maxRetries).toBe(45);
     });
 
+    it("projects process-local hook metadata out before JSON custody", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        preparedBatch: {
+          schemaVersion: 1,
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              sourceIndex: 0,
+              status: "suppressed",
+              reason: "cancelled_by_message_sending_hook",
+              hookEffect: {
+                cancelReason: "owned elsewhere",
+                metadata: { nonJsonValue: 1n },
+              },
+            },
+          ],
+        },
+      });
+
+      expect(readQueuedEntry(tmpDir(), id).preparedBatch).toEqual({
+        schemaVersion: 1,
+        sourcePayloadCount: 1,
+        entries: [
+          {
+            sourceIndex: 0,
+            status: "suppressed",
+            reason: "cancelled_by_message_sending_hook",
+          },
+        ],
+      });
+    });
+
+    it("canonicalizes duplicate singular and plural media before recording fan-out", async () => {
+      const mediaUrl = "https://example.com/same.png";
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "caption", mediaUrl, mediaUrls: [mediaUrl] }],
+      });
+
+      const entry = readQueuedEntry(tmpDir(), id) as unknown as QueuedDelivery;
+      expect(acceptedPreparedOutboundEntries(entry.preparedBatch)[0]?.preparedMediaCount).toBe(1);
+    });
+
     it("atomically reserves delivery attempts up to the producer budget", async () => {
       const id = await enqueueTextDelivery({
         channel: "directchat",
@@ -288,7 +336,11 @@ describe("delivery-queue storage", () => {
         requesterSenderId: "sender-1",
       });
       expect(entry.retryCount).toBe(0);
-      expect(entry.payloads).toEqual([{ text: "hello" }]);
+      expect(
+        acceptedPreparedOutboundEntries((entry as unknown as QueuedDelivery).preparedBatch).map(
+          (prepared) => prepared.payload,
+        ),
+      ).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir());
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -322,7 +374,9 @@ describe("delivery-queue storage", () => {
       expect(first).toEqual({ id: "operation-stable", created: true });
       expect(repeated).toEqual({ id: "operation-stable", created: false });
       expect(readQueuedEntry(tmpDir(), "operation-stable")).toMatchObject({
-        payloads: [{ text: "first" }],
+        preparedBatch: {
+          entries: [expect.objectContaining({ payload: { text: "first" }, status: "accepted" })],
+        },
         deliveryCompletion: {
           kind: "conversation",
           agentId: "main",
@@ -420,6 +474,52 @@ describe("delivery-queue storage", () => {
       expect((entry.platformSendStartedAt as number) > 0).toBe(true);
       expect(entry.recoveryState).toBe("unknown_after_send");
       expect(entry.retryCount).toBe(0);
+    });
+
+    it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+        const stateDir = tmpDir();
+        const id = "cron-direct-delivery:v1:unknown-owner-lease";
+        await enqueueDeliveryOnce(
+          {
+            channel: "forum",
+            to: "123",
+            payloads: [{ text: "test" }],
+            completionRetention: {
+              idPrefix: "cron-direct-delivery:v1:",
+              maxAgeMs: 24 * 60 * 60_000,
+              maxEntries: 2_000,
+            },
+            requiresProducerClaim: true,
+          },
+          id,
+          stateDir,
+        );
+        const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+        if (!claimId) {
+          throw new Error("test invariant: explicit producer must own the stable row");
+        }
+        await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
+        const started = readQueuedEntry(stateDir, id);
+        const originalExpiry = started.availableAt;
+        vi.setSystemTime(Date.now() + 1_000);
+
+        await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
+
+        expect(readQueuedEntry(stateDir, id)).toMatchObject({
+          recoveryState: "unknown_after_send",
+          platformSendAttemptId: claimId,
+          availableAt: originalExpiry,
+        });
+        await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
+          Date.now() + 30_000,
+        );
+        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 30_000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("refreshes the attempt timestamp immediately before provider I/O", async () => {

@@ -1,5 +1,10 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
-import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import {
+  getFileExtension,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
@@ -9,6 +14,11 @@ export type MediaFact = {
   url?: string;
   contentType?: string;
   kind?: MediaKind;
+  fileName?: string;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
   transcribed?: boolean;
   messageId?: string;
   workspaceDir?: string;
@@ -25,6 +35,10 @@ export type MediaFactInput = {
 };
 
 const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
+
+function normalizeNonNegativeNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
 
 /** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
 export function attachRuntimePromptMediaFacts<T extends object>(
@@ -212,6 +226,11 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
       ...(fact.url ? { url: fact.url } : {}),
       ...(fact.contentType && !bareLegacyKind ? { contentType: fact.contentType } : {}),
       ...(explicitKind ? { kind: explicitKind } : {}),
+      ...(fact.fileName ? { fileName: fact.fileName } : {}),
+      ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
+      ...(fact.durationMs ? { durationMs: fact.durationMs } : {}),
+      ...(fact.width ? { width: fact.width } : {}),
+      ...(fact.height ? { height: fact.height } : {}),
       ...(fact.transcribed ? { transcribed: true } : {}),
       ...(fact.messageId ? { messageId: fact.messageId } : {}),
       ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),
@@ -260,37 +279,39 @@ export function readRuntimePromptImageOrder(message: object): PromptImageOrderEn
   return Array.isArray(imageOrder) ? (imageOrder as PromptImageOrderEntry[]) : undefined;
 }
 
+/** Returns whether a declared MIME only describes otherwise unclassified binary bytes. */
+export function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
+  const normalizedContentType = normalizeMimeType(contentType);
+  return (
+    normalizedContentType === "application/octet-stream" ||
+    normalizedContentType === "binary/octet-stream"
+  );
+}
+
 /** Returns whether a fact can produce native image input. */
 export function isImageMediaFact(fact: MediaFactInput): boolean {
   if (fact.kind && fact.kind !== "unknown") {
     return fact.kind === "image" || fact.kind === "sticker";
   }
-  const contentType = normalizeOptionalString(fact.contentType);
-  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase();
-  if (
-    normalizedContentType &&
-    normalizedContentType !== "application/octet-stream" &&
-    normalizedContentType !== "binary/octet-stream"
-  ) {
+  const normalizedContentType = normalizeMimeType(fact.contentType);
+  if (normalizedContentType && !isGenericBinaryMediaContentType(normalizedContentType)) {
     const mimeKind = kindFromMime(normalizedContentType);
     if (mimeKind) {
       return mimeKind === "image";
     }
-    // Legacy channel-mode projections persist bare kinds as MediaType; honor
-    // them, and fall through to filename inference for other unknown strings.
-    if (normalizedContentType === "image" || normalizedContentType === "sticker") {
-      return true;
-    }
-    if (
-      normalizedContentType === "audio" ||
-      normalizedContentType === "video" ||
-      normalizedContentType === "document"
-    ) {
-      return false;
-    }
+    // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
+    return normalizedContentType === "image" || normalizedContentType === "sticker";
   }
   const pathValue = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
-  return kindFromMime(mimeTypeFromFilePath(pathValue)) === "image";
+  const inferredMime = mimeTypeFromFilePath(pathValue);
+  if (inferredMime === "image/svg+xml") {
+    return false;
+  }
+  if (kindFromMime(inferredMime) === "image") {
+    return true;
+  }
+  const extension = getFileExtension(pathValue);
+  return extension === ".tif" || extension === ".tiff";
 }
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
@@ -299,6 +320,10 @@ type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   workspaceDir?: string;
   transcribed?: (media: TInput, index: number) => boolean;
 };
+
+function normalizePositiveInteger(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
 
 export type MediaFactLegacyProjection = {
   /** @deprecated Use `media[0]?.path`. */
@@ -330,11 +355,22 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
 ): MediaFact {
   const workspaceDir = normalizeOptionalString(media.workspaceDir) ?? defaults.workspaceDir;
   const contentType = normalizeOptionalString(media.contentType);
+  const durationMs = normalizePositiveInteger(media.durationMs);
+  const width = normalizePositiveInteger(media.width);
+  const height = normalizePositiveInteger(media.height);
   const normalized: MediaFact = {
     path: normalizeOptionalString(media.path),
     url: normalizeOptionalString(media.url),
     contentType,
-    kind: media.kind ?? defaults.kind ?? kindFromMime(contentType),
+    kind:
+      media.kind ??
+      defaults.kind ??
+      (isGenericBinaryMediaContentType(contentType) ? undefined : kindFromMime(contentType)),
+    fileName: normalizeOptionalString(media.fileName),
+    sizeBytes: normalizeNonNegativeNumber(media.sizeBytes),
+    ...(durationMs ? { durationMs } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
     transcribed: media.transcribed === true || defaults.transcribed?.(media, index) === true,
     messageId: normalizeOptionalString(media.messageId) ?? defaults.messageId,
     ...(workspaceDir ? { workspaceDir } : {}),
@@ -416,6 +452,11 @@ function resolveMediaFactsWithPrecedence(
           ? (legacyContentType ?? fact?.contentType)
           : (fact?.contentType ?? legacyContentType),
         kind: fact?.kind,
+        fileName: fact?.fileName,
+        sizeBytes: fact?.sizeBytes,
+        durationMs: fact?.durationMs,
+        width: fact?.width,
+        height: fact?.height,
         transcribed: legacyProjectionWins
           ? fact
             ? fact.transcribed === true

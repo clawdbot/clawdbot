@@ -19,6 +19,10 @@ class WearProxyListenerService : WearableListenerService() {
 
   override fun onChannelOpened(channel: ChannelClient.Channel) {
     val app = application as? NodeApp ?: return
-    app.wearRealtimeChannels.accept(channel, app::ensureBackgroundRuntime)
+    app.wearRealtimeChannels.accept(
+      channel = channel,
+      appendAudio = { owner, payload -> app.ensureBackgroundRuntime().appendWearRealtimeAudio(owner, payload) },
+      stopTalk = { owner -> app.ensureBackgroundRuntime().stopWearRealtimeTalk(owner) },
+    )
   }
 }

@@ -90,3 +90,10 @@ export function resolvePluginSetupCliBackendDescriptor(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );
 }
+
+/** Resolve enabled setup CLI backend ids from one metadata snapshot. */
+export function resolvePluginSetupCliBackendIds(
+  params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
+): string[] {
+  return resolveSetupCliBackendDescriptors(params).map((entry) => entry.backend.id);
+}

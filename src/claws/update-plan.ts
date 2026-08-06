@@ -1,7 +1,7 @@
 // Builds read-only, agent-centric Claw update plans from grouped manifests and ownership state.
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
-import { stableStringify } from "../agents/stable-stringify.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -59,6 +59,7 @@ function manualState(state: string): boolean {
 export async function buildClawUpdatePlan(params: {
   agentId: string;
   targetManifest: ClawManifest;
+  targetClawMarkdownBody?: Buffer;
   targetOpenClawProfile?: ClawOpenClawProfile;
   targetSource: ClawSourceIdentity;
   config: OpenClawConfig;
@@ -204,6 +205,7 @@ export async function buildClawUpdatePlan(params: {
     >();
     const targetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
+      clawMarkdownBody: params.targetClawMarkdownBody,
       openClawProfile: params.targetOpenClawProfile,
       source: params.targetSource,
       diagnostics: params.diagnostics,

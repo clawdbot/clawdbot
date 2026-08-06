@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
+import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
@@ -30,12 +31,32 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   `;
 }
 
+function sessionLoaderDeps(
+  face: BoardFace,
+  context: ApplicationContext,
+  location: RouteLocation,
+): string {
+  const search = new URLSearchParams(location.search);
+  const bridgedPath =
+    location.pathname === pathForRoute(face, context.basePath)
+      ? search.get(INTERNAL_SESSION_PATH_PARAM)
+      : null;
+  if (bridgedPath) {
+    search.delete(INTERNAL_SESSION_PATH_PARAM);
+  }
+  const serializedSearch = search.toString();
+  return `${bridgedPath ?? location.pathname}\u0000${
+    serializedSearch ? `?${serializedSearch}` : ""
+  }`;
+}
+
 function sessionPage(face: BoardFace) {
   return definePage({
-    id: face,
-    path: `/${face}`,
-    loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-      `${location.pathname}\u0000${location.search}`,
+    ...routePageSpec(face),
+    // The application router temporarily maps dynamic session URLs onto the
+    // static face route. Both locations describe the same loader match.
+    loaderDeps: (context: ApplicationContext, location: RouteLocation) =>
+      sessionLoaderDeps(face, context, location),
     loader: async (context: ApplicationContext, { location, signal }) => {
       const { loadChatRoute } = await import("./route-loader.ts");
       return await loadChatRoute(context, location, face, signal);

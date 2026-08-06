@@ -14,6 +14,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { withEnv } from "../test-utils/env.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { testApi } from "./logger.js";
 import { loggingState } from "./state.js";
 import {
   captureConsoleSnapshot,
@@ -374,12 +375,13 @@ describe("enableConsoleCapture", () => {
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
-  it("routes subsystem-prefixed warnings through one file-log sink", () => {
+  it("routes subsystem-prefixed warnings through one file-log sink", async () => {
     const logPath = tempLogPath();
     setLoggerOverride({ level: "info", file: logPath });
     enableConsoleCapture();
 
     logWarn("mcp-loopback: conflicting schema definitions");
+    await testApi.flushFileLogQueueForTests();
 
     const content = fs.readFileSync(logPath, "utf-8");
     expect(countMatchingLines(content, "conflicting schema definitions")).toBe(1);

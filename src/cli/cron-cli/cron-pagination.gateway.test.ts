@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockCronStateForJobs } from "../../cron/service.test-harness.js";
-import { listPage } from "../../cron/service/ops.js";
+import { listPage } from "../../cron/service/ops-read.js";
 import type { CronJob } from "../../cron/types.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 

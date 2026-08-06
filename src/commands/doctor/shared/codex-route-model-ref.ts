@@ -411,6 +411,7 @@ export function resolveImplicitDefaultAgentModelRef(cfg: OpenClawConfig): string
   const fallbackProvider = resolveConfiguredProviderFallback({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
   });
   return fallbackProvider
     ? normalizeProviderModelRef(fallbackProvider.provider, fallbackProvider.model)

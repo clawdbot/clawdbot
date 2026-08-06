@@ -1,18 +1,26 @@
 // Telegram reaction handler registration.
 import type { ReactionTypeEmoji } from "grammy/types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import type { TelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
+import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
-import {
-  buildTelegramGroupPeerId,
-  buildTelegramParentPeer,
-  resolveTelegramForumThreadId,
-} from "./bot/helpers.js";
+import { buildTelegramGroupPeerId, buildTelegramParentPeer } from "./bot/helpers.js";
+import { resolveTelegramConversationRoute } from "./conversation-route.js";
+
+/** Stable operator-facing reason for a forum reaction dropped without a known topic. */
+const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
+
+/** Only the message-cache lookup this handler needs, so tests can supply it directly. */
+type TelegramReactionThreadRecovery = Pick<
+  TelegramHandlerMessageRuntime,
+  "resolveCachedMessageThreadId"
+>;
 
 export function registerTelegramReactionHandler(
   { accountId, bot, runtime, telegramDeps, shouldSkipUpdate }: RegisterTelegramHandlerParams,
+  threadRecovery: TelegramReactionThreadRecovery,
   authorizationRuntime: TelegramHandlerAuthorizationRuntime,
 ) {
   const { resolveTelegramEventAuthorizationContext, authorizeTelegramEventSender } =
@@ -58,12 +66,51 @@ export function registerTelegramReactionHandler(
         );
         return;
       }
+      // Detect added reactions. This runs before topic recovery so a reaction that
+      // enqueues nothing never spends a cache lookup or logs an unresolved-topic warning.
+      const oldEmojis = new Set(
+        reaction.old_reaction
+          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+          .map((r) => r.emoji),
+      );
+      const addedReactions = reaction.new_reaction
+        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+        .filter((r) => !oldEmojis.has(r.emoji));
+
+      if (addedReactions.length === 0) {
+        return;
+      }
+
+      // `MessageReactionUpdated` omits `message_thread_id`, so a forum reaction only has a
+      // topic if the reacted-to message is still in the bounded message cache. Recover it
+      // before authorization: topic allowlists and topic agents are both keyed by thread
+      // id, so an assumed thread here authorizes and routes the wrong topic.
+      let cachedForumThreadId: number | undefined;
+      if (isForum) {
+        cachedForumThreadId = await threadRecovery.resolveCachedMessageThreadId({
+          chatId,
+          messageId,
+        });
+        if (cachedForumThreadId === undefined) {
+          // Never fall back to General: that would authorize and enqueue this reaction
+          // against a topic the user did not react in. Degrade to one bounded warning
+          // carrying route ids only.
+          runtime.log?.(
+            warn(
+              `telegram: skipped forum reaction account=${accountId} chat=${chatId} message=${messageId} reason=${TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON}`,
+            ),
+          );
+          return;
+        }
+      }
+
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         cfg: authorizationCfg,
         chatId,
         isGroup,
         isForum,
         senderId,
+        ...(cachedForumThreadId === undefined ? {} : { messageThreadId: cachedForumThreadId }),
       });
       const senderAuthorization = await authorizeTelegramEventSender({
         chatId,
@@ -93,18 +140,36 @@ export function registerTelegramReactionHandler(
         }
       }
 
-      // Detect added reactions.
-      const oldEmojis = new Set(
-        reaction.old_reaction
-          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-          .map((r) => r.emoji),
-      );
-      const addedReactions = reaction.new_reaction
-        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
-        .filter((r) => !oldEmojis.has(r.emoji));
-
-      if (addedReactions.length === 0) {
-        return;
+      const resolvedThreadId = eventAuthContext.resolvedThreadId;
+      let sessionKey: string;
+      if (isForum) {
+        // Forum topics carry topic agents and conversation bindings, so the recovered
+        // topic goes through the canonical route resolver instead of a bare peer route.
+        sessionKey = resolveTelegramConversationRoute({
+          cfg: eventAuthContext.cfg,
+          accountId,
+          chatId,
+          isGroup,
+          resolvedThreadId,
+          replyThreadId: resolvedThreadId,
+          senderId,
+          topicAgentId: eventAuthContext.topicConfig?.agentId,
+        }).route.sessionKey;
+      } else {
+        // Direct chats and non-forum groups have no topic to recover; keep their
+        // established peer route so reaction sessions stay where they already are.
+        const peerId = isGroup
+          ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+          : String(chatId);
+        const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+        // Fresh config for bindings lookup; other routing inputs are payload-derived.
+        sessionKey = resolveAgentRoute({
+          cfg: eventAuthContext.cfg,
+          channel: "telegram",
+          accountId,
+          peer: { kind: isGroup ? "group" : "direct", id: peerId },
+          parentPeer,
+        }).sessionKey;
       }
 
       // Build sender label.
@@ -122,24 +187,6 @@ export function registerTelegramReactionHandler(
         senderLabel = `id:${user.id}`;
       }
       senderLabel = senderLabel || "unknown";
-
-      // Reactions target a specific message_id; the Telegram Bot API does not include
-      // message_thread_id on MessageReactionUpdated, so we route to the chat-level
-      // session (forum topic routing is not available for reactions).
-      const resolvedThreadId = isForum
-        ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
-        : undefined;
-      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
-      // Fresh config for bindings lookup; other routing inputs are payload-derived.
-      const route = resolveAgentRoute({
-        cfg: eventAuthContext.cfg,
-        channel: "telegram",
-        accountId,
-        peer: { kind: isGroup ? "group" : "direct", id: peerId },
-        parentPeer,
-      });
-      const sessionKey = route.sessionKey;
 
       // Enqueue system event for each added reaction.
       for (const r of addedReactions) {

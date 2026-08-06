@@ -12,9 +12,26 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { runReplyAgent } from "./agent-runner.runtime.js";
+import { applySessionHints } from "./body.js";
+import {
+  loadAgentRunnerRuntime,
+  loadEmbeddedAgentRuntime,
+  loadSessionUpdatesRuntime,
+} from "./get-reply-run-helpers.js";
+import { runPreparedReply } from "./get-reply-run.js";
+import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
-import { createReplyOperation } from "./reply-run-registry.js";
+import {
+  buildInboundUserContextPrefix,
+  resolveInboundUserContextPromptJoiner,
+} from "./inbound-meta.js";
+import { createReplyOperation, getActiveReplyRunCount } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { routeReply } from "./route-reply.runtime.js";
+import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { resolveTypingMode } from "./typing-mode.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -100,21 +117,6 @@ vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
-  resolveGroupSilentReplyBehavior: vi.fn(
-    (params: {
-      sessionEntry?: SessionEntry;
-      defaultActivation: "always" | "mention";
-      silentReplyPolicy?: "allow" | "disallow";
-    }) => {
-      const activation = params.sessionEntry?.groupActivation ?? params.defaultActivation;
-      const canUseSilentReply = params.silentReplyPolicy !== "disallow";
-      return {
-        activation,
-        canUseSilentReply,
-        allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
-      };
-    },
-  ),
 }));
 
 vi.mock("./inbound-meta.js", () => ({
@@ -156,20 +158,6 @@ vi.mock("./session-reset-prompt.js", () => ({
 vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
-
-let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
-let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
-let routeReply: typeof import("./route-reply.runtime.js").routeReply;
-let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
-let applySessionHints: typeof import("./body.js").applySessionHints;
-let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
-let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
-let buildGroupIntro: typeof import("./groups.js").buildGroupIntro;
-let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
-let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
-let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
-let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
-let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
@@ -344,21 +332,13 @@ describe("runPreparedReply media-only handling", () => {
   const cleanupPaths: string[] = [];
 
   beforeAll(async () => {
-    ({ runPreparedReply } = await import("./get-reply-run.js"));
-    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
-    ({ routeReply } = await import("./route-reply.runtime.js"));
-    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
-    ({ applySessionHints } = await import("./body.js"));
-    ({ resolveTypingMode } = await import("./typing-mode.js"));
-    ({ buildDirectChatContext, buildGroupIntro, buildGroupChatContext } =
-      await import("./groups.js"));
-    ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
-      await import("./inbound-meta.js"));
-    ({ getActiveReplyRunCount } = await import("./reply-run-registry.js"));
-    ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
-
-    // Load deferred reply dependencies before per-case timing starts.
-    await runPreparedReply(baseParams());
+    // Preload the runtime seams directly so test setup does not need a synthetic
+    // reply turn with registry and session side effects.
+    await Promise.all([
+      loadEmbeddedAgentRuntime(),
+      loadAgentRunnerRuntime(),
+      loadSessionUpdatesRuntime(),
+    ]);
   });
 
   beforeEach(async () => {
@@ -482,6 +462,13 @@ describe("runPreparedReply media-only handling", () => {
     expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.run.thinkLevel).toBe("off");
+    expect(call.followupRun.run.thinkingCatalog).toEqual([
+      {
+        provider: "openai",
+        id: "chat-latest",
+        reasoning: false,
+      },
+    ]);
   });
 
   it("reports unsupported explicit one-turn thinking overrides", async () => {
@@ -1650,6 +1637,12 @@ describe("runPreparedReply media-only handling", () => {
 
     const runPromise = runPreparedReply(
       baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        },
         isNewSession: false,
         sessionId: "session-goal-interrupt",
         sessionEntry: activeEntry,
@@ -1701,6 +1694,12 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(
       baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        },
         isNewSession: false,
         sessionEntry,
         sessionStore,
@@ -1716,6 +1715,12 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(
       baseParams({
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: {} },
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        },
         isNewSession: false,
         sessionEntry,
         sessionStore,
@@ -1728,6 +1733,42 @@ describe("runPreparedReply media-only handling", () => {
       requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
     ).not.toContain("A reusable workflow");
   });
+
+  it.each(["propose", "auto"] as const)(
+    "suppresses the suggestion nudge in %s mode",
+    async (mode) => {
+      const suggestion = { skillName: "github-pr-workflow", detectedAt: 1 };
+      const sessionEntry: SessionEntry = {
+        sessionId: `skill-suggestion-${mode}`,
+        updatedAt: 1,
+        pendingSkillSuggestion: suggestion,
+      };
+      consumeSessionSkillSuggestionMock.mockResolvedValueOnce({
+        entry: { ...sessionEntry, pendingSkillSuggestion: undefined },
+        suggestion,
+      });
+
+      await runPreparedReply(
+        baseParams({
+          cfg: {
+            session: {},
+            channels: {},
+            agents: { defaults: {} },
+            skills: { workshop: { autonomous: { mode } } },
+          },
+          isNewSession: false,
+          sessionEntry,
+          sessionStore: { "session-key": sessionEntry },
+          storePath: "/tmp/openclaw-session-store.json",
+        }),
+      );
+
+      expect(consumeSessionSkillSuggestionMock).toHaveBeenCalledOnce();
+      expect(
+        requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
+      ).not.toContain("A reusable workflow");
+    },
+  );
   it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
@@ -3452,6 +3493,32 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
       __openclaw: { senderIsOwner: true },
     });
+  });
+
+  it("keeps the canonical current owner in bounded reply-run prompt guidance", async () => {
+    const ownerIds = Array.from({ length: 24 }, (_, index) =>
+      String(100_000_000_000_000_000n + BigInt(index)),
+    );
+    const currentOwnerId = ownerIds.at(-1)!;
+    const params = ownerParams();
+    params.command = {
+      ...params.command,
+      ownerList: ownerIds,
+      senderId: currentOwnerId,
+      senderIsOwner: true,
+    };
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      SenderId: `<@!${currentOwnerId}>`,
+    };
+
+    await runPreparedReply(params);
+
+    const run = requireRunReplyAgentCall().followupRun.run;
+    expect(run.senderId).toBe(`<@!${currentOwnerId}>`);
+    expect(run.ownerNumbers).toHaveLength(16);
+    expect(run.ownerNumbers?.at(-1)).toBe(currentOwnerId);
+    expect(params.command.ownerList).toHaveLength(24);
   });
 
   it("keeps sender ownership when drained system events are present", async () => {

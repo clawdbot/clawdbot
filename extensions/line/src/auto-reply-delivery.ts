@@ -1,11 +1,17 @@
 // Line plugin module implements auto reply delivery behavior.
 import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { hasLineSpecificMediaOptions } from "./outbound-media.js";
@@ -35,7 +41,7 @@ type LineAutoReplyDeps = {
     address: string;
     latitude: number;
     longitude: number;
-  }) => messagingApi.LocationMessage;
+  }) => messagingApi.LocationMessage | null;
   replyMessageLine: (
     replyToken: string,
     messages: messagingApi.Message[],
@@ -53,10 +59,43 @@ function toLineDeliveryError(error: unknown): Error {
 }
 
 function getLineHttpError(error: unknown): HTTPFetchError | undefined {
-  if (error instanceof HTTPFetchError) {
-    return error;
+  return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).find(
+    (candidate): candidate is HTTPFetchError => candidate instanceof HTTPFetchError,
+  );
+}
+
+function canFallbackAfterLineReplyFailure(error: unknown): boolean {
+  const httpError = getLineHttpError(error);
+  if (httpError) {
+    return httpError.status >= 400 && httpError.status < 500 && httpError.status !== 408;
   }
-  return error instanceof Error && error.cause instanceof HTTPFetchError ? error.cause : undefined;
+
+  const candidates = collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+  ]);
+  if (
+    candidates.some(
+      (candidate) =>
+        readErrorName(candidate) === "AbortError" ||
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "ambiguous",
+    )
+  ) {
+    return false;
+  }
+  if (
+    candidates.some(
+      (candidate) =>
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect",
+    )
+  ) {
+    return true;
+  }
+
+  // Undici rejects an unknown network outcome with this exact TypeError shape.
+  return !candidates.some(
+    (candidate) => candidate instanceof TypeError && candidate.message === "fetch failed",
+  );
 }
 
 function markLineVisibleDeliveryError(error: unknown): Error {
@@ -93,6 +132,9 @@ export async function deliverLineAutoReply(params: {
       visibleReplySent = true;
       return result;
     } catch (error) {
+      if (isChannelPartialDeliveryError(error)) {
+        visibleReplySent = true;
+      }
       if (visibleReplySent) {
         throw markLineVisibleDeliveryError(error);
       }
@@ -127,7 +169,7 @@ export async function deliverLineAutoReply(params: {
           }),
         );
       } catch (error) {
-        if (typeof error === "object" && error !== null) {
+        if (!isChannelPartialDeliveryError(error) && typeof error === "object" && error !== null) {
           failedPushSegments.set(error, {
             allowFailedBatchTextRecovery,
             failedBatch: batch,
@@ -156,9 +198,12 @@ export async function deliverLineAutoReply(params: {
           accountId,
         });
       } catch (err) {
+        // Reply tokens are single-use, and a push cannot deduplicate a possibly accepted reply.
+        if (isChannelPartialDeliveryError(err) || !canFallbackAfterLineReplyFailure(err)) {
+          throw err;
+        }
         deps.onReplyError?.(err);
-        // A transport-failed reply may have landed; only a definitive LINE 400
-        // makes text recovery after a rejected push fallback safe.
+        // Only a definitive LINE 400 makes text recovery after a rejected push safe.
         await pushLineMessages(
           replyBatch,
           getLineHttpError(err)?.status === 400,
@@ -182,7 +227,7 @@ export async function deliverLineAutoReply(params: {
   if (lineData.flexMessage) {
     richMessages.push(
       deps.createFlexMessage(
-        truncateUtf16Safe(lineData.flexMessage.altText, 400),
+        lineData.flexMessage.altText,
         lineData.flexMessage.contents as FlexContainer,
       ),
     );
@@ -196,7 +241,10 @@ export async function deliverLineAutoReply(params: {
   }
 
   if (lineData.location) {
-    richMessages.push(deps.createLocationMessage(lineData.location));
+    const locationMessage = deps.createLocationMessage(lineData.location);
+    if (locationMessage) {
+      richMessages.push(locationMessage);
+    }
   }
 
   // Inbound auto-replies bypass the channel outbound adapter, so enforce the
@@ -206,13 +254,26 @@ export async function deliverLineAutoReply(params: {
     ? deps.processLineMessage(visibleText)
     : { text: "", flexMessages: [] };
 
-  for (const flexMsg of processed.flexMessages) {
-    richMessages.push(
-      deps.createFlexMessage(truncateUtf16Safe(flexMsg.altText, 400), flexMsg.contents),
-    );
+  if (!processed.segments) {
+    for (const flexMsg of processed.flexMessages) {
+      richMessages.push(deps.createFlexMessage(flexMsg.altText, flexMsg.contents));
+    }
   }
 
-  const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
+  const orderedMessages = processed.segments?.flatMap<
+    messagingApi.FlexMessage | messagingApi.TextMessage
+  >((segment) =>
+    segment.type === "flex"
+      ? [deps.createFlexMessage(segment.message.altText, segment.message.contents)]
+      : deps
+          .chunkMarkdownText(segment.text, textLimit)
+          .map((text) => ({ type: "text" as const, text })),
+  );
+  const chunks = orderedMessages
+    ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
+    : processed.text
+      ? deps.chunkMarkdownText(processed.text, textLimit)
+      : [];
 
   // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
   // other LINE media options so a reply-token video/audio is not silently
@@ -250,7 +311,11 @@ export async function deliverLineAutoReply(params: {
     });
   }
   if (hasQuickReplies) {
-    const targetMessages = textMessages.length > 0 ? textMessages : richMediaMessages;
+    const targetMessages = orderedMessages?.length
+      ? orderedMessages
+      : textMessages.length > 0
+        ? textMessages
+        : richMediaMessages;
     const lastIndex = targetMessages.length - 1;
     const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
     targetMessages[lastIndex] = {
@@ -262,8 +327,8 @@ export async function deliverLineAutoReply(params: {
   // Quick replies disappear when a newer message arrives, so rich/media parts
   // lead and the action-bearing text remains final across reply/push batches.
   const messages = hasQuickReplies
-    ? [...richMediaMessages, ...textMessages]
-    : [...textMessages, ...richMediaMessages];
+    ? [...richMediaMessages, ...(orderedMessages ?? textMessages)]
+    : [...(orderedMessages ?? textMessages), ...richMediaMessages];
   try {
     // A reply token carries five messages without consuming push quota. The
     // canonical batcher owns overflow and reply failure fallback for every payload.

@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   cancelChatScroll,
+  getChatSessionScrollPosition,
   handleChatScroll,
   resetChatScroll,
+  restoreChatScroll,
+  saveChatSessionScrollPosition,
   scheduleChatScroll,
 } from "./scroll.ts";
 
@@ -275,6 +278,70 @@ describe("scheduleChatScroll", () => {
 
     // On initial load, force should work regardless
     expect(container.scrollTop).toBe(container.scrollHeight);
+  });
+
+  it("restores a session viewport and does not force-jump when new messages arrive", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2400,
+      scrollTop: 2000,
+      clientHeight: 400,
+    });
+
+    expect(restoreChatScroll(host, container as unknown as HTMLElement, 1500)).toBe(1500);
+    expect(host.chatHasAutoScrolled).toBe(true);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatNewMessagesBelow).toBe(true);
+
+    container.scrollHeight = 2600;
+    scheduleChatScroll(host, true);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(1500);
+    expect(host.chatNewMessagesBelow).toBe(true);
+  });
+
+  it("locks a restored virtual viewport before its scroll height is measurable", () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 0,
+      scrollTop: 0,
+      clientHeight: 400,
+    });
+
+    expect(restoreChatScroll(host, container as unknown as HTMLElement, 600)).toBe(0);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatNewMessagesBelow).toBe(true);
+
+    saveChatSessionScrollPosition("settled-pane", "settled-session", {
+      scrollTop: 600,
+      anchorToEnd: false,
+    });
+    expect(restoreChatScroll(host, container as unknown as HTMLElement, 0)).toBe(0);
+    saveChatSessionScrollPosition("settled-pane", "settled-session", {
+      scrollTop: 0,
+      anchorToEnd: true,
+    });
+    expect(getChatSessionScrollPosition("settled-pane", "settled-session")).toEqual({
+      scrollTop: 0,
+      anchorToEnd: true,
+    });
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("keeps only the newest equivalent session-key scroll position", () => {
+    saveChatSessionScrollPosition("alias-pane", "main", {
+      scrollTop: 100,
+      anchorToEnd: false,
+    });
+    saveChatSessionScrollPosition("alias-pane", "agent:main:main", {
+      scrollTop: 200,
+      anchorToEnd: false,
+    });
+
+    expect(getChatSessionScrollPosition("alias-pane", "main")).toEqual({
+      scrollTop: 200,
+      anchorToEnd: false,
+    });
   });
 
   it("uses force=true on initial load even after a previous follow lock", async () => {

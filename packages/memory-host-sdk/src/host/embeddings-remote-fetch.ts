@@ -18,7 +18,7 @@ function malformedEmbeddingResponse(errorPrefix: string): Error {
 
 /** Validate and return one finite embedding vector. */
 function readEmbeddingVector(value: unknown, errorPrefix: string): number[] {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.length === 0) {
     throw malformedEmbeddingResponse(errorPrefix);
   }
   for (const entry of value) {

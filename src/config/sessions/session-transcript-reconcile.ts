@@ -3,7 +3,7 @@
 import { randomInt } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   resolveOpenClawAgentSqlitePath,
@@ -11,8 +11,16 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { deleteOrphanedTranscriptIndexRowsInTransaction } from "./session-transcript-index.js";
+import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  listSessionsNeedingTranscriptIndexReconcile,
+} from "./session-transcript-index.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
@@ -42,6 +50,7 @@ export type SessionTranscriptReconcileResult = {
 };
 
 type SessionTranscriptReconcileParams = OpenClawAgentDatabaseOptions & {
+  createWorker?: (filename: string | URL, options: WorkerOptions) => Worker;
   preferredSessionId?: string;
 };
 
@@ -193,7 +202,7 @@ async function finalizePreparedProjection(
 }
 
 /** Prepares full trees off-thread, then commits bounded chunks through the runtime writer owner. */
-export function reconcileSessionTranscriptIndexes(
+export async function reconcileSessionTranscriptIndexes(
   params: SessionTranscriptReconcileParams,
 ): Promise<SessionTranscriptReconcileResult> {
   const databasePath = resolveOpenClawAgentSqlitePath(params);
@@ -202,6 +211,19 @@ export function reconcileSessionTranscriptIndexes(
     ...(params.env ? { env: params.env } : {}),
     path: databasePath,
   };
+  // The SQLite owner can cheaply prove a clean projection before paying for a
+  // Worker. Keep the post-worker sweep too, because request-time writers may race.
+  const needsWorker = await runProjectionWrite(
+    databaseOptions,
+    "sessions.transcript-index.preflight",
+    (database) => {
+      deleteOrphanedTranscriptIndexRowsInTransaction(database.db);
+      return listSessionsNeedingTranscriptIndexReconcile(database.db).length > 0;
+    },
+  );
+  if (!needsWorker) {
+    return { reconciledSessions: 0 };
+  }
   const workerUrl = resolveSessionTranscriptReconcileWorkerUrl();
   const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const input: SessionTranscriptReconcileWorkerInput = {
@@ -211,9 +233,12 @@ export function reconcileSessionTranscriptIndexes(
   };
   let worker: Worker;
   try {
-    worker = new Worker(workerUrl, { workerData: input, execArgv: sourceWorkerExecArgv });
+    worker = (params.createWorker ?? ((filename, options) => new Worker(filename, options)))(
+      workerUrl,
+      { workerData: input, execArgv: sourceWorkerExecArgv },
+    );
   } catch (error) {
-    return Promise.reject(normalizeReconcileError(error));
+    throw normalizeReconcileError(error);
   }
 
   return new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
@@ -386,4 +411,12 @@ export async function waitForSessionTranscriptIndexReconcile(
   params: OpenClawAgentDatabaseOptions,
 ): Promise<void> {
   await runningReconciles.get(reconcileKey(params))?.promise;
+}
+
+/** Waits for a projection rebuild already scheduled by a failed transcript read. */
+export async function waitForSessionTranscriptProjection(
+  scope: SessionTranscriptReadScope,
+): Promise<void> {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolved));
 }
