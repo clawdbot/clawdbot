@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionUsageTimeSeries } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import type { SessionLogEntry } from "./types.ts";
+import type { UsageRouteData } from "./usage-page.ts";
 import "./usage-page.ts";
 
 type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
+  routeData: UsageRouteData;
   usageSelectedSessions: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
@@ -75,6 +78,83 @@ async function createPage(client: GatewayBrowserClient): Promise<TestUsagePage> 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+const loadedProviderUsage: ProviderUsageSummary = {
+  updatedAt: 2,
+  providers: [
+    {
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 10 }],
+    },
+  ],
+};
+
+function usageRouteData(
+  context: ApplicationContext,
+  providerUsageSummary: ProviderUsageSummary,
+): UsageRouteData {
+  return {
+    gateway: context.gateway,
+    gatewaySnapshot: context.gateway.snapshot,
+    query: {
+      startDate: "2026-08-05",
+      endDate: "2026-08-05",
+      scope: "family",
+      timeZone: "local",
+      agentId: null,
+    },
+    result: null,
+    costSummary: null,
+    providerUsageSummary,
+    loadedAtMs: Date.now(),
+    error: null,
+  };
+}
+
+describe("UsagePage provider usage", () => {
+  it("fills the provider panel after a refreshing payload without user action", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      const request = vi.fn(async (method: string) => {
+        if (method === "usage.status") {
+          return loadedProviderUsage;
+        }
+        return method === "usage.cost" ? { daily: [] } : { sessions: [], totals: null };
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const page = document.createElement("openclaw-usage-page") as TestUsagePage;
+      page.context = contextWithClient(client);
+      document.body.append(page);
+      await page.updateComplete;
+
+      // A Gateway that has not loaded provider usage yet answers with the marker only.
+      page.routeData = usageRouteData(page.context, {
+        updatedAt: 1,
+        providers: [],
+        refreshing: true,
+      });
+      await page.updateComplete;
+      expect(document.querySelector(".provider-usage-card")).toBeNull();
+      expect(request).not.toHaveBeenCalledWith("usage.status", undefined, expect.anything());
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("usage.status", undefined, expect.anything());
+      });
+      await vi.waitFor(async () => {
+        await page.updateComplete;
+        expect(document.querySelector(".provider-usage-card__name")?.textContent).toContain(
+          "OpenAI",
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("UsagePage detail requests", () => {
