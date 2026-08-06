@@ -31,6 +31,7 @@ import {
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   resolveReplyRunPhaseForSessionId,
+  waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
@@ -329,6 +330,84 @@ describe("reply run registry", () => {
     await barrier;
     await vi.waitFor(() => {
       expect(afterClear).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps owner settlement pending after stale expiry through its completion barrier", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-stale-owner" });
+    operation.setPhase("running");
+
+    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(true);
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+
+    const settlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
+    let settled = false;
+    void settlement.then((value) => {
+      settled = value;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    let releaseCompletion: () => void = () => {};
+    const completionBarrier = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    operation.completeWithAfterClearBarrier(completionBarrier);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseCompletion();
+    await expect(settlement).resolves.toBe(true);
+  });
+
+  it("installs stale recovery barrier before synchronous cancel completion", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-sync-cancel" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => operation.complete(),
+      isStreaming: () => true,
+    });
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(true);
+    expect(afterClear).not.toHaveBeenCalled();
+
+    releaseRecovery();
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-sync-cancel");
+    });
+  });
+
+  it("keeps late after-clear registration behind an active stale barrier", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-late-callback" });
+    operation.setPhase("running");
+    let releaseRecovery: () => void = () => {};
+    const recoveryBarrier = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+
+    expect(
+      expireStaleReplyOperation(operation, "stuck_recovery", {
+        afterClearBarrier: recoveryBarrier,
+      }),
+    ).toBe(true);
+    const afterClear = vi.fn();
+    runAfterReplyOperationClear(operation, afterClear);
+    expect(afterClear).not.toHaveBeenCalled();
+
+    releaseRecovery();
+    await vi.waitFor(() => {
+      expect(afterClear).toHaveBeenCalledWith("session-late-callback");
     });
   });
 

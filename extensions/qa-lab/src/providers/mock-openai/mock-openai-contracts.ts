@@ -35,6 +35,7 @@ export type QaMockProviderDispatchResult = {
   failure?: QaMockProviderFailure;
   onResponseSent?: () => void;
   previewPauseMs?: number;
+  responsePauseMs?: number;
 };
 
 export type StreamEvent =

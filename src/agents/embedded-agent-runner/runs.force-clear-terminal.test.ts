@@ -1,6 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  createReplyOperation,
+  isReplyRunActiveForSessionId,
+  runAfterReplyOperationClear,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -42,6 +47,53 @@ describe("force-clear terminal state persistence", () => {
     clearRuntimeConfigSnapshot();
     testing.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
+  });
+
+  it("delays stale-owner followups until the old reply owner settles", async () => {
+    const sessionKey = "agent:main:reply-stuck-followup";
+    const sessionId = "session-reply-stuck-followup";
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const handle = createRunHandle();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: handle.abort,
+      isStreaming: handle.isStreaming,
+    });
+    operation.setPhase("running");
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+    const followupObservedActiveHandle: boolean[] = [];
+    runAfterReplyOperationClear(operation, () => {
+      followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
+    });
+
+    const recovery = abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 100,
+    });
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
+    expect(followupObservedActiveHandle).toEqual([]);
+
+    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    let recoverySettled = false;
+    void recovery.then(() => {
+      recoverySettled = true;
+    });
+    await Promise.resolve();
+    expect(recoverySettled).toBe(false);
+    expect(followupObservedActiveHandle).toEqual([]);
+
+    operation.complete();
+    await expect(recovery).resolves.toEqual({
+      aborted: true,
+      drained: true,
+      forceCleared: false,
+    });
+    await Promise.resolve();
+    expect(followupObservedActiveHandle).toEqual([false]);
   });
 
   it("persists killed status after a force-cleared run", async () => {

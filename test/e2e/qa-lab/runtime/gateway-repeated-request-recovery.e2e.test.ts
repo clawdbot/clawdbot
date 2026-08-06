@@ -10,6 +10,8 @@ type StabilityEvent = {
   reason?: unknown;
   outcome?: unknown;
   ageMs?: unknown;
+  queueDepth?: unknown;
+  source?: unknown;
 };
 
 type StabilitySnapshot = {
@@ -32,6 +34,20 @@ type GatewayChatHistory = {
   messages?: GatewayChatMessage[];
 };
 
+type MockRequestSnapshot = {
+  cursor?: unknown;
+  prompt?: unknown;
+  outcome?: unknown;
+  errorCode?: unknown;
+};
+
+type ClassifiedMockRequest = {
+  cursor: unknown;
+  prompt: "recovery" | "queued" | "other" | "missing";
+  outcome: unknown;
+  errorCode: unknown;
+};
+
 const RECOVERY_PROMPT =
   "Repeated request recovery Gateway QA check. Keep attempting without producing a reply.";
 const QUEUED_PROMPT =
@@ -39,7 +55,7 @@ const QUEUED_PROMPT =
 const QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 const RECOVERY_REASON = "repeated_model_requests_without_progress";
 const PRODUCTION_RECOVERY_BOUND_MS = 360_000;
-const HISTORY_RETRY_TIMEOUT_MS = 10_000;
+const HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const HISTORY_RETRY_INTERVAL_MS = 250;
 
 let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
@@ -187,6 +203,66 @@ async function waitForQueuedReply(
     : new Error(message, { cause: lastRetryableError });
 }
 
+async function readClassifiedMockRequests(mockBaseUrl: string): Promise<ClassifiedMockRequest[]> {
+  return fetch(`${mockBaseUrl}/debug/requests`)
+    .then((response) => response.json() as Promise<MockRequestSnapshot[]>)
+    .then((records) =>
+      records.map(({ cursor, prompt, outcome, errorCode }) => ({
+        cursor,
+        prompt:
+          typeof prompt === "string"
+            ? prompt.includes(QUEUED_PROMPT)
+              ? "queued"
+              : prompt.includes(RECOVERY_PROMPT)
+                ? "recovery"
+                : "other"
+            : "missing",
+        outcome,
+        errorCode,
+      })),
+    );
+}
+
+async function readFailureEvidence(params: {
+  gateway: Awaited<ReturnType<typeof startQaLiveLaneGateway>>["gateway"];
+  mockBaseUrl: string | undefined;
+  sinceSeq: number;
+}): Promise<string> {
+  const events = (await readStability(params.gateway, params.sinceSeq)).events ?? [];
+  const stability = events
+    .filter(
+      (event) =>
+        typeof event.type === "string" &&
+        (event.type.startsWith("session.") ||
+          event.type === "message.queued" ||
+          event.type === "model.call.started"),
+    )
+    .map(({ type, action, reason, outcome, ageMs, queueDepth, source }) => ({
+      type,
+      action,
+      reason,
+      outcome,
+      ageMs,
+      queueDepth,
+      source,
+    }));
+  const requests = params.mockBaseUrl
+    ? await readClassifiedMockRequests(params.mockBaseUrl).catch((error: unknown) => [
+        { requestEvidenceError: String(error) },
+      ])
+    : [];
+  const gatewayLogs = params.gateway
+    .logs()
+    .split("\n")
+    .filter((line) =>
+      /followup queue|reply run stale takeover|stuck session recovery|queue: active session/iu.test(
+        line,
+      ),
+    )
+    .slice(-100);
+  return JSON.stringify({ stability, requests, gatewayLogs });
+}
+
 describe("Gateway repeated-request recovery", () => {
   it(
     "aborts the real stalled owner once and releases one queued followup",
@@ -271,7 +347,7 @@ describe("Gateway repeated-request recovery", () => {
       ]);
       expect(
         events.filter((event) => event.type === "model.call.started").length,
-      ).toBeGreaterThanOrEqual(3);
+      ).toBeGreaterThanOrEqual(4);
 
       const activeTerminal = (await gateway.call(
         "agent.wait",
@@ -287,8 +363,28 @@ describe("Gateway repeated-request recovery", () => {
       )) as GatewayChatRun;
       expect(queuedTerminal.status).toBe("ok");
 
-      const history = await waitForQueuedReply(gateway, sessionKey);
+      const history = await waitForQueuedReply(gateway, sessionKey).catch(
+        async (error: unknown) => {
+          const evidence = await readFailureEvidence({
+            gateway,
+            mockBaseUrl: harness?.mock?.baseUrl,
+            sinceSeq: baselineSeq,
+          });
+          throw new Error(`${String(error)}; evidence=${evidence}`, { cause: error });
+        },
+      );
       expect(historyContainsQueuedReply(history)).toBe(true);
+      const mockBaseUrl = harness?.mock?.baseUrl;
+      if (!mockBaseUrl) {
+        throw new Error("mock provider request evidence unavailable");
+      }
+      const requests = await readClassifiedMockRequests(mockBaseUrl);
+      expect(
+        requests.filter((request) => request.prompt === "recovery").length,
+      ).toBeGreaterThanOrEqual(4);
+      expect(requests.filter((request) => request.prompt === "queued")).toEqual([
+        expect.objectContaining({ outcome: "success" }),
+      ]);
 
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];
       expect(

@@ -239,6 +239,7 @@ describe("embedded-agent runner run registry", () => {
       sessionId: "session-reply-stuck",
       resetTriggered: false,
     });
+    cancel.mockImplementation(() => operation.complete());
     operation.attachBackend({
       kind: "embedded",
       cancel,

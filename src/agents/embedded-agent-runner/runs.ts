@@ -20,6 +20,7 @@ import {
   resolveReplyRunPhaseForSessionId,
   type ReplyOperation,
   type ReplyOperationPhase,
+  waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -875,47 +876,85 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
+  const settleDeadline = Date.now() + settleMs;
   const embeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
   const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
+  let releaseStaleExpiryBarrier: (() => void) | undefined;
+  const staleExpiryBarrier =
+    params.reason === "stuck_recovery"
+      ? new Promise<void>((resolve) => {
+          releaseStaleExpiryBarrier = resolve;
+        })
+      : undefined;
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
   const expiredReplyRun =
     params.reason === "stuck_recovery" &&
-    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery");
-  if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
-    // Reply expiry aborts synchronously and clears registry ownership. Let the
-    // command lane observe that abort before recovery decides whether to reset it.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+    expireStaleReplyRunBySessionId(params.sessionId, "stuck_recovery", {
+      afterClearBarrier: staleExpiryBarrier,
+      followupAdmissionBarrierTimeout: settleMs + 1_000,
     });
-    const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
-    return { aborted: true, drained, forceCleared: false };
-  }
-  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
-  const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
-  const persistenceSnapshot =
-    params.forceClear === true && params.sessionKey
-      ? tryLoadForceClearSessionSnapshot(params.sessionKey)
-      : undefined;
-  const forceCleared =
-    params.forceClear === true && (!aborted || !drained)
-      ? forceClearEmbeddedAgentRun(
-          params.sessionId,
-          embeddedRunHandle,
-          replyOperation,
-          params.sessionKey,
-          params.reason,
-        )
+  const waitForExpiredOwnerSettlement = async () => {
+    if (!expiredReplyRun || !replyOperation) {
+      return true;
+    }
+    const settled = await waitForReplyOperationOwnerSettlement(
+      replyOperation,
+      Math.max(100, settleDeadline - Date.now()),
+    );
+    if (!settled) {
+      diag.warn(
+        `stuck recovery: reply owner settlement timed out sessionId=${params.sessionId} settleMs=${settleMs}`,
+      );
+    }
+    return settled;
+  };
+  try {
+    if (expiredReplyRun && !ACTIVE_EMBEDDED_RUNS.has(params.sessionId)) {
+      // Reply expiry aborts synchronously and clears registry ownership. Let the
+      // command lane observe that abort before recovery decides whether to reset it.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const embeddedDrained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
+      const ownerSettled = await waitForExpiredOwnerSettlement();
+      const drained = embeddedDrained && ownerSettled;
+      return { aborted: true, drained, forceCleared: false };
+    }
+    const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+    const embeddedDrained = aborted
+      ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)
       : false;
-  if (forceCleared && params.sessionKey && persistenceSnapshot) {
-    await persistForceClearedEmbeddedRunTerminalState({
-      ...persistenceSnapshot,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-    });
+    const ownerSettled = await waitForExpiredOwnerSettlement();
+    const drained = embeddedDrained && ownerSettled;
+    const persistenceSnapshot =
+      params.forceClear === true && params.sessionKey
+        ? tryLoadForceClearSessionSnapshot(params.sessionKey)
+        : undefined;
+    const forceCleared =
+      params.forceClear === true && (!aborted || !drained)
+        ? forceClearEmbeddedAgentRun(
+            params.sessionId,
+            embeddedRunHandle,
+            replyOperation,
+            params.sessionKey,
+            params.reason,
+          )
+        : false;
+    if (forceCleared && params.sessionKey && persistenceSnapshot) {
+      await persistForceClearedEmbeddedRunTerminalState({
+        ...persistenceSnapshot,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
+    }
+    return { aborted, drained, forceCleared };
+  } finally {
+    // Queue drains registered on the stale owner must not start while its
+    // backend can still claim the same session and requeue the adopted turn.
+    releaseStaleExpiryBarrier?.();
   }
-  return { aborted, drained, forceCleared };
 }
 
 type ForceClearSessionSnapshot = {
