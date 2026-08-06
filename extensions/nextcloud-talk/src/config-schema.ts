@@ -1,9 +1,6 @@
 // Nextcloud Talk helper module supports config schema behavior.
 import {
-  DmPolicySchema,
-  GroupPolicySchema,
-  MarkdownConfigSchema,
-  ReplyRuntimeConfigSchemaShape,
+  buildCommonChannelAccountShape,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
@@ -24,30 +21,51 @@ const NextcloudTalkNetworkSchema = z
   .strict()
   .optional();
 
+const NextcloudTalkCommonAccountShape = buildCommonChannelAccountShape({
+  useDefaults: true,
+  omit: [
+    "capabilities",
+    "allowFrom",
+    "defaultTo",
+    "groupAllowFrom",
+    "mentionPatterns",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "replyToMode",
+  ],
+});
+
 const NextcloudTalkAccountSchemaBase = z
   .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
-    markdown: MarkdownConfigSchema,
+    name: NextcloudTalkCommonAccountShape.name,
+    enabled: NextcloudTalkCommonAccountShape.enabled,
+    configWrites: NextcloudTalkCommonAccountShape.configWrites,
+    markdown: NextcloudTalkCommonAccountShape.markdown,
     baseUrl: z.string().optional(),
     botSecret: buildSecretInputSchema().optional(),
     botSecretFile: z.string().optional(),
     apiUser: z.string().optional(),
     apiPassword: buildSecretInputSchema().optional(),
     apiPasswordFile: z.string().optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    dmPolicy: NextcloudTalkCommonAccountShape.dmPolicy,
     webhookPort: z.number().int().positive().optional(),
     webhookHost: z.string().optional(),
     webhookPath: z.string().optional(),
     webhookPublicUrl: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
     groupAllowFrom: z.array(z.string()).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupPolicy: NextcloudTalkCommonAccountShape.groupPolicy,
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
     /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
     network: NextcloudTalkNetworkSchema,
-    ...ReplyRuntimeConfigSchemaShape,
+    historyLimit: NextcloudTalkCommonAccountShape.historyLimit,
+    dmHistoryLimit: NextcloudTalkCommonAccountShape.dmHistoryLimit,
+    contextVisibility: NextcloudTalkCommonAccountShape.contextVisibility,
+    dms: NextcloudTalkCommonAccountShape.dms,
+    textChunkLimit: NextcloudTalkCommonAccountShape.textChunkLimit,
+    streaming: NextcloudTalkCommonAccountShape.streaming,
+    responsePrefix: NextcloudTalkCommonAccountShape.responsePrefix,
+    mediaMaxMb: NextcloudTalkCommonAccountShape.mediaMaxMb,
   })
   .strict();
 

@@ -3,12 +3,9 @@ import {
   AllowFromListSchema,
   BlockStreamingCoalesceSchema,
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildGroupEntrySchema,
   buildNestedDmConfigSchema,
-  ContextVisibilityModeSchema,
-  GroupPolicySchema,
-  MarkdownConfigSchema,
-  MentionPatternsPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -127,10 +124,27 @@ function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
   return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
 }
 
+const MatrixCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "dmPolicy",
+    "allowFrom",
+    "defaultTo",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const MatrixConfigSchema = z.object({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
+  name: MatrixCommonAccountShape.name,
+  enabled: MatrixCommonAccountShape.enabled,
+  configWrites: MatrixCommonAccountShape.configWrites,
   defaultAccount: z.string().optional(),
   // Accounts stay schema-open, but retired scalar streaming must fail loudly
   // instead of silently resolving to "off"; doctor migrates the old spelling.
@@ -143,7 +157,7 @@ const MatrixConfigSchema = z.object({
       }),
     )
     .optional(),
-  markdown: MarkdownConfigSchema,
+  markdown: MatrixCommonAccountShape.markdown,
   homeserver: z.string().optional(),
   network: matrixNetworkSchema,
   proxy: z.string().optional(),
@@ -159,14 +173,14 @@ const MatrixConfigSchema = z.object({
   dangerouslyAllowNameMatching: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   botLoopProtection: botLoopProtectionSchema,
-  groupPolicy: GroupPolicySchema.optional(),
-  mentionPatterns: MentionPatternsPolicySchema.optional(),
-  contextVisibility: ContextVisibilityModeSchema.optional(),
+  groupPolicy: MatrixCommonAccountShape.groupPolicy,
+  mentionPatterns: MatrixCommonAccountShape.mentionPatterns,
+  contextVisibility: MatrixCommonAccountShape.contextVisibility,
   streaming: matrixStreamingSchema.optional(),
   replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
-  responsePrefix: z.string().optional(),
+  responsePrefix: MatrixCommonAccountShape.responsePrefix,
   ackReaction: z.string().optional(),
   ackReactionScope: z
     .enum(["group-mentions", "group-all", "direct", "all", "none", "off"])
@@ -176,10 +190,10 @@ const MatrixConfigSchema = z.object({
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),
-  historyLimit: z.number().int().min(0).optional(),
+  historyLimit: MatrixCommonAccountShape.historyLimit,
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: AllowFromListSchema,
-  groupAllowFrom: AllowFromListSchema,
+  groupAllowFrom: MatrixCommonAccountShape.groupAllowFrom,
   dm: buildNestedDmConfigSchema({
     sessionScope: z.enum(["per-user", "per-room"]).optional(),
     threadReplies: z.enum(["off", "inbound", "always"]).optional(),

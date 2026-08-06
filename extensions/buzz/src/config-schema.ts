@@ -1,7 +1,6 @@
 import {
   buildChannelConfigSchema,
-  GroupPolicySchema,
-  MarkdownConfigSchema,
+  buildCommonChannelAccountShape,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -14,12 +13,33 @@ const BuzzGroupConfigSchema = z
   })
   .strict();
 
+const BuzzCommonAccountShape = buildCommonChannelAccountShape({
+  groupPolicyDefault: true,
+  omit: [
+    "capabilities",
+    "dmPolicy",
+    "allowFrom",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const RawBuzzConfigSchema = z
   .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
-    markdown: MarkdownConfigSchema,
+    name: BuzzCommonAccountShape.name,
+    enabled: BuzzCommonAccountShape.enabled,
+    configWrites: BuzzCommonAccountShape.configWrites,
+    markdown: BuzzCommonAccountShape.markdown,
     relayUrl: z
       .string()
       .url()
@@ -27,15 +47,15 @@ const RawBuzzConfigSchema = z
       .optional(),
     privateKey: buildSecretInputSchema().optional(),
     authTag: buildSecretInputSchema().optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupPolicy: BuzzCommonAccountShape.groupPolicy,
+    groupAllowFrom: BuzzCommonAccountShape.groupAllowFrom,
     groups: z
       .record(
         z.string().regex(BUZZ_CHANNEL_ID_PATTERN, "Buzz group key must be a channel UUID"),
         BuzzGroupConfigSchema,
       )
       .optional(),
-    defaultTo: z.string().optional(),
+    defaultTo: BuzzCommonAccountShape.defaultTo,
   })
   .strict();
 

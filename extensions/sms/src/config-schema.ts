@@ -1,9 +1,8 @@
 // Sms helper module supports config schema behavior.
 import {
-  AllowFromListSchema,
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildMultiAccountChannelSchema,
-  DmPolicySchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
@@ -12,22 +11,43 @@ import { z } from "zod";
 
 const SecretInputSchema = buildSecretInputSchema();
 
+const SmsCommonAccountShape = buildCommonChannelAccountShape({
+  dmPolicyDefault: true,
+  omit: [
+    "capabilities",
+    "markdown",
+    "groupAllowFrom",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const SmsAccountConfigSchema = z
   .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
+    name: SmsCommonAccountShape.name,
+    enabled: SmsCommonAccountShape.enabled,
+    configWrites: SmsCommonAccountShape.configWrites,
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
     messagingServiceSid: z.string().optional(),
-    defaultTo: z.string().optional(),
+    defaultTo: SmsCommonAccountShape.defaultTo,
     webhookPath: z.string().optional(),
     publicWebhookUrl: z.string().optional(),
     dangerouslyDisableSignatureValidation: z.boolean().optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: AllowFromListSchema,
-    textChunkLimit: z.number().int().positive().optional(),
+    dmPolicy: SmsCommonAccountShape.dmPolicy,
+    allowFrom: SmsCommonAccountShape.allowFrom,
+    textChunkLimit: SmsCommonAccountShape.textChunkLimit,
   })
   .strict();
 

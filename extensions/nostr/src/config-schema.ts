@@ -1,9 +1,5 @@
 // Nostr helper module supports config schema behavior.
-import {
-  AllowFromListSchema,
-  DmPolicySchema,
-  MarkdownConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+import { buildCommonChannelAccountShape } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
@@ -69,19 +65,40 @@ export interface NostrProfile {
 /**
  * Zod schema for channels.nostr.* configuration
  */
+const NostrCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "defaultTo",
+    "groupAllowFrom",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 export const NostrConfigSchema = z.object({
   /** Account name (optional display name) */
-  name: z.string().optional(),
+  name: NostrCommonAccountShape.name,
 
   /** Optional default account id for routing/account selection. */
   defaultAccount: z.string().optional(),
 
   /** Whether this channel is enabled */
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
+  enabled: NostrCommonAccountShape.enabled,
+  configWrites: NostrCommonAccountShape.configWrites,
 
   /** Markdown formatting overrides (tables). */
-  markdown: MarkdownConfigSchema,
+  markdown: NostrCommonAccountShape.markdown,
 
   /** Private key in hex or nsec bech32 format */
   privateKey: buildSecretInputSchema().optional(),
@@ -90,10 +107,10 @@ export const NostrConfigSchema = z.object({
   relays: z.array(z.string()).optional(),
 
   /** DM access policy: pairing, allowlist, open, or disabled */
-  dmPolicy: DmPolicySchema.optional(),
+  dmPolicy: NostrCommonAccountShape.dmPolicy,
 
   /** Allowed sender pubkeys (npub or hex format) */
-  allowFrom: AllowFromListSchema,
+  allowFrom: NostrCommonAccountShape.allowFrom,
 
   /** Profile metadata (NIP-01 kind:0 content) */
   profile: NostrProfileSchema.optional(),

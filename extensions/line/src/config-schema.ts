@@ -1,8 +1,7 @@
 // Line helper module supports config schema behavior.
 import {
-  DmPolicySchema,
-  GroupPolicySchema,
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
@@ -20,19 +19,39 @@ const ThreadBindingsSchema = z
   })
   .strict();
 
+const LineCommonAccountShape = buildCommonChannelAccountShape({
+  useDefaults: true,
+  omit: [
+    "capabilities",
+    "markdown",
+    "defaultTo",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const LineCommonConfigSchemaBase = z.object({
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
+  enabled: LineCommonAccountShape.enabled,
+  configWrites: LineCommonAccountShape.configWrites,
   channelAccessToken: z.string().optional(),
   channelSecret: z.string().optional(),
   tokenFile: z.string().optional(),
   secretFile: z.string().optional(),
-  name: z.string().optional(),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  responsePrefix: z.string().optional(),
+  name: LineCommonAccountShape.name,
+  allowFrom: LineCommonAccountShape.allowFrom,
+  groupAllowFrom: LineCommonAccountShape.groupAllowFrom,
+  dmPolicy: LineCommonAccountShape.dmPolicy,
+  groupPolicy: LineCommonAccountShape.groupPolicy,
+  responsePrefix: LineCommonAccountShape.responsePrefix,
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),
   threadBindings: ThreadBindingsSchema.optional(),

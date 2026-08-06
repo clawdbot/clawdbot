@@ -4,6 +4,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -198,24 +199,41 @@ const FeishuGroupSchema = buildGroupEntrySchema({
   replyInThread: ReplyInThreadSchema,
 }).omit({ toolsBySender: true });
 
+const FeishuCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "name",
+    "markdown",
+    "defaultTo",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "dms",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "replyToMode",
+  ],
+});
+
 const FeishuSharedConfigShape = {
   webhookHost: z.string().optional(),
   webhookPort: z.number().int().positive().optional(),
-  capabilities: z.array(z.string()).optional(),
+  capabilities: FeishuCommonAccountShape.capabilities,
   markdown: MarkdownConfigSchema,
-  configWrites: z.boolean().optional(),
-  dmPolicy: DmPolicySchema.optional(),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  configWrites: FeishuCommonAccountShape.configWrites,
+  dmPolicy: FeishuCommonAccountShape.dmPolicy,
+  allowFrom: FeishuCommonAccountShape.allowFrom,
   groupPolicy: FeishuGroupPolicySchema.optional(),
-  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  groupAllowFrom: FeishuCommonAccountShape.groupAllowFrom,
   groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
+  historyLimit: FeishuCommonAccountShape.historyLimit,
+  dmHistoryLimit: FeishuCommonAccountShape.dmHistoryLimit,
   dms: z.record(z.string(), DmConfigSchema).optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  mediaMaxMb: z.number().positive().optional(),
+  textChunkLimit: FeishuCommonAccountShape.textChunkLimit,
+  mediaMaxMb: FeishuCommonAccountShape.mediaMaxMb,
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
@@ -237,7 +255,7 @@ const FeishuSharedConfigShape = {
  */
 export const FeishuAccountConfigSchema = z
   .object({
-    enabled: z.boolean().optional(),
+    enabled: FeishuCommonAccountShape.enabled,
     name: z.string().optional(), // Display name for this account
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
@@ -254,7 +272,7 @@ export const FeishuAccountConfigSchema = z
 
 const FeishuConfigSchemaBase = z
   .object({
-    enabled: z.boolean().optional(),
+    enabled: FeishuCommonAccountShape.enabled,
     defaultAccount: z.string().optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),

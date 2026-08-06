@@ -1,31 +1,46 @@
 // Zalo helper module supports config schema behavior.
 import {
-  AllowFromListSchema,
+  buildCommonChannelAccountShape,
   buildMultiAccountChannelSchema,
-  DmPolicySchema,
-  GroupPolicySchema,
-  MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
+const ZaloCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "defaultTo",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const zaloAccountSchema = z.object({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
-  markdown: MarkdownConfigSchema,
+  name: ZaloCommonAccountShape.name,
+  enabled: ZaloCommonAccountShape.enabled,
+  configWrites: ZaloCommonAccountShape.configWrites,
+  markdown: ZaloCommonAccountShape.markdown,
   botToken: buildSecretInputSchema().optional(),
   tokenFile: z.string().optional(),
   webhookUrl: z.string().optional(),
   webhookSecret: buildSecretInputSchema().optional(),
   webhookPath: z.string().optional(),
-  dmPolicy: DmPolicySchema.optional(),
-  allowFrom: AllowFromListSchema,
-  groupPolicy: GroupPolicySchema.optional(),
-  groupAllowFrom: AllowFromListSchema,
+  dmPolicy: ZaloCommonAccountShape.dmPolicy,
+  allowFrom: ZaloCommonAccountShape.allowFrom,
+  groupPolicy: ZaloCommonAccountShape.groupPolicy,
+  groupAllowFrom: ZaloCommonAccountShape.groupAllowFrom,
   mediaMaxMb: z.number().optional(),
   proxy: z.string().optional(),
-  responsePrefix: z.string().optional(),
+  responsePrefix: ZaloCommonAccountShape.responsePrefix,
 });
 
 export const ZaloConfigSchema = buildMultiAccountChannelSchema(zaloAccountSchema, {

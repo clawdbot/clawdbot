@@ -1,6 +1,7 @@
 // Qa Channel helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -22,20 +23,41 @@ const QaChannelGroupConfigSchema = buildGroupEntrySchema().omit({
   systemPrompt: true,
 });
 
+const QaChannelCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "markdown",
+    "dmPolicy",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const QaChannelAccountConfigSchema = z
   .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
+    name: QaChannelCommonAccountShape.name,
+    enabled: QaChannelCommonAccountShape.enabled,
+    configWrites: QaChannelCommonAccountShape.configWrites,
     baseUrl: z.string().url().optional(),
     botUserId: z.string().optional(),
     botDisplayName: z.string().optional(),
     pollTimeoutMs: z.number().int().min(100).max(30_000).optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: QaChannelCommonAccountShape.allowFrom,
     groupPolicy: z.enum(["open", "allowlist", "disabled"]).optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupAllowFrom: QaChannelCommonAccountShape.groupAllowFrom,
     groups: z.record(z.string(), QaChannelGroupConfigSchema).optional(),
-    defaultTo: z.string().optional(),
+    defaultTo: QaChannelCommonAccountShape.defaultTo,
     actions: QaChannelActionConfigSchema.optional(),
   })
   .strict();

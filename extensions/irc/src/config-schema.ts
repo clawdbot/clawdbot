@@ -1,11 +1,8 @@
 // Irc helper module supports config schema behavior.
 import {
   ChannelGroupEntrySchema,
-  DmPolicySchema,
-  GroupPolicySchema,
-  MarkdownConfigSchema,
-  ReplyRuntimeConfigSchemaShape,
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -32,11 +29,23 @@ const IrcNickServSchema = z
     }
   });
 
+const IrcCommonAccountShape = buildCommonChannelAccountShape({
+  useDefaults: true,
+  omit: [
+    "capabilities",
+    "defaultTo",
+    "mentionPatterns",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "replyToMode",
+  ],
+});
+
 const IrcAccountSchemaBase = z
   .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
+    name: IrcCommonAccountShape.name,
+    enabled: IrcCommonAccountShape.enabled,
+    configWrites: IrcCommonAccountShape.configWrites,
     dangerouslyAllowNameMatching: z.boolean().optional(),
     host: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),
@@ -47,15 +56,22 @@ const IrcAccountSchemaBase = z
     password: z.string().optional(),
     passwordFile: z.string().optional(),
     nickserv: IrcNickServSchema.optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    dmPolicy: IrcCommonAccountShape.dmPolicy,
+    allowFrom: IrcCommonAccountShape.allowFrom,
+    groupPolicy: IrcCommonAccountShape.groupPolicy,
+    groupAllowFrom: IrcCommonAccountShape.groupAllowFrom,
     groups: z.record(z.string(), ChannelGroupEntrySchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
     mentionPatterns: z.array(z.string()).optional(),
-    markdown: MarkdownConfigSchema,
-    ...ReplyRuntimeConfigSchemaShape,
+    markdown: IrcCommonAccountShape.markdown,
+    historyLimit: IrcCommonAccountShape.historyLimit,
+    dmHistoryLimit: IrcCommonAccountShape.dmHistoryLimit,
+    contextVisibility: IrcCommonAccountShape.contextVisibility,
+    dms: IrcCommonAccountShape.dms,
+    textChunkLimit: IrcCommonAccountShape.textChunkLimit,
+    streaming: IrcCommonAccountShape.streaming,
+    responsePrefix: IrcCommonAccountShape.responsePrefix,
+    mediaMaxMb: IrcCommonAccountShape.mediaMaxMb,
   })
   .strict();
 

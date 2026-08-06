@@ -2,6 +2,7 @@
 import {
   ChannelImplicitMentionsSchema,
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import { z } from "zod";
@@ -25,10 +26,33 @@ const TlonNetworkSchema = z
   .strict()
   .optional();
 
+const TlonCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "markdown",
+    "dmPolicy",
+    "allowFrom",
+    "defaultTo",
+    "groupAllowFrom",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const tlonCommonConfigFields = {
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
+  name: TlonCommonAccountShape.name,
+  enabled: TlonCommonAccountShape.enabled,
+  configWrites: TlonCommonAccountShape.configWrites,
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),
@@ -38,7 +62,7 @@ const tlonCommonConfigFields = {
   groupInviteAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
-  responsePrefix: z.string().optional(),
+  responsePrefix: TlonCommonAccountShape.responsePrefix,
   implicitMentions: ChannelImplicitMentionsSchema.optional(),
   // Auto-accept settings
   autoAcceptDmInvites: z.boolean().optional(), // Auto-accept DMs from ships in dmAllowlist

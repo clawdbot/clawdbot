@@ -1,9 +1,7 @@
 // Qqbot helper module supports config schema behavior.
 import {
-  AllowFromListSchema,
-  ContextVisibilityModeSchema,
-  GroupPolicySchema,
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -53,7 +51,6 @@ const QQBotExecApprovalsSchema = z
   .optional();
 
 const QQBotDmPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
-const QQBotGroupPolicySchema = GroupPolicySchema.optional();
 const QQBotGroupCommandLevelSchema = z.enum(["all", "safety", "strict"]).optional();
 
 const QQBotGroupSchema = buildGroupEntrySchema({
@@ -66,18 +63,39 @@ const QQBotGroupSchema = buildGroupEntrySchema({
 
 const QQBotGroupsSchema = z.record(z.string(), QQBotGroupSchema).optional();
 
+const QQBotCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "markdown",
+    "configWrites",
+    "dmPolicy",
+    "defaultTo",
+    "mentionPatterns",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const QQBotAccountSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    name: z.string().optional(),
+    enabled: QQBotCommonAccountShape.enabled,
+    name: QQBotCommonAccountShape.name,
     appId: z.string().optional(),
     clientSecret: buildSecretInputSchema().optional(),
     clientSecretFile: z.string().optional(),
-    allowFrom: AllowFromListSchema,
-    groupAllowFrom: AllowFromListSchema,
+    allowFrom: QQBotCommonAccountShape.allowFrom,
+    groupAllowFrom: QQBotCommonAccountShape.groupAllowFrom,
     dmPolicy: QQBotDmPolicySchema,
-    groupPolicy: QQBotGroupPolicySchema,
-    contextVisibility: ContextVisibilityModeSchema.optional(),
+    groupPolicy: QQBotCommonAccountShape.groupPolicy,
+    contextVisibility: QQBotCommonAccountShape.contextVisibility,
     systemPrompt: z.string().optional(),
     markdownSupport: z.boolean().optional(),
     audioFormatPolicy: AudioFormatPolicySchema,

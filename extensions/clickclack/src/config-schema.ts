@@ -3,16 +3,40 @@
  */
 import {
   buildChannelConfigSchema,
+  buildCommonChannelAccountShape,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
+const ClickClackCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "markdown",
+    "dmPolicy",
+    "allowFrom",
+    "groupAllowFrom",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const ClickClackAccountConfigSchema = z
   .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    configWrites: z.boolean().optional(),
+    name: ClickClackCommonAccountShape.name,
+    enabled: ClickClackCommonAccountShape.enabled,
+    configWrites: ClickClackCommonAccountShape.configWrites,
     baseUrl: z.string().url().optional(),
     apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
@@ -24,7 +48,7 @@ const ClickClackAccountConfigSchema = z
     model: z.string().optional(),
     systemPrompt: z.string().optional(),
     toolsAllow: z.array(z.string()).optional(),
-    defaultTo: z.string().optional(),
+    defaultTo: ClickClackCommonAccountShape.defaultTo,
     allowFrom: z.array(z.string()).optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
     agentActivity: z.boolean().optional(),

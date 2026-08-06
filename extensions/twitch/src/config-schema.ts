@@ -1,11 +1,35 @@
 // Twitch helper module supports config schema behavior.
-import { MarkdownConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildCommonChannelAccountShape } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 
 /**
  * Twitch user roles that can be allowed to interact with the bot
  */
 const TwitchRoleSchema = z.enum(["moderator", "owner", "vip", "subscriber", "all"]);
+
+const TwitchCommonAccountShape = buildCommonChannelAccountShape({
+  omit: [
+    "name",
+    "capabilities",
+    "markdown",
+    "dmPolicy",
+    "allowFrom",
+    "defaultTo",
+    "groupAllowFrom",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
 
 const TwitchAccountShape = {
   /** Twitch username */
@@ -17,9 +41,9 @@ const TwitchAccountShape = {
   /** Channel name to join */
   channel: z.string().min(1),
   /** Enable this account */
-  enabled: z.boolean().optional(),
+  enabled: TwitchCommonAccountShape.enabled,
   /** Allow channel-initiated configuration writes */
-  configWrites: z.boolean().optional(),
+  configWrites: TwitchCommonAccountShape.configWrites,
   /** Allowlist of Twitch user IDs who can interact with the bot (use IDs for safety, not usernames) */
   allowFrom: z.array(z.string()).optional(),
   /** Roles allowed to interact with the bot (e.g., ["moderator", "vip", "subscriber"]) */
@@ -27,7 +51,7 @@ const TwitchAccountShape = {
   /** Require @mention to trigger bot responses */
   requireMention: z.boolean().optional(),
   /** Outbound response prefix override for this channel/account. */
-  responsePrefix: z.string().optional(),
+  responsePrefix: TwitchCommonAccountShape.responsePrefix,
   /** Twitch client secret (required for token refresh via RefreshingAuthProvider) */
   clientSecret: z.string().optional(),
   /** Refresh token (required for automatic token refresh) */
@@ -46,11 +70,34 @@ const TwitchAccountSchema = z.object(TwitchAccountShape);
 /**
  * Base configuration properties shared by both single and multi-account modes
  */
+const TwitchCommonRootShape = buildCommonChannelAccountShape({
+  omit: [
+    "capabilities",
+    "dmPolicy",
+    "allowFrom",
+    "defaultTo",
+    "groupAllowFrom",
+    "groupPolicy",
+    "mentionPatterns",
+    "contextVisibility",
+    "historyLimit",
+    "dmHistoryLimit",
+    "dms",
+    "textChunkLimit",
+    "streaming",
+    "heartbeatVisibility",
+    "healthMonitor",
+    "responsePrefix",
+    "mediaMaxMb",
+    "replyToMode",
+  ],
+});
+
 const TwitchConfigBaseShape = {
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
-  markdown: MarkdownConfigSchema.optional(),
+  name: TwitchCommonRootShape.name,
+  enabled: TwitchCommonRootShape.enabled,
+  configWrites: TwitchCommonRootShape.configWrites,
+  markdown: TwitchCommonRootShape.markdown,
   defaultAccount: z.string().optional(),
 };
 
