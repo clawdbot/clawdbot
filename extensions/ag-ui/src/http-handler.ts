@@ -2,12 +2,14 @@ import { randomUUID, createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventType } from "@ag-ui/core";
 import type { RunAgentInput, Message } from "@ag-ui/core";
-import { EventEncoder } from "@ag-ui/encoder";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { aguiChannelPlugin } from "./channel.js";
+import { resolveAguiAgentRoute } from "./agent-route.js";
+import { applyCorsAndHandlePreflight } from "./cors.js";
+import { authenticateAguiDevice } from "./device-auth.js";
+import { observeDisconnect } from "./disconnect.js";
 import { resolveGatewaySecret } from "./gateway-secret.js";
 import { extractImagesFromMessages } from "./images.js";
 import {
@@ -22,21 +24,27 @@ import {
 import {
   sendJson,
   sendMethodNotAllowed,
-  sendUnauthorized,
   readJsonBody,
   getBearerToken,
   validateSessionKeyHeader,
-  createDeviceToken,
-  verifyDeviceToken,
 } from "./request-util.js";
+import { beginSseResponse } from "./sse.js";
 import {
-  setWriter,
-  clearWriter,
+  claimRun,
+  endRun,
   markClientToolNames,
+  markStateWriterNames,
+  setRunWriter,
   wasClientToolCalled,
-  clearClientToolCalled,
-  clearClientToolNames,
 } from "./tool-store.js";
+
+/**
+ * Ceiling on browser-declared tool schemas, which reach the model as tool
+ * definitions. Companion to the `context`/`state` caps in prompt-builder.ts —
+ * the request body limit alone (~1 MiB) would let one page spend the agent's
+ * whole context window on tool definitions.
+ */
+const MAX_CLIENT_TOOL_SCHEMA_CHARS = 24_000;
 
 // ---------------------------------------------------------------------------
 // HTTP handler factory
@@ -58,13 +66,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
     // forces a preflight, so we have to answer 204 here. The route's
     // gateway-side auth still requires a valid pairing token on the actual
     // POST: CORS only governs which origins can read the response.
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "authorization, content-type");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Max-Age", "86400");
-    if (req.method === "OPTIONS") {
-      res.statusCode = 204;
-      res.end();
+    if (applyCorsAndHandlePreflight(req, res)) {
       return;
     }
     // POST-only
@@ -81,87 +83,18 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
       return;
     }
 
-    // ---------------------------------------------------------------------------
-    // Authentication: No auth (pairing initiation) or Device token
-    // ---------------------------------------------------------------------------
-    let deviceId: string;
-
-    const bearerToken = getBearerToken(req);
-
-    if (!bearerToken) {
-      // No auth header: initiate pairing
-      // Generate new device ID
-      deviceId = randomUUID();
-
-      // Add to pending via OpenClaw pairing API - returns a pairing code for approval
-      const { code: pairingCode } = await runtime.channel.pairing.upsertPairingRequest({
-        channel: "ag-ui",
-        accountId: "default",
-        id: deviceId,
-        pairingAdapter: aguiChannelPlugin.pairing,
-      });
-
-      // Rate limit reached - max pending requests exceeded
-      if (!pairingCode) {
-        sendJson(res, 429, {
-          error: {
-            type: "rate_limit",
-            message:
-              "Too many pending pairing requests. Please wait for existing requests to expire (10 minutes) or ask the owner to approve/reject them.",
-          },
-        });
-        return;
-      }
-
-      // Generate signed device token
-      const deviceToken = createDeviceToken(gatewaySecret, deviceId);
-
-      // Return pairing pending response with device token and pairing code
-      sendJson(res, 403, {
-        pairing_code: pairingCode,
-        bearer_token: deviceToken,
-        error: {
-          type: "pairing_pending",
-          message: "Device pending approval",
-          pairing: {
-            pairingCode,
-            token: deviceToken,
-            instructions: `Save this token for use as a Bearer token and ask the owner to approve: openclaw pairing approve ag-ui ${pairingCode}`,
-          },
-        },
-      });
+    const auth = await authenticateAguiDevice({
+      req,
+      res,
+      runtime,
+      api,
+      gatewaySecret,
+      bearerToken: getBearerToken(req),
+    });
+    if (!auth.ok) {
       return;
     }
-
-    // Device token flow: verify HMAC signature, extract device ID
-    const extractedDeviceId = verifyDeviceToken(bearerToken, gatewaySecret);
-    if (!extractedDeviceId) {
-      sendUnauthorized(res);
-      return;
-    }
-    deviceId = extractedDeviceId;
-
-    // ---------------------------------------------------------------------------
-    // Pairing check: verify device is approved
-    // ---------------------------------------------------------------------------
-    const storeAllowFrom = await (
-      runtime.channel.pairing.readAllowFromStore as unknown as (arg: {
-        channel: string;
-      }) => Promise<string[]>
-    )({ channel: "ag-ui" }).catch(() => []);
-    const normalizedAllowFrom = storeAllowFrom.map((e) => e.replace(/^ag-ui:/i, "").toLowerCase());
-    const allowed = normalizedAllowFrom.includes(deviceId.toLowerCase());
-
-    if (!allowed) {
-      sendJson(res, 403, {
-        error: {
-          type: "pairing_pending",
-          message:
-            "Device pending approval. Ask the owner to approve using the pairing code from your initial pairing response.",
-        },
-      });
-      return;
-    }
+    const deviceId = auth.deviceId;
 
     // ---------------------------------------------------------------------------
     // Device approved - proceed with request
@@ -181,9 +114,12 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
  * scopes before we see the request, so we skip the device-pairing dance. The
  * AG-UI dispatch logic itself is identical to the device-token path.
  *
- * Intended for operator-UI-embedded consumers (plugin-contributed UI slots)
- * that already hold an OpenClaw gateway token via `ExtensionTabContext` and
- * should not need a second pairing flow.
+ * Intended for TRUSTED SERVER-SIDE callers that already hold a gateway token and
+ * should not need a second pairing flow — an AG-UI runtime proxy, a backend
+ * integration, or same-origin operator UI. A cross-origin browser cannot use
+ * this route directly: its CORS preflight is unauthenticated and core rejects it
+ * before this handler runs (see the note in the handler body). Untrusted browser
+ * clients belong on the pairing route `/v1/ag-ui`.
  */
 export function createOperatorAguiHttpHandler(api: OpenClawPluginApi) {
   const runtime: PluginRuntime = api.runtime;
@@ -192,21 +128,21 @@ export function createOperatorAguiHttpHandler(api: OpenClawPluginApi) {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    // This route is reached from the OpenClaw operator console's
-    // `chat.surface` slot, which runs inside a sandboxed iframe without
-    // `allow-same-origin` — the iframe's document origin is opaque ("null").
-    // Any fetch from that context is treated by the browser as cross-origin
-    // and requires CORS response headers; an `Authorization` request header
-    // forces a preflight OPTIONS we also have to satisfy. `*` is safe here
-    // because the route still requires the gateway operator token, which the
-    // browser's SOP prevents a third-party origin from minting.
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "authorization, content-type");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Max-Age", "86400");
-    if (req.method === "OPTIONS") {
-      res.statusCode = 204;
-      res.end();
+    // Sets CORS headers on the POST. `*` is safe here because the route still
+    // requires the gateway operator token, which the browser's SOP prevents a
+    // third-party origin from minting.
+    //
+    // The preflight branch is NOT reachable on this route: it is registered
+    // `auth: "gateway"`, and core rejects an unauthenticated OPTIONS before any
+    // plugin handler runs (src/gateway/server/plugins-http.ts:189). A CORS
+    // preflight never carries credentials, so it always 401s. That is why this
+    // route is documented for trusted SERVER-SIDE callers (README
+    // "Authentication"), which send no preflight — browser clients belong on
+    // `/v1/ag-ui`, whose `auth: "plugin"` lets the preflight through, or behind
+    // an AG-UI runtime proxy. Serving a cross-origin browser directly from this
+    // route would need core to exempt OPTIONS from gateway auth; that is a core
+    // security-surface change and is deliberately not attempted here.
+    if (applyCorsAndHandlePreflight(req, res)) {
       return;
     }
     if (req.method !== "POST") {
@@ -285,74 +221,6 @@ async function dispatchAuthenticatedAguiRequest(
       Boolean(m) && typeof m === "object" && typeof (m as Message).role === "string",
   );
 
-  const hasUserMessage = messages.some((m) => m.role === "user");
-  const hasToolMessage = messages.some((m) => m.role === "tool");
-  if (!hasUserMessage && !hasToolMessage) {
-    // AG-UI protocol allows empty messages (used for session init/sync).
-    // Return a valid empty run instead of 400.
-    const accept =
-      typeof req.headers.accept === "string" ? req.headers.accept : "text/event-stream";
-    const encoder = new EventEncoder({ accept });
-    res.statusCode = 200;
-    res.setHeader("Content-Type", encoder.getContentType());
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders?.();
-    res.write(encoder.encode({ type: EventType.RUN_STARTED, threadId, runId }));
-    res.write(encoder.encode({ type: EventType.RUN_FINISHED, threadId, runId }));
-    res.end();
-    return;
-  }
-
-  // Build body from messages
-  const { body: messageBody } = buildBodyFromMessages(messages);
-
-  // Format AG-UI context entries (if any) for injection into the agent prompt
-  const contextSuffix =
-    Array.isArray(input.context) && input.context.length > 0
-      ? formatContextEntries(input.context as Array<{ description: string; value: string }>)
-      : undefined;
-
-  // Bidirectional shared state: the frontend declares its state-writer tools
-  // via forwardedProps.stateWriterTools; we inject them into clientTools below
-  // and intercept the calls into STATE_SNAPSHOTs. Inbound state is rendered
-  // into the prompt so the model can read (and knows how to change) it.
-  const { specs: stateWriterSpecs, schemas: stateWriterSchemas } = parseStateWriterTools(
-    input.forwardedProps,
-  );
-  const stateWriterNames = [...stateWriterSpecs.keys()];
-  const sharedStateSuffix = formatSharedState(input.state, stateWriterNames);
-  // Run-scoped shared-state store, seeded from inbound state so snapshots
-  // carry UI-set keys (e.g. preferences) alongside agent-written keys.
-  const runSharedState: Record<string, unknown> = isSharedState(input.state)
-    ? { ...(input.state as Record<string, unknown>) }
-    : {};
-
-  // Multimodal: pull image content blocks out of the messages so they can be
-  // sent to the model (they are dropped from the text-only prompt). Requires
-  // an image-capable model config (see gateway setup); otherwise the OpenClaw
-  // provider ignores them.
-  const promptImages = extractImagesFromMessages(messages);
-  const hasImages = promptImages.length > 0;
-
-  if (!messageBody.trim()) {
-    sendJson(res, 400, {
-      error: {
-        message: "Could not extract a prompt from `messages`.",
-        type: "invalid_request_error",
-      },
-    });
-    return;
-  }
-
-  // Resolve agent route
-  const cfg = runtime.config.current() as OpenClawConfig;
-  const agentIdHeader =
-    typeof req.headers["x-openclaw-agent-id"] === "string"
-      ? req.headers["x-openclaw-agent-id"]
-      : undefined;
-
   // Support custom session key via header for per-user isolation.
   // Treated as a trusted-proxy-only concern (see README "Session isolation"):
   // the value only *scopes* route.sessionKey — it never replaces it.
@@ -375,22 +243,139 @@ async function dispatchAuthenticatedAguiRequest(
     userKey = validated;
   }
 
-  const route = runtime.channel.routing.resolveAgentRoute({
-    cfg,
-    channel: "ag-ui",
-    peer: { kind: "direct", id: caller.id },
-    accountId: agentIdHeader,
-  });
+  const hasUserMessage = messages.some((m) => m.role === "user");
+  const hasToolMessage = messages.some((m) => m.role === "tool");
+  if (!hasUserMessage && !hasToolMessage) {
+    // AG-UI protocol allows empty messages (used for session init/sync).
+    // Return a valid empty run instead of 400.
+    const encoder = beginSseResponse(res);
+    res.write(encoder.encode({ type: EventType.RUN_STARTED, threadId, runId }));
+    res.write(encoder.encode({ type: EventType.RUN_FINISHED, threadId, runId }));
+    res.end();
+    return;
+  }
 
-  // Set up SSE via EventEncoder
-  const accept = typeof req.headers.accept === "string" ? req.headers.accept : "text/event-stream";
-  const encoder = new EventEncoder({ accept });
-  res.statusCode = 200;
-  res.setHeader("Content-Type", encoder.getContentType());
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.flushHeaders?.();
+  // Build body from messages
+  const { body: messageBody } = buildBodyFromMessages(messages);
+
+  // Format AG-UI context entries (if any) for injection into the agent prompt
+  const contextSuffix =
+    Array.isArray(input.context) && input.context.length > 0
+      ? formatContextEntries(input.context)
+      : undefined;
+
+  // Bidirectional shared state: the frontend declares its state-writer tools
+  // via forwardedProps.stateWriterTools; we inject them into clientTools below
+  // and intercept the calls into STATE_SNAPSHOTs. Inbound state is rendered
+  // into the prompt so the model can read (and knows how to change) it.
+  const { specs: stateWriterSpecs, schemas: stateWriterSchemas } = parseStateWriterTools(
+    input.forwardedProps,
+  );
+  const stateWriterNames = [...stateWriterSpecs.keys()];
+  const sharedStateSuffix = formatSharedState(input.state, stateWriterNames);
+  // Run-scoped shared-state store, seeded from inbound state so snapshots
+  // carry UI-set keys (e.g. preferences) alongside agent-written keys.
+  const runSharedState: Record<string, unknown> = isSharedState(input.state)
+    ? { ...(input.state as Record<string, unknown>) }
+    : {};
+
+  // An image with no caption is a normal multimodal turn, and
+  // `buildBodyFromMessages` only extracts TEXT — so a text-empty body alone is
+  // not an empty request. This guard asks "did the client send anything usable
+  // at all?", which is why it scans the whole request rather than the delta;
+  // what actually gets forwarded is still delta-scoped further down.
+  // A tool message also counts: a frontend tool that succeeds with no output
+  // sends `{ role: "tool", content: "" }`, which carries no text and no image
+  // but IS the turn — rejecting it dead-ends the run right after the browser
+  // did the work, so the agent never learns the call succeeded.
+  if (!messageBody.trim() && !hasToolMessage && extractImagesFromMessages(messages).length === 0) {
+    sendJson(res, 400, {
+      error: {
+        message: "Could not extract a prompt or image from `messages`.",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
+  // Tool schemas are browser-supplied and reach the model verbatim as tool
+  // definitions, so they fall under the same hard cap as `context` and `state`
+  // (root prompt-budget policy: every model-visible injected item is bounded).
+  // Checked HERE, before the SSE headers are committed, so an oversized toolset
+  // gets a clean 400 — silently dropping tools would leave the page believing
+  // the agent can call something it can never see.
+  const declaredToolsChars =
+    JSON.stringify(Array.isArray(input.tools) ? input.tools : []).length +
+    JSON.stringify(stateWriterSchemas).length;
+  if (declaredToolsChars > MAX_CLIENT_TOOL_SCHEMA_CHARS) {
+    sendJson(res, 400, {
+      error: {
+        message: `Declared tool schemas are too large (${declaredToolsChars} chars, limit ${MAX_CLIENT_TOOL_SCHEMA_CHARS}). Send fewer tools or shorter descriptions/parameter schemas.`,
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
+  // Resolve agent route
+  const cfg = runtime.config.current() as OpenClawConfig;
+  const agentIdHeader =
+    typeof req.headers["x-openclaw-agent-id"] === "string"
+      ? req.headers["x-openclaw-agent-id"]
+      : undefined;
+
+  const routeResolution = resolveAguiAgentRoute({
+    runtime,
+    cfg,
+    callerId: caller.id,
+    agentIdHeader,
+  });
+  if (!routeResolution.ok) {
+    sendJson(res, 400, {
+      error: {
+        message: `Unknown agent in X-OpenClaw-Agent-Id: ${JSON.stringify(routeResolution.unknownAgentId)}.`,
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+  const route = routeResolution.route;
+
+  // Compose the session scope BEFORE committing any response headers. The
+  // :user: suffix (from the validated header) and the :thread: suffix both
+  // subdivide route.sessionKey and never replace it.
+  let sessionKey = route.sessionKey;
+  if (userKey) {
+    sessionKey += `:user:${userKey}`;
+  }
+  if (threadId) {
+    sessionKey += `:thread:${threadId.toLowerCase()}`;
+  }
+
+  // Identifies THIS request's run inside the shared per-session tool-stream
+  // state. Two requests from the same device and thread share `sessionKey`, so
+  // ownership — not the session key — decides who may write tool events.
+  const runOwner = `${runId}:${randomUUID()}`;
+
+  // Claim before any header is written: once SSE headers are flushed the
+  // response is committed and `sendJson` (which calls setHeader) would throw
+  // ERR_HTTP_HEADERS_SENT, leaving the client with a truncated 200 stream
+  // instead of a retryable 409.
+  if (!claimRun({ sessionKey, owner: runOwner })) {
+    sendJson(res, 409, {
+      error: {
+        message:
+          "A run is already in progress for this session. Retry once it completes, or use a distinct X-OpenClaw-Session-Key.",
+        type: "conflict_error",
+      },
+    });
+    return;
+  }
+
+  // Commit SSE headers. Must happen AFTER claimRun above: once headers are
+  // flushed the response is committed and the 409 conflict path can no longer
+  // call setHeader.
+  const encoder = beginSseResponse(res);
 
   let closed = false;
   let currentMessageId = `msg-${randomUUID()}`;
@@ -451,9 +436,22 @@ async function dispatchAuthenticatedAguiRequest(
     }
   };
 
-  // Handle client disconnect
-  req.on("close", () => {
+  const abortController = new AbortController();
+
+  // The run was claimed before headers were committed; wire its writer now that
+  // the stream exists so the tool hooks can emit into THIS response.
+  setRunWriter({ sessionKey, owner: runOwner, writer: writeEvent, messageId: currentMessageId });
+
+  observeDisconnect({ req, res }, () => {
     closed = true;
+    abortController.abort();
+    // Deliberately does NOT endRun. Aborting only *requests* that the agent stop;
+    // tool hooks can still fire while the run unwinds. Releasing ownership here
+    // would let a second request for this session claim the run and install its
+    // writer, and the hooks resolve the writer by sessionKey alone — so this
+    // run's late TOOL_CALL_* events would be written into the new run's stream.
+    // The run keeps the session until its `finally` releases it (ownership-checked),
+    // which is reached on every path including abort.
   });
 
   // Emit RUN_STARTED
@@ -464,17 +462,6 @@ async function dispatchAuthenticatedAguiRequest(
   });
 
   // Build inbound context using the plugin runtime (same pattern as msteams).
-  // Compose session scopes under route.sessionKey — the :user: suffix (from
-  // the validated header) and the :thread: suffix both subdivide the route
-  // scope and never replace it.
-  let sessionKey = route.sessionKey;
-  if (userKey) {
-    sessionKey += `:user:${userKey}`;
-  }
-  if (threadId) {
-    sessionKey += `:thread:${threadId.toLowerCase()}`;
-  }
-
   // STABLE per-conversation session id. OpenClaw derives the transcript file
   // from this id, so it IS the isolation boundary between conversations — a
   // stable id keeps every turn of one conversation in ONE transcript (giving
@@ -486,21 +473,6 @@ async function dispatchAuthenticatedAguiRequest(
   // fixed-length (73 chars incl. prefix — safely under OpenClaw's 128-char
   // session-id limit regardless of how long sessionKey grows).
   const embeddedSessionId = `ag-ui-${createHash("sha256").update(sessionKey).digest("hex")}`;
-
-  // Register the SSE writer ALWAYS so the before_tool_call / tool_result_persist
-  // hooks can render SERVER-side (backend) tool calls as AG-UI events — even on
-  // turns that ALSO carry frontend/client tools, shared state, or images (a
-  // typical an AG-UI client page declares frontend tools on every turn, so gating
-  // the writer on `!hasClientTools` meant any backend tool the model ran on
-  // those turns rendered no card). To avoid a duplicate tool-call sequence,
-  // the client/state-writer tool NAMES are marked below and the hooks skip
-  // them — those are emitted by this handler's pendingToolCalls path instead.
-  setWriter(sessionKey, writeEvent, currentMessageId);
-
-  const abortController = new AbortController();
-  req.on("close", () => {
-    abortController.abort();
-  });
 
   // Streaming + reasoning callbacks shared by both run paths: the channel
   // reply pipeline (tool-less turns) and runEmbeddedAgent (client-tool
@@ -713,9 +685,24 @@ async function dispatchAuthenticatedAguiRequest(
       sessionKey,
       clientTools.map((t) => t.function.name),
     );
+    // State writers are a subset of the above that WE execute, so they must not
+    // be treated as "the browser took over" — see markStateWriterNames.
+    markStateWriterNames(sessionKey, stateWriterNames);
 
     const promptSuffix = [contextSuffix, sharedStateSuffix].filter(Boolean).join("");
-    const { prompt: deltaPrompt, systemPrompt } = buildDeltaPrompt(messages);
+    const { prompt: deltaPrompt, systemPrompt, deltaMessages } = buildDeltaPrompt(messages);
+    // Multimodal: pull image content blocks out of the messages so they can be
+    // sent to the model (they are dropped from the text-only prompt). Requires
+    // an image-capable model config (see gateway setup); otherwise the OpenClaw
+    // provider ignores them.
+    //
+    // Scoped to `deltaMessages`, NOT the full history: AG-UI clients POST the
+    // whole transcript every turn, so extracting from all of it would resend
+    // turn 1's image with turn 2's text — the model would answer against a
+    // stale image, the attachment would be duplicated in the persisted session,
+    // and `hasImages` would stay true and keep empty resync runs alive below.
+    const promptImages = extractImagesFromMessages(deltaMessages);
+    const hasImages = promptImages.length > 0;
     // Server-side continuation transcript. After we handle a state-writer
     // call ourselves (apply + STATE_SNAPSHOT), we re-run the model with a
     // synthetic result appended so it NARRATES a confirmation instead of
@@ -782,7 +769,11 @@ async function dispatchAuthenticatedAguiRequest(
         config: cfg,
         prompt,
         ...(systemPrompt ? { extraSystemPrompt: systemPrompt } : {}),
-        ...(hasImages
+        // Turn 0 only. Continuation turns re-run the SAME session to narrate a
+        // state-writer result, so the images are already in the transcript;
+        // resending them duplicates the attachments and re-bills the context on
+        // every narration turn.
+        ...(hasImages && turn === 0
           ? {
               images: promptImages,
               imageOrder: promptImages.map(() => "inline" as const),
@@ -960,10 +951,16 @@ async function dispatchAuthenticatedAguiRequest(
   // branch is gone — the reply pipeline is itself a wrapper around
   // runEmbeddedAgent plus channel envelope/session machinery that this HTTP
   // AG-UI surface does not need. Backend (server-side) tools still render as
-  // AG-UI cards: the writer is registered for tool-less turns (see setWriter
-  // above), so the before_tool_call / tool_result_persist hooks emit their
+  // AG-UI cards: this run claims the session's tool-stream state immediately
+  // below, so the before_tool_call / tool_result_persist hooks emit their
   // TOOL_CALL_* events during the embedded run exactly as they did when the
   // reply pipeline drove the same run internally.
+  //
+  // The claim happens HERE rather than at request admission so the window in
+  // which a writer is registered matches the window in which this run executes.
+  // Registering earlier let a second same-session request take the session's
+  // writer while the first run was still queued, sending the first run's tool
+  // events into the second response.
   try {
     await runViaEmbeddedAgent();
 
@@ -995,8 +992,8 @@ async function dispatchAuthenticatedAguiRequest(
       res.end();
     }
   } finally {
-    clearWriter(sessionKey);
-    clearClientToolCalled(sessionKey);
-    clearClientToolNames(sessionKey);
+    // Ownership-checked: a run that has already been displaced must not tear
+    // down the state belonging to whoever holds the session now.
+    endRun(sessionKey, runOwner);
   }
 }
