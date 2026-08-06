@@ -249,7 +249,7 @@ async function guardGatewayRunSelectedConfig(
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
     { collectEnvSecretRefIds },
-    { clearMissingManagedServiceEnvKeys, readManagedServiceEnvKeysFromEnvironment },
+    { clearMissingManagedServiceEnvKeys, readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
     import("../../config/config-env-vars.js"),
@@ -273,7 +273,7 @@ async function guardGatewayRunSelectedConfig(
     normalizeStateDirEnv(process.env);
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
-      overrideKeys: readManagedServiceEnvKeysFromEnvironment(process.env),
+      overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
       quiet: true,
       ...resolveGatewayRunDotEnvPaths({
         env: process.env,
@@ -349,7 +349,7 @@ async function guardGatewayRunSelectedConfig(
     // config reference are stale; clearing the broad marker blindly would drop file-backed refs.
     clearMissingManagedServiceEnvKeys({
       environment: process.env,
-      managedKeys: readManagedServiceEnvKeysFromEnvironment(process.env),
+      managedKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
       presentKeys: trustedEnvLoad.dotenvPresentKeys,
       preserveKeys: collectEnvSecretRefIds(snapshot.sourceConfig),
     });
@@ -560,7 +560,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
     { normalizeEnv },
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
-    { readManagedServiceEnvKeysFromEnvironment },
+    { readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
     import("../../config/env-vars.js"),
@@ -576,7 +576,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
   normalizeStateDirEnv(process.env);
   loadGlobalRuntimeDotEnvFiles({
     ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
-    overrideKeys: readManagedServiceEnvKeysFromEnvironment(process.env),
+    overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
     quiet: true,
     ...resolveGatewayRunDotEnvPaths({
       env: process.env,

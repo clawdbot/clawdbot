@@ -1,6 +1,7 @@
 /** Tracks managed service environment keys across reinstall and repair flows. */
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
@@ -70,6 +71,17 @@ export function readManagedServiceEnvKeysFromEnvironment(
     }
   }
   return new Set();
+}
+
+export function readManagedSystemdServiceEnvKeysFromEnvironment(
+  environment: Record<string, string | undefined> | undefined,
+  platform: NodeJS.Platform = process.platform,
+): Set<string> {
+  // Only systemd snapshots state dotenv values into its inherited service environment.
+  // Other supervisors retain their existing reinstall-based precedence contract.
+  return environment && detectRespawnSupervisor(environment, platform) === "systemd"
+    ? readManagedServiceEnvKeysFromEnvironment(environment)
+    : new Set();
 }
 
 export function clearMissingManagedServiceEnvKeys(params: {

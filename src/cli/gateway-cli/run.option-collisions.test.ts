@@ -15,6 +15,7 @@ import {
 } from "../../test-utils/env.js";
 import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
@@ -50,6 +51,7 @@ const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
 const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinConfigDir = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
 const pinRuntimePaths = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
+const detectRespawnSupervisor = vi.fn(() => null as "systemd" | null);
 type RuntimeDotEnvLoadResult = {
   dotenvPresentKeys: string[];
   gatewayEnvAppliedKeys: string[];
@@ -301,7 +303,7 @@ vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/supervisor-markers.js")>();
   return {
     ...actual,
-    detectRespawnSupervisor: () => null,
+    detectRespawnSupervisor: () => detectRespawnSupervisor(),
   };
 });
 
@@ -410,6 +412,7 @@ describe("gateway run option collisions", () => {
     });
     netState.autoBindHost = "127.0.0.1";
     netState.container = false;
+    detectRespawnSupervisor.mockReset().mockReturnValue(null);
     readBestEffortConfig.mockClear();
     readConfigFileSnapshotWithPluginMetadata.mockClear();
     gatewayLogMessages.length = 0;
@@ -1576,14 +1579,20 @@ describe("gateway run option collisions", () => {
   });
 
   it("lets gateway bootstrap refresh inherited service-managed dotenv keys", async () => {
-    await withEnvAsync(
-      { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY,ANTHROPIC_API_KEY" },
-      async () => {
-        const { prepareGatewayRunBootstrap, selectGatewayRunEnvironment } =
-          await import("./pre-bootstrap.js");
-        await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
-        await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
-      },
+    detectRespawnSupervisor.mockReturnValue("systemd");
+    await withMockedPlatform("linux", () =>
+      withEnvAsync(
+        {
+          INVOCATION_ID: "systemd-invocation",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY,ANTHROPIC_API_KEY",
+        },
+        async () => {
+          const { prepareGatewayRunBootstrap, selectGatewayRunEnvironment } =
+            await import("./pre-bootstrap.js");
+          await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
+          await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
+        },
+      ),
     );
 
     expect(loadGlobalRuntimeDotEnvFiles).toHaveBeenCalledWith(
@@ -1593,7 +1602,40 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("limits inherited service-managed dotenv refresh to systemd launches", async () => {
+    const serviceManagedEnv = await import("../../daemon/service-managed-env.js");
+    detectRespawnSupervisor.mockReturnValueOnce("systemd");
+    expect(
+      serviceManagedEnv.readManagedSystemdServiceEnvKeysFromEnvironment(
+        {
+          INVOCATION_ID: "systemd-invocation",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY",
+        },
+        "linux",
+      ),
+    ).toEqual(new Set(["OPENAI_API_KEY"]));
+    expect(
+      serviceManagedEnv.readManagedSystemdServiceEnvKeysFromEnvironment(
+        { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY" },
+        "linux",
+      ),
+    ).toEqual(new Set());
+    expect(
+      serviceManagedEnv.readManagedSystemdServiceEnvKeysFromEnvironment(
+        { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY" },
+        "darwin",
+      ),
+    ).toEqual(new Set());
+    expect(
+      serviceManagedEnv.readManagedSystemdServiceEnvKeysFromEnvironment(
+        { OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENAI_API_KEY" },
+        "win32",
+      ),
+    ).toEqual(new Set());
+  });
+
   it("clears only missing managed keys after reading the selected config", async () => {
+    detectRespawnSupervisor.mockReturnValue("systemd");
     configState.snapshot = {
       config: {},
       exists: true,
@@ -1601,7 +1643,7 @@ describe("gateway run option collisions", () => {
         models: {
           providers: {
             openai: {
-              apiKey: { source: "env", provider: "default", id: "SECRET_REF_KEY" },
+              apiKey: { source: "env", id: "SECRET_REF_KEY" },
             },
           },
         },
@@ -1614,22 +1656,25 @@ describe("gateway run option collisions", () => {
       stateEnvAppliedKeys: [],
     });
 
-    await withEnvAsync(
-      {
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "REMOVED_KEY,SECRET_REF_KEY",
-        REMOVED_KEY: "stale-service-value",
-        SECRET_REF_KEY: "file-backed-value",
-        OPERATOR_KEY: "operator-value",
-      },
-      async () => {
-        const { prepareGatewayRunBootstrap, selectGatewayRunEnvironment } =
-          await import("./pre-bootstrap.js");
-        await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
-        expect(process.env.REMOVED_KEY).toBeUndefined();
-        expect(process.env.SECRET_REF_KEY).toBe("file-backed-value");
-        expect(process.env.OPERATOR_KEY).toBe("operator-value");
-        await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
-      },
+    await withMockedPlatform("linux", () =>
+      withEnvAsync(
+        {
+          INVOCATION_ID: "systemd-invocation",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "REMOVED_KEY,SECRET_REF_KEY",
+          REMOVED_KEY: "stale-service-value",
+          SECRET_REF_KEY: "file-backed-value",
+          OPERATOR_KEY: "operator-value",
+        },
+        async () => {
+          const { prepareGatewayRunBootstrap, selectGatewayRunEnvironment } =
+            await import("./pre-bootstrap.js");
+          await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime });
+          expect(process.env.REMOVED_KEY).toBeUndefined();
+          expect(process.env.SECRET_REF_KEY).toBe("file-backed-value");
+          expect(process.env.OPERATOR_KEY).toBe("operator-value");
+          await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime });
+        },
+      ),
     );
   });
 

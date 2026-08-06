@@ -102,12 +102,12 @@ export function parseEnvTemplateSecretRef(
   };
 }
 
-/** Collect env ids from canonical and shorthand SecretRefs anywhere in a config tree. */
+/** Collect env ids from supported SecretRef shapes anywhere in a config tree. */
 export function collectEnvSecretRefIds(value: unknown): Set<string> {
   const ids = new Set<string>();
   const seen = new WeakSet<object>();
   const visit = (candidate: unknown): void => {
-    const ref = isSecretRef(candidate) ? candidate : parseEnvTemplateSecretRef(candidate);
+    const ref = coerceSecretRef(candidate);
     if (ref?.source === "env" && isValidEnvSecretRefId(ref.id)) {
       ids.add(ref.id);
       return;
