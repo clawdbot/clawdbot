@@ -931,13 +931,20 @@ describe("discoverOpenClawPlugins", () => {
       packageName: "pack",
       extensions: ["./src/one.ts", "./src/two.ts"],
     });
+    writePluginManifest({ pluginDir: globalExt, id: "pack" });
     writePluginEntry(path.join(globalExt, "src", "one.ts"));
     writePluginEntry(path.join(globalExt, "src", "two.ts"));
     writePluginEntry(path.join(globalExt, "dist", "one.js"));
     writePluginEntry(path.join(globalExt, "dist", "two.js"));
 
-    const { candidates } = await discoverWithStateDir(stateDir, {});
-    expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
+    const discovery = await discoverWithStateDir(stateDir, {});
+    expectCandidateIds(discovery.candidates, { includes: ["pack/one", "pack/two"] });
+
+    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    expect(registry.plugins.map((plugin) => plugin.id).toSorted()).toEqual([
+      "pack/one",
+      "pack/two",
+    ]);
   });
 
   it("discovers untracked global package plugins that point at TypeScript source", async () => {

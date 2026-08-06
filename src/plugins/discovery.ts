@@ -72,6 +72,8 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
 /** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {
   idHint: string;
+  /** Discovery-owned identity for one entry in a multi-entry package pack. */
+  effectivePluginId?: string;
   diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
@@ -731,6 +733,7 @@ function addCandidate(params: {
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
   idHint: string;
+  effectivePluginId?: string;
   diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
@@ -778,6 +781,7 @@ function addCandidate(params: {
   });
   params.candidates.push({
     idHint: params.idHint,
+    ...(params.effectivePluginId ? { effectivePluginId: params.effectivePluginId } : {}),
     ...(params.diagnosticIdHint && params.diagnosticIdHint !== params.idHint
       ? { diagnosticIdHint: params.diagnosticIdHint }
       : {}),
@@ -1005,12 +1009,17 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
     diagnostics: params.diagnostics,
     rejectHardlinks,
   });
-  const addPackageCandidate = (source: string, idHint: string): void => {
+  const addPackageCandidate = (
+    source: string,
+    idHint: string,
+    effectivePluginId?: string,
+  ): void => {
     addCandidate({
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
       idHint,
+      ...(effectivePluginId ? { effectivePluginId } : {}),
       diagnosticIdHint: pluginIdHint,
       source,
       ...(setupSource ? { setupSource } : {}),
@@ -1040,16 +1049,14 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       rejectHardlinks,
     });
     for (const source of resolvedRuntimeSources) {
-      addPackageCandidate(
-        source,
-        deriveIdHint({
-          filePath: source,
-          manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
-          packageName: manifest?.name,
-          fallbackId: path.basename(dir),
-          hasMultipleExtensions: extensions.length > 1,
-        }),
-      );
+      const idHint = deriveIdHint({
+        filePath: source,
+        manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
+        packageName: manifest?.name,
+        fallbackId: path.basename(dir),
+        hasMultipleExtensions: extensions.length > 1,
+      });
+      addPackageCandidate(source, idHint, extensions.length > 1 ? idHint : undefined);
     }
     return true;
   }
