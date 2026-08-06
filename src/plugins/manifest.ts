@@ -7,6 +7,7 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { parsePluginManifestHostIntegrationBundle } from "./host-integration-bundle.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
@@ -256,6 +257,16 @@ export function loadPluginManifest(
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),
     qaRunners: setupNormalizers.normalizeManifestQaRunners(raw.qaRunners),
   };
+  const hostIntegrationBundleResult = parsePluginManifestHostIntegrationBundle(
+    raw.hostIntegrationBundle,
+  );
+  if (!hostIntegrationBundleResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest: ${hostIntegrationBundleResult.error}`,
+      manifestPath,
+    });
+  }
   const dashboardResult = setupNormalizers.normalizeManifestDashboard(raw.dashboard);
   if (!dashboardResult.ok) {
     return cacheResult({
@@ -279,6 +290,7 @@ export function loadPluginManifest(
       version: normalizeOptionalString(raw.version),
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
       contracts: capabilityNormalizers.normalizeManifestContracts(raw.contracts),
+      hostIntegrationBundle: hostIntegrationBundleResult.bundle,
       mediaUnderstandingProviderMetadata:
         capabilityNormalizers.normalizeMediaUnderstandingProviderMetadata(
           raw.mediaUnderstandingProviderMetadata,

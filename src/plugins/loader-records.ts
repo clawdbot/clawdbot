@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
+import type { PluginManifestHostIntegrationBundle } from "./host-integration-bundle.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
 import type {
   PluginManifestContracts,
@@ -41,6 +42,7 @@ export function createPluginRecord(params: {
   providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
+  hostIntegrationBundle?: PluginManifestHostIntegrationBundle;
   dashboard?: PluginManifestDashboard;
   mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
@@ -99,6 +101,7 @@ export function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
     contracts: params.contracts,
+    hostIntegrationBundle: params.hostIntegrationBundle,
     dashboard: params.dashboard,
     mcpServers: params.mcpServers,
   };
