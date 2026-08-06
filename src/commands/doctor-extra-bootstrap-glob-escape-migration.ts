@@ -34,7 +34,7 @@ const PATTERN_KEYS = ["paths", "patterns", "files"] as const;
 
 type PatternRewrite = { key: string; index: number; from: string; to: string };
 
-export type ExtraBootstrapGlobEscapeResult = {
+type ExtraBootstrapGlobEscapeResult = {
   cfg: OpenClawConfig;
   changes: string[];
   warnings: string[];
