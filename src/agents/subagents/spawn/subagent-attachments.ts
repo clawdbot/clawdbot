@@ -398,8 +398,18 @@ export async function materializeSubagentAttachments(params: {
     // would trust a pre-existing attachments symlink before fs-safe can reject the hop.
     workspaceRootDir = workspaceRoot.rootReal;
     absDir = path.join(workspaceRootDir, ...relDir.split(path.posix.sep));
-    await workspaceRoot.mkdir(relDir);
-    await setPrivateAttachmentDirectoryMode({ rootDir: workspaceRootDir, absDir });
+    for (const privateRelDir of [".openclaw", ".openclaw/attachments", relDir]) {
+      const existed = await workspaceRoot.exists(privateRelDir);
+      await workspaceRoot.mkdir(privateRelDir);
+      // Match recursive mkdir(mode): harden directories created by this call
+      // without changing permissions on an operator-owned existing parent.
+      if (!existed) {
+        await setPrivateAttachmentDirectoryMode({
+          rootDir: workspaceRootDir,
+          absDir: path.join(workspaceRootDir, ...privateRelDir.split(path.posix.sep)),
+        });
+      }
+    }
 
     const files: SubagentAttachmentReceiptFile[] = [];
     const writeJobs: Array<{ outPath: string; buf: Buffer }> = [];

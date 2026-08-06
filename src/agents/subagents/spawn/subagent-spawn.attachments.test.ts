@@ -182,9 +182,13 @@ describe("spawnSubagentDirect filename validation", () => {
         if (!receiptDir) {
           throw new Error("missing attachment receipt directory");
         }
-        expect(fs.statSync(path.join(explicitAttachmentsRoot, receiptDir)).mode & 0o777).toBe(
-          0o700,
-        );
+        for (const privateDir of [
+          path.join(explicitWorkspaceDir, ".openclaw"),
+          explicitAttachmentsRoot,
+          path.join(explicitAttachmentsRoot, receiptDir),
+        ]) {
+          expect(fs.statSync(privateDir).mode & 0o777).toBe(0o700);
+        }
       }
     } finally {
       fs.rmSync(explicitWorkspaceDir, { recursive: true, force: true });
