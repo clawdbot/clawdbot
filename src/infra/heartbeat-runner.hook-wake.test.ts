@@ -69,7 +69,10 @@ describe("startHeartbeatRunner hook wake targeting", () => {
     vi.restoreAllMocks();
   });
 
-  it("runs one targeted hook wake for an agent without a heartbeat schedule", async () => {
+  it.each([
+    { name: "session-targeted", sessionKey: "agent:ops:main" },
+    { name: "agent-targeted", sessionKey: undefined },
+  ])("runs one $name hook wake for an agent without a heartbeat schedule", async (testCase) => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = await expectWakeDispatch({
@@ -82,7 +85,7 @@ describe("startHeartbeatRunner hook wake targeting", () => {
         intent: "immediate",
         reason: "hook:123e4567-e89b-12d3-a456-426614174000",
         agentId: "ops",
-        sessionKey: "agent:ops:main",
+        sessionKey: testCase.sessionKey,
         coalesceMs: 0,
       },
       expectedCall: {
@@ -90,7 +93,7 @@ describe("startHeartbeatRunner hook wake targeting", () => {
         source: "hook",
         intent: "immediate",
         reason: "hook:123e4567-e89b-12d3-a456-426614174000",
-        sessionKey: "agent:ops:main",
+        sessionKey: testCase.sessionKey,
       },
     });
     runner.stop();
@@ -110,7 +113,6 @@ describe("startHeartbeatRunner hook wake targeting", () => {
       intent: "immediate",
       reason: "hook:123e4567-e89b-12d3-a456-426614174000",
       agentId: "bogus",
-      sessionKey: "agent:bogus:main",
       coalesceMs: 0,
     });
     await vi.advanceTimersByTimeAsync(1);

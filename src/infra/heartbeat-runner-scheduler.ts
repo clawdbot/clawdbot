@@ -339,6 +339,7 @@ export function startHeartbeatRunner(opts: {
           source: params.source,
           intent,
           reason,
+          agentId: requestedAgentId,
           sessionKey: requestedSessionKey,
         }));
     if (state.agents.size === 0 && !allowsUnscheduledTarget) {

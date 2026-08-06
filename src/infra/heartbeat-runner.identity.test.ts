@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIsolatedHeartbeatSessionKey } from "./heartbeat-runner-session.js";
@@ -11,10 +11,17 @@ import {
   readSessionStoreForTest,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
 describe("runHeartbeatOnce identity", () => {
+  afterEach(() => resetSystemEventsForTest());
+
   it("uses metadata to distinguish a global heartbeat sibling from a matching user key", () => {
     const sessionKey = "agent:historian2:global:heartbeat";
     expect(
@@ -103,6 +110,48 @@ describe("runHeartbeatOnce identity", () => {
       });
     },
   );
+
+  it("runs a global hook wake for an agent without a heartbeat schedule", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+      const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: tmpDir },
+          entries: { main: { default: true }, hooks: {} },
+        },
+        session: { scope: "global", store: storeTemplate },
+      };
+      const hooksStorePath = resolveStorePath(storeTemplate, { agentId: "hooks" });
+      await seedSessionStore(hooksStorePath, "global", {});
+      enqueueSystemEvent("Mapped hook wake", { sessionKey: "global" });
+      expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
+        "Mapped hook wake",
+      ]);
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "hooks",
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:wake",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        AgentId: "hooks",
+        SessionKey: "global",
+      });
+      // The real reply admission layer formats generic events into the model
+      // envelope; this injected reply boundary still proves runner consumption.
+      expect(peekSystemEventEntries("global")).toEqual([]);
+    });
+  });
 
   it.each([
     { name: "alert", replyText: "needs attention", showOk: false },

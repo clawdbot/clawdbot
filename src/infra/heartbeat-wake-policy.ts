@@ -64,23 +64,24 @@ export function isTargetedImmediateSystemEventWake(params: {
 }
 
 /**
- * Hook result/failure wakes carry an explicit session target and must be able
+ * Hook result/failure wakes carry an explicit agent or session target and must be able
  * to wake a known agent that has no recurring heartbeat schedule; otherwise the
  * queued hook event sits unread. This is the hook counterpart of
- * `isTargetedImmediateSystemEventWake` — narrowly gated to hook sources with an
- * explicit session key.
+ * `isTargetedImmediateSystemEventWake` — narrowly gated to targeted hook sources.
  */
 export function isTargetedImmediateHookWake(params: {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
+  agentId?: string;
   sessionKey?: string;
 }): boolean {
   return (
     params.source === "hook" &&
     params.intent === "immediate" &&
     (params.reason?.trim().startsWith("hook:") ?? false) &&
-    normalizeOptionalString(params.sessionKey) !== undefined
+    (normalizeOptionalString(params.agentId) !== undefined ||
+      normalizeOptionalString(params.sessionKey) !== undefined)
   );
 }
 
