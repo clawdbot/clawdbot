@@ -50,4 +50,28 @@ describe("Codex endpoint probe diagnostics", () => {
     expect(output).not.toContain(accessToken);
     expect(output).not.toContain(trailingDiagnostic);
   });
+
+  it("redacts colon-delimited credentials", async () => {
+    const apiKey = "super-secret-api-key-0123456789";
+    const request: EndpointRequest = async () => {
+      throw new Error(`Codex app-server rejected X-Api-Key: ${apiKey}`);
+    };
+    const tools = createCodexSupervisionTools({
+      getPluginConfig: () => ({
+        supervision: {
+          enabled: true,
+          endpoints: [{ id: "broken", transport: "stdio-proxy" }],
+        },
+      }),
+      senderIsOwner: true,
+      request,
+    });
+
+    const output = JSON.stringify(
+      await toolByName(tools, "codex_endpoint_probe").execute("probe", {}),
+    );
+
+    expect(output).toContain("X-Api-Key: <redacted>");
+    expect(output).not.toContain(apiKey);
+  });
 });

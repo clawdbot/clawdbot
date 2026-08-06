@@ -1105,12 +1105,16 @@ export function redactCodexAppServerDiagnostic(value: string): string {
   const redacted = compact
     .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, "$1<redacted>")
     .replace(
-      /("[a-z0-9_-]*(?:api_?key|authorization|token|access_token|refresh_token|client_secret|secret|password|cookie)"\s*:\s*")([^"]+)(")/gi,
+      /("[a-z0-9_-]*(?:api[-_]?key|authorization|token|access_token|refresh_token|client_secret|secret|password|cookie)"\s*:\s*")([^"]+)(")/gi,
       "$1<redacted>$3",
     )
     .replace(
-      /\b([a-z0-9_-]*(?:api_?key|authorization|access_token|refresh_token|client_secret|token|secret|password|cookie))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
+      /\b([a-z0-9_-]*(?:api[-_]?key|authorization|access_token|refresh_token|client_secret|token|secret|password|cookie))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
       "$1$2$3<redacted>$4",
+    )
+    .replace(
+      /\b([a-z0-9_-]*(?:api[-_]?key|authorization|access_token|refresh_token|client_secret|token|secret|password|cookie))(\s*:\s*)[^\r\n]+/gi,
+      "$1$2<redacted>",
     );
   return redacted.length > CODEX_APP_SERVER_DIAGNOSTIC_MAX
     ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_DIAGNOSTIC_MAX)}...`
