@@ -3532,6 +3532,71 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
   });
 
+  test("closes a tracked blocked tool span once without creating a duplicate", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: "run-blocked",
+      toolName: "exec",
+      toolCallId: "call-blocked",
+      sourceTimestampMs: 1_000,
+      trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
+    });
+    await emitTrustedAndFlush({
+      type: "tool.execution.blocked",
+      runId: "run-blocked",
+      toolName: "exec",
+      toolCallId: "call-blocked",
+      deniedReason: "tools.deny",
+      reason: "policy denied",
+      sourceTimestampMs: 1_250,
+      trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
+    });
+
+    const toolSpans = telemetryState.spans.filter(
+      (span) => span.name === "openclaw.tool.execution",
+    );
+    expect(toolSpans).toHaveLength(1);
+    expect(startedSpanOptions("openclaw.tool.execution")?.startTime).toBe(1_000);
+    expect(toolSpans[0]?.end).toHaveBeenCalledTimes(1);
+    expect(toolSpans[0]?.end).toHaveBeenCalledWith(1_250);
+  });
+
+  test("uses authoritative source timestamps for terminal-only tool spans", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.completed",
+      runId: "run-completed",
+      toolName: "read",
+      toolCallId: "call-completed",
+      durationMs: 250,
+      sourceTimestampMs: 5_000,
+    });
+    await emitTrustedAndFlush({
+      type: "tool.execution.error",
+      runId: "run-error",
+      toolName: "write",
+      toolCallId: "call-error",
+      durationMs: 500,
+      errorCategory: "test",
+      sourceTimestampMs: 7_000,
+    });
+
+    const toolSpanCalls = telemetryState.tracer.startSpan.mock.calls.filter(
+      (call) => call[0] === "openclaw.tool.execution",
+    );
+    const toolSpans = telemetryState.spans.filter(
+      (span) => span.name === "openclaw.tool.execution",
+    );
+    expect(toolSpanCalls).toHaveLength(2);
+    expect((toolSpanCalls[0]?.[1] as { startTime?: number } | undefined)?.startTime).toBe(4_750);
+    expect((toolSpanCalls[1]?.[1] as { startTime?: number } | undefined)?.startTime).toBe(6_500);
+    expect(toolSpans[0]?.end).toHaveBeenCalledWith(5_000);
+    expect(toolSpans[1]?.end).toHaveBeenCalledWith(7_000);
+  });
+
   test("exports model failover spans", async () => {
     await startOtelService({ traces: true });
 
@@ -3623,14 +3688,26 @@ describe("diagnostics-otel service", () => {
     expect(JSON.stringify(failoverOptions?.attributes)).not.toContain("Agent:qa:otel-trace-smoke");
   });
 
-  test("maps model call APIs to GenAI operation names and error type", async () => {
+  test("maps model call APIs and preserves zero usage on terminal spans", async () => {
     await startOtelService({ traces: true, metrics: true });
+    const zeroUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      total: 0,
+    };
 
     emitDiagnosticEvent({
       type: "model.call.completed",
       ...MODEL_CALL_FIXTURE,
       api: "openai-completions",
       durationMs: 80,
+      requestPayloadBytes: 0,
+      responseStreamBytes: 0,
+      timeToFirstByteMs: 0,
+      usage: zeroUsage,
     });
     emitDiagnosticEvent({
       type: "model.call.completed",
@@ -3641,7 +3718,7 @@ describe("diagnostics-otel service", () => {
       api: "google-generative-ai",
       durationMs: 90,
     });
-    await emitAndFlush({
+    emitDiagnosticEvent({
       type: "model.call.error",
       runId: "run-1",
       callId: "call-3",
@@ -3649,12 +3726,20 @@ describe("diagnostics-otel service", () => {
       api: "openai-responses",
       durationMs: 40,
       errorCategory: "TimeoutError",
+      usage: zeroUsage,
+    });
+    await emitAndFlush({
+      type: "model.call.completed",
+      ...MODEL_CALL_FIXTURE,
+      callId: "call-cache-only",
+      durationMs: 30,
+      usage: { cacheWrite: 7 },
     });
 
     const modelCallAttrs = telemetryState.tracer.startSpan.mock.calls
       .filter((call) => call[0] === "openclaw.model.call")
       .map((call) => (call[1] as { attributes?: Record<string, unknown> }).attributes);
-    expect(modelCallAttrs).toHaveLength(3);
+    expect(modelCallAttrs).toHaveLength(4);
     expect(modelCallAttrs[0]?.["gen_ai.system"]).toBe("openai");
     expect(modelCallAttrs[0]?.["gen_ai.request.model"]).toBe("gpt-5.4");
     expect(modelCallAttrs[0]?.["gen_ai.operation.name"]).toBe("text_completion");
@@ -3665,6 +3750,40 @@ describe("diagnostics-otel service", () => {
     expect(modelCallAttrs[2]?.["gen_ai.request.model"]).toBe("gpt-5.4");
     expect(modelCallAttrs[2]?.["gen_ai.operation.name"]).toBe("chat");
     expect(modelCallAttrs[2]?.["error.type"]).toBe("TimeoutError");
+    for (const attrs of [modelCallAttrs[0], modelCallAttrs[2]]) {
+      expect(attrs).toMatchObject({
+        "openclaw.model_call.usage.input_tokens": 0,
+        "openclaw.model_call.usage.output_tokens": 0,
+        "openclaw.model_call.usage.cache_read_input_tokens": 0,
+        "openclaw.model_call.usage.cache_creation_input_tokens": 0,
+        "openclaw.model_call.usage.reasoning_output_tokens": 0,
+        "openclaw.model_call.usage.prompt_tokens": 0,
+        "openclaw.model_call.usage.total_tokens": 0,
+        "gen_ai.usage.input_tokens": 0,
+        "gen_ai.usage.output_tokens": 0,
+        "gen_ai.usage.cache_read.input_tokens": 0,
+        "gen_ai.usage.cache_creation.input_tokens": 0,
+      });
+    }
+    for (const key of [
+      "openclaw.model_call.request_bytes",
+      "openclaw.model_call.response_bytes",
+      "openclaw.model_call.time_to_first_byte_ms",
+    ]) {
+      expect(modelCallAttrs[0]).not.toHaveProperty(key);
+    }
+    expect(
+      Object.keys(modelCallAttrs[1] ?? {}).filter(
+        (key) => key.startsWith("openclaw.model_call.usage.") || key.startsWith("gen_ai.usage."),
+      ),
+    ).toEqual([]);
+    expect(modelCallAttrs[3]).toMatchObject({
+      "openclaw.model_call.usage.cache_creation_input_tokens": 7,
+      "openclaw.model_call.usage.prompt_tokens": 7,
+      "gen_ai.usage.input_tokens": 7,
+      "gen_ai.usage.cache_creation.input_tokens": 7,
+    });
+    expect(modelCallAttrs[3]).not.toHaveProperty("openclaw.model_call.usage.input_tokens");
   });
 
   test("uses latest GenAI request and agent span shapes only when semconv opt-in is set", async () => {

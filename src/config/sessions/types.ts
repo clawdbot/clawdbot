@@ -324,11 +324,6 @@ export type SessionPostCompactionDelegate = {
   expectedRevision?: number;
 };
 
-export type PendingSkillSuggestion = {
-  skillName: string;
-  detectedAt: number;
-};
-
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -445,10 +440,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
     goal?: SessionGoal;
-    /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
-    pendingSkillSuggestion?: PendingSkillSuggestion;
-    /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
-    skillCaptureSignalHashes?: string[];
     /** Timestamp (ms) when the current sessionId first became active. */
     sessionStartedAt?: number;
     /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */

@@ -88,7 +88,7 @@ vi.mock("./doctor-plugin-manifests.js", () => ({
 }));
 
 vi.mock("./doctor-plugin-registry.js", () => ({
-  maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => config),
+  maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => ({ config })),
 }));
 
 vi.mock("./doctor-platform-notes.js", () => ({
@@ -129,6 +129,7 @@ vi.mock("./doctor-skills.js", () => ({
 }));
 
 vi.mock("./doctor-state-integrity.js", () => ({
+  collectWorkspaceBackupTip: vi.fn(() => null),
   noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
   noteWorkspaceBackupTip: vi.fn(),
 }));

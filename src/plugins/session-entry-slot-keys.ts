@@ -59,8 +59,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRuns",
   "restartRecoveryForceSafeTools",
   "goal",
-  "pendingSkillSuggestion",
-  "skillCaptureSignalHashes",
   "sessionStartedAt",
   "ambientTranscriptWatermarks",
   "lastInteractionAt",

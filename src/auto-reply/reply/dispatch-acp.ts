@@ -30,6 +30,7 @@ import {
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { cleanDeferredFinalText, shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
@@ -286,17 +287,14 @@ async function finalizeAcpTurnOutput(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   ttsAccountId?: string;
+  shouldDeferVisibleTextForTts: boolean;
   shouldEmitResolvedIdentityNotice: boolean;
 }): Promise<boolean> {
-  await params.delivery.settleVisibleText();
-  let queuedFinal =
-    params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
   const ttsMode = resolveConfiguredTtsMode(params.cfg, {
     agentId: params.agentId,
     channelId: params.ttsChannel,
     accountId: params.ttsAccountId,
   });
-  const accumulatedVisibleBlockText = params.delivery.getAccumulatedVisibleBlockText();
   const accumulatedBlockTtsText = params.delivery.getAccumulatedBlockTtsText();
   const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
@@ -308,9 +306,27 @@ async function finalizeAcpTurnOutput(params: {
   });
   const canAttemptFinalTts =
     ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
+  const shouldDeferVisibleTextForTts =
+    params.shouldDeferVisibleTextForTts &&
+    ttsMode === "final" &&
+    hasAccumulatedBlockText &&
+    canAttemptFinalTts;
+  const accumulatedVisibleBlockText = shouldDeferVisibleTextForTts
+    ? cleanDeferredFinalText(accumulatedBlockTtsText)
+    : params.delivery.getAccumulatedVisibleBlockText();
+  if (!shouldDeferVisibleTextForTts) {
+    await params.delivery.settleVisibleText();
+  }
+  let queuedFinal =
+    params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
 
-  let finalMediaDelivered = false;
-  if (ttsMode === "final" && hasAccumulatedBlockText && canAttemptFinalTts) {
+  let finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
+  if (
+    ttsMode === "final" &&
+    hasAccumulatedBlockText &&
+    canAttemptFinalTts &&
+    !finalMediaDelivered
+  ) {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
@@ -324,21 +340,27 @@ async function finalizeAcpTurnOutput(params: {
         accountId: params.ttsAccountId,
       });
       if (ttsSyntheticReply.mediaUrl) {
+        const finalTtsPayload = markReplyPayloadAsTtsSupplement(
+          shouldDeferVisibleTextForTts
+            ? {
+                ...ttsSyntheticReply,
+                text: accumulatedVisibleBlockText || undefined,
+                trustedLocalMedia: true,
+              }
+            : { ...ttsSyntheticReply, text: undefined, trustedLocalMedia: true },
+          accumulatedBlockTtsText,
+          shouldDeferVisibleTextForTts ? undefined : { visibleTextAlreadyDelivered: true },
+        );
+        const delivered = await params.delivery.deliver("final", finalTtsPayload);
+        queuedFinal = queuedFinal || delivered;
+        finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
+      } else if (shouldDeferVisibleTextForTts && ttsSyntheticReply.text?.trim()) {
         const delivered = await params.delivery.deliver(
           "final",
-          markReplyPayloadAsTtsSupplement(
-            {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockTtsText,
-              trustedLocalMedia: true,
-            },
-            accumulatedBlockTtsText,
-            { visibleTextAlreadyDelivered: true },
-          ),
+          { text: ttsSyntheticReply.text },
+          { skipTts: true },
         );
         queuedFinal = queuedFinal || delivered;
-        finalMediaDelivered = delivered;
       }
     } catch (err) {
       logVerbose(`dispatch-acp: accumulated ACP block TTS failed: ${formatErrorMessage(err)}`);
@@ -351,8 +373,11 @@ async function finalizeAcpTurnOutput(params: {
     ttsMode !== "all" &&
     accumulatedVisibleBlockText.trim().length > 0 &&
     !finalMediaDelivered &&
-    !params.delivery.hasDeliveredFinalReply() &&
-    (!params.delivery.hasDeliveredVisibleText() || params.delivery.hasFailedVisibleTextDelivery());
+    (shouldDeferVisibleTextForTts
+      ? !params.delivery.hasDeliveredAnswerFinalToUser()
+      : !params.delivery.hasDeliveredFinalReply() &&
+        (!params.delivery.hasDeliveredVisibleText() ||
+          params.delivery.hasFailedVisibleTextDelivery()));
   if (shouldDeliverTextFallback) {
     const delivered = await params.delivery.deliver(
       "final",
@@ -449,29 +474,6 @@ export async function tryDispatchAcpReply(params: {
         }
       : undefined;
 
-  let queuedFinal = false;
-  const delivery = createAcpDispatchDeliveryCoordinator({
-    cfg: params.cfg,
-    agentId: acpAgentId,
-    ctx: params.ctx,
-    dispatcher: params.dispatcher,
-    inboundAudio: params.inboundAudio,
-    sessionKey: canonicalSessionKey,
-    sessionTtsAuto: params.sessionTtsAuto,
-    ttsChannel: params.ttsChannel,
-    suppressUserDelivery: params.suppressUserDelivery,
-    suppressReplyLifecycle: params.suppressReplyLifecycle,
-    shouldRouteToOriginating: params.shouldRouteToOriginating,
-    originatingChannel: params.originatingChannel,
-    originatingTo: params.originatingTo,
-    originatingAccountId: params.originatingAccountId,
-    originatingThreadId: params.originatingThreadId,
-    originatingChatType: params.originatingChatType,
-    onReplyStart: params.onReplyStart,
-    abortSignal: params.abortSignal,
-    runId: params.runId,
-  });
-
   const identityPendingBeforeTurn = isSessionIdentityPending(
     resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
   );
@@ -508,6 +510,44 @@ export async function tryDispatchAcpReply(params: {
       : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
   const effectiveDispatchAccountId =
     explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
+  const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
+    cfg: params.cfg,
+    ttsAuto: params.sessionTtsAuto,
+    agentId: acpAgentId,
+    channelId: params.ttsChannel,
+    accountId: effectiveDispatchAccountId,
+    inboundAudio: params.inboundAudio,
+  });
+  let queuedFinal = false;
+  const delivery = createAcpDispatchDeliveryCoordinator({
+    cfg: params.cfg,
+    agentId: acpAgentId,
+    ctx: params.ctx,
+    dispatcher: params.dispatcher,
+    inboundAudio: params.inboundAudio,
+    sessionKey: canonicalSessionKey,
+    sessionTtsAuto: params.sessionTtsAuto,
+    ttsChannel: params.ttsChannel,
+    suppressUserDelivery: params.suppressUserDelivery,
+    suppressBlockUserDelivery: shouldDeferVisibleTextForTts,
+    suppressReplyLifecycle: params.suppressReplyLifecycle,
+    shouldRouteToOriginating: params.shouldRouteToOriginating,
+    originatingChannel: params.originatingChannel,
+    originatingTo: params.originatingTo,
+    originatingAccountId: params.originatingAccountId,
+    originatingThreadId: params.originatingThreadId,
+    originatingChatType: params.originatingChatType,
+    onReplyStart: params.onReplyStart,
+    abortSignal: params.abortSignal,
+    runId: params.runId,
+  });
+  const deliverDeferredTextFallback = async (): Promise<boolean> => {
+    if (!shouldDeferVisibleTextForTts || delivery.hasDeliveredAnswerFinalToUser()) {
+      return false;
+    }
+    const text = delivery.getAccumulatedVisibleBlockText();
+    return text.trim() ? await delivery.deliver("final", { text }, { skipTts: true }) : false;
+  };
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -773,8 +813,7 @@ export async function tryDispatchAcpReply(params: {
 
     await projector.flush(true);
     if (runtimeTurnWasCancelled || params.abortSignal?.aborted) {
-      // A cancelled runtime can return normally after the projector has already
-      // delivered partial output. Keep the bound transcript aligned with it.
+      queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
       await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
       queuedFinal = delivery.hasDeliveredFinalReply() || queuedFinal;
       const counts = params.dispatcher.getQueuedCounts();
@@ -794,6 +833,7 @@ export async function tryDispatchAcpReply(params: {
         sessionTtsAuto: params.sessionTtsAuto,
         ttsChannel: params.ttsChannel,
         ttsAccountId: effectiveDispatchAccountId,
+        shouldDeferVisibleTextForTts,
         shouldEmitResolvedIdentityNotice,
       })) || queuedFinal;
 
@@ -815,6 +855,7 @@ export async function tryDispatchAcpReply(params: {
     });
     emitAuditError(acpError);
     await projector.flush(true);
+    queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
     await maybeUnbindStaleBoundConversations({
       targetSessionKey: canonicalSessionKey,
       error: acpError,

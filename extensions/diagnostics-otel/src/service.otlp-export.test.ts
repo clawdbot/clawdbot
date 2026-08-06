@@ -556,6 +556,42 @@ test("propagates the exported model span across two OTLP services with one roote
   }
 }, 30_000);
 
+test("preserves explicit zero model-call usage through OTLP protobuf export", async () => {
+  const receiver = startLocalOtlpReceiver();
+  const port = await receiver.listen();
+  releasePreloadedOtelGlobals();
+  const { service, ctx } = await startOtelService({
+    endpoint: `http://127.0.0.1:${port}`,
+    traces: true,
+  });
+
+  try {
+    emit({
+      type: "model.call.completed",
+      runId: "run-zero-usage",
+      callId: "call-zero-usage",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      durationMs: 1,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
+    await waitForDiagnosticEventsDrained();
+    await service.stop?.(ctx);
+
+    expect(
+      receiver.capturedSpans.find((span) => span.name === "openclaw.model.call")?.attributes,
+    ).toMatchObject({
+      "openclaw.model_call.usage.input_tokens": 0,
+      "openclaw.model_call.usage.output_tokens": 0,
+      "openclaw.model_call.usage.prompt_tokens": 0,
+      "gen_ai.usage.input_tokens": 0,
+    });
+  } finally {
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 30_000);
+
 test("uses the real preloaded model span as the mid-turn propagation root", async () => {
   const { service, ctx } = await startOtelService({ traces: true });
   const outboundTraceparent = runModelCallAndCaptureTraceparent({
