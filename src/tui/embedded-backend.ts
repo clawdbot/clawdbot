@@ -29,7 +29,6 @@ import {
   buildConfiguredModelCatalog,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
@@ -101,6 +100,7 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
+import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import type {
   ChatSendOptions,
@@ -379,32 +379,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
+  private readonly preparedModelRuntime = new EmbeddedPreparedModelRuntimeHost();
   private unsubscribePluginApprovals?: () => void;
   private unsubscribeConfigWrites?: () => void;
-  private preparedModelRuntimePublicationTail: Promise<void> = Promise.resolve();
-  private preparedModelRuntimeReady: Promise<void> = Promise.resolve();
   // Resolves once the one-time session-key migration has run; store methods await it.
   private ready: Promise<void> = Promise.resolve();
-
-  private publishPreparedModelRuntime(config: OpenClawConfig): void {
-    const publication = this.preparedModelRuntimePublicationTail.then(async () => {
-      await refreshPreparedModelRuntimeSnapshots(config, { catalogMode: "static" });
-    });
-    // Later config writes must still be able to replace a failed generation. Keep the admission
-    // promise rejected for callers while allowing the serialized publication tail to recover.
-    this.preparedModelRuntimeReady = publication;
-    this.preparedModelRuntimePublicationTail = publication.catch(() => undefined);
-  }
-
-  private async waitForPreparedModelRuntime(): Promise<void> {
-    for (;;) {
-      const ready = this.preparedModelRuntimeReady;
-      await ready;
-      if (ready === this.preparedModelRuntimeReady) {
-        return;
-      }
-    }
-  }
 
   start() {
     if (this.unsubscribe) {
@@ -426,9 +405,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     const config = getRuntimeConfig();
     this.unsubscribeConfigWrites = registerConfigWriteListener((event) => {
-      this.publishPreparedModelRuntime(event.runtimeConfig);
+      this.preparedModelRuntime.publish(event.runtimeConfig);
     });
-    this.publishPreparedModelRuntime(config);
+    this.preparedModelRuntime.publish(config);
     // Local mode never runs gateway startup; canonicalize orphaned keys once here.
     this.ready = (async () => {
       const { runSessionStartupMigration } =
@@ -487,7 +466,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     await this.ready;
-    await this.waitForPreparedModelRuntime();
+    await this.preparedModelRuntime.waitUntilReady();
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
     const isQueueCommand = resolveTextCommand(opts.message)?.command.key === "queue";
@@ -1409,7 +1388,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (recheckPreparedRuntimeAtAdmission) {
         // A turn may have queued behind another local run while a config write published a new
         // generation. Recheck at actual model admission so it cannot use stale facts.
-        await this.waitForPreparedModelRuntime();
+        await this.preparedModelRuntime.waitUntilReady();
         if (params.controller.signal.aborted) {
           if (activeRun) {
             this.emitChatTerminal(params.runId, activeRun, "aborted");
