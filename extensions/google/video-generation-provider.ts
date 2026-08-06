@@ -1,6 +1,6 @@
 // Google provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
@@ -12,7 +12,6 @@ import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtim
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
@@ -37,12 +36,6 @@ const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
   return configured ? resolveGoogleGenerativeAiApiOrigin(configured) : undefined;
-}
-
-function assertGeneratedVideoBufferWithinLimit(buffer: Buffer, maxBytes: number): void {
-  if (buffer.length > maxBytes) {
-    throw new Error(`Google generated video download exceeds ${maxBytes} bytes`);
-  }
 }
 
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
@@ -219,7 +212,7 @@ async function downloadGeneratedVideoFromUri(params: {
   index: number;
   maxBytes: number;
   timeoutMs: number;
-}): Promise<GeneratedVideoAsset | undefined> {
+}) {
   const downloadUrl = resolveGoogleGeneratedVideoDownloadUrl({
     uri: params.uri,
     apiKey: params.apiKey,
@@ -540,25 +533,29 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         }
         operation = sdkOperation;
       }
-      const finalOperation = operation as { error?: unknown; name?: string };
+      const finalOperation = operation as Awaited<
+        ReturnType<GoogleGenAIClient["models"]["generateVideos"]>
+      >;
       if (finalOperation.error) {
         throw new Error(JSON.stringify(finalOperation.error));
       }
-      let generatedVideos = extractGeneratedVideos(operation);
-      if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
-        operation = await generateGoogleVideoViaRest({
-          baseUrl: restBaseUrl,
-          headers: authHeaders,
-          deadline,
-          model,
-          prompt: req.prompt,
-          durationSeconds,
-          aspectRatio,
-          resolution,
-        });
-        generatedVideos = extractGeneratedVideos(operation);
-      }
+      const generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0) {
+        const filteredReason = finalOperation.response?.raiMediaFilteredReasons
+          ?.map((reason) => normalizeOptionalString(reason))
+          .find((reason) => reason !== undefined);
+        const filteredCount = finalOperation.response?.raiMediaFilteredCount;
+        if (filteredReason) {
+          throw new Error(
+            `${GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE}: safety filter (${filteredReason})`,
+          );
+        }
+        if (typeof filteredCount === "number" && filteredCount > 0) {
+          const filteredLabel = filteredCount === 1 ? "video" : "videos";
+          throw new Error(
+            `${GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE}: safety filter (${filteredCount} ${filteredLabel})`,
+          );
+        }
         throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
       }
       const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
@@ -568,12 +565,14 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             | { videoBytes?: string; uri?: string; mimeType?: string }
             | undefined;
           if (inline?.videoBytes) {
+            if (estimateBase64DecodedBytes(inline.videoBytes) > maxVideoBytes) {
+              throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
+            }
             const canonicalVideo = canonicalizeBase64(inline.videoBytes);
             if (!canonicalVideo) {
               throw new Error("Google video generation returned malformed base64 video data");
             }
             const buffer = Buffer.from(canonicalVideo, "base64");
-            assertGeneratedVideoBufferWithinLimit(buffer, maxVideoBytes);
             return {
               buffer,
               mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",

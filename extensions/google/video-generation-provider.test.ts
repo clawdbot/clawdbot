@@ -1,4 +1,5 @@
 // Google tests cover video generation provider plugin behavior.
+import * as mediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -230,19 +231,22 @@ describe("google video generation provider", () => {
       source: "env",
       mode: "api-key",
     });
+    const videoBytes = Buffer.from("too-large").toString("base64");
     generateVideosMock.mockResolvedValue({
       done: true,
       response: {
         generatedVideos: [
           {
             video: {
-              videoBytes: Buffer.from("too-large").toString("base64"),
+              videoBytes,
               mimeType: "video/mp4",
             },
           },
         ],
       },
     });
+    const canonicalizeBase64 = vi.spyOn(mediaRuntime, "canonicalizeBase64");
+    const decodeBase64 = vi.spyOn(Buffer, "from");
 
     const provider = buildGoogleVideoGenerationProvider();
     await expect(
@@ -254,6 +258,39 @@ describe("google video generation provider", () => {
         durationSeconds: 3,
       }),
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+    expect(canonicalizeBase64).not.toHaveBeenCalled();
+    expect(decodeBase64).not.toHaveBeenCalledWith(videoBytes, "base64");
+  });
+
+  it("accepts inline video bytes exactly at the configured media cap", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: Buffer.from("a").toString("base64"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await buildGoogleVideoGenerationProvider().generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "One-byte video fixture",
+      cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      durationSeconds: 4,
+    });
+
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("a"));
   });
 
   it.each([
@@ -583,6 +620,100 @@ describe("google video generation provider", () => {
       }),
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
     expect(downloadMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "an explicit safety-filter reason",
+      response: {
+        generatedVideos: [],
+        raiMediaFilteredCount: 1,
+        raiMediaFilteredReasons: ["SAFETY"],
+      },
+      error: "Google video generation response missing generated videos: safety filter (SAFETY)",
+    },
+    {
+      name: "a safety-filter count without a reason",
+      response: { generatedVideos: [], raiMediaFilteredCount: 2 },
+      error: "Google video generation response missing generated videos: safety filter (2 videos)",
+    },
+    {
+      name: "blank safety reasons and one filtered video",
+      response: {
+        generatedVideos: [],
+        raiMediaFilteredCount: 1,
+        raiMediaFilteredReasons: ["  "],
+      },
+      error: "Google video generation response missing generated videos: safety filter (1 video)",
+    },
+    {
+      name: "a safety reason after blank entries",
+      response: {
+        generatedVideos: [],
+        raiMediaFilteredReasons: ["  ", "  PERSON_GENERATION  "],
+      },
+      error:
+        "Google video generation response missing generated videos: safety filter (PERSON_GENERATION)",
+    },
+    {
+      name: "an otherwise empty completed response",
+      response: { generatedVideos: [] },
+      error: "Google video generation response missing generated videos",
+    },
+  ])("never starts a second paid generation after $name", async ({ response, error }) => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      name: "operations/completed-once",
+      response,
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            done: true,
+            response: {
+              generateVideoResponse: {
+                generatedSamples: [
+                  {
+                    video: {
+                      videoBytes: Buffer.from("unwanted-second-generation").toString("base64"),
+                      mimeType: "video/mp4",
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await buildGoogleVideoGenerationProvider()
+      .generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "Do not repeat a completed paid video generation.",
+        cfg: {},
+        durationSeconds: 4,
+      })
+      .then(
+        () => ({ status: "fulfilled" as const }),
+        (cause: unknown) => ({
+          status: "rejected" as const,
+          message: cause instanceof Error ? cause.message : String(cause),
+        }),
+      );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(generateVideosMock).toHaveBeenCalledTimes(1);
+    expect(getVideosOperationMock).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ status: "rejected", message: error });
   });
 
   it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {
