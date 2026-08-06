@@ -81,14 +81,15 @@ enum GatewayDiscoveryPreferences {
     static func migrateLegacyUnboundDiscoveryRoute(_ currentRoot: [String: Any])
         -> (root: [String: Any], changed: Bool)
     {
+        let connectionMode = ConnectionModeResolver.resolve(root: currentRoot).mode
         guard let preferredStableID = self.preferredStableID(),
               self.preferredRouteBinding() == nil,
-              ConnectionModeResolver.resolve(root: currentRoot).mode == .remote,
               GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
         else {
             return (currentRoot, false)
         }
-        if self.isVerifiedTailscaleServeRoute(
+        if connectionMode == .remote,
+           self.isVerifiedTailscaleServeRoute(
             stableID: preferredStableID,
             root: currentRoot)
         {

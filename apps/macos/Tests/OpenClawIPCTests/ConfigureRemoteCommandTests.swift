@@ -170,12 +170,20 @@ struct ConfigureRemoteCommandTests {
         try FileManager().createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try initialData.write(to: configURL)
 
+        let defaultsSuite = "ConfigureRemoteCommandTests.direct.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: defaultsSuite))
+        defaults.set("bonjour|old-gateway", forKey: "gateway.preferredStableID")
+        defaults.set(
+            "remote:direct:wss://old-gateway.example",
+            forKey: "gateway.preferredStableIDRouteBinding.v1")
+        defer { defaults.removePersistentDomain(forName: defaultsSuite) }
+
         try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
             let output = try configureRemote(
                 .init(
                     directUrl: "ws://192.168.0.202:18789",
                     token: "test-token"), // pragma: allowlist secret
-                defaultsSuites: [])
+                defaultsSuites: [defaultsSuite])
 
             #expect(output.transport == "direct")
             #expect(output.remoteUrl == "ws://192.168.0.202:18789")
@@ -195,6 +203,8 @@ struct ConfigureRemoteCommandTests {
             #expect(remote["sshTarget"] == nil)
             #expect(remote["sshHostKeyPolicy"] == nil)
             #expect(remote["token"] as? String == "test-token") // pragma: allowlist secret
+            #expect(defaults.string(forKey: "gateway.preferredStableID") == nil)
+            #expect(defaults.string(forKey: "gateway.preferredStableIDRouteBinding.v1") == nil)
         }
     }
 

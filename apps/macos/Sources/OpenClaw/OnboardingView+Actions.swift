@@ -7,7 +7,6 @@ extension OnboardingView {
         if state.connectionMode != .local {
             resetGatewayBoundAIState()
         }
-        GatewayDiscoveryPreferences.retirePreferredRouteBeforeLeavingRemote(state: state)
         defaultsToLocalGateway = false
         state.connectionMode = .local
         preferredGatewayID = nil
@@ -18,7 +17,6 @@ extension OnboardingView {
 
     func selectUnconfiguredGateway() {
         resetGatewayBoundAIState()
-        GatewayDiscoveryPreferences.retirePreferredRouteBeforeLeavingRemote(state: state)
         defaultsToLocalGateway = false
         state.connectionMode = .unconfigured
         preferredGatewayID = nil

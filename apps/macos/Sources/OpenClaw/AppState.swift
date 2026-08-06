@@ -296,6 +296,13 @@ final class AppState {
     }
 
     var connectionMode: ConnectionMode {
+        willSet {
+            if self.connectionMode == .remote, newValue != .remote {
+                // Route ownership is still observable until the mode changes. Retire automatic
+                // Direct authority here so every settings and config-driven exit is covered.
+                GatewayDiscoveryPreferences.retirePreferredRouteBeforeLeavingRemote(state: self)
+            }
+        }
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
             if oldValue != self.connectionMode {

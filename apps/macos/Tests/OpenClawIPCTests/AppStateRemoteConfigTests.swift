@@ -215,6 +215,29 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `legacy direct route is retired while gateway mode is inactive`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "local",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://\(tailnetHost)",
+                ],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID("tailscale-serve|\(tailnetHost)")
+
+        let migration = GatewayDiscoveryPreferences.migrateLegacyUnboundDiscoveryRoute(root)
+
+        #expect(migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "ws://127.0.0.1:18789")
+    }
+
+    @Test
     func `invalid remote drafts cannot be persisted for a configured gateway probe`() {
         let base = AppState.GatewayConfigSyncDraft(
             connectionMode: .remote,

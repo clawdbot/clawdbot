@@ -249,6 +249,11 @@ private func saveConfigRoot(_ root: [String: Any], to url: URL) throws {
 private func writeAppDefaults(opts: ConfigureRemoteOptions, target: String, suites: [String]) {
     for suite in suites {
         guard let defaults = UserDefaults(suiteName: suite) else { continue }
+        // CLI configuration is an explicit operator route, so it must not inherit automatic
+        // discovery ownership that would make startup migrate the newly written endpoint.
+        defaults.removeObject(forKey: "gateway.preferredStableID")
+        defaults.removeObject(forKey: "bridge.preferredStableID")
+        defaults.removeObject(forKey: "gateway.preferredStableIDRouteBinding.v1")
         defaults.set("remote", forKey: "openclaw.connectionMode")
         setDefaultString(defaults, key: "openclaw.remoteTarget", value: target)
         defaults.set(true, forKey: "openclaw.onboardingSeen")
