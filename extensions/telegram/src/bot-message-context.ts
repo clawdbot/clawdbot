@@ -183,6 +183,7 @@ export const buildTelegramMessageContext = async ({
 
   const syncCachedTopicName = async (params: {
     threadId: number;
+    accountId?: string;
     allowReplyCreationFallback: boolean;
   }): Promise<{ explicitName?: string; name?: string }> => {
     const topicNameCacheScope = resolveTopicNameCacheScope(
@@ -191,7 +192,7 @@ export const buildTelegramMessageContext = async ({
         agentId: account.accountId,
         sessionRuntime,
       }),
-      account.accountId,
+      params.accountId,
     );
     const ftCreated = msg.forum_topic_created;
     const ftEdited = msg.forum_topic_edited;
@@ -393,6 +394,7 @@ export const buildTelegramMessageContext = async ({
   if (isDirectTopic && useDmThreadSession && getOptionalTelegramRuntime() && dmThreadId != null) {
     const directTopic = await syncCachedTopicName({
       threadId: dmThreadId,
+      accountId: account.accountId,
       allowReplyCreationFallback: false,
     });
     topicName = directTopic.name;

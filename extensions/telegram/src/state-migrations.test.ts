@@ -198,7 +198,7 @@ describe("telegram state migrations", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const storePath = resolveStorePath(undefined, { env, agentId: "ops" });
     const persistedPath = resolveTopicNameCachePath(storePath);
-    const namespace = resolveTopicNameCacheNamespace(resolveTopicNameCacheScope(storePath, "ops"));
+    const namespace = resolveTopicNameCacheNamespace(resolveTopicNameCacheScope(storePath));
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
       await writeFile(
@@ -264,7 +264,7 @@ describe("telegram state migrations", () => {
     const persistedPath = resolveTopicNameCachePath(legacyStorePath);
     const defaultAccountStorePath = resolveStorePath(undefined, { env, agentId: "ops" });
     const namespace = resolveTopicNameCacheNamespace(
-      resolveTopicNameCacheScope(defaultAccountStorePath, "ops"),
+      resolveTopicNameCacheScope(defaultAccountStorePath),
     );
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
@@ -319,49 +319,6 @@ describe("telegram state migrations", () => {
           },
         },
       ]);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("imports an ambiguous fixed-store topic cache only for the default account", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-    const storePath = path.join(dir, "shared-sessions.json");
-    const persistedPath = resolveTopicNameCachePath(storePath);
-    const cfg = {
-      session: { store: storePath },
-      channels: {
-        telegram: {
-          defaultAccount: "work",
-          accounts: {
-            personal: { botToken: "123456:personal" },
-            work: { botToken: "123456:work" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    try {
-      await mkdir(path.dirname(persistedPath), { recursive: true });
-      await writeFile(
-        persistedPath,
-        JSON.stringify({
-          "7:44": { name: "Ambiguous legacy topic", updatedAt: 1736380002 },
-        }),
-      );
-
-      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
-      const topicNamePlans = plans.filter(
-        (plan) =>
-          plan.kind === "plugin-state-import" &&
-          plan.label === "Telegram forum topic-name cache" &&
-          plan.sourcePath === persistedPath,
-      );
-
-      expect(topicNamePlans).toHaveLength(1);
-      expect(topicNamePlans[0]).toMatchObject({
-        namespace: resolveTopicNameCacheNamespace(resolveTopicNameCacheScope(storePath, "work")),
-      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

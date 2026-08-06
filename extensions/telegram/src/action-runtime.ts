@@ -154,11 +154,10 @@ function readTelegramThreadId(params: Record<string, unknown>) {
 }
 
 function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
-  const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
   const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: resolvedAccountId,
+    agentId: accountId ?? resolveDefaultTelegramAccountId(cfg),
   });
-  return resolveTopicNameCacheScope(storePath, resolvedAccountId);
+  return resolveTopicNameCacheScope(storePath);
 }
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {

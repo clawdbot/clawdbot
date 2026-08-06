@@ -411,10 +411,9 @@ function detectTelegramThreadBindingLegacyStateMigration(params: {
 function topicNameCacheImportSource(params: {
   sourceStorePath: string;
   targetStorePath?: string;
-  targetAccountId: string;
 }): { sourcePath: string; namespace: string } {
   const targetStorePath = params.targetStorePath ?? params.sourceStorePath;
-  const scope = resolveTopicNameCacheScope(targetStorePath, params.targetAccountId);
+  const scope = resolveTopicNameCacheScope(targetStorePath);
   return {
     sourcePath: resolveTopicNameCachePath(params.sourceStorePath),
     namespace: resolveTopicNameCacheNamespace(scope),
@@ -426,22 +425,12 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const defaultAccountId = resolveDefaultTelegramAccountId(params.cfg);
-  // A fixed session.store path was previously shared by all Telegram accounts.
-  // Its legacy cache has no account identity, so import it only into the default
-  // account instead of copying potentially wrong topic names to every account.
-  const accountSources = [
-    defaultAccountId,
-    ...listTelegramAccountIds(params.cfg).filter((accountId) => accountId !== defaultAccountId),
-  ].map((accountId) => {
+  const accountSources = listTelegramAccountIds(params.cfg).map((accountId) => {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       env: params.env,
       agentId: accountId,
     });
-    return topicNameCacheImportSource({
-      sourceStorePath: storePath,
-      targetAccountId: accountId,
-    });
+    return topicNameCacheImportSource({ sourceStorePath: storePath });
   });
   const defaultStorePath = resolveAgentSessionStorePath({
     ...params,
@@ -450,30 +439,21 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
   const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const defaultAccountStorePath = resolveStorePath(params.cfg.session?.store, {
     env: params.env,
-    agentId: defaultAccountId,
+    agentId: resolveDefaultTelegramAccountId(params.cfg),
   });
   const legacyStorePath = resolveLegacySessionStorePath(params);
-  const sourcesByPath = new Map(
+  const sourcesByKey = new Map(
     [
       ...accountSources,
-      topicNameCacheImportSource({
-        sourceStorePath: defaultStorePath,
-        targetStorePath: defaultAccountStorePath,
-        targetAccountId: defaultAccountId,
-      }),
-      topicNameCacheImportSource({
-        sourceStorePath: legacyMainStorePath,
-        targetStorePath: defaultAccountStorePath,
-        targetAccountId: defaultAccountId,
-      }),
+      topicNameCacheImportSource({ sourceStorePath: defaultStorePath }),
+      topicNameCacheImportSource({ sourceStorePath: legacyMainStorePath }),
       topicNameCacheImportSource({
         sourceStorePath: legacyStorePath,
         targetStorePath: defaultAccountStorePath,
-        targetAccountId: defaultAccountId,
       }),
-    ].map((source) => [source.sourcePath, source] as const),
+    ].map((source) => [`${source.sourcePath}\0${source.namespace}`, source] as const),
   );
-  return [...sourcesByPath.values()].flatMap((source) => {
+  return [...sourcesByKey.values()].flatMap((source) => {
     if (!fileExists(source.sourcePath)) {
       return [];
     }
