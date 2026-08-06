@@ -3,9 +3,19 @@ import { PassThrough, Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installParentDeathWatchLinux,
+  readProcStat as parseProcStat,
   runNativeHookRelayCli,
   runNativeHookRelayCliFromArgv,
 } from "./native-hook-relay-cli.js";
+
+const { mockReadFileSync } = vi.hoisted(() => ({
+  mockReadFileSync: vi.fn(),
+}));
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return { ...actual, readFileSync: mockReadFileSync };
+});
 
 function createReadableTextStream(text: string): NodeJS.ReadableStream {
   return Readable.from([text]);
@@ -676,6 +686,11 @@ describe("parent death watch", () => {
   const PARENT_START_TIME = 12345;
   const SELF_START_TIME = 67890;
 
+  type MockProcStatResult =
+    | { status: "present"; startTime: number; ppid: number }
+    | { status: "missing" }
+    | { status: "unreadable" };
+
   function makeProcStat(
     pid: number,
     ppid: number,
@@ -702,7 +717,7 @@ describe("parent death watch", () => {
     const parentAlive = opts.parentAlive ?? true;
     const parentStartTime = opts.parentStartTime ?? PARENT_START_TIME;
     const selfPpid = opts.selfPpid ?? PARENT_PID;
-    return vi.fn((pid: number) => {
+    return vi.fn<(pid: number) => MockProcStatResult>((pid) => {
       if (pid === PARENT_PID) {
         if (!parentAlive) {
           return makeMissing();
@@ -957,5 +972,73 @@ describe("parent death watch", () => {
     );
 
     expect(setIntervalSpy).not.toHaveBeenCalled();
+  });
+
+  describe("readProcStat field validation", () => {
+    beforeEach(() => {
+      mockReadFileSync.mockReset();
+    });
+
+    it("returns unreadable when proc stat has no closing paren", () => {
+      // Missing ")" makes the comm field unparseable.
+      mockReadFileSync.mockReturnValue(
+        "1234 (comm S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23",
+      );
+      expect(parseProcStat(1234)).toEqual({ status: "unreadable" });
+    });
+
+    it("returns unreadable when proc stat has too few fields", () => {
+      // Only 5 fields after comm — not enough for ppid (index 1) and
+      // starttime (index 19).
+      mockReadFileSync.mockReturnValue("1234 (comm) S 1 2 3");
+      expect(parseProcStat(1234)).toEqual({ status: "unreadable" });
+    });
+
+    it("returns unreadable when ppid is non-numeric", () => {
+      const fields = Array(25).fill("0");
+      fields[0] = "abc";
+      mockReadFileSync.mockReturnValue(`1234 (comm) S ${fields.join(" ")}`);
+      expect(parseProcStat(1234)).toEqual({ status: "unreadable" });
+    });
+
+    it("returns unreadable when starttime is non-numeric", () => {
+      const fields = Array(25).fill("0");
+      fields[18] = "xyz";
+      mockReadFileSync.mockReturnValue(`1234 (comm) S ${fields.join(" ")}`);
+      expect(parseProcStat(1234)).toEqual({ status: "unreadable" });
+    });
+
+    it("returns unreadable when starttime is negative", () => {
+      const fields = Array(25).fill("0");
+      fields[18] = "-1";
+      mockReadFileSync.mockReturnValue(`1234 (comm) S ${fields.join(" ")}`);
+      expect(parseProcStat(1234)).toEqual({ status: "unreadable" });
+    });
+
+    it("returns present with valid proc stat fields", () => {
+      const fields = Array(25).fill("0");
+      fields[0] = "1";
+      fields[18] = "12345";
+      mockReadFileSync.mockReturnValue(`1234 (comm) S ${fields.join(" ")}`);
+      expect(parseProcStat(1234)).toEqual({ status: "present", ppid: 1, startTime: 12345 });
+    });
+
+    it("returns missing for ENOENT errors", () => {
+      const err = new Error("ENOENT") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      mockReadFileSync.mockImplementation(() => {
+        throw err;
+      });
+      expect(parseProcStat(99999)).toEqual({ status: "missing" });
+    });
+
+    it("returns unreadable for non-ENOENT errors", () => {
+      const err = new Error("EACCES") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      mockReadFileSync.mockImplementation(() => {
+        throw err;
+      });
+      expect(parseProcStat(1234)).toEqual({ status: "unreadable" });
+    });
   });
 });

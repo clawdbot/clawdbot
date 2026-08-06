@@ -103,7 +103,7 @@ type ProcStatResult =
  * - "unreadable" — the entry exists but cannot be read or parsed (transient
  *   I/O, EACCES, malformed content). The caller should retry, not exit.
  */
-function readProcStat(pid: number): ProcStatResult {
+export function readProcStat(pid: number): ProcStatResult {
   try {
     const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
     // /proc/[pid]/stat: pid (comm) state ppid ... starttime
@@ -114,10 +114,19 @@ function readProcStat(pid: number): ProcStatResult {
       return { status: "unreadable" };
     }
     const fields = raw.slice(closeParen + 2).split(" ");
-    // field index 1 after ")" is ppid
+    // Validate field count — need at least 20 fields after comm for
+    // ppid (index 1) and starttime (index 19).
+    if (fields.length <= 19) {
+      return { status: "unreadable" };
+    }
     const ppid = Number(fields[1]);
-    // field index 19 after ")" is starttime (22nd field overall)
     const startTime = Number(fields[19]);
+    // Number() of an undefined or non-numeric entry produces NaN.
+    // NaN !== NaN in the poll loop would take the PID-reuse branch
+    // and exit a live relay. Reject non-numeric field values.
+    if (!Number.isFinite(ppid) || !Number.isFinite(startTime) || startTime < 0) {
+      return { status: "unreadable" };
+    }
     return { status: "present", startTime, ppid };
   } catch (error) {
     // ENOENT means the /proc/[pid] directory is gone — the process exited.
