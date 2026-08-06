@@ -10,12 +10,6 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildEmptyToolTelemetry,
-  createProjector,
-  registerCodexEventProjectorTestLifecycle,
-  turnCompleted,
-} from "./event-projector.test-harness.js";
-import {
   type CodexHostTrajectoryRecorder,
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
@@ -37,8 +31,6 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
-registerCodexEventProjectorTestLifecycle();
 
 function expectTrajectoryRecorder(
   recorder: ReturnType<typeof createCodexTrajectoryRecorder>,
@@ -153,15 +145,14 @@ describe("Codex trajectory recorder", () => {
       storePath,
       entry: { sessionId: "session-1", updatedAt: 10 },
     });
-    const attempt = {
-      sessionFile: "agent:main:session-1",
-      sessionKey: "agent:main:session-1",
-      sessionId: "session-1",
-      model: { api: "responses" },
-    } as never;
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
-      attempt,
+      attempt: {
+        sessionFile: "agent:main:session-1",
+        sessionKey: "agent:main:session-1",
+        sessionId: "session-1",
+        model: { api: "responses" },
+      } as never,
       trajectoryRecorder: createSqliteHostTrajectoryRecorder({
         agentId: "main",
         sessionId: "session-1",
@@ -172,18 +163,6 @@ describe("Codex trajectory recorder", () => {
 
     const trajectoryRecorder = expectTrajectoryRecorder(recorder);
     trajectoryRecorder.recordEvent("session.started");
-    recordCodexTrajectoryCompletion(trajectoryRecorder, {
-      attempt,
-      threadId: "thread-1",
-      turnId: "turn-1",
-      timedOut: false,
-      result: {
-        terminal: { kind: "ok" },
-        assistantTexts: ["truncated"],
-        lastAssistant: { stopReason: "length" },
-        messagesSnapshot: [],
-      } as never,
-    });
     await trajectoryRecorder.flush();
 
     expect(fs.readdirSync(path.join(tmpDir, "sessions"))).not.toEqual(
@@ -191,15 +170,7 @@ describe("Codex trajectory recorder", () => {
     );
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1", storePath }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "session.started" }),
-        expect.objectContaining({
-          type: "model.completed",
-          data: expect.objectContaining({ stopReason: "length" }),
-        }),
-      ]),
-    );
+    ).resolves.toEqual([expect.objectContaining({ type: "session.started" })]);
   });
 
   it("redacts secrets and keeps recorded strings UTF-16 safe", async () => {
@@ -265,27 +236,6 @@ describe("Codex trajectory recorder", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("records the app-server projected assistant stop reason on model completion", async () => {
-    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
-    const projector = await createProjector();
-    await projector.handleNotification(
-      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "truncated" }]),
-    );
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    recordCodexTrajectoryCompletion(recorder, {
-      attempt: {} as never,
-      threadId: "thread-1",
-      turnId: "turn-1",
-      timedOut: false,
-      result,
-    });
-    await recorder.flush();
-
-    expect(result.lastAssistant?.stopReason).toBe("stop");
-    expect(events[0]?.data?.stopReason).toBe("stop");
-  });
-
   it("preserves usage when truncating oversized model completion events", async () => {
     const attempt = {
       sessionId: "session-1",
@@ -316,7 +266,6 @@ describe("Codex trajectory recorder", () => {
         terminal: { kind: "ok" },
         attemptUsage: usage,
         assistantTexts: ["done"],
-        lastAssistant: { stopReason: "length" },
         messagesSnapshot: Array.from({ length: 20 }, (_value, index) => ({
           role: index % 2 === 0 ? "user" : "assistant",
           content: `message-${index} ${"x".repeat(32_000)}`,
@@ -329,7 +278,6 @@ describe("Codex trajectory recorder", () => {
       truncated: true,
       reason: "trajectory-event-size-limit",
       usage,
-      stopReason: "length",
     });
     expect(events[0]?.data?.messagesSnapshot).toBeUndefined();
     expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");

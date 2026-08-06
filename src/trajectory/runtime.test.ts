@@ -401,6 +401,7 @@ describe("trajectory runtime", () => {
     runtimeRecorder.recordEvent("model.completed", {
       usage: oversizedUsage,
       promptCache,
+      stopReason: "length",
       messagesSnapshot: [{ role: "user", content: "x".repeat(32_000) }],
     });
 
@@ -410,6 +411,7 @@ describe("trajectory runtime", () => {
       truncated: true,
       reason: "trajectory-event-size-limit",
       promptCache,
+      stopReason: "length",
     });
     expect(parsed.data.usage).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(

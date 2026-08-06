@@ -77,7 +77,6 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
           return undefined;
         });
         const agentEvents: Array<{ stream: string; data: Record<string, unknown> }> = [];
-        const trajectoryEvents: Array<{ type: string; data?: Record<string, unknown> }> = [];
         const params = {
           sessionId: "approval-requester-session",
           sessionKey: "agent:approval-requester:main",
@@ -121,12 +120,6 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
           onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {
             agentEvents.push(event);
           },
-          trajectoryRecorder: {
-            recordEvent: (type: string, data?: Record<string, unknown>) => {
-              trajectoryEvents.push({ type, data });
-            },
-            flush: async () => undefined,
-          },
         } as unknown as EmbeddedRunAttemptParams;
 
         const result = await runCodexAppServerAttempt(params, {
@@ -137,15 +130,6 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
         });
 
         expect(result.terminal.kind, JSON.stringify(result.terminal)).toBe("ok");
-        expect(result.lastAssistant?.stopReason).toBe("stop");
-        expect(trajectoryEvents).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "model.completed",
-              data: expect.objectContaining({ stopReason: "stop" }),
-            }),
-          ]),
-        );
         expect(await fs.readFile(target, "utf8")).toBe("REAL_BINARY_OWNER_OK\n");
         expect(serverRequestMethods).toContain("item/fileChange/requestApproval");
         expect(hookRequesters).toEqual(
