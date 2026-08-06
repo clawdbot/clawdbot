@@ -50,6 +50,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolPolicyVersion",
   "inheritedToolDeny",
   "inheritedToolAllow",
+  "lifecycleRunId",
   "mainRestartRecovery",
   "subagentRecovery",
   "pluginOwnerId",

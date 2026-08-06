@@ -21,7 +21,7 @@ export type RestartRecoveryParams = {
   entry: SubagentRunRecord;
   now: number;
   gatewayRuntime: GatewayRecoveryRuntime | undefined;
-  isCurrent: () => boolean;
+  isCurrent: (runId: string, entry: SubagentRunRecord) => boolean;
   abandonLaunch: ReturnType<
     typeof createSubagentRunManager
   >["abandonSubagentRestartRecoveryLaunch"];

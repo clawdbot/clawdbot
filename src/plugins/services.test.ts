@@ -17,6 +17,11 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import {
+  emitTrustedDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -142,6 +147,7 @@ function createTrackingService(
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticEventsForTest();
     resetPluginRuntimeStateForTest();
   });
 
@@ -163,6 +169,82 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("drains producer diagnostics before exporters stop and propagates exporter failures", async () => {
+    const order: string[] = [];
+    const producerError = new Error("producer stop failed");
+    const exporterError = new Error("exporter stop failed");
+    let unsubscribe: () => void = () => undefined;
+    const registry = createRegistry(
+      [
+        {
+          id: "producer",
+          start: () => undefined,
+          stop: () => {
+            order.push("producer");
+            emitTrustedDiagnosticEvent({
+              type: "log.record",
+              level: "INFO",
+              message: "queued during producer shutdown",
+            });
+            throw producerError;
+          },
+        },
+      ],
+      "plugin:test",
+      "workspace",
+    );
+    registry.services.push(
+      ...createRegistry(
+        [
+          {
+            id: "diagnostics-prometheus",
+            start: () => undefined,
+            stop: () => {
+              order.push("prometheus");
+            },
+          },
+        ],
+        "diagnostics-prometheus",
+        "bundled",
+      ).services,
+      ...createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start: (ctx) => {
+              unsubscribe = ctx.internalDiagnostics!.onEvent((event) => {
+                if (event.type === "log.record") {
+                  order.push("event");
+                }
+              });
+            },
+            stop: () => {
+              order.push("otel");
+              unsubscribe();
+              throw exporterError;
+            },
+          },
+        ],
+        "diagnostics-otel",
+        "bundled",
+      ).services,
+    );
+
+    const handle = await startPluginServices({
+      registry,
+      config: createServiceConfig(),
+    });
+
+    await expect(handle.stop()).rejects.toBe(exporterError);
+    await waitForDiagnosticEventsDrained();
+
+    expect(order).toEqual(["producer", "event", "otel", "prometheus"]);
+    expect(mockedLogger.warn.mock.calls).toEqual([
+      ["plugin service stop failed (producer): Error: producer stop failed"],
+      ["plugin service stop failed (diagnostics-otel): Error: exporter stop failed"],
+    ]);
   });
 
   it("rolls back partially started services before starting their siblings", async () => {
@@ -474,10 +556,15 @@ describe("startPluginServices", () => {
     await handle.stop();
   });
 
-  it("logs start/stop failures and continues", async () => {
+  it("attempts every ordinary service stop and preserves warn-and-continue failures", async () => {
     const stopOk = vi.fn();
-    const stopThrows = vi.fn(() => {
-      throw new Error("stop failed");
+    const firstError = new Error("first stop failed");
+    const secondError = new Error("second stop failed");
+    const stopFirst = vi.fn(() => {
+      throw firstError;
+    });
+    const stopSecond = vi.fn(() => {
+      throw secondError;
     });
 
     const handle = await startTrackingServices({
@@ -486,12 +573,13 @@ describe("startPluginServices", () => {
           failOnStart: true,
           stopSpy: vi.fn(),
         }),
+        createTrackingService("service-stop-first", { stopSpy: stopFirst }),
         createTrackingService("service-ok", { stopSpy: stopOk }),
-        createTrackingService("service-stop-fail", { stopSpy: stopThrows }),
+        createTrackingService("service-stop-second", { stopSpy: stopSecond }),
       ],
     });
 
-    await handle.stop();
+    await expect(handle.stop()).resolves.toBeUndefined();
 
     expect(mockedLogger.error.mock.calls).toEqual([
       [
@@ -500,10 +588,12 @@ describe("startPluginServices", () => {
     ]);
     expect(requireLoggerErrorMessage()).not.toContain("\n");
     expect(mockedLogger.warn.mock.calls).toEqual([
-      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
+      ["plugin service stop failed (service-stop-second): Error: second stop failed"],
+      ["plugin service stop failed (service-stop-first): Error: first stop failed"],
     ]);
     expect(stopOk).toHaveBeenCalledOnce();
-    expect(stopThrows).toHaveBeenCalledOnce();
+    expect(stopFirst).toHaveBeenCalledOnce();
+    expect(stopSecond).toHaveBeenCalledOnce();
   });
 
   it("continues starting siblings when rollback also fails", async () => {
@@ -533,6 +623,41 @@ describe("startPluginServices", () => {
 
     await handle.stop();
     expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("keeps diagnostics rollback detail visible beside the host startup failure", async () => {
+    const startupError = new Error("SDK startup failed");
+    const rollbackError = new Error("SDK rollback failed");
+
+    await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start: (ctx) => {
+              ctx.logger.error(
+                "diagnostics-otel: SDK startup rollback cleanup failed: Error: SDK rollback failed",
+              );
+              throw new AggregateError(
+                [startupError, rollbackError],
+                "diagnostics-otel startup failed and rollback cleanup failed",
+                { cause: startupError },
+              );
+            },
+          },
+        ],
+        "diagnostics-otel",
+        "bundled",
+      ),
+      config: createServiceConfig(),
+    });
+
+    expect(mockedLogger.error.mock.calls).toEqual([
+      ["diagnostics-otel: SDK startup rollback cleanup failed: Error: SDK rollback failed"],
+      [
+        "plugin service failed (diagnostics-otel, plugin=diagnostics-otel, root=/plugins/test-plugin): diagnostics-otel startup failed and rollback cleanup failed",
+      ],
+    ]);
   });
 
   it("emits per-service startup trace spans and summary", async () => {
@@ -662,6 +787,7 @@ describe("startPluginServices", () => {
 
     expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(contexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf("function");
 
     const prometheusContexts: OpenClawPluginServiceContext[] = [];
     const prometheusService = createTrackingService("diagnostics-prometheus", {
@@ -674,6 +800,9 @@ describe("startPluginServices", () => {
 
     expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(prometheusContexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf(
+      "function",
+    );
 
     const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
     const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
@@ -691,6 +820,9 @@ describe("startPluginServices", () => {
 
     expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(
+      officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
+    ).toBeTypeOf("function");
 
     const officialInstallContexts: OpenClawPluginServiceContext[] = [];
     const officialInstallService = createTrackingService("diagnostics-prometheus", {
@@ -703,6 +835,9 @@ describe("startPluginServices", () => {
 
     expect(officialInstallContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(officialInstallContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+    expect(
+      officialInstallContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
+    ).toBeTypeOf("function");
 
     const untrustedContexts: OpenClawPluginServiceContext[] = [];
     const untrustedService = createTrackingService("diagnostics-otel", {

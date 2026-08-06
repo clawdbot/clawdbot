@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   claimSessionSkillCaptureSignals,
@@ -14,6 +15,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { autoApplySkillProposal } from "../workshop/auto-apply.js";
 import { resolveSkillWorkshopConfig } from "../workshop/config.js";
+import { selectCurrentSkillTurnMessages } from "../workshop/experience-review-prompt.js";
 import { stripProposalFrontmatterForSkill } from "../workshop/frontmatter.js";
 import {
   inspectSkillProposal,
@@ -91,31 +93,24 @@ function readToolCallAction(value: unknown): string | undefined {
       return undefined;
     }
   }
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
+  if (!isRecord(input)) {
     return undefined;
   }
-  const action = (input as { action?: unknown }).action;
+  const action = input.action;
   return typeof action === "string" ? action.trim().toLowerCase() : undefined;
 }
 
-function isSkillWorkshopMutationBlock(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function isSkillWorkshopMutationBlock(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) {
     return false;
   }
-  const block = value as {
-    type?: unknown;
-    name?: unknown;
-    arguments?: unknown;
-    input?: unknown;
-    args?: unknown;
-  };
-  if (!TOOL_CALL_BLOCK_TYPES.has(String(block.type))) {
+  if (!TOOL_CALL_BLOCK_TYPES.has(String(value.type))) {
     return false;
   }
-  if (typeof block.name !== "string" || block.name.trim().toLowerCase() !== "skill_workshop") {
+  if (typeof value.name !== "string" || value.name.trim().toLowerCase() !== "skill_workshop") {
     return false;
   }
-  const action = readToolCallAction(block.arguments ?? block.input ?? block.args);
+  const action = readToolCallAction(value.arguments ?? value.input ?? value.args);
   return action ? SKILL_WORKSHOP_MUTATING_ACTIONS.has(action) : false;
 }
 
@@ -123,19 +118,16 @@ function hasUnfailedSkillWorkshopMutationCall(messages: readonly unknown[]): boo
   const callIds = new Set<string>();
   let hasUnidentifiedCall = false;
   for (const message of messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
+    if (!isRecord(message)) {
       continue;
     }
-    const content = (message as { content?: unknown }).content;
+    const content = message.content;
     const blocks = Array.isArray(content) ? content : [content];
     for (const block of blocks) {
       if (!isSkillWorkshopMutationBlock(block)) {
         continue;
       }
-      const id =
-        block && typeof block === "object" && !Array.isArray(block)
-          ? (block as { id?: unknown }).id
-          : undefined;
+      const id = block.id;
       if (typeof id === "string" && id) {
         callIds.add(id);
       } else {
@@ -147,34 +139,18 @@ function hasUnfailedSkillWorkshopMutationCall(messages: readonly unknown[]): boo
     return true;
   }
   for (const message of messages) {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
+    if (!isRecord(message)) {
       continue;
     }
-    const result = message as { role?: unknown; toolCallId?: unknown; isError?: unknown };
     if (
-      result.role === "toolResult" &&
-      result.isError === true &&
-      typeof result.toolCallId === "string"
+      message.role === "toolResult" &&
+      message.isError === true &&
+      typeof message.toolCallId === "string"
     ) {
-      callIds.delete(result.toolCallId);
+      callIds.delete(message.toolCallId);
     }
   }
   return callIds.size > 0;
-}
-
-function currentTurnMessages(messages: readonly unknown[]): readonly unknown[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (
-      message &&
-      typeof message === "object" &&
-      !Array.isArray(message) &&
-      (message as { role?: unknown }).role === "user"
-    ) {
-      return messages.slice(index);
-    }
-  }
-  return messages;
 }
 
 function fingerprintInstructions(instructions: readonly string[]): string {
@@ -239,7 +215,7 @@ export async function runSkillResearchAutoCapture(params: {
   // Proposals are workspace-scoped, so different sessions must not inspect and revise the same
   // pending draft concurrently from stale content.
   await skillCaptureQueue.enqueue(workspaceDir, async () => {
-    const turnMessages = currentTurnMessages(params.event.messages);
+    const turnMessages = selectCurrentSkillTurnMessages(params.event.messages);
     if (hasUnfailedSkillWorkshopMutationCall(turnMessages)) {
       const signalHashes = extractDurableInstructions([...turnMessages]).map((instruction) =>
         fingerprintInstructions([instruction]),

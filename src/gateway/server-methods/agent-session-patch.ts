@@ -6,12 +6,12 @@ import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
-  type SessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   deliveryContextFromSession,
@@ -243,6 +243,7 @@ export function buildAgentSessionPatch(params: {
     ...(shouldClearRotatedState || shouldClearTerminalState
       ? {
           status: undefined,
+          lifecycleRunId: undefined,
           startedAt: undefined,
           endedAt: undefined,
           runtimeMs: undefined,

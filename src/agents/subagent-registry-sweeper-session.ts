@@ -1,5 +1,5 @@
 import type { callGateway } from "../gateway/call.js";
-import { isSessionLifecycleChangedGatewayError } from "./subagent-session-cleanup.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
@@ -25,25 +25,20 @@ export function createSubagentSweepSessionCleanup(call: typeof callGateway) {
     childSessionKey: string,
     identity: FrozenSessionIdentity,
   ): Promise<"deleted" | "changed"> => {
-    try {
-      await call({
-        method: "sessions.delete",
-        params: {
-          key: childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-          expectedSessionId: identity.sessionId,
-          expectedLifecycleRevision: identity.lifecycleRevision,
-        },
-        timeoutMs: 10_000,
-      });
-      return "deleted";
-    } catch (error) {
-      if (isSessionLifecycleChangedGatewayError(error)) {
-        return "changed";
-      }
-      throw error;
+    let failure: unknown;
+    const outcome = await deleteSubagentSessionForCleanup({
+      callGateway: call,
+      childSessionKey,
+      expectedSessionId: identity.sessionId,
+      expectedLifecycleRevision: identity.lifecycleRevision,
+      onError: (error) => {
+        failure = error;
+      },
+    });
+    if (outcome === "failed") {
+      throw failure;
     }
+    return outcome;
   };
 
   return { deleteSession, freezeSessionIdentity };

@@ -179,10 +179,7 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
   const program = ts.createProgram(fileNames, parsedConfig.options);
   return {
     checker: program.getTypeChecker(),
-    printer: ts.createPrinter({
-      newLine: ts.NewLineKind.LineFeed,
-      removeComments: true,
-    }),
+    printer: ts.createPrinter({ newLine: ts.NewLineKind.LineFeed, removeComments: true }),
     program,
   };
 }
@@ -232,26 +229,18 @@ function inferExportKind(
     }
   }
 
-  if (symbol.flags & ts.SymbolFlags.Function) {
-    return "function";
-  }
-  if (symbol.flags & ts.SymbolFlags.Class) {
-    return "class";
-  }
-  if (symbol.flags & ts.SymbolFlags.Interface) {
-    return "interface";
-  }
-  if (symbol.flags & ts.SymbolFlags.TypeAlias) {
-    return "type";
-  }
-  if (symbol.flags & ts.SymbolFlags.ConstEnum || symbol.flags & ts.SymbolFlags.RegularEnum) {
-    return "enum";
-  }
-  if (symbol.flags & ts.SymbolFlags.Variable) {
-    return "variable";
-  }
-  if (symbol.flags & ts.SymbolFlags.NamespaceModule || symbol.flags & ts.SymbolFlags.ValueModule) {
-    return "namespace";
+  for (const [flag, kind] of [
+    [ts.SymbolFlags.Function, "function"],
+    [ts.SymbolFlags.Class, "class"],
+    [ts.SymbolFlags.Interface, "interface"],
+    [ts.SymbolFlags.TypeAlias, "type"],
+    [ts.SymbolFlags.ConstEnum | ts.SymbolFlags.RegularEnum, "enum"],
+    [ts.SymbolFlags.Variable, "variable"],
+    [ts.SymbolFlags.NamespaceModule | ts.SymbolFlags.ValueModule, "namespace"],
+  ] as const) {
+    if (symbol.flags & flag) {
+      return kind;
+    }
   }
   return "unknown";
 }
@@ -460,6 +449,36 @@ function printTypeParameters(printer: ts.Printer, declaration: ts.TypeAliasDecla
   return `<${parameters.join(", ")}>`;
 }
 
+/** Render tuple-derived literal unions in declaration order, independent of compiler traversal. */
+export function formatPluginSdkApiTypeAlias(
+  checker: ts.TypeChecker,
+  declaration: ts.TypeAliasDeclaration,
+): string {
+  const type = checker.getTypeAtLocation(declaration);
+  if (
+    type.isUnion() &&
+    ts.isIndexedAccessTypeNode(declaration.type) &&
+    declaration.type.indexType.kind === ts.SyntaxKind.NumberKeyword
+  ) {
+    const tuple = checker.getTypeFromTypeNode(declaration.type.objectType);
+    const members = checker.isTupleType(tuple)
+      ? [...new Set(checker.getTypeArguments(tuple as ts.TypeReference))]
+      : [];
+    if (
+      members.length === type.types.length &&
+      members.every(
+        (member) =>
+          (member.isStringLiteral() || member.isNumberLiteral()) && type.types.includes(member),
+      )
+    ) {
+      return members
+        .map((member) => checker.typeToString(member, declaration, DECLARATION_TYPE_FORMAT_FLAGS))
+        .join(" | ");
+    }
+  }
+  return checker.typeToString(type, declaration, DECLARATION_TYPE_FORMAT_FLAGS);
+}
+
 function printNode(
   repoRoot: string,
   checker: ts.TypeChecker,
@@ -504,15 +523,10 @@ function printNode(
   }
 
   if (ts.isTypeAliasDeclaration(declaration)) {
-    const type = checker.getTypeAtLocation(declaration);
     const typeParameters = printTypeParameters(printer, declaration);
     return normalizePluginSdkApiDeclarationText(
       repoRoot,
-      `export type ${exportName}${typeParameters} = ${checker.typeToString(
-        type,
-        declaration,
-        DECLARATION_TYPE_FORMAT_FLAGS,
-      )};`,
+      `export type ${exportName}${typeParameters} = ${formatPluginSdkApiTypeAlias(checker, declaration)};`,
     );
   }
 
@@ -545,20 +559,14 @@ function compareDeclarations(
   left: ts.Declaration,
   right: ts.Declaration,
 ): number {
-  const byPath = compareText(
-    relativePath(repoRoot, left.getSourceFile().fileName),
-    relativePath(repoRoot, right.getSourceFile().fileName),
+  return (
+    compareText(
+      relativePath(repoRoot, left.getSourceFile().fileName),
+      relativePath(repoRoot, right.getSourceFile().fileName),
+    ) ||
+    left.getStart() - right.getStart() ||
+    left.kind - right.kind
   );
-  if (byPath !== 0) {
-    return byPath;
-  }
-
-  const byStart = left.getStart() - right.getStart();
-  if (byStart !== 0) {
-    return byStart;
-  }
-
-  return left.kind - right.kind;
 }
 
 function buildExportSurface(params: {
@@ -593,11 +601,9 @@ function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): numbe
     unknown: 8,
   };
 
-  const byKind = kindRank[left.kind] - kindRank[right.kind];
-  if (byKind !== 0) {
-    return byKind;
-  }
-  return compareText(left.exportName, right.exportName);
+  return (
+    kindRank[left.kind] - kindRank[right.kind] || compareText(left.exportName, right.exportName)
+  );
 }
 
 function buildModuleSurface(params: {

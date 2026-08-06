@@ -19,12 +19,16 @@ import type {
 import {
   rowDemandsVisibility,
   sidebarSessionMetaId,
+  sidebarSessionStateId,
   type SidebarRecentSession,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import { renderSessionLeadingState } from "./session-leading-indicator.ts";
+import {
+  describeSessionTrailingState,
+  renderSessionLeadingState,
+} from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
@@ -176,18 +180,27 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const { running, leadingIndicator } = renderSessionLeadingState(
+  const { running, leadingIndicator, trailingIndicator } = renderSessionLeadingState(
     session,
     pullRequestState,
     ownerActor,
     ownerAttribution,
   );
+  const trailingDescription = session.isChild
+    ? ""
+    : describeSessionTrailingState(session, pullRequestState);
   const meta = display?.meta ?? session.meta;
   const rowMeta = session.pinned ? "" : meta;
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
+  const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
   const menuSession = display ? { ...session, meta } : session;
-  const title = display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · ");
+  const title = [
+    display?.title ?? [label, narration, rowMeta].filter(Boolean).join(" · "),
+    trailingDescription,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
   const menuLabel = `${t("chat.sidebar.openSessionMenu")}: ${label}`;
   const rowClass = [
@@ -268,10 +281,12 @@ export function renderRecentSession(params: {
         draggable="false"
         title=${title}
         aria-current=${session.visuallyActive ? "page" : nothing}
-        aria-describedby=${metaId ?? nothing}
+        aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        <span class="sidebar-session-indicator">${leadingIndicator}</span>
+        ${leadingIndicator === nothing
+          ? nothing
+          : html`<span class="sidebar-session-indicator">${leadingIndicator}</span>`}
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee"
             >${session.archived
@@ -340,20 +355,25 @@ export function renderRecentSession(params: {
           </button>`
         : nothing}
       <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-trail" id=${metaId ?? nothing}
-          >${session.isChild && session.runtimeMs != null
-            ? session.hasActiveRun
-              ? html`<openclaw-elapsed-time
-                  .startMs=${session.runtimeSampledAt! - session.runtimeMs}
-                ></openclaw-elapsed-time>`
-              : (formatDurationCompact(session.runtimeMs, { spaced: true }) ?? "0ms")
-            : session.isChild && session.startedAt != null
-              ? html`<openclaw-elapsed-time
-                  .startMs=${session.startedAt}
-                  .endMs=${session.endedAt ?? null}
-                ></openclaw-elapsed-time>`
-              : nothing}</span
-        >
+        ${trailingIndicator === nothing
+          ? nothing
+          : html`<span class="session-row-state" id=${stateId} aria-label=${trailingDescription}
+              >${trailingIndicator}</span
+            >`}
+        ${hasTrail
+          ? html`<span class="session-row-trail" id=${metaId}
+              >${session.runtimeMs != null
+                ? session.hasActiveRun
+                  ? html`<openclaw-elapsed-time
+                      .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+                    ></openclaw-elapsed-time>`
+                  : (formatDurationCompact(session.runtimeMs, { spaced: true }) ?? "0ms")
+                : html`<openclaw-elapsed-time
+                    .startMs=${session.startedAt!}
+                    .endMs=${session.endedAt ?? null}
+                  ></openclaw-elapsed-time>`}</span
+            >`
+          : nothing}
         ${session.isChild
           ? nothing
           : html`<span class="session-row-actions">

@@ -212,6 +212,43 @@ async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> 
   return await resolveRepositoryFromRealPath(requested, repoRoot);
 }
 
+async function canonicalPathKey(target: string): Promise<string> {
+  const canonical = await fs.realpath(target);
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+}
+
+async function shouldPreserveOrphanCandidate(
+  target: string,
+  managedPaths: ReadonlySet<string>,
+): Promise<boolean> {
+  const targetKey = await canonicalPathKey(target);
+  if (managedPaths.has(targetKey)) {
+    return true;
+  }
+  const hasOwnGitMarker = await pathExists(path.join(target, ".git"));
+  if (!hasOwnGitMarker) {
+    return false;
+  }
+  // Query from the checkout itself so registered unborn worktrees do not pass
+  // through resolveRepository's intentional HEAD commit requirement.
+  const listed = await listGitWorktrees(target);
+  for (const entry of listed) {
+    let listedKey: string;
+    try {
+      listedKey = await canonicalPathKey(entry.path);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        continue;
+      }
+      throw error;
+    }
+    if (listedKey === targetKey) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branch: string) {
   const removed = await runGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
   const deletedBranch = await runGit(repoRoot, ["branch", "-D", branch]);
@@ -1236,7 +1273,16 @@ export class ManagedWorktreeService {
   }
 
   private async reconcileOrphans(records: ManagedWorktreeRecord[]): Promise<number> {
-    const managedPaths = new Set(records.map((record) => path.resolve(record.path)));
+    const managedPaths = new Set<string>();
+    for (const record of records) {
+      try {
+        managedPaths.add(await canonicalPathKey(record.path));
+      } catch (error) {
+        if (!isMissingFileError(error)) {
+          throw error;
+        }
+      }
+    }
     const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
     const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
     let deleted = 0;
@@ -1245,21 +1291,19 @@ export class ManagedWorktreeService {
         continue;
       }
       const fingerprintPath = path.join(worktreesRoot, fingerprint.name);
+      // A root entry can be a checkout, not a fingerprint container; descending
+      // before applying the same preservation rule would expose its contents to deletion.
+      if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths)) {
+        continue;
+      }
       const names = await fs.readdir(fingerprintPath, { withFileTypes: true }).catch(() => []);
       for (const name of names) {
         if (!name.isDirectory()) {
           continue;
         }
         const candidate = path.join(fingerprintPath, name.name);
-        if (managedPaths.has(path.resolve(candidate))) {
+        if (await shouldPreserveOrphanCandidate(candidate, managedPaths)) {
           continue;
-        }
-        const repository = await resolveRepository(candidate).catch(() => undefined);
-        if (repository) {
-          const listed = await listGitWorktrees(repository.repoRoot).catch(() => []);
-          if (listed.some((entry) => path.resolve(entry.path) === path.resolve(candidate))) {
-            continue;
-          }
         }
         await fs.rm(candidate, { recursive: true, force: true });
         deleted += 1;

@@ -448,6 +448,35 @@ export function replaceSqliteSessionEntrySync(
   emitCommittedSessionIdentityDiff(previous, current);
 }
 
+/** Creates a missing session identity without replacing a concurrently owned row. */
+export function ensureSqliteSessionEntrySync(
+  scope: SessionAccessScope,
+  entry: SessionEntry,
+): boolean {
+  const resolved = resolveSqliteScope(scope);
+  assertCanonicalSessionWriteScope(resolved);
+  let owned = false;
+  let previous = new Map<string, SessionEntry>();
+  let current = new Map<string, SessionEntry>();
+  runOpenClawAgentWriteTransaction((database) => {
+    const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+    previous = readSqliteSessionIdentitySnapshot(database, identityKeys);
+    const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+    if (existing) {
+      owned = existing.sessionId === entry.sessionId;
+      current = previous;
+      return;
+    }
+    writeSessionEntry(database, resolved.sessionKey, entry);
+    current = readSqliteSessionIdentitySnapshot(database, identityKeys);
+    owned = current.get(resolved.sessionKey)?.sessionId === entry.sessionId;
+  }, toDatabaseOptions(resolved));
+  if (current.size !== previous.size || owned) {
+    emitCommittedSessionIdentityDiff(previous, current);
+  }
+  return owned;
+}
+
 /** Patches one entry in the additive SQLite session store. */
 export async function patchSqliteSessionEntry(
   scope: SessionAccessScope,

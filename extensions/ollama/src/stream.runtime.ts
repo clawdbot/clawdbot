@@ -1,4 +1,4 @@
-// Ollama plugin module implements stream behavior.
+// Ollama stream runtime implements native transport behavior.
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -11,30 +11,16 @@ import type {
   Tool,
   Usage,
 } from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream, streamSimple } from "openclaw/plugin-sdk/llm";
-import type {
-  OpenClawConfig,
-  ProviderRuntimeModel,
-  ProviderWrapStreamFnContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  normalizeProviderId,
-} from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  createMoonshotThinkingWrapper,
-  createPlainTextToolCallCompatWrapper,
-  resolveMoonshotThinkingType,
-  streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream-shared";
+import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { estimateStringChars, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
-import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
@@ -45,11 +31,26 @@ import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
+import {
+  type OllamaThinkValue,
+  resolveOllamaConfiguredNumCtx,
+  resolveOllamaThinkParamValue,
+  shouldForwardNativeOllamaThink,
+} from "./stream-compat.js";
+import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+
+export {
+  createConfiguredOllamaCompatStreamWrapper,
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "./stream-compat.js";
+
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
-export const OLLAMA_INCOMPLETE_STREAM_ERROR = "Ollama API stream ended without a final response";
 
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
@@ -153,97 +154,6 @@ export function resolveOllamaBaseUrlForRun(params: {
   return OLLAMA_NATIVE_BASE_URL;
 }
 
-export function resolveConfiguredOllamaProviderConfig(params: {
-  config?: OpenClawConfig;
-  providerId?: string;
-}) {
-  const providerId = params.providerId?.trim();
-  if (!providerId) {
-    return undefined;
-  }
-  const providers = params.config?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  const direct = providers[providerId];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeProviderId(providerId);
-  for (const [candidateId, candidate] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateId) === normalized) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
-export function isOllamaCompatProvider(model: {
-  provider?: string;
-  baseUrl?: string;
-  api?: string;
-}): boolean {
-  const providerId = normalizeProviderId(model.provider ?? "");
-  if (providerId === "ollama") {
-    return true;
-  }
-  if (!model.baseUrl) {
-    return false;
-  }
-  try {
-    const parsed = new URL(model.baseUrl);
-    if (isLoopbackHost(parsed.hostname) && parsed.port === "11434") {
-      return true;
-    }
-
-    // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
-    // itself indicates Ollama usage (for example "my-ollama").
-    const providerHintsOllama = providerId.includes("ollama");
-    const isOllamaPort = parsed.port === "11434";
-    const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
-    return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
-  } catch {
-    return false;
-  }
-}
-
-export function resolveOllamaCompatNumCtxEnabled(params: {
-  config?: OpenClawConfig;
-  providerId?: string;
-}): boolean {
-  return resolveConfiguredOllamaProviderConfig(params)?.injectNumCtxForOpenAICompat ?? true;
-}
-
-export function shouldInjectOllamaCompatNumCtx(params: {
-  model: { api?: string; provider?: string; baseUrl?: string };
-  config?: OpenClawConfig;
-  providerId?: string;
-}): boolean {
-  if (params.model.api !== "openai-completions") {
-    return false;
-  }
-  if (!isOllamaCompatProvider(params.model)) {
-    return false;
-  }
-  return resolveOllamaCompatNumCtxEnabled({
-    config: params.config,
-    providerId: params.providerId,
-  });
-}
-
-export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
-  const streamFn = baseFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
-      if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
-        payloadRecord.options = {};
-      }
-      (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-    });
-}
-
-type OllamaThinkValue = boolean | "low" | "medium" | "high";
-
 const OLLAMA_OPTION_PARAM_KEYS = new Set([
   "num_keep",
   "seed",
@@ -268,92 +178,14 @@ const OLLAMA_OPTION_PARAM_KEYS = new Set([
 
 const OLLAMA_TOP_LEVEL_PARAM_KEYS = new Set(["format", "keep_alive", "truncate", "shift"]);
 
-function createOllamaThinkingWrapper(
-  baseFn: StreamFn | undefined,
-  think: OllamaThinkValue,
-): StreamFn {
-  const streamFn = baseFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
-      payloadRecord.think = think;
-    });
-}
-
-function resolveOllamaThinkValue(thinkingLevel: unknown): OllamaThinkValue | undefined {
-  if (thinkingLevel === "off") {
-    return false;
-  }
-  if (thinkingLevel === "low" || thinkingLevel === "medium" || thinkingLevel === "high") {
-    return thinkingLevel;
-  }
-  if (thinkingLevel === "minimal") {
-    return "low";
-  }
-  if (thinkingLevel === "xhigh" || thinkingLevel === "adaptive" || thinkingLevel === "max") {
-    return "high";
-  }
-  return undefined;
-}
-
-function resolveOllamaThinkParamValue(
-  params: Record<string, unknown> | undefined,
-): OllamaThinkValue | undefined {
-  const raw = params?.think ?? params?.thinking;
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (raw === "off") {
-    return false;
-  }
-  if (raw === "low" || raw === "medium" || raw === "high") {
-    return raw;
-  }
-  if (raw === "minimal") {
-    return "low";
-  }
-  if (raw === "xhigh" || raw === "adaptive" || raw === "max") {
-    return "high";
-  }
-  return undefined;
-}
-
-function shouldForwardNativeOllamaThink(
-  model: ProviderRuntimeModel | undefined,
-  think: OllamaThinkValue,
-): boolean {
-  // Ollama accepts top-level `think` as the native chat contract, but rejects
-  // truthy values for models known not to expose thinking support.
-  return think === false || model?.reasoning !== false;
-}
-
-function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
-  const raw = model.params?.num_ctx;
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-    return undefined;
-  }
-  return Math.floor(raw);
-}
-
-function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
-  return (
-    resolveOllamaConfiguredNumCtx(model) ??
-    Math.max(
-      1,
-      Math.floor(
-        model.contextTokens ?? model.contextWindow ?? model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-      ),
-    )
-  );
-}
-
 /**
  * Resolves num_ctx for native /api/chat requests:
  *  1. explicit `params.num_ctx` set on the model wins,
  *  2. the effective `contextTokens` runtime cap is forwarded when present,
  *  3. otherwise Ollama's model, OLLAMA_CONTEXT_LENGTH, VRAM, or Modelfile policy decides.
  *
- * This intentionally differs from `resolveOllamaNumCtx` by not falling back
- * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
+ * This intentionally differs from the OpenAI-compat resolver by not falling back
+ * to a default context size: that fallback is a sane wrapper-side guess for
  * the OpenAI-compat path, but native `/api/chat` should not force the full
  * advertised `contextWindow`; only an explicit runtime cap or operator override is forwarded.
  */
@@ -433,62 +265,6 @@ function resolveStreamingTextDelta(previousText: string, nextText: string): stri
   // Sanitizers may rewrite previously accumulated content. Fall back to
   // re-emitting the latest complete text so downstream partial state converges.
   return nextText;
-}
-
-export function createConfiguredOllamaCompatStreamWrapper(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
-  let streamFn = ctx.streamFn;
-  const model = ctx.model;
-  let injectNumCtx = false;
-  const isNativeOllamaTransport = model?.api === "ollama";
-
-  if (model) {
-    const providerId =
-      typeof model.provider === "string" && model.provider.trim().length > 0
-        ? model.provider
-        : ctx.provider;
-    if (
-      shouldInjectOllamaCompatNumCtx({
-        model,
-        config: ctx.config,
-        providerId,
-      })
-    ) {
-      injectNumCtx = true;
-    }
-  }
-
-  if (injectNumCtx && model) {
-    streamFn = wrapOllamaCompatNumCtx(streamFn, resolveOllamaNumCtx(model));
-  }
-
-  const configuredThinkValue = model ? resolveOllamaThinkParamValue(model.params) : undefined;
-  const runtimeThinkValue = isNativeOllamaTransport
-    ? resolveOllamaThinkValue(ctx.thinkingLevel)
-    : undefined;
-  // "off" is also the implicit agent default. Preserve explicit native Ollama
-  // model config unless the active run requests a non-off thinking level.
-  const ollamaThinkValue =
-    runtimeThinkValue === false && configuredThinkValue !== undefined
-      ? undefined
-      : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
-    streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
-  }
-
-  if (
-    normalizeProviderId(ctx.provider) === "ollama" &&
-    shouldWrapOllamaCompatMoonshotThinking(ctx.modelId)
-  ) {
-    const thinkingType = resolveMoonshotThinkingType({
-      configuredThinking: ctx.extraParams?.thinking,
-      thinkingLevel: ctx.thinkingLevel,
-    });
-    streamFn = createMoonshotThinkingWrapper(streamFn, thinkingType);
-  }
-
-  return streamFn;
 }
 
 export function buildOllamaChatRequest(params: {

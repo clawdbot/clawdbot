@@ -169,6 +169,45 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).not.toHaveBeenCalled();
   });
 
+  it("persists a mixed delivered and in-progress yielded batch without scheduling", () => {
+    const alpha = makeRun("run-alpha");
+    const beta = makeRun("run-beta");
+    beta.delivery = { status: "in_progress" };
+    const calls: string[] = [];
+    const persistOrThrow = vi.fn(() => calls.push("persist"));
+    const schedule = vi.fn(() => calls.push("schedule"));
+
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [accepted(alpha), accepted(beta)],
+        runs: new Map([
+          [alpha.runId, alpha],
+          [beta.runId, beta],
+        ]),
+        persistOrThrow,
+        schedule,
+      }),
+    ).toBe(true);
+
+    const frozenState = {
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds: ["run-alpha", "run-beta"],
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+      rearmGeneration: 1,
+    } as const;
+    expect(alpha.requesterSettleWake).toEqual(frozenState);
+    expect(beta.requesterSettleWake).toEqual(frozenState);
+    expect(alpha.requesterTurnRunId).toBeUndefined();
+    expect(beta.requesterTurnRunId).toBeUndefined();
+    expect(calls).toEqual(["persist"]);
+    expect(schedule).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "ignores same-turn non-completion spawns during settlement (yielded: %s)",
     (requesterYielded) => {

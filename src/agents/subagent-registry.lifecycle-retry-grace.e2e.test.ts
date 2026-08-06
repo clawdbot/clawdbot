@@ -59,6 +59,7 @@ type GatewayRequest = {
 
 let lifecycleHandler: ((evt: LifecycleEvent) => void) | undefined;
 let agentCallPlan: Array<"ok" | "throw"> = [];
+let agentCallGates = new Map<string, Promise<void>>();
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 
@@ -76,6 +77,11 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     };
   }
   if (method === "agent") {
+    const sourceSessionKey = request.params?.inputProvenance?.sourceSessionKey;
+    const gate = sourceSessionKey ? agentCallGates.get(sourceSessionKey) : undefined;
+    if (gate) {
+      await gate;
+    }
     const next = agentCallPlan.shift() ?? "ok";
     if (next === "throw") {
       throw new Error("announce delivery failed");
@@ -121,6 +127,30 @@ vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
 
+const loadSubagentRegistryRuntimeForTest = async () =>
+  ({
+    countActiveDescendantRuns: mod.countActiveDescendantRuns,
+    countPendingDescendantRuns: mod.countPendingDescendantRuns,
+    countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
+    hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
+    getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+    getSubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
+    isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
+    listAncestorSessionKeys,
+    listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
+    recordAcceptedSubagentSteerDispatch: async (
+      params: Parameters<typeof mod.recordAcceptedSubagentSteerDispatch>[0],
+    ) => mod.recordAcceptedSubagentSteerDispatch(params),
+    replaceSubagentRunAfterSteer: async (
+      params: Parameters<typeof mod.replaceSubagentRunAfterSteer>[0],
+    ) => mod.replaceSubagentRunAfterSteer(params),
+    clearSubagentRunSteerRestart: async (
+      ...args: Parameters<typeof mod.clearSubagentRunSteerRestart>
+    ) => mod.clearSubagentRunSteerRestart(...args),
+    resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
+    shouldIgnorePostCompletionAnnounceForSession: mod.shouldIgnorePostCompletionAnnounceForSession,
+  }) as unknown as typeof import("./subagent-registry-runtime.js");
+
 describe("subagent registry lifecycle error grace", () => {
   let previousFastTestEnv: string | undefined;
 
@@ -144,6 +174,7 @@ describe("subagent registry lifecycle error grace", () => {
       session: { mainKey: "main", scope: "per-sender" },
     });
     agentCallPlan = [];
+    agentCallGates = new Map();
     chatHistoryBySessionKey = new Map();
     sessionStore = new Proxy<Record<string, SessionStoreEntry>>(
       {
@@ -174,29 +205,6 @@ describe("subagent registry lifecycle error grace", () => {
       loadAgentRuntimePluginRegistryHandle: () => undefined,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
-    });
-    const loadSubagentRegistryRuntimeForTest = async () => ({
-      countActiveDescendantRuns: mod.countActiveDescendantRuns,
-      countPendingDescendantRuns: mod.countPendingDescendantRuns,
-      countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
-      hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
-      getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
-      getSubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
-      isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
-      listAncestorSessionKeys,
-      listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-      recordAcceptedSubagentSteerDispatch: async (
-        params: Parameters<typeof mod.recordAcceptedSubagentSteerDispatch>[0],
-      ) => mod.recordAcceptedSubagentSteerDispatch(params),
-      replaceSubagentRunAfterSteer: async (
-        params: Parameters<typeof mod.replaceSubagentRunAfterSteer>[0],
-      ) => mod.replaceSubagentRunAfterSteer(params),
-      clearSubagentRunSteerRestart: async (
-        ...args: Parameters<typeof mod.clearSubagentRunSteerRestart>
-      ) => mod.clearSubagentRunSteerRestart(...args),
-      resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
-      shouldIgnorePostCompletionAnnounceForSession:
-        mod.shouldIgnorePostCompletionAnnounceForSession,
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
@@ -264,6 +272,32 @@ describe("subagent registry lifecycle error grace", () => {
     throw new Error(`run ${runId} did not reach cleanupHandled=false in time`);
   };
 
+  const waitForDeliveredCleanup = async (runId: string) => {
+    let lastRun: ReturnType<typeof mod.listSubagentRunsForRequester>[number] | undefined;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const run = mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === runId);
+      lastRun = run;
+      if (
+        run?.delivery?.status === "delivered" &&
+        typeof run.cleanupCompletedAt === "number" &&
+        run.requesterSettleWake === undefined
+      ) {
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await flushAsync();
+    }
+    throw new Error(
+      `run ${runId} did not finish delivered cleanup in time: ${JSON.stringify({
+        cleanupCompletedAt: lastRun?.cleanupCompletedAt,
+        delivery: lastRun?.delivery,
+        requesterSettleWake: lastRun?.requesterSettleWake,
+      })}`,
+    );
+  };
+
   const waitForAgentCallCount = async (expectedCount: number) => {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       if (getAgentCalls().length >= expectedCount) {
@@ -289,9 +323,15 @@ describe("subagent registry lifecycle error grace", () => {
     throw new Error(`run ${runId} frozen result did not refresh`);
   };
 
-  function registerCompletionRun(runId: string, childSuffix: string, task: string) {
+  function registerCompletionRun(
+    runId: string,
+    childSuffix: string,
+    task: string,
+    requesterTurnRunId?: string,
+  ) {
     mod.registerSubagentRun({
       runId,
+      requesterTurnRunId,
       childSessionKey: `agent:main:subagent:${childSuffix}`,
       requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
       requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
@@ -366,6 +406,131 @@ describe("subagent registry lifecycle error grace", () => {
       })
       .filter((result): result is string => typeof result === "string");
   }
+
+  it("lets the delivered cleanup own a yielded batch after a stale wake loses generation", async () => {
+    const requesterTurnRunId = "run-requester-yield-race";
+    const alphaSessionKey = "agent:main:subagent:yield-alpha";
+    const betaSessionKey = "agent:main:subagent:yield-beta";
+    registerCompletionRun("run-yield-alpha", "yield-alpha", "yield alpha", requesterTurnRunId);
+    registerCompletionRun("run-yield-beta", "yield-beta", "yield beta", requesterTurnRunId);
+    setAssistantOutput(alphaSessionKey, "alpha complete");
+    setAssistantOutput(betaSessionKey, "beta complete");
+
+    let releaseAlphaWakeRuntime: (() => void) | undefined;
+    const alphaWakeRuntimeGate = new Promise<void>((resolve) => {
+      releaseAlphaWakeRuntime = resolve;
+    });
+    let settleWakeRuntimeLoads = 0;
+    settleWakeTesting.setDepsForTest({
+      loadSubagentRegistryRuntime: async () => {
+        settleWakeRuntimeLoads += 1;
+        if (settleWakeRuntimeLoads === 1) {
+          await alphaWakeRuntimeGate;
+        }
+        return await loadSubagentRegistryRuntimeForTest();
+      },
+    });
+
+    let releaseBetaDelivery: (() => void) | undefined;
+    agentCallGates.set(
+      betaSessionKey,
+      new Promise<void>((resolve) => {
+        releaseBetaDelivery = resolve;
+      }),
+    );
+
+    emitLifecycleEvent("run-yield-alpha", { phase: "end", endedAt: Date.now() });
+    await waitForAgentCallCount(1);
+    await vi.waitFor(() => expect(settleWakeRuntimeLoads).toBe(1));
+
+    emitLifecycleEvent("run-yield-beta", { phase: "end", endedAt: Date.now() + 1 });
+    await waitForAgentCallCount(2);
+    const betaBeforeYield = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((run) => run.runId === "run-yield-beta");
+    if (!betaBeforeYield) {
+      throw new Error("expected beta run before requester yield");
+    }
+    betaBeforeYield.delivery = { ...betaBeforeYield.delivery, status: "in_progress" };
+
+    expect(
+      mod.markRequesterTurnYielded({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+      }),
+    ).toBe(2);
+    expect(
+      mod.settleRequesterAfterSessionSpawns({
+        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        requesterTurnRunId,
+        requesterYielded: true,
+        acceptedSessionSpawns: [
+          { runId: "run-yield-alpha", childSessionKey: alphaSessionKey },
+          { runId: "run-yield-beta", childSessionKey: betaSessionKey },
+        ],
+      }),
+    ).toBe(true);
+
+    releaseAlphaWakeRuntime?.();
+    await vi.advanceTimersByTimeAsync(0);
+    await flushAsync();
+
+    const yieldedBatch = mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
+    expect(
+      yieldedBatch.map((run) => ({
+        runId: run.runId,
+        delivery: run.delivery?.status,
+        nextAttemptAt: run.requesterSettleWake?.nextAttemptAt,
+        rearmGeneration: run.requesterSettleWake?.rearmGeneration,
+      })),
+    ).toEqual([
+      {
+        runId: "run-yield-alpha",
+        delivery: "delivered",
+        nextAttemptAt: undefined,
+        rearmGeneration: 1,
+      },
+      {
+        runId: "run-yield-beta",
+        delivery: "in_progress",
+        nextAttemptAt: undefined,
+        rearmGeneration: 1,
+      },
+    ]);
+    const requesterWakeCalls = () =>
+      getAgentCalls().filter((request) => {
+        const idempotencyKey = (request.params as Record<string, unknown> | undefined)
+          ?.idempotencyKey;
+        return (
+          typeof idempotencyKey === "string" &&
+          idempotencyKey.startsWith("announce:requester-settle:")
+        );
+      });
+    expect(requesterWakeCalls()).toHaveLength(0);
+
+    agentCallGates.delete(betaSessionKey);
+    releaseBetaDelivery?.();
+    await waitForAgentCallCount(3);
+    await waitForDeliveredCleanup("run-yield-alpha");
+    await waitForDeliveredCleanup("run-yield-beta");
+
+    expect(requesterWakeCalls()).toHaveLength(1);
+    const requesterWakeParams = requesterWakeCalls()[0]?.params as
+      | Record<string, unknown>
+      | undefined;
+    expect(requesterWakeParams?.idempotencyKey).toContain(":yield-1");
+    expect(requesterWakeParams?.message).toContain("visible final answer");
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .filter((run) => run.runId === "run-yield-alpha" || run.runId === "run-yield-beta")
+        .every((run) => run.requesterSettleWake === undefined),
+    ).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    expect(requesterWakeCalls()).toHaveLength(1);
+  });
 
   it("ignores transient lifecycle errors when run retries and then ends successfully", async () => {
     registerCompletionRun("run-transient-error", "transient-error", "transient error test");

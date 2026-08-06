@@ -1641,7 +1641,7 @@ describe("createVideoGenerateTool", () => {
     });
   });
 
-  it("rejects image-to-video when the provider disables that mode", async () => {
+  it("defers disabled primary modes to the fallback-aware runtime", async () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
       {
         id: "video-plugin",
@@ -1657,7 +1657,7 @@ describe("createVideoGenerateTool", () => {
         }),
       },
     ]);
-    const generateSpy = vi.spyOn(videoGenerationRuntime, "generateVideo");
+    const generateSpy = mockSavedVideoResult();
 
     const tool = createVideoGenerateTool({
       config: asConfig({
@@ -1672,13 +1672,64 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    await expect(
-      tool.execute("call-1", {
-        prompt: "lobster timelapse",
-        image: "data:image/png;base64,cG5n",
+    await tool.execute("call-1", {
+      prompt: "lobster timelapse",
+      image: "data:image/png;base64,cG5n",
+    });
+
+    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
+    expect(request.inputImages).toHaveLength(1);
+  });
+
+  it("defers model-specific reference limits to runtime overlays", async () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "video-plugin",
+        defaultModel: "r2v",
+        models: ["r2v"],
+        capabilities: {
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 1,
+          },
+        },
+        catalogByModel: {
+          r2v: {
+            modes: ["imageToVideo"],
+            capabilities: {
+              imageToVideo: {
+                enabled: true,
+                maxInputImages: 5,
+              },
+            },
+          },
+        },
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/r2v" },
+          },
+        },
       }),
-    ).rejects.toThrow("video-plugin does not support image-to-video reference inputs.");
-    expect(generateSpy).not.toHaveBeenCalled();
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-r2v", {
+      prompt: "animate both references",
+      images: ["data:image/png;base64,cG5n", "data:image/png;base64,cG5nMg=="],
+    });
+
+    const request = firstMockCallArg(generateSpy) as { inputImages?: unknown[] };
+    expect(request.inputImages).toHaveLength(2);
   });
 
   it("warns when optional provider overrides are ignored", async () => {

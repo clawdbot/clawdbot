@@ -19,7 +19,7 @@ export async function reconcileAcceptedRecovery(params: {
   clearAcceptedRecovery: RestartRecoveryParams["clearAcceptedRecovery"];
   entry: SubagentRunRecord;
   getRun: RestartRecoveryParams["getRun"];
-  isCurrent: () => boolean;
+  isCurrent: RestartRecoveryParams["isCurrent"];
   now: number;
   receipt: SubagentRestartRecoveryReceipt;
   replaceRun: RestartRecoveryParams["replaceRun"];
@@ -42,7 +42,7 @@ export async function reconcileAcceptedRecovery(params: {
     let remapError: unknown;
     try {
       remapped =
-        params.isCurrent() &&
+        params.isCurrent(params.runId, params.entry) &&
         params.replaceRun({
           previousRunId: params.runId,
           nextRunId: params.receipt.idempotencyKey,
@@ -69,7 +69,11 @@ export async function reconcileAcceptedRecovery(params: {
       return { status: "deferred" };
     }
     const successor = params.getRun(params.receipt.idempotencyKey);
-    if (!successor || successor.execution.restartRecovery !== params.receipt) {
+    if (
+      !successor ||
+      successor.execution.restartRecovery !== params.receipt ||
+      !params.isCurrent(successor.runId, successor)
+    ) {
       params.warn("accepted subagent restart recovery lost its remapped owner", {
         runId: params.runId,
         childSessionKey: params.childSessionKey,
@@ -78,6 +82,10 @@ export async function reconcileAcceptedRecovery(params: {
     }
     owner = successor;
   }
+  const ownsAcceptedTarget = () =>
+    params.isCurrent(owner.runId, owner) &&
+    owner.execution.restartRecovery === params.receipt &&
+    isRestartRecoveryLifecycleCurrent(params.receipt);
 
   if (
     !params.currentSessionId ||
@@ -99,10 +107,7 @@ export async function reconcileAcceptedRecovery(params: {
       !(await settleAcceptedRecoverySession({
         attempts: params.attempts,
         childSessionKey: params.childSessionKey,
-        isOwnerCurrent: () =>
-          params.getRun(owner.runId) === owner &&
-          owner.execution.restartRecovery === params.receipt &&
-          isRestartRecoveryLifecycleCurrent(params.receipt),
+        isOwnerCurrent: ownsAcceptedTarget,
         sessionId: params.receipt.sessionId,
         sessionLifecycleRevision: params.receipt.sessionLifecycleRevision,
         now: params.now,
@@ -151,6 +156,7 @@ export async function reconcileAcceptedRecovery(params: {
 
   try {
     if (
+      !ownsAcceptedTarget() ||
       !params.clearAcceptedRecovery({
         runId: owner.runId,
         expected: owner,
@@ -173,6 +179,7 @@ export async function reconcileAcceptedRecovery(params: {
     return { status: "deferred" };
   }
   if (
+    !params.isCurrent(owner.runId, owner) ||
     !params.resumeAcceptedRecovery({
       runId: owner.runId,
       expected: owner,

@@ -68,27 +68,27 @@ export function startGatewayCronWithLogging(params: {
   }).catch((err: unknown) => params.logCron.error(`failed to enter start root: ${String(err)}`));
 }
 
-function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles | null): void {
+async function clearGatewayMaintenanceHandles(
+  maintenance: GatewayMaintenanceHandles | null,
+): Promise<void> {
   if (!maintenance) {
     return;
   }
-  // Maintenance startup can race shutdown. Clear every interval handle here so
-  // callers can discard partially-created maintenance safely.
+  // Maintenance startup can race shutdown. Stop every owner here and wait for
+  // in-flight media work before discarding its state directory and SQLite handles.
   clearInterval(maintenance.tickInterval);
   clearInterval(maintenance.healthInterval);
   clearInterval(maintenance.dedupeCleanup);
+  await maintenance.stopMediaCleanup();
   clearInterval(maintenance.worktreeCleanup);
   clearInterval(maintenance.delegateArtifactCleanup);
-  if (maintenance.mediaCleanup) {
-    clearInterval(maintenance.mediaCleanup);
-  }
   maintenance.skillCuratorCleanup();
 }
 
 /** Runs maintenance that is intentionally delayed until after the gateway is ready. */
 export async function runGatewayPostReadyMaintenance(params: {
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
-  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
+  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
   shouldStartCron: () => boolean;
   markCronStartHandled: () => void;
   cronState: GatewayCronState;
@@ -101,7 +101,7 @@ export async function runGatewayPostReadyMaintenance(params: {
   try {
     const maintenance = await params.startMaintenance();
     if (maintenance) {
-      params.applyMaintenance({
+      await params.applyMaintenance({
         ...maintenance,
         // Split startup callers retain this callback but do not retain every
         // continuation-owned interval handle, so couple their cleanup here.
@@ -133,7 +133,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   isClosing: () => boolean;
   onStarted?: () => void;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
-  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
+  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
   shouldStartCron: () => boolean;
   markCronStartHandled: () => void;
   cronState: GatewayCronState;
@@ -158,17 +158,17 @@ export function scheduleGatewayPostReadyMaintenance(params: {
           if (params.isClosing()) {
             // Maintenance can allocate intervals before shutdown is observed; clear them here
             // instead of handing live timers to a closing gateway.
-            clearGatewayMaintenanceHandles(maintenance);
+            await clearGatewayMaintenanceHandles(maintenance);
             return null;
           }
           return maintenance;
         },
-        applyMaintenance: (maintenance) => {
+        applyMaintenance: async (maintenance) => {
           if (params.isClosing()) {
-            clearGatewayMaintenanceHandles(maintenance);
+            await clearGatewayMaintenanceHandles(maintenance);
             return;
           }
-          params.applyMaintenance(maintenance);
+          await params.applyMaintenance(maintenance);
         },
         shouldStartCron: () => !params.isClosing() && params.shouldStartCron(),
         markCronStartHandled: params.markCronStartHandled,

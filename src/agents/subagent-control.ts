@@ -344,17 +344,19 @@ async function killSubagentRun(params: {
   targetState?: SubagentKillTargetState;
   error?: string;
 }> {
+  const markKilledBestEffort = () =>
+    markSubagentRunTerminatedBestEffort({
+      runId: params.entry.runId,
+      reason: "killed",
+      suppressTaskDelivery: params.suppressTaskDelivery,
+    });
   const initialTargetState = resolveSubagentKillTargetState(params.entry);
   if (initialTargetState) {
     if (
       params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       params.entry.suppressAnnounceReason !== "steer-restart"
     ) {
-      markSubagentRunTerminatedBestEffort({
-        runId: params.entry.runId,
-        reason: "killed",
-        suppressTaskDelivery: params.suppressTaskDelivery,
-      });
+      markKilledBestEffort();
     }
     return { killed: false, targetState: initialTargetState };
   }
@@ -403,11 +405,7 @@ async function killSubagentRun(params: {
           params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
           params.entry.suppressAnnounceReason !== "steer-restart"
         ) {
-          markSubagentRunTerminatedBestEffort({
-            runId: params.entry.runId,
-            reason: "killed",
-            suppressTaskDelivery: params.suppressTaskDelivery,
-          });
+          markKilledBestEffort();
         }
         return { killed: false, sessionId, targetState: targetStateAfterRuntimeLoad };
       }
@@ -539,11 +537,7 @@ async function killSubagentRun(params: {
           targetState.task.status === "cancelled" &&
           targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
         if (killedTarget) {
-          markSubagentRunTerminatedBestEffort({
-            runId: params.entry.runId,
-            reason: "killed",
-            suppressTaskDelivery: params.suppressTaskDelivery,
-          });
+          markKilledBestEffort();
         } else {
           try {
             releaseSubagentRunKillClaim({

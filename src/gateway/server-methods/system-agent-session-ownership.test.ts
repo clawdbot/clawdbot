@@ -208,6 +208,35 @@ describe("openclaw.chat session ownership", () => {
     ).not.toHaveBeenCalled();
   });
 
+  it("preserves the live session and pending approval when reset persistence fails", async () => {
+    const engine = makeEngine();
+    const session = seededSession({ engine });
+    session.pendingApproval = { id: "approval-1", proposalHash: "proposal-1" };
+    const sessions = new Map<string, SystemAgentChatSession>([["owned-session", session]]);
+    const expire = vi.fn();
+    const context = {
+      ...makeContext(sessions),
+      systemAgentApprovalManager: { expire },
+    } as unknown as GatewayRequestContext;
+    transcriptStoreMocks.appendTranscriptReset.mockImplementationOnce(() => {
+      throw new Error("transcript store unavailable");
+    });
+
+    await expect(callChat(context, { sessionId: "owned-session", reset: true })).rejects.toThrow(
+      "transcript store unavailable",
+    );
+
+    expect(transcriptStoreMocks.appendTranscriptReset).toHaveBeenCalledOnce();
+    expect(sessions.get("owned-session")).toBe(session);
+    expect(session.pendingApproval).toEqual({
+      id: "approval-1",
+      proposalHash: "proposal-1",
+    });
+    expect(expire).not.toHaveBeenCalled();
+    expect(engine.dispose).not.toHaveBeenCalled();
+    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+  });
+
   it("lets the same authenticated principal resume after reconnecting", async () => {
     const sessions = new Map<string, SystemAgentChatSession>();
     const context = makeContext(sessions);

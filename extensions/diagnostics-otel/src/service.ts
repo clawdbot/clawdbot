@@ -1,5 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
-import { metrics, trace } from "@opentelemetry/api";
+import { metrics, trace, type SpanContext } from "@opentelemetry/api";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
@@ -18,14 +18,18 @@ import {
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import type { OpenClawPluginService } from "../api.js";
+import type { DiagnosticTraceContext, OpenClawPluginService } from "../api.js";
 import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT_ENV,
+  OTEL_EXPORTER_OTLP_LOGS_PROTOCOL_ENV,
   OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV,
+  OTEL_EXPORTER_OTLP_METRICS_PROTOCOL_ENV,
+  OTEL_EXPORTER_OTLP_PROTOCOL_ENV,
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV,
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL_ENV,
 } from "./service-constants.js";
 import {
   hasPreloadedOtelSdk,
@@ -53,16 +57,58 @@ import { createUsageRecorders } from "./service-recorders-usage.js";
 import { createDiagnosticsTraceRuntime } from "./service-traces.js";
 import type { OtelLogsExporter, TelemetryExporterDiagnosticEvent } from "./service-types.js";
 
+const OTLP_HTTP_PROTOBUF_PROTOCOL = "http/protobuf";
+const OTEL_SIGNAL_PROTOCOL_ENV = {
+  traces: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL_ENV,
+  metrics: OTEL_EXPORTER_OTLP_METRICS_PROTOCOL_ENV,
+  logs: OTEL_EXPORTER_OTLP_LOGS_PROTOCOL_ENV,
+} satisfies Record<TelemetryExporterDiagnosticEvent["signal"], string>;
+
+function readNonblankOtelEnv(name: string): string | undefined {
+  const value = process.env[name];
+  return value?.trim() ? value : undefined;
+}
+
+function resolveSignalProtocol(
+  signal: TelemetryExporterDiagnosticEvent["signal"],
+  configuredProtocol: string | undefined,
+): string {
+  return (
+    configuredProtocol ??
+    readNonblankOtelEnv(OTEL_SIGNAL_PROTOCOL_ENV[signal]) ??
+    readNonblankOtelEnv(OTEL_EXPORTER_OTLP_PROTOCOL_ENV) ??
+    OTLP_HTTP_PROTOBUF_PROTOCOL
+  );
+}
+
+function createStartupRollbackError(startupError: unknown, cleanupError: unknown) {
+  return new AggregateError(
+    [startupError, cleanupError],
+    "diagnostics-otel startup failed and rollback cleanup failed",
+    { cause: startupError },
+  );
+}
+
+function diagnosticTraceContextFromSpanContext(spanContext: SpanContext): DiagnosticTraceContext {
+  return {
+    traceId: spanContext.traceId,
+    spanId: spanContext.spanId,
+    traceFlags: spanContext.traceFlags.toString(16).padStart(2, "0"),
+  };
+}
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
   let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
   let unsubscribe: (() => void) | null = null;
+  let unregisterTracePropagationBridge: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
   let continuationTracerInstalled = false;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
+    const currentUnregisterTracePropagationBridge = unregisterTracePropagationBridge;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentContinuationTracerInstalled = continuationTracerInstalled;
@@ -70,26 +116,42 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
     unsubscribe = null;
+    unregisterTracePropagationBridge = null;
     logProvider = null;
     sdk = null;
     continuationTracerInstalled = false;
     stopActiveTrustedSpans = null;
     unregisterUnhandledRejectionHandler = null;
 
-    currentUnregisterUnhandledRejectionHandler?.();
+    const settle = async (...stops: Array<(() => void | Promise<void>) | null>) =>
+      (
+        await Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.())))
+      ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+    // Stop new propagation, drain queued events, then retire listeners/spans before providers.
+    const failures = await settle(currentUnregisterTracePropagationBridge);
     if (currentUnsubscribe) {
-      await waitForDiagnosticEventsDrained().catch(() => undefined);
+      failures.push(...(await settle(() => waitForDiagnosticEventsDrained())));
     }
-    currentUnsubscribe?.();
-    currentStopActiveTrustedSpans?.();
-    if (currentContinuationTracerInstalled) {
-      resetContinuationTracer();
+    failures.push(
+      ...(await settle(currentUnsubscribe)),
+      ...(await settle(currentStopActiveTrustedSpans)),
+      ...(await settle(
+        currentContinuationTracerInstalled ? () => resetContinuationTracer() : null,
+      )),
+      ...(await settle(
+        currentLogProvider ? () => currentLogProvider.shutdown() : null,
+        currentSdk ? () => currentSdk.shutdown() : null,
+      )),
+      ...(await settle(currentUnregisterUnhandledRejectionHandler)),
+    );
+    if (failures.length === 1) {
+      throw failures[0];
     }
-    if (currentLogProvider) {
-      await currentLogProvider.shutdown().catch(() => undefined);
-    }
-    if (currentSdk) {
-      await currentSdk.shutdown().catch(() => undefined);
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `diagnostics-otel shutdown failed: ${failures.join("; ")}`,
+      );
     }
   };
 
@@ -128,31 +190,59 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const metricsEnabled = otel.metrics !== false;
       const logsEnabled = otel.logs === true;
       const logsExporter: OtelLogsExporter = otel.logsExporter ?? "otlp";
-      const logsToOtlp = logsEnabled && (logsExporter === "otlp" || logsExporter === "both");
+      const logsToOtlpRequested =
+        logsEnabled && (logsExporter === "otlp" || logsExporter === "both");
       const logsToStdout = logsEnabled && (logsExporter === "stdout" || logsExporter === "both");
-      const otlpSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
-        ...(tracesEnabled ? (["traces"] as const) : []),
-        ...(metricsEnabled ? (["metrics"] as const) : []),
-        ...(logsToOtlp ? (["logs"] as const) : []),
-      ];
-      const enabledSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
+      const configuredSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
         ...(tracesEnabled ? (["traces"] as const) : []),
         ...(metricsEnabled ? (["metrics"] as const) : []),
         ...(logsEnabled ? (["logs"] as const) : []),
       ];
-      if (enabledSignals.length === 0) {
+      if (configuredSignals.length === 0) {
+        return;
+      }
+      // This capability is the admission gate; no exporter may outlive a denied start.
+      const subscribe = ctx.internalDiagnostics?.onEvent;
+      if (!subscribe) {
+        ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
         return;
       }
 
-      const envProtocol = process.env.OTEL_EXPORTER_OTLP_PROTOCOL;
-      const protocol = otel.protocol ?? (envProtocol?.trim() ? envProtocol : "http/protobuf");
-      if (otlpSignals.length > 0 && protocol !== "http/protobuf") {
-        emitForSignals(otlpSignals, {
+      const sdkPreloaded = hasPreloadedOtelSdk();
+      const ownedOtlpSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
+        ...(!sdkPreloaded && tracesEnabled ? (["traces"] as const) : []),
+        ...(!sdkPreloaded && metricsEnabled ? (["metrics"] as const) : []),
+        ...(logsToOtlpRequested ? (["logs"] as const) : []),
+      ];
+      const supportedOtlpSignals = new Set<TelemetryExporterDiagnosticEvent["signal"]>();
+      for (const signal of ownedOtlpSignals) {
+        const protocol = resolveSignalProtocol(signal, otel.protocol);
+        if (protocol === OTLP_HTTP_PROTOBUF_PROTOCOL) {
+          supportedOtlpSignals.add(signal);
+          continue;
+        }
+        emitExporterEvent({
+          signal,
           exporter: "diagnostics-otel",
           status: "failure",
           reason: "unsupported_protocol",
         });
-        ctx.logger.warn(`diagnostics-otel: unsupported protocol ${protocol}`);
+        ctx.logger.warn(
+          `diagnostics-otel: unsupported ${signal} protocol ${protocol}; OTLP export disabled`,
+        );
+      }
+      const tracesToOtlp = !sdkPreloaded && tracesEnabled && supportedOtlpSignals.has("traces");
+      const metricsToOtlp = !sdkPreloaded && metricsEnabled && supportedOtlpSignals.has("metrics");
+      const logsToOtlp = logsToOtlpRequested && supportedOtlpSignals.has("logs");
+      const tracesActive = sdkPreloaded ? tracesEnabled : tracesToOtlp;
+      const metricsActive = sdkPreloaded ? metricsEnabled : metricsToOtlp;
+      const logsActive = logsToStdout || logsToOtlp;
+      const startedSignals: TelemetryExporterDiagnosticEvent["signal"][] = [
+        ...(tracesActive ? (["traces"] as const) : []),
+        ...(metricsActive ? (["metrics"] as const) : []),
+        ...(logsActive ? (["logs"] as const) : []),
+      ];
+      if (startedSignals.length === 0) {
         return;
       }
 
@@ -163,7 +253,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
       const sampleRate = resolveSampleRate(otel.sampleRate);
       const contentCapturePolicy = resolveContentCapturePolicy(otel.captureContent);
-      const sdkPreloaded = hasPreloadedOtelSdk();
 
       const resource = resourceFromAttributes({
         [ATTR_SERVICE_NAME]: serviceName,
@@ -178,40 +267,36 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             path: "v1/logs",
           })
         : undefined;
-      const traceUrl =
-        !sdkPreloaded && tracesEnabled
-          ? resolveSignalOtelUrl({
-              signalEndpoint: otel.tracesEndpoint,
-              signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV],
-              sharedEnvEndpoint,
-              endpoint,
-              path: "v1/traces",
-            })
-          : undefined;
-      const metricUrl =
-        !sdkPreloaded && metricsEnabled
-          ? resolveSignalOtelUrl({
-              signalEndpoint: otel.metricsEndpoint,
-              signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV],
-              sharedEnvEndpoint,
-              endpoint,
-              path: "v1/metrics",
-            })
-          : undefined;
+      const traceUrl = tracesToOtlp
+        ? resolveSignalOtelUrl({
+            signalEndpoint: otel.tracesEndpoint,
+            signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV],
+            sharedEnvEndpoint,
+            endpoint,
+            path: "v1/traces",
+          })
+        : undefined;
+      const metricUrl = metricsToOtlp
+        ? resolveSignalOtelUrl({
+            signalEndpoint: otel.metricsEndpoint,
+            signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV],
+            sharedEnvEndpoint,
+            endpoint,
+            path: "v1/metrics",
+          })
+        : undefined;
       // Validate every owned signal before any SDK can export with downgraded TLS trust.
       const logHttpAgentOptions = logsToOtlp
         ? resolveOtelHttpAgentOptions({ url: logUrl, signalIdentifier: "LOGS" })
         : undefined;
-      const traceHttpAgentOptions =
-        !sdkPreloaded && tracesEnabled
-          ? resolveOtelHttpAgentOptions({ url: traceUrl, signalIdentifier: "TRACES" })
-          : undefined;
-      const metricHttpAgentOptions =
-        !sdkPreloaded && metricsEnabled
-          ? resolveOtelHttpAgentOptions({ url: metricUrl, signalIdentifier: "METRICS" })
-          : undefined;
-      if (!sdkPreloaded && (tracesEnabled || metricsEnabled)) {
-        const traceExporter = tracesEnabled
+      const traceHttpAgentOptions = tracesToOtlp
+        ? resolveOtelHttpAgentOptions({ url: traceUrl, signalIdentifier: "TRACES" })
+        : undefined;
+      const metricHttpAgentOptions = metricsToOtlp
+        ? resolveOtelHttpAgentOptions({ url: metricUrl, signalIdentifier: "METRICS" })
+        : undefined;
+      if (tracesToOtlp || metricsToOtlp) {
+        const traceExporter = tracesToOtlp
           ? new OTLPTraceExporter({
               ...(traceUrl ? { url: traceUrl } : {}),
               ...(headers ? { headers } : {}),
@@ -227,7 +312,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               ]
             : undefined;
 
-        const metricExporter = metricsEnabled
+        const metricExporter = metricsToOtlp
           ? new OTLPMetricExporter({
               ...(metricUrl ? { url: metricUrl } : {}),
               ...(headers ? { headers } : {}),
@@ -246,8 +331,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
         sdk = new NodeSDK({
           resource,
-          // Explicit empty arrays keep NodeSDK from restoring disabled exporters
-          // from ambient OTEL_* settings; OpenClaw owns every signal exporter.
+          // Empty arrays are required in mixed-signal cases too; omission lets NodeSDK
+          // restore a protocol-rejected exporter from ambient OTEL_* settings.
           ...(spanProcessors
             ? { spanProcessors }
             : traceExporter
@@ -269,8 +354,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         } catch (err) {
           emitForSignals(
             [
-              ...(tracesEnabled ? (["traces"] as const) : []),
-              ...(metricsEnabled ? (["metrics"] as const) : []),
+              ...(tracesToOtlp ? (["traces"] as const) : []),
+              ...(metricsToOtlp ? (["metrics"] as const) : []),
             ],
             {
               exporter: "diagnostics-otel",
@@ -279,8 +364,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               errorCategory: errorCategory(err),
             },
           );
-          await stopStarted();
           ctx.logger.error(`diagnostics-otel: failed to start SDK: ${formatError(err)}`);
+          try {
+            await stopStarted();
+          } catch (cleanupError) {
+            ctx.logger.error(
+              `diagnostics-otel: SDK startup rollback cleanup failed: ${formatError(cleanupError)}`,
+            );
+            throw createStartupRollbackError(err, cleanupError);
+          }
           throw err;
         }
       } else if (sdkPreloaded && (tracesEnabled || metricsEnabled)) {
@@ -299,7 +391,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         flushIntervalMs: otel.flushIntervalMs,
         headers,
         logger: ctx.logger,
-        logsEnabled,
+        logsEnabled: logsActive,
         logsToOtlp,
         logsToStdout,
         logHttpAgentOptions,
@@ -314,7 +406,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         contentCapturePolicy,
         metrics: diagnosticMetrics,
         traces: diagnosticsTrace,
-        tracesEnabled,
+        tracesEnabled: tracesActive,
       });
       const recorders = {
         ...createUsageRecorders(recorderRuntime),
@@ -323,13 +415,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createModelRecorders(recorderRuntime),
         ...createToolAndSystemRecorders(recorderRuntime),
       };
-      const subscribe = ctx.internalDiagnostics?.onEvent;
-      if (!subscribe) {
-        ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
-        return;
-      }
 
-      if (tracesEnabled && (sdk !== null || sdkPreloaded)) {
+      if (tracesActive) {
         setContinuationTracer(
           createContinuationOtelTracerAdapter({
             resolveSpanContext: diagnosticsTrace.resolveTrustedSpanContext,
@@ -347,6 +434,29 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           recordSecurityEvent,
         }),
       );
+      if (tracesActive) {
+        // Model/tool starts are queued while their lifecycle parents dispatch
+        // synchronously. Prepare these child spans before outbound propagation,
+        // then let the queued recorder reuse them instead of exporting duplicates.
+        unregisterTracePropagationBridge =
+          ctx.internalDiagnostics?.registerTracePropagationBridge?.({
+            shouldPrepareEvent(event) {
+              return event.type === "model.call.started" || event.type === "tool.execution.started";
+            },
+            prepareEvent(event, metadata) {
+              if (event.type === "model.call.started") {
+                recorders.recordModelCallStarted(event, metadata);
+              } else if (event.type === "tool.execution.started") {
+                recorders.recordToolExecutionStarted(event, metadata);
+              }
+            },
+            resolveTraceContext(traceContext) {
+              const spanContext =
+                diagnosticsTrace.exportedSpanContextForDiagnosticTraceContext(traceContext);
+              return spanContext ? diagnosticTraceContextFromSpanContext(spanContext) : undefined;
+            },
+          }) ?? null;
+      }
 
       unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
         const otlpError = findOtlpExporterError(reason);
@@ -360,17 +470,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return true;
       });
 
-      emitForSignals(enabledSignals, {
+      emitForSignals(startedSignals, {
         exporter: "diagnostics-otel",
         status: "started",
         reason: "configured",
       });
 
-      if (logsEnabled) {
+      if (logsActive) {
         const label =
-          logsExporter === "both"
+          logsToOtlp && logsToStdout
             ? "OTLP/Protobuf + stdout JSONL"
-            : logsExporter === "stdout"
+            : logsToStdout
               ? "stdout JSONL"
               : "OTLP/Protobuf";
         ctx.logger.info(`diagnostics-otel: logs exporter enabled (${label})`);

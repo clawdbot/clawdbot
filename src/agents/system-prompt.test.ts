@@ -1361,8 +1361,10 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
-    expect(prompt).toContain("style primary|success|danger");
+    expect(prompt).toContain('presentation={"blocks":[{"type":"buttons"');
+    expect(prompt).toContain(
+      '"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"',
+    );
   });
 
   it("does not embed Telegram rich-text authoring guidance in core messaging", () => {
@@ -1449,7 +1451,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`presentation` buttons/selects");
     expect(prompt).not.toContain("Inline buttons not enabled for slack");
     expect(prompt).not.toContain("slack.capabilities.inlineButtons");
-    expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
+    expect(prompt).not.toContain('presentation={"blocks":[{"type":"buttons"');
   });
 
   it.each(["group", "channel"] as const)(
