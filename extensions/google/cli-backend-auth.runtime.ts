@@ -101,14 +101,14 @@ function normalizeString(value: string | undefined): string | undefined {
 }
 
 function throwUnsupportedGeminiCredential(credential: GeminiAuthProfileCredential): never {
+  // Route compatibility is not credential-health evidence. Keep this local so
+  // a profile that is valid for its owner is not quarantined across providers.
   if (credential.provider === VERCEL_AI_GATEWAY_PROVIDER_ID) {
-    throw new CliBackendAuthProfilePreparationError(
+    throw new Error(
       "Gemini CLI execution cannot use a vercel-ai-gateway auth profile. Use the OpenClaw vercel-ai-gateway provider instead.",
     );
   }
-  throw new CliBackendAuthProfilePreparationError(
-    "Gemini CLI execution requires a google-gemini-cli auth profile.",
-  );
+  throw new Error("Gemini CLI execution requires a google-gemini-cli auth profile.");
 }
 
 function throwUnstageableSelectedGeminiProfile(
@@ -127,7 +127,9 @@ function throwUnstageableSelectedGeminiProfile(
   if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
     throwUnsupportedGeminiCredential(credential);
   }
-  throw new CliBackendAuthProfilePreparationError(
+  // A materialized token can be healthy even though Gemini CLI cannot use its
+  // type. Only missing or malformed credential material gets the typed signal.
+  throw new Error(
     `Gemini CLI execution requires a Google AI Studio API-key profile or a previously configured valid Gemini CLI OAuth profile. ${GEMINI_CLI_SUPPORTED_AUTH_GUIDANCE}`,
   );
 }

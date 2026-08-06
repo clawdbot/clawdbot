@@ -839,20 +839,20 @@ describe("google gemini cli backend auth bridge", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
 
     try {
-      await expect(
-        backend.prepareExecution?.({
-          workspaceDir,
-          agentDir: path.join(workspaceDir, "agent"),
-          provider: "google-gemini-cli",
-          modelId: "gemini-3.1-flash-lite",
-          authProfileId: "vercel-ai-gateway:default",
-          authCredential: {
-            type: "api_key",
-            provider: "vercel-ai-gateway",
-            key: "vercel-key",
-          },
-        } as never),
-      ).rejects.toThrow(/vercel-ai-gateway auth profile/);
+      const preparation = backend.prepareExecution?.({
+        workspaceDir,
+        agentDir: path.join(workspaceDir, "agent"),
+        provider: "google-gemini-cli",
+        modelId: "gemini-3.1-flash-lite",
+        authProfileId: "vercel-ai-gateway:default",
+        authCredential: {
+          type: "api_key",
+          provider: "vercel-ai-gateway",
+          key: "vercel-key",
+        },
+      } as never);
+      await expect(preparation).rejects.not.toBeInstanceOf(CliBackendAuthProfilePreparationError);
+      await expect(preparation).rejects.toThrow(/vercel-ai-gateway auth profile/);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -863,20 +863,20 @@ describe("google gemini cli backend auth bridge", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
 
     try {
-      await expect(
-        backend.prepareExecution?.({
-          workspaceDir,
-          agentDir: path.join(workspaceDir, "agent"),
+      const preparation = backend.prepareExecution?.({
+        workspaceDir,
+        agentDir: path.join(workspaceDir, "agent"),
+        provider: "google-gemini-cli",
+        modelId: "gemini-3.1-flash-lite",
+        authProfileId: "google-gemini-cli:token",
+        authCredential: {
+          type: "token",
           provider: "google-gemini-cli",
-          modelId: "gemini-3.1-flash-lite",
-          authProfileId: "google-gemini-cli:token",
-          authCredential: {
-            type: "token",
-            provider: "google-gemini-cli",
-            token: "bearer-token",
-          },
-        } as never),
-      ).rejects.toThrow(/Google AI Studio API-key profile/);
+          token: "bearer-token",
+        },
+      } as never);
+      await expect(preparation).rejects.not.toBeInstanceOf(CliBackendAuthProfilePreparationError);
+      await expect(preparation).rejects.toThrow(/Google AI Studio API-key profile/);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

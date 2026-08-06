@@ -259,6 +259,27 @@ describe("runCliAgent before_agent_reply seam", () => {
     },
   );
 
+  it("does not settle an incompatible explicit profile during isolated preparation", async () => {
+    const error = new Error("Gemini CLI execution cannot use a vercel-ai-gateway auth profile.");
+    prepareCliRunContextMock.mockRejectedValueOnce(error);
+
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        provider: "google-gemini-cli",
+        authProfileId: "vercel-ai-gateway:default",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        disableTools: true,
+        cliToolAvailability: { native: [], openClaw: [] },
+      }),
+    ).rejects.toBe(error);
+
+    expect(loadAuthProfileStoreForRuntimeMock).not.toHaveBeenCalled();
+    expect(markAuthProfileFailureMock).not.toHaveBeenCalled();
+    expect(markAuthProfileSuccessMock).not.toHaveBeenCalled();
+  });
+
   it("records only success when fresh-session recovery succeeds and clears stale health", async () => {
     const profileId = "google-gemini-cli:selected";
     const store = {
