@@ -1283,18 +1283,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
-  private async reindexAfterPrimaryProviderRecovery(): Promise<MemoryIndexIdentityState> {
+  private async reindexAfterPrimaryProviderRecovery(
+    recoveredProvider: EmbeddingProvider | null,
+  ): Promise<MemoryIndexIdentityState> {
     let indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
     // A forced sync may join a fallback-owned generation that was already active
     // when recovery completed. Recheck after that join and admit one fresh primary
     // generation so recovery cannot clear fallback state with a stale index.
     for (let attempt = 0; indexIdentity.status !== "valid" && attempt < 2; attempt += 1) {
       try {
-        await this.syncAdmitted({ reason: "search", force: true });
+        await this.syncAdmitted(
+          { reason: "search", force: true },
+          { suppressFallbackActivation: true },
+        );
       } catch (err) {
         log.warn(`memory sync failed (primary-recovery-reindex): ${formatErrorMessage(err)}`);
       }
       indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    }
+    if (indexIdentity.status === "valid" && this.provider !== recoveredProvider) {
+      return {
+        status: "mismatched",
+        reason: "primary recovery reindex completed with a different active provider",
+      };
     }
     return indexIdentity;
   }
@@ -1344,8 +1355,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (!recovered) {
         return;
       }
+      const recoveredProvider = this.provider;
       try {
-        const identity = await this.reindexAfterPrimaryProviderRecovery();
+        const identity = await this.reindexAfterPrimaryProviderRecovery(recoveredProvider);
         if (identity.status === "valid") {
           this.commitPrimaryProviderRecovery();
         } else {
@@ -2291,6 +2303,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     options?: {
       allowEmbeddingBootstrapFallback?: boolean;
       queuedSessionOwner?: boolean;
+      suppressFallbackActivation?: boolean;
     },
   ): Promise<void> {
     if (this.syncing) {
@@ -2355,9 +2368,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       const runGeneration = async (keywordOnly: boolean) => {
         this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+        const previousSuppressFallbackActivation = this.suppressSyncFallbackActivation;
+        if (options?.suppressFallbackActivation) {
+          this.suppressSyncFallbackActivation = true;
+        }
         try {
           await this.runSyncWithReadonlyRecovery(params);
         } finally {
+          this.suppressSyncFallbackActivation = previousSuppressFallbackActivation;
           this.endSyncProviderGeneration();
         }
       };

@@ -73,6 +73,7 @@ const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
+  protected suppressSyncFallbackActivation = false;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
   protected beginSyncProviderGeneration(_options?: { forceFtsOnly?: boolean }): void {}
@@ -431,6 +432,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   ): Promise<"activated" | "suppressed" | "inactive"> {
     const generationProvider = this.syncProviderGeneration?.provider ?? null;
     this.endSyncProviderGeneration();
+    if (this.suppressSyncFallbackActivation) {
+      log.debug("memory embeddings: skipping fallback activation for primary recovery reindex");
+      return "inactive";
+    }
     if (generationProvider && this.provider !== generationProvider) {
       log.debug(
         "memory embeddings: skipping stale sync fallback activation after primary recovery",

@@ -104,9 +104,11 @@ type RecoveryHarness = {
   retireProvider: (provider: EmbeddingProvider) => Promise<void>;
   awaitManagerIdle: () => Promise<void>;
   refreshIndexIdentityDirty: () => { status: string };
-  reindexAfterPrimaryProviderRecovery: () => Promise<{ status: string }>;
+  reindexAfterPrimaryProviderRecovery: (
+    recoveredProvider?: EmbeddingProvider | null,
+  ) => Promise<{ status: string }>;
   schedulePrimaryProviderRecovery: () => void;
-  syncAdmitted: () => Promise<void>;
+  syncAdmitted: (...args: unknown[]) => Promise<void>;
 };
 
 function createProvider(id: string): EmbeddingProvider {
@@ -220,12 +222,20 @@ describe("memory manager primary provider recovery", () => {
       }
     });
 
-    await expect(manager.reindexAfterPrimaryProviderRecovery()).resolves.toEqual({
+    await expect(manager.reindexAfterPrimaryProviderRecovery(manager.provider)).resolves.toEqual({
       status: "valid",
     });
     expect(manager.syncAdmitted).toHaveBeenCalledTimes(2);
-    expect(manager.syncAdmitted).toHaveBeenNthCalledWith(1, { reason: "search", force: true });
-    expect(manager.syncAdmitted).toHaveBeenNthCalledWith(2, { reason: "search", force: true });
+    expect(manager.syncAdmitted).toHaveBeenNthCalledWith(
+      1,
+      { reason: "search", force: true },
+      { suppressFallbackActivation: true },
+    );
+    expect(manager.syncAdmitted).toHaveBeenNthCalledWith(
+      2,
+      { reason: "search", force: true },
+      { suppressFallbackActivation: true },
+    );
   });
 
   it("keeps searches out of an exclusive primary recovery reindex", async () => {
@@ -281,6 +291,38 @@ describe("memory manager primary provider recovery", () => {
     expect(manager.fallbackFrom).toBe("mock");
     expect(manager.retireProvider).toHaveBeenCalledWith(expect.objectContaining({ id: "mock" }));
     expect(manager.retireProvider).not.toHaveBeenCalledWith(fallbackProvider);
+  });
+
+  it("rolls back when recovery reindex activates a replacement fallback", async () => {
+    const manager = createRecoveryHarness();
+    const originalFallback = manager.provider;
+    const replacementFallback = createProvider("fallback-provider");
+    let refreshCalls = 0;
+    manager.refreshIndexIdentityDirty = vi.fn(() => {
+      refreshCalls += 1;
+      return { status: refreshCalls >= 2 ? "valid" : "mismatched" };
+    });
+    manager.syncAdmitted = vi.fn(async () => {
+      manager.provider = replacementFallback;
+      manager.providerKey = "fallback-provider-key";
+      manager.fallbackFrom = "mock";
+      manager.fallbackReason = "primary reindex failed";
+    });
+
+    manager.schedulePrimaryProviderRecovery();
+    const backgroundRecovery = manager.primaryProviderRecoveryBackgroundPromise;
+    expect(backgroundRecovery).toBeDefined();
+    await backgroundRecovery;
+
+    expect(manager.syncAdmitted).toHaveBeenCalledWith(
+      { reason: "search", force: true },
+      { suppressFallbackActivation: true },
+    );
+    expect(manager.provider).toBe(originalFallback);
+    expect(manager.provider?.id).toBe("fallback-provider");
+    expect(manager.fallbackFrom).toBe("mock");
+    expect(manager.retireProvider).toHaveBeenCalledWith(replacementFallback);
+    expect(manager.retireProvider).not.toHaveBeenCalledWith(originalFallback);
   });
 
   it("retains the recovery throttle after rollback", async () => {
