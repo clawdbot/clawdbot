@@ -317,13 +317,17 @@ async function sendSynologyChatMedia(
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   });
-  const accepted = await sendHostedFileUrl(
+  const sendResult = await sendHostedFileUrl(
     incomingUrl,
     prepared.url,
     ctx.to,
     account.allowInsecureSsl,
   );
-  if (!accepted) {
+  if (sendResult.status === "rejected") {
+    await prepared.cleanup();
+    throw new Error("Synology Chat rejected the attachment request");
+  }
+  if (sendResult.status === "indeterminate") {
     // A timeout or lost response is indeterminate: the NAS may already have
     // queued this capability. Retain it until bounded expiry for delayed fetches.
     throw new Error("Synology Chat attachment request acceptance could not be confirmed");

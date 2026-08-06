@@ -133,7 +133,7 @@ function hostedUrl(value: string): SynologyHostedMediaUrl {
   return value as SynologyHostedMediaUrl;
 }
 
-const tlsVerificationDefaultCases = [
+const tlsVerificationDefaultCases: Array<{ name: string; invoke: () => Promise<unknown> }> = [
   {
     name: "sendMessage",
     invoke: () => sendMessage("https://nas.example.com/incoming", "Hello"),
@@ -303,7 +303,7 @@ describe("sendMessage", () => {
 describe("sendHostedFileUrl", () => {
   installFakeTimerHarness();
 
-  it("returns true on success", async () => {
+  it("returns accepted on success", async () => {
     mockSuccessResponse();
     const result = await settleTimers(
       sendHostedFileUrl(
@@ -311,10 +311,10 @@ describe("sendHostedFileUrl", () => {
         hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
       ),
     );
-    expect(result).toBe(true);
+    expect(result).toEqual({ status: "accepted" });
   });
 
-  it("returns false on failure", async () => {
+  it("returns rejected on a definitive HTTP failure", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(
       sendHostedFileUrl(
@@ -322,10 +322,10 @@ describe("sendHostedFileUrl", () => {
         hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
       ),
     );
-    expect(result).toBe(false);
+    expect(result).toEqual({ status: "rejected" });
   });
 
-  it("returns false without retrying an HTTP-successful webhook rejection", async () => {
+  it("returns rejected without retrying an HTTP-successful webhook rejection", async () => {
     mockResponse(200, JSON.stringify({ success: false, error: { code: 105 } }));
 
     const result = await settleTimers(
@@ -335,8 +335,25 @@ describe("sendHostedFileUrl", () => {
       ),
     );
 
-    expect(result).toBe(false);
+    expect(result).toEqual({ status: "rejected" });
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns indeterminate when the request outcome is lost", async () => {
+    vi.mocked(https.request).mockImplementation((() => {
+      const req = createMockRequestEmitter();
+      process.nextTick(() => req.emit("error", new Error("connection reset")));
+      return req;
+    }) as MockRequestHandler);
+
+    const result = await settleTimers(
+      sendHostedFileUrl(
+        "https://nas.example.com/incoming",
+        hostedUrl("https://gateway.example.com/webhook?__openclaw_synology_media_token_a=t"),
+      ),
+    );
+
+    expect(result).toEqual({ status: "indeterminate" });
   });
 
   it("respects the shared send interval before posting a file URL", async () => {
@@ -363,7 +380,7 @@ describe("sendHostedFileUrl", () => {
     const result = await settleTimers(
       sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("not-a-url")),
     );
-    expect(result).toBe(false);
+    expect(result).toEqual({ status: "rejected" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
@@ -371,7 +388,7 @@ describe("sendHostedFileUrl", () => {
     const result = await settleTimers(
       sendHostedFileUrl("https://nas.example.com/incoming", hostedUrl("http://example.com/file")),
     );
-    expect(result).toBe(false);
+    expect(result).toEqual({ status: "rejected" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 
@@ -385,7 +402,7 @@ describe("sendHostedFileUrl", () => {
         hostedUrl(credentialedUrl.toString()),
       ),
     );
-    expect(result).toBe(false);
+    expect(result).toEqual({ status: "rejected" });
     expect(vi.mocked(https.request)).not.toHaveBeenCalled();
   });
 });

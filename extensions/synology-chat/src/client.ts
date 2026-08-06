@@ -88,6 +88,11 @@ type ChatWebhookPayload = {
   user_ids?: number[];
 };
 
+export type SynologyHostedFileSendResult =
+  | { status: "accepted" }
+  | { status: "rejected" }
+  | { status: "indeterminate" };
+
 const ChatUserSchema = z
   .object({
     user_id: z.number(),
@@ -187,15 +192,23 @@ export async function sendHostedFileUrl(
   fileUrl: SynologyHostedMediaUrl,
   userId?: string | number,
   allowInsecureSsl = false,
-): Promise<boolean> {
+): Promise<SynologyHostedFileSendResult> {
+  let body: string;
   try {
-    const body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
-
-    await waitForSendSlot();
-    const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-    return ok;
+    body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
   } catch {
-    return false;
+    return { status: "rejected" };
+  }
+
+  try {
+    await waitForSendSlot();
+    return (await doPost(incomingUrl, body, allowInsecureSsl))
+      ? { status: "accepted" }
+      : { status: "rejected" };
+  } catch {
+    // Once the request starts, transport errors and timeouts cannot prove that
+    // Synology did not queue the capability before the response was lost.
+    return { status: "indeterminate" };
   }
 }
 
