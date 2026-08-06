@@ -24,24 +24,19 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "./test-helpers.e2e.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import {
+  configureManualGatewayBackgroundEnv,
+  MANUAL_GATEWAY_ENV_KEYS,
+} from "./test-helpers.manual-gateway-env.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
-  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
+  ...MANUAL_GATEWAY_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ];
 
 type Cleanup = () => Promise<void> | void;
@@ -67,17 +62,6 @@ async function requestExecApproval(params: {
     status: "accepted",
     id: params.id,
   });
-}
-
-function configureApprovalGatewayTestEnv(tempHome: string): void {
-  setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
-  setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
-  setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
-  setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-  setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
-  setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-  setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-  setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(tempHome, "no-plugins"));
 }
 
 describe("operator approval gateway client e2e", () => {
@@ -107,7 +91,7 @@ describe("operator approval gateway client e2e", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    configureApprovalGatewayTestEnv(tempHome);
+    configureManualGatewayBackgroundEnv(tempHome);
 
     const port = await getFreeGatewayPort();
     const token = "approval-client-e2e-token";
@@ -212,7 +196,7 @@ describe("operator approval gateway client e2e", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    configureApprovalGatewayTestEnv(tempHome);
+    configureManualGatewayBackgroundEnv(tempHome);
 
     const requesterIdentity = loadOrCreateDeviceIdentity({
       path: path.join(stateDir, "test-device-identities", "approval-requester.sqlite"),
