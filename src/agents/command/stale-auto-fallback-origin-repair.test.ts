@@ -23,7 +23,7 @@ function makeSessionEntry(params: Partial<SessionEntry> = {}): SessionEntry {
 }
 
 describe("repairStaleAutoFallbackOriginOverride", () => {
-  it("does not repair a genuine fallback origin without durable provenance", async () => {
+  it("repairs a genuine fallback origin when persisted with a store path", async () => {
     const sessionKey = "agent:main:telegram:123";
     const sessionStore: Record<string, SessionEntry> = {};
     const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
@@ -34,8 +34,8 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     }
     sessionStore[sessionKey] = sessionEntry;
 
-    // Origin differs from override (genuine fallback) and from primary, but without
-    // durable provenance this is indistinguishable from a legitimate primary change.
+    // Origin differs from override (genuine fallback) and from primary. The stale
+    // override is cleared so this turn retries the configured primary.
     const result = await repairStaleAutoFallbackOriginOverride({
       sessionEntry,
       sessionStore,
@@ -45,11 +45,12 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
       primaryModel: "claude-opus-4-8",
     });
 
-    expect(result.entry).toBe(sessionEntry);
-    expect(result.hasStoredOverride).toBe(true);
+    expect(result.entry.providerOverride).toBeUndefined();
+    expect(result.entry.modelOverride).toBeUndefined();
+    expect(result.hasStoredOverride).toBe(false);
   });
 
-  it("does not repair the canonical three-distinct state without provenance", async () => {
+  it("repairs the canonical three-distinct state with a store path", async () => {
     const sessionKey = "agent:main:telegram:123";
     const sessionStore: Record<string, SessionEntry> = {};
     const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
@@ -75,14 +76,14 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
       primaryModel: "claude-opus-4-8",
     });
 
-    // Without a provenance/migration contract, three-distinct origins are indistinguishable
-    // from a legitimate primary-model change, so the override and origin are left untouched.
-    expect(result.entry.providerOverride).toBe("anthropic");
-    expect(result.entry.modelOverride).toBe("claude-opus-4-7");
-    expect(result.entry.modelOverrideSource).toBe("auto");
-    expect(result.entry.modelOverrideFallbackOriginProvider).toBe("anthropic");
-    expect(result.entry.modelOverrideFallbackOriginModel).toBe("claude-haiku-4-5");
-    expect(result.hasStoredOverride).toBe(true);
+    // Origin, override, and primary are all different. The stale override is cleared
+    // so this turn retries the configured primary.
+    expect(result.entry.providerOverride).toBeUndefined();
+    expect(result.entry.modelOverride).toBeUndefined();
+    expect(result.entry.modelOverrideSource).toBeUndefined();
+    expect(result.entry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(result.entry.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(result.hasStoredOverride).toBe(false);
   });
 
   it("returns the observed entry unchanged when no repair is needed", async () => {
@@ -128,7 +129,7 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
     expect(result.entry.modelOverride).toBe("gemini-3-pro");
   });
 
-  it("leaves non-stale origins untouched even with a store path", async () => {
+  it("adopts newer persisted state when a concurrent write blocks the repair", async () => {
     const sessionKey = "agent:main:telegram:123";
     const sessionStore: Record<string, SessionEntry> = {};
     const storePath = path.join(tempDirs.make("repair-store"), "sessions.json");
@@ -156,9 +157,10 @@ describe("repairStaleAutoFallbackOriginOverride", () => {
       primaryModel: "claude-opus-4-8",
     });
 
-    // Since the classifier returns null (no durable provenance), the observed
-    // entry is returned directly without reading the persisted store.
-    expect(result.entry).toBe(sessionEntry);
+    // The snapshot guard blocked the repair because the persisted entry was
+    // concurrently modified. Adopt the newer persisted state instead.
+    expect(result.entry.model).toBe("newer-model");
+    expect(result.entry).not.toBe(sessionEntry);
   });
 
   it("leaves non-stale origins untouched", async () => {

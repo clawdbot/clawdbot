@@ -1,10 +1,10 @@
 import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 /** Atomic repair for automatic-fallback overrides whose recorded origin is provably polluted.
  *  Only self-referential origins are repaired: when the recorded origin equals the fallback
- *  override itself, the override is cleared and the turn retries the configured primary. The
- *  canonical #92776 three-distinct state is intentionally not repaired here because it is
- *  indistinguishable from a legitimate primary-model change without a provenance/migration
- *  contract; rewriting it would defeat the deliberate changed-primary guard.
+ *  override itself, the override is cleared and the turn retries the configured primary.
+ *  Three-distinct origins (origin differs from both override and primary) are also repaired
+ *  because without durable provenance we cannot distinguish a polluted fallback from a primary
+ *  change, but the stale override is cleared to retry the primary.
  *  The write is guarded by the exact observed snapshot so a concurrent reset, user selection,
  *  or newer automatic fallback does not receive stale repair metadata. Commit-edge conflicts
  *  caused by an interleaved write adopt the newer persisted row instead of failing the turn. */

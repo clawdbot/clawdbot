@@ -705,9 +705,9 @@ export async function getReplyFromConfig(
   const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
   // A provably polluted self-referential fallback origin (origin equals the override itself)
   // prevents the snap-back probe from firing. Repair it in place before the probe check so this
-  // turn can retry the primary. The canonical #92776 three-distinct state is not repaired here
-  // because it is indistinguishable from a legitimate primary-model change without a migration or
-  // provenance contract.
+  // turn can retry the primary. Three-distinct origins (origin differs from primary) are also
+  // repaired here because without durable provenance we cannot distinguish a polluted fallback
+  // from a primary-model change, but the stale override is cleared to retry the primary.
   const staleAutoFallbackOriginRepairKind = classifyStaleAutoFallbackOriginOverride(
     sessionEntry,
     primaryProvider,
@@ -1235,6 +1235,8 @@ function prepareRepairedReplySessionEntry(): Partial<SessionEntry> {
     modelOverrideFallbackOriginProvider: undefined,
     modelOverrideFallbackOriginModel: undefined,
     authProfileOverride: undefined,
+    authProfileOverrideSource: undefined,
+    authProfileOverrideCompactionCount: undefined,
   };
 }
 

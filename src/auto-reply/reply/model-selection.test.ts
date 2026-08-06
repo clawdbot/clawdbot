@@ -2090,7 +2090,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
-  it("preserves auto-failover override on normal turn when the origin mismatches a changed primary", async () => {
+  it("repairs auto-failover override on normal turn when the origin mismatches a changed primary", async () => {
     const { state, sessionStore } = await resolveStateWithOverride({
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
@@ -2102,21 +2102,23 @@ describe("createModelSelectionState auto-failover overrides", () => {
     });
 
     // Origin differs from both the current primary and the override (three-distinct
-    // state). The repair kind is "repair-origin", not "clear-override", so the
-    // fallback override is preserved here and the origin is repaired elsewhere.
-    expect(state.provider).toBe("openrouter");
-    expect(state.model).toBe("minimax/minimax-m2.7");
-    expect(state.resetModelOverride).toBe(false);
-    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
-    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
-    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
-    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginProvider).toBe("openai");
-    expect(sessionStore[sessionKey]?.modelOverrideFallbackOriginModel).toBe("gpt-5.3");
+    // state). Without durable provenance we cannot distinguish a polluted fallback
+    // from a legitimate primary change, but the stale override is cleared to retry
+    // the configured primary.
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
   });
 
-  it("preserves a genuine auto-failover override without durable provenance", async () => {
-    // Origin differs from override (genuine fallback) and from current primary, but
-    // without durable provenance this is indistinguishable from a legitimate primary change.
+  it("repairs a genuine auto-failover override when origin differs from primary", async () => {
+    // Origin differs from override (genuine fallback) and from current primary.
+    // Without durable provenance we cannot distinguish a polluted fallback from a
+    // legitimate primary change, but the stale override is cleared to retry the
+    // configured primary.
     const { state, sessionStore } = await resolveStateWithOverride({
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
@@ -2127,13 +2129,12 @@ describe("createModelSelectionState auto-failover overrides", () => {
       model: "minimax/minimax-m2.7",
     });
 
-    // Override is preserved; the snap-back probe fires through the existing
-    // resolveAutoFallbackPrimaryProbe path.
-    expect(state.provider).toBe("openrouter");
-    expect(state.model).toBe("minimax/minimax-m2.7");
-    expect(state.resetModelOverride).toBe(false);
-    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
-    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
   });
 
   it("preserves a user override on normal turn even when its origin looks stale", async () => {
