@@ -83,6 +83,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
         meta: resolution.meta,
       })
     ) {
+      logVerbose(
+        `acp-binding: reusing ready session ${sessionKey} (agent=${params.spec.agentId}, model=${resolution.meta.runtimeOptions?.model ?? "none"})`,
+      );
       return {
         ok: true,
         sessionKey,
@@ -90,6 +93,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
     }
 
     if (resolution.kind !== "none") {
+      logVerbose(
+        `acp-binding: closing ${resolution.kind} session ${sessionKey} (configured model mismatch or state change)`,
+      );
       await acpManager.closeSession({
         cfg: params.cfg,
         sessionKey,
@@ -103,6 +109,10 @@ export async function ensureConfiguredAcpBindingSession(params: {
     // Model is resolved from the owning OpenClaw agent, not the ACP harness override.
     const sessionAgentId = params.spec.acpAgentId ?? params.spec.agentId;
     const resolvedModel = resolveAgentExplicitModelPrimary(params.cfg, params.spec.agentId);
+
+    logVerbose(
+      `acp-binding: initializing session ${sessionKey} (agent=${sessionAgentId}, model=${resolvedModel ?? "none"})`,
+    );
 
     await acpManager.initializeSession({
       cfg: params.cfg,
