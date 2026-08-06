@@ -195,6 +195,68 @@ describe("spawnSubagentDirect filename validation", () => {
     }
   });
 
+  it("rejects attachments from a sandbox with a writable host workspace", async () => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: {
+          workspace: workspaceDirOverride,
+          sandbox: { mode: "all", workspaceAccess: "rw" },
+        },
+      },
+    });
+    const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true }),
+    });
+
+    const result = await sandboxedSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toEqual({
+      status: "forbidden",
+      error: expect.stringContaining("workspaceAccess=rw"),
+    });
+    expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw"))).toBe(false);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps attachments available to a read-only sandbox workspace", async () => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: {
+          workspace: workspaceDirOverride,
+          sandbox: { mode: "all", workspaceAccess: "ro" },
+        },
+      },
+    });
+    const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true }),
+    });
+
+    const result = await sandboxedSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(true);
+  });
+
   it.runIf(process.platform !== "win32").each(["metadata", "attachments"] as const)(
     "rejects a symlinked %s directory without writing outside the workspace",
     async (linkedComponent) => {

@@ -6,6 +6,7 @@ import { resolveAgentDir } from "../../agent-scope-config.js";
 import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
+import { resolveSandboxConfigForAgent } from "../../sandbox/config.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
@@ -156,6 +157,22 @@ export async function resolveSubagentChildPlan(params: {
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
   });
+  // A read-write sandbox can race host staging through its workspace mount.
+  // Gate that authority combination before any session or filesystem mutation.
+  if (
+    params.request.attachments?.length &&
+    requesterRuntime.sandboxed &&
+    resolveSandboxConfigForAgent(params.cfg, requesterRuntime.agentId).workspaceAccess === "rw"
+  ) {
+    return {
+      ok: false,
+      result: {
+        status: "forbidden",
+        error:
+          "sessions_spawn attachments are unavailable from a sandbox with workspaceAccess=rw because the caller can mutate the host staging path. Retry without attachments, retry from an unsandboxed session, or ask the operator to use sandbox workspaceAccess=ro or none.",
+      },
+    };
+  }
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: childSessionKey,
