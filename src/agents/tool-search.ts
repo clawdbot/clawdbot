@@ -1,10 +1,12 @@
 /** Tool Search catalog compaction for large OpenClaw, MCP, and client tool inventories. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -26,13 +28,20 @@ import {
 } from "./tool-search-config.js";
 import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import { MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS } from "./tool-search-directory.js";
+import { readToolSearchRequest } from "./tool-search-request.js";
 import {
-  readToolSearchArgs,
+  formatToolSearchControlError,
+  formatToolSearchControlResult,
   readToolSearchCallArgs,
   readToolSearchId,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import {
+  MAX_TOOL_SEARCH_BATCH_QUERIES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+  MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
+  MAX_TOOL_SEARCH_RESULTS,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -75,6 +84,125 @@ export type {
   ToolSearchTargetTranscriptProjection,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
+
+type ToolSearchCandidate = Awaited<ReturnType<ToolSearchRuntime["search"]>>[number];
+type ToolSearchBatchGroup = {
+  query: string;
+  candidates: ToolSearchCandidate[];
+  truncated?: true;
+};
+const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
+const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
+const MAX_BATCH_CANDIDATE_METADATA_CHARS = 2_000;
+
+function compactBatchCandidateDescription(candidate: ToolSearchCandidate): ToolSearchCandidate {
+  // Remote catalog descriptions are untrusted. Bound the scanned prefix before
+  // normalization so repeated batch matches cannot amplify attacker-sized text.
+  const prefix = truncateUtf16Safe(
+    candidate.description,
+    MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS,
+  );
+  const normalized = prefix.replace(/\s+/g, " ").trim();
+  if (
+    prefix.length === candidate.description.length &&
+    normalized.length <= MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS
+  ) {
+    return { ...candidate, description: normalized };
+  }
+  const compacted = truncateUtf16Safe(
+    normalized,
+    MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS - 3,
+  ).trimEnd();
+  return {
+    ...candidate,
+    description: `${compacted}...`,
+  };
+}
+
+function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandidate | undefined {
+  // Callable identity must stay exact. Optional provenance/display metadata is
+  // omitted when it would make a repeated batch candidate attacker-sized.
+  const mandatoryChars =
+    candidate.id.length + candidate.source.length + candidate.name.length + candidate.input.length;
+  if (mandatoryChars > MAX_BATCH_CANDIDATE_METADATA_CHARS) {
+    return undefined;
+  }
+  let remaining = MAX_BATCH_CANDIDATE_METADATA_CHARS - mandatoryChars;
+  const retain = (value: string | undefined): string | undefined => {
+    if (value === undefined || value.length > remaining) {
+      return undefined;
+    }
+    remaining -= value.length;
+    return value;
+  };
+  const sourceName = retain(candidate.sourceName);
+  const label = retain(candidate.label);
+  const mcpChars = candidate.mcp
+    ? candidate.mcp.serverName.length +
+      candidate.mcp.safeServerName.length +
+      candidate.mcp.toolName.length +
+      candidate.mcp.operation.length
+    : 0;
+  const mcp = candidate.mcp && mcpChars <= remaining ? candidate.mcp : undefined;
+  if (mcp) {
+    remaining -= mcpChars;
+  }
+  const output = retain(candidate.output);
+  return {
+    ...compactBatchCandidateDescription(candidate),
+    sourceName,
+    label,
+    mcp,
+    output,
+  };
+}
+
+function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
+  results: ToolSearchBatchGroup[];
+  truncated?: true;
+} {
+  const bounded: ToolSearchBatchGroup[] = results.map((result) => {
+    const candidates = result.candidates
+      .map(compactBatchCandidate)
+      .filter((candidate): candidate is ToolSearchCandidate => candidate !== undefined);
+    const groupTruncated = candidates.length < result.candidates.length;
+    return {
+      ...result,
+      candidates,
+      ...(groupTruncated ? { truncated: true as const } : {}),
+    };
+  });
+  let truncated = bounded.some((result) => result.truncated);
+  const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
+  while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+    const removable = bounded
+      .map((result, index) => ({
+        index,
+        rank: result.candidates.length,
+        candidate: result.candidates.at(-1),
+      }))
+      .filter(
+        (item): item is { index: number; rank: number; candidate: ToolSearchCandidate } =>
+          item.candidate !== undefined,
+      )
+      .toSorted(
+        (a, b) =>
+          b.rank - a.rank ||
+          JSON.stringify(b.candidate).length - JSON.stringify(a.candidate).length ||
+          a.index - b.index,
+      )[0];
+    if (!removable) {
+      break;
+    }
+    const group = bounded[removable.index];
+    group?.candidates.pop();
+    if (group) {
+      group.truncated = true;
+    }
+    truncated = true;
+  }
+  return render();
+}
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   if (name === TOOL_SEARCH_CODE_MODE_TOOL_NAME) {
@@ -155,34 +283,83 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         args: unknown,
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
-      ): Promise<AgentToolResult<unknown>> =>
-        jsonResult(
-          await runCodeMode({
+      ): Promise<AgentToolResult<unknown>> => {
+        let executionRuntime: ToolSearchRuntime | undefined;
+        try {
+          const result = await runCodeMode({
             toolCallId,
             ctx,
             code: readToolSearchCode(args),
             config,
             signal,
             onUpdate,
-          }),
-        ),
+            onRuntime: (value) => {
+              executionRuntime = value;
+            },
+          });
+          return formatToolSearchControlResult(result, executionRuntime);
+        } catch (error) {
+          throw formatToolSearchControlError(
+            error,
+            executionRuntime,
+            toolCallId,
+            signal ?? ctx.abortSignal,
+          );
+        }
+      },
     },
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Query in English: matching is lexical against tool names and descriptions, which are written in English, so a query in another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass exactly one of query for one search or queries for several independent searches in one call. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
-        query: Type.String({
-          description: "Search query, in English. Describe the capability you need.",
-        }),
+        query: Type.Optional(
+          Type.String({
+            description:
+              "Single search query, in English. Do not set this when queries is present.",
+          }),
+        ),
         limit: Type.Optional(
-          Type.Integer({ minimum: 1, description: "Maximum number of results." }),
+          Type.Integer({ minimum: 1, description: "Maximum number of single-search results." }),
+        ),
+        queries: Type.Optional(
+          Type.Array(
+            Type.Object({
+              query: Type.String({
+                minLength: 1,
+                maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+                description: "Search query, in English. Describe the capability you need.",
+              }),
+              limit: Type.Optional(
+                Type.Integer({
+                  minimum: 1,
+                  description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+                }),
+              ),
+            }),
+            {
+              minItems: 1,
+              maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
+              description: `Independent searches. Do not set query when this is present. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
+            },
+          ),
         ),
       }),
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
-        const search = readToolSearchArgs(args, config);
-        return jsonResult(await runtime.search(search.query, { limit: search.limit }));
+        const request = readToolSearchRequest(args, config);
+        if (request.kind === "single") {
+          return jsonResult(
+            await runtime.search(request.search.query, { limit: request.search.limit }),
+          );
+        }
+        const results = await Promise.all(
+          request.searches.map(async (search) => ({
+            query: search.query,
+            candidates: await runtime.search(search.query, { limit: search.limit }),
+          })),
+        );
+        return jsonResult(boundToolSearchBatchResponse(results));
       },
     },
     {
@@ -213,13 +390,23 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
         const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
-        return jsonResult(
-          await runtime.call(call.id, call.input, {
+        try {
+          const callResult = await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,
             signal,
             onUpdate,
-          }),
-        );
+          });
+          const wrappedResult = formatToolSearchControlResult(callResult, runtime, toolCallId);
+          const failureKind = resolveToolResultFailureKind(callResult.result);
+          if (!failureKind) {
+            return wrappedResult;
+          }
+          // Keep the model-visible `{ tool, result }` envelope stable while the
+          // outer lifecycle reads its own canonical failure marker from details.
+          return { ...wrappedResult, details: { ...callResult, status: failureKind } };
+        } catch (error) {
+          throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
+        }
       },
     },
   ];

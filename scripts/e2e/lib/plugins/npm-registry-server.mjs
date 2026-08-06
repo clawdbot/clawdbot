@@ -30,6 +30,21 @@ function normalizeUpstreamRegistry(raw) {
 }
 
 const upstreamRegistry = normalizeUpstreamRegistry(process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM);
+const distTagOverrides = new Map(
+  (process.env.OPENCLAW_NPM_REGISTRY_DIST_TAGS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const separator = entry.indexOf("=");
+      if (separator <= 0 || separator === entry.length - 1) {
+        throw new Error(
+          "OPENCLAW_NPM_REGISTRY_DIST_TAGS must contain comma-separated tag=version entries",
+        );
+      }
+      return [entry.slice(0, separator).trim(), entry.slice(separator + 1).trim()];
+    }),
+);
 // Match other E2E package-download budgets while keeping public-registry hops
 // inside the install deadline and decoded bodies inside a fixed memory budget.
 const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
@@ -88,7 +103,10 @@ for (let index = 0; index < packageArgs.length; index += 3) {
 
 const metadataFor = (entry, baseUrl) => ({
   name: entry.packageName,
-  "dist-tags": { latest: entry.latestVersion },
+  "dist-tags": {
+    latest: entry.latestVersion,
+    ...Object.fromEntries(distTagOverrides),
+  },
   versions: Object.fromEntries(
     [...entry.versions.entries()].map(([version, versionEntry]) => [
       version,

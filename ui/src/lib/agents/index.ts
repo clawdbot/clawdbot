@@ -55,7 +55,7 @@ type AgentToolsState = Omit<AgentsState, "agentsLoading" | "agentsError">;
 
 type AgentsConfigCapability = {
   readonly state: { configFormDirty: boolean };
-  save: () => Promise<boolean>;
+  save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;
 };
 
@@ -187,12 +187,16 @@ export async function setDefaultAgent(
   config: AgentsConfigCapability,
   agentId: string,
   refreshAgents: () => Promise<unknown>,
+  canDispatch: () => boolean = () => true,
 ): Promise<void> {
+  if (!canDispatch()) {
+    return;
+  }
   const hadPendingConfigDraft = config.state.configFormDirty;
   if (config.stageDefaultAgent(agentId)) {
     if (!hadPendingConfigDraft && config.state.configFormDirty) {
-      const saved = await config.save();
-      if (saved) {
+      const saved = await config.save({ canDispatch });
+      if (saved && canDispatch()) {
         await refreshAgents();
       }
     }

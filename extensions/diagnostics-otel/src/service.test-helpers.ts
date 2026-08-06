@@ -2,7 +2,10 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  onTrustedInternalDiagnosticEvent,
+  registerDiagnosticTracePropagationBridge,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -80,6 +83,7 @@ export function createOtelContext(
     internalDiagnostics: {
       emit: emitTrustedDiagnosticEventWithPrivateData,
       onEvent: onTrustedInternalDiagnosticEvent,
+      registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
     },
   };
 }

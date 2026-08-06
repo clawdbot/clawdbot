@@ -22,7 +22,9 @@ const DREAMING_WORKSPACE_STATE_MAX_ENTRIES = 50_000;
 export const SHORT_TERM_LOCK_MAX_ENTRIES = 4_096;
 export const SESSION_SEEN_HASHES_PER_CHUNK = 512;
 
-type MemoryCoreOpenKeyedStore = <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+export type MemoryCoreOpenKeyedStore = <T>(
+  options: OpenKeyedStoreOptions,
+) => PluginStateKeyedStore<T>;
 
 type WorkspaceValue<T> = {
   version: 1;

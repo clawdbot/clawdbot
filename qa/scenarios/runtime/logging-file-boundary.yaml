@@ -1,0 +1,26 @@
+title: Logging file boundary
+
+scenario:
+  id: logging-file-boundary
+  surface: runtime
+  coverage:
+    primary:
+      - observability.rolling-gateway-jsonl-file-logs
+      - observability.trace-correlation-fields
+  objective: Verify the actual file logger rotates bounded JSONL while preserving diagnostic trace correlation.
+  successCriteria:
+    - A tiny configured file limit rotates the active JSONL log into the .1 archive.
+    - Every retained line in the active and archived files is valid JSON.
+    - Trace, span, parent, and flags fields survive in the file record and match the linked diagnostic event.
+  codeRefs:
+    - src/logging/logger.ts
+    - src/logging/logger-file-transport.ts
+    - src/infra/diagnostic-trace-context.ts
+    - test/e2e/qa-lab/runtime/logging-file-boundary-runtime.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/logging-file-boundary-runtime.ts
+    summary: Runs the real logger with a tiny file cap and validates JSONL rotation and trace correlation.
+    args:
+      - --artifact-base
+      - ${outputDir}

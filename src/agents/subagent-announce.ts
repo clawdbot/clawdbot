@@ -309,6 +309,7 @@ export async function runSubagentAnnounceFlow(params: {
   isChildSessionEffectsAllowed?: () => boolean;
   /** Live owner check for requester delivery after awaited phases. */
   isCompletionDeliveryAllowed?: () => boolean;
+  isCompletionOwnedByRequesterYield?: () => boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -334,11 +335,7 @@ export async function runSubagentAnnounceFlow(params: {
       typeof childSessionEntry?.sessionId === "string" && childSessionEntry.sessionId.trim()
         ? childSessionEntry.sessionId.trim()
         : undefined;
-    childSessionLifecycleRevision =
-      typeof childSessionEntry?.lifecycleRevision === "string" &&
-      childSessionEntry.lifecycleRevision.trim()
-        ? childSessionEntry.lifecycleRevision.trim()
-        : undefined;
+    childSessionLifecycleRevision = normalizeOptionalString(childSessionEntry?.lifecycleRevision);
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply =
       params.terminalReply?.disposition === "visible"
@@ -705,6 +702,7 @@ export async function runSubagentAnnounceFlow(params: {
       sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
       isSourceSessionEffectsAllowed: completionDeliveryAllowed,
+      isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage,

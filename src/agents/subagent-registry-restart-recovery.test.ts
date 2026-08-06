@@ -506,6 +506,20 @@ describe("subagent registry restart recovery", () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
+  it("does not reserve when the Gateway lifecycle rotates during transcript recovery", async () => {
+    const entry = run();
+    mocks.readSessionMessages.mockImplementationOnce(async () => {
+      rotateAgentEventLifecycleGeneration();
+      return [];
+    });
+
+    await expect(recover(entry)).resolves.toEqual({ status: "handled" });
+
+    expect(reserveLaunch).not.toHaveBeenCalled();
+    expect(markLaunchAttempted).not.toHaveBeenCalled();
+    expect(dispatchAgent).not.toHaveBeenCalled();
+  });
+
   it("never overwrites a consumed attempt when the mutable session marker advances", async () => {
     const entry = run({
       execution: {

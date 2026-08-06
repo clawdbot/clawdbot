@@ -20,10 +20,27 @@ function throwAbortError(): never {
  * Tool settlements pass through untouched to preserve tool error semantics,
  * including non-Error rejections.
  */
-function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+function raceWithAbortSignal<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+  yieldRunSignal?: AbortSignal,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
+      const reason = yieldRunSignal?.reason as
+        | { code?: unknown; turnHandoff?: unknown }
+        | undefined;
+      // Only the initiating tool may finish its run owner's deliberate handoff;
+      // caller-authored aborts and concurrent sibling tools must still cancel.
+      if (
+        yieldRunSignal?.aborted &&
+        signal.reason === reason &&
+        reason?.code === "sessions_yield" &&
+        reason.turnHandoff === true
+      ) {
+        return;
+      }
       reject(createAbortError("Aborted"));
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -67,6 +84,7 @@ export function wrapToolWithAbortSignal(
       return await raceWithAbortSignal(
         execute(toolCallId, params, combinedSignal, onUpdate),
         combinedSignal,
+        tool.name === "sessions_yield" ? abortSignal : undefined,
       );
     },
   };

@@ -2,6 +2,7 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -46,6 +47,12 @@ function safeFlowDisplayText(value: string | undefined, maxChars?: number): stri
     return "n/a";
   }
   return typeof maxChars === "number" ? truncate(sanitized, maxChars) : sanitized;
+}
+
+function formatFlowTableCell(value: string | undefined, width: number): string {
+  const text = safeFlowDisplayText(value);
+  const fitted = visibleWidth(text) > width ? `${truncateToVisibleWidth(text, width - 1)}…` : text;
+  return `${fitted}${" ".repeat(width - visibleWidth(fitted))}`;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
@@ -96,7 +103,7 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
         flow.syncMode.padEnd(MODE_PAD),
         formatFlowStatusCell(flow.status, rich),
         String(flow.revision).padEnd(REV_PAD),
-        safeFlowDisplayText(flow.controllerId, CTRL_PAD).padEnd(CTRL_PAD),
+        formatFlowTableCell(flow.controllerId, CTRL_PAD),
         counts.padEnd(14),
         safeFlowDisplayText(flow.goal, 80),
       ].join(" "),

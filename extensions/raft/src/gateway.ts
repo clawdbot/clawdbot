@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Socket } from "node:net";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -377,14 +378,12 @@ export async function startRaftGatewayAccount(
       }
     });
 
-    ctx.setStatus({
-      accountId: ctx.accountId,
-      running: true,
-      lifecycle: "ready",
-      connected: true,
-      lastStartAt: Date.now(),
-      lastError: null,
-    });
+    ctx.setStatus(
+      channelReadyPatch({
+        accountId: ctx.accountId,
+        lastStartAt: Date.now(),
+      }),
+    );
     ctx.log?.info?.(`Raft bridge started for profile "${profile}".`);
 
     await keepHttpServerTaskAlive({

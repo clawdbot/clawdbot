@@ -52,6 +52,7 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
+  user?: string;
   trustDeclaredOperatorScopes: boolean;
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
@@ -258,6 +259,7 @@ async function checkGatewayHttpRequestAuthWith(
     ok: true,
     requestAuth: {
       authMethod: authResult.method,
+      ...(authResult.user ? { user: authResult.user } : {}),
       // Shared-secret bearer auth proves possession of the gateway secret, but it
       // does not prove a narrower per-request operator identity. HTTP endpoints
       // must opt in explicitly if they want to treat that shared-secret path as a

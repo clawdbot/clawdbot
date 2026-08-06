@@ -86,6 +86,11 @@ import {
 } from "./changed-lanes.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mjs";
+import {
+  GATEWAY_SERVER_TEST_PROCESS_COUNT,
+  listGatewayServerTestTargets,
+  splitTestTargetChunks as splitTargetChunks,
+} from "./lib/gateway-server-test-plan.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -723,19 +728,6 @@ export function formatNoChangedTestTargetLines(skippedBroadFallbackPaths) {
 }
 
 const EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD = 12;
-const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
-const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
-  "src/gateway/embeddings-http.test.ts",
-  "src/gateway/models-http.test.ts",
-  "src/gateway/openai-http.test.ts",
-  "src/gateway/openresponses-http.test.ts",
-  "src/gateway/probe.auth.integration.test.ts",
-]);
-const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
-  "src/gateway/gateway.test.ts",
-  "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  "src/gateway/sessions-history-http.test.ts",
-]);
 function resolveTestProjectsVitestNoOutputTimeoutMs(config) {
   const directRunnerTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(["run", "--config", config]);
   return String(
@@ -774,63 +766,6 @@ function listRepoFilesRecursive(root, cwd) {
     }
     return [normalizePathPattern(path.relative(cwd, absolute))];
   });
-}
-
-function listGatewayFilesFromGit(cwd) {
-  const result = spawnSync("git", ["ls-files", "--", "src/gateway"], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0);
-}
-
-function isGatewayServerFullSuiteTarget(relative) {
-  if (
-    GATEWAY_SERVER_EXCLUDED_TEST_TARGETS.has(relative) ||
-    relative.startsWith("src/gateway/server-methods/")
-  ) {
-    return false;
-  }
-  return (
-    GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS.has(relative) ||
-    (relative.startsWith("src/gateway/") &&
-      path.posix.basename(relative).includes("server") &&
-      relative.endsWith(".test.ts"))
-  );
-}
-
-function resolveGatewayServerFullSuiteTargets(cwd) {
-  const gatewayDir = path.join(cwd, "src/gateway");
-  if (!fs.existsSync(gatewayDir)) {
-    return [];
-  }
-  return (listGatewayFilesFromGit(cwd) ?? listRepoFilesRecursive(gatewayDir, cwd))
-    .filter(isGatewayServerFullSuiteTarget)
-    .toSorted((a, b) => a.localeCompare(b));
-}
-
-function splitTargetChunks(targets, chunkCount) {
-  if (targets.length === 0) {
-    return [];
-  }
-  const normalizedChunkCount = Math.min(chunkCount, targets.length);
-  const baseSize = Math.floor(targets.length / normalizedChunkCount);
-  const remainder = targets.length % normalizedChunkCount;
-  const chunks = [];
-  let offset = 0;
-  for (let index = 0; index < normalizedChunkCount; index += 1) {
-    const chunkSize = baseSize + (index < remainder ? 1 : 0);
-    chunks.push(targets.slice(offset, offset + chunkSize));
-    offset += chunkSize;
-  }
-  return chunks;
 }
 
 let cachedBroadScriptTestTargets = null;
@@ -2276,7 +2211,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS = [
   ],
   [/^scripts\/lib\/plugin-sdk-entries\.mjs$/u, pluginSdkEntryOwners],
   [
-    /^scripts\/lib\/official-external-channel-catalog\.json$/u,
+    /^scripts\/lib\/official-external-channel-(?:catalog|seed)\.json$/u,
     [
       "src/plugins/official-external-plugin-catalog.test.ts",
       releaseCheck,
@@ -3684,8 +3619,8 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
           chunks = splitTargetChunks(targets, chunkCount);
         } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
           chunks = splitTargetChunks(
-            resolveGatewayServerFullSuiteTargets(cwd),
-            GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+            listGatewayServerTestTargets(cwd),
+            GATEWAY_SERVER_TEST_PROCESS_COUNT,
           );
         } else if (config === EXTENSION_MATRIX_VITEST_CONFIG) {
           chunks = createExtensionTestProcessTargetChunks(

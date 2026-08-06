@@ -1,7 +1,11 @@
 /** Covers non-activating memory registry handles and requesting-agent workspace ownership. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
+import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+
+type AuthorizeSearchHits = NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>;
 
 const mocks = vi.hoisted(() => ({
   getMemoryRuntime: vi.fn(),
@@ -25,6 +29,7 @@ vi.mock("./memory-state.js", async (importOriginal) => {
 });
 
 import {
+  authorizeActiveMemorySearchHits,
   closeActiveMemorySearchManager,
   closeActiveMemorySearchManagers,
   getActiveMemorySearchManager,
@@ -35,14 +40,24 @@ import { hasMemoryRuntime } from "./memory-state.js";
 
 function createRuntime() {
   return {
+    authorizeSearchHits: vi.fn<AuthorizeSearchHits>(async ({ hits }) => hits),
     getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
     resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
     closeMemorySearchManager: vi.fn(async () => {}),
     closeAllMemorySearchManagers: vi.fn(async () => {}),
-  };
+  } satisfies MemoryPluginRuntime;
 }
 
-function createRegistry(runtime = createRuntime()) {
+type TestRegistry<T extends MemoryPluginRuntime> = {
+  registry: ReturnType<typeof createEmptyPluginRegistry>;
+  runtime: T;
+};
+
+function createRegistry(): TestRegistry<ReturnType<typeof createRuntime>>;
+function createRegistry<T extends MemoryPluginRuntime>(runtime: T): TestRegistry<T>;
+function createRegistry(
+  runtime: MemoryPluginRuntime = createRuntime(),
+): TestRegistry<MemoryPluginRuntime> {
   const registry = createEmptyPluginRegistry();
   registry.memoryCapabilities.push({ pluginId: "memory-core", capability: { runtime } });
   return { registry, runtime };
@@ -210,6 +225,83 @@ describe("memory runtime handles", () => {
       backend: "builtin",
     });
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it("authorizes raw hits inside the selected plugin runtime scope", async () => {
+    const { registry, runtime } = createRegistry();
+    runtime.authorizeSearchHits.mockImplementationOnce(async ({ hits }) => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+      return hits.filter((hit) => hit.source === "memory");
+    });
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+    const hits: MemorySearchResult[] = [
+      {
+        source: "memory",
+        path: "memory.md",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet: "memory",
+      },
+      {
+        source: "sessions",
+        path: "sessions/private.jsonl",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet: "private",
+      },
+    ];
+
+    await expect(
+      authorizeActiveMemorySearchHits({
+        cfg: memoryConfig,
+        agentId: "main",
+        requesterSessionKey: "agent:main:voice:15550001234",
+        sandboxed: false,
+        hits,
+      }),
+    ).resolves.toEqual([hits[0]]);
+  });
+
+  it("fails closed on session hits when a memory runtime has no authorizer", async () => {
+    const runtimeWithoutAuthorizer = {
+      getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+      resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
+      closeMemorySearchManager: vi.fn(async () => {}),
+      closeAllMemorySearchManagers: vi.fn(async () => {}),
+    } satisfies MemoryPluginRuntime;
+    mocks.loadPluginRegistryHandle.mockReturnValue(
+      createRegistry(runtimeWithoutAuthorizer).registry,
+    );
+    const hits: MemorySearchResult[] = [
+      {
+        source: "memory",
+        path: "memory.md",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet: "memory",
+      },
+      {
+        source: "sessions",
+        path: "sessions/private.jsonl",
+        startLine: 1,
+        endLine: 1,
+        score: 1,
+        snippet: "private",
+      },
+    ];
+
+    await expect(
+      authorizeActiveMemorySearchHits({
+        cfg: memoryConfig,
+        agentId: "main",
+        requesterSessionKey: "agent:main:voice:15550001234",
+        sandboxed: false,
+        hits,
+      }),
+    ).resolves.toEqual([hits[0]]);
   });
 
   it("closes managers through current and retired workspace handles without reloading", async () => {

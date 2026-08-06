@@ -274,6 +274,7 @@ export async function recoverInterruptedSubagentRow(
   const acceptedRecoveryCurrent =
     initialRecoveryReceipt?.phase === "accepted" && params.isCurrent();
   const isRecoverySourceCurrent = () =>
+    isRecoveryAttemptLifecycleCurrent() &&
     params.isCurrent() &&
     params.entry.pauseReason !== "sessions_yield" &&
     params.entry.suppressAnnounceReason !== "steer-restart" &&
@@ -542,7 +543,7 @@ export async function recoverInterruptedSubagentRow(
           expected: params.entry,
           sessionMarker: marker,
           idempotencyKey,
-          lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+          lifecycleGeneration: recoveryLifecycleGeneration,
         });
         if (!attempted || attempted.phase === "accepted") {
           earlyResult = { status: "handled" };

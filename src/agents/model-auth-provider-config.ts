@@ -21,6 +21,10 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
 } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  isAuthCooldownBypassedForProvider,
+  resolveProfileUnusableUntil,
+} from "./auth-profiles/usage-state.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -519,6 +523,67 @@ function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): b
   return (
     normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
     coerceSecretRef(providerConfig.apiKey) !== null
+  );
+}
+
+function isInlineProviderApiKeySource(source: string): boolean {
+  return (
+    source === "models.json" ||
+    source.endsWith(" (models.json secretref)") ||
+    source.endsWith(" (models.json marker)")
+  );
+}
+
+/** True when a resolved credential came from an inline `models.providers.<id>.apiKey`. */
+export function isConfigBackedInlineProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  source: string;
+  store?: AuthProfileStore;
+}): boolean {
+  if (isInlineProviderApiKeySource(params.source)) {
+    return true;
+  }
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig || !hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return false;
+  }
+  if (coerceSecretRef(providerConfig.apiKey)) {
+    return true;
+  }
+  const perEntryRawKey = normalizeOptionalSecretInput(providerConfig.apiKey);
+  return Boolean(perEntryRawKey && !params.store?.profiles[perEntryRawKey]);
+}
+
+// Reads the inline provider API-key cooldown via usage-state primitives instead
+// of the auth-profiles usage module, so model-auth keeps working in the many
+// tests that partially mock that module. Mirrors the usage-module helper of the
+// same intent, using the same provider normalization as the write side so the
+// `inline-api-key:<provider>` usage id matches what the failure marker records.
+export function resolveInlineProviderApiKeyCooldownUntil(
+  store: AuthProfileStore,
+  provider: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
+  return stats ? resolveProfileUnusableUntil(stats) : null;
+}
+
+/** Fails closed while an inline provider API key is inside its billing/auth cooldown. */
+export function assertInlineProviderApiKeyUsable(params: {
+  store: AuthProfileStore;
+  provider: string;
+}): void {
+  const unusableUntil = resolveInlineProviderApiKeyCooldownUntil(params.store, params.provider);
+  if (typeof unusableUntil !== "number" || unusableUntil <= Date.now()) {
+    return;
+  }
+  const waitMs = Math.max(0, unusableUntil - Date.now());
+  const waitMinutes = Math.max(1, Math.ceil(waitMs / 60_000));
+  throw new Error(
+    `Inline API key for provider "${params.provider}" is temporarily disabled after a provider auth/billing failure. Retry after about ${waitMinutes} minute${waitMinutes === 1 ? "" : "s"}, or switch to a different auth profile/API key.`,
   );
 }
 

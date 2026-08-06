@@ -583,6 +583,37 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
+  it.each([
+    { ownerAllowFrom: ["discord:*"], senderIsOwner: false },
+    { ownerAllowFrom: ["discord:123456789012345678"], senderIsOwner: true },
+  ])(
+    "passes host owner status $senderIsOwner for command owners $ownerAllowFrom",
+    async ({ ownerAllowFrom, senderIsOwner }) => {
+      const cfg = {
+        ...createConfig(),
+        commands: { ownerAllowFrom },
+      } as OpenClawConfig;
+      const interaction = createInteraction();
+      interaction.user.id = "123456789012345678";
+      interaction.options.getString.mockReturnValue("now");
+      registerPairPlugin();
+      const command = await createPluginCommand({ cfg, name: "pair" });
+      const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+        text: "paired:now",
+      });
+
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(
+        interaction as unknown,
+      );
+
+      expectPluginCommandExecution({
+        mock: executeSpy,
+        commandName: "pair",
+        expected: { senderIsOwner },
+      });
+    },
+  );
+
   it("passes the configured binding agent to plugin-owned Discord command sessions", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();

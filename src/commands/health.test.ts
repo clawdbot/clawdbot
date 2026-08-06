@@ -1,5 +1,6 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
@@ -80,6 +81,7 @@ const buildGatewayProbeConnectionDetailsMock = vi.fn(() => ({
   url: TEST_GATEWAY_URL,
 }));
 const formatGatewayAuthErrorJsonMock = vi.fn();
+const formatGatewayClientRequestErrorJsonMock = vi.fn();
 const formatGatewayTransportErrorJsonMock = vi.fn();
 const probeGatewayStatusMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -89,6 +91,8 @@ vi.mock("../gateway/call.js", () => ({
   buildGatewayProbeConnectionDetails: (...args: [unknown, ...unknown[]]) =>
     Reflect.apply(buildGatewayProbeConnectionDetailsMock, undefined, args),
   formatGatewayAuthErrorJson: (...args: unknown[]) => formatGatewayAuthErrorJsonMock(...args),
+  formatGatewayClientRequestErrorJson: (...args: unknown[]) =>
+    formatGatewayClientRequestErrorJsonMock(...args),
   formatGatewayTransportErrorJson: (...args: unknown[]) =>
     formatGatewayTransportErrorJsonMock(...args),
   isGatewayCredentialsRequiredError: (value: unknown) =>
@@ -145,9 +149,14 @@ describe("healthCommand", () => {
       tlsFingerprint: TEST_TLS_FINGERPRINT,
       url: TEST_GATEWAY_URL,
     });
-    formatGatewayAuthErrorJsonMock.mockReset();
-    formatGatewayAuthErrorJsonMock.mockReturnValue(null);
-    formatGatewayTransportErrorJsonMock.mockReturnValue(null);
+    for (const formatterMock of [
+      formatGatewayAuthErrorJsonMock,
+      formatGatewayClientRequestErrorJsonMock,
+      formatGatewayTransportErrorJsonMock,
+    ]) {
+      formatterMock.mockReset();
+      formatterMock.mockReturnValue(null);
+    }
     isGatewayCredentialsRequiredErrorMock.mockReturnValue(false);
     isGatewaySecretRefUnavailableErrorMock.mockReturnValue(false);
     probeGatewayStatusMock.mockReset();
@@ -407,6 +416,56 @@ describe("healthCommand", () => {
     expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+  });
+
+  it("keeps Gateway health request failures machine-readable in JSON mode", async () => {
+    const error = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "health snapshot unavailable",
+      details: { operation: "refresh" },
+      retryable: true,
+      retryAfterMs: 250,
+    });
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "UNAVAILABLE",
+        message: "health snapshot unavailable",
+        details: { operation: "refresh" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    formatGatewayClientRequestErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(formatGatewayAuthErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(formatGatewayClientRequestErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(formatGatewayTransportErrorJsonMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+  });
+
+  it("preserves Gateway health request failures in human-readable mode", async () => {
+    const error = new GatewayClientRequestError({
+      code: "UNAVAILABLE",
+      message: "health snapshot unavailable",
+      retryable: true,
+    });
+    callGatewayMock.mockRejectedValueOnce(error);
+
+    await expect(
+      healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never),
+    ).rejects.toBe(error);
+
+    expect(formatGatewayAuthErrorJsonMock).not.toHaveBeenCalled();
+    expect(formatGatewayClientRequestErrorJsonMock).not.toHaveBeenCalled();
+    expect(formatGatewayTransportErrorJsonMock).not.toHaveBeenCalled();
   });
 
   it.each([

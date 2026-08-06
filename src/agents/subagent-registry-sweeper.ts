@@ -31,7 +31,7 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
-import { isSessionLifecycleChangedGatewayError } from "./subagent-session-cleanup.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
@@ -210,25 +210,20 @@ export function createSubagentRegistrySweeper(params: {
     childSessionKey: string,
     identity: FrozenSessionIdentity,
   ): Promise<"deleted" | "changed"> {
-    try {
-      await params.callGateway({
-        method: "sessions.delete",
-        params: {
-          key: childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-          expectedSessionId: identity.sessionId,
-          expectedLifecycleRevision: identity.lifecycleRevision,
-        },
-        timeoutMs: 10_000,
-      });
-      return "deleted";
-    } catch (error) {
-      if (isSessionLifecycleChangedGatewayError(error)) {
-        return "changed";
-      }
-      throw error;
+    let failure: unknown;
+    const outcome = await deleteSubagentSessionForCleanup({
+      callGateway: params.callGateway,
+      childSessionKey,
+      expectedSessionId: identity.sessionId,
+      expectedLifecycleRevision: identity.lifecycleRevision,
+      onError: (error) => {
+        failure = error;
+      },
+    });
+    if (outcome === "failed") {
+      throw failure;
     }
+    return outcome;
   }
 
   const sweptContext = (entry: SubagentRunRecord) => ({

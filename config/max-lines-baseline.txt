@@ -180,7 +180,7 @@ extensions/oc-path/src/oc-path/universal.ts
 extensions/ollama/index.test.ts
 extensions/ollama/index.ts
 extensions/ollama/src/stream-runtime.test.ts
-extensions/ollama/src/stream.ts
+extensions/ollama/src/stream.runtime.ts
 extensions/openai/image-generation-provider.test.ts
 extensions/openai/image-generation-provider.ts
 extensions/openai/openai-provider.test.ts
@@ -229,7 +229,6 @@ extensions/qqbot/src/engine/messaging/outbound-deliver.ts
 extensions/qqbot/src/engine/messaging/outbound-media-send.ts
 extensions/qqbot/src/engine/messaging/streaming-c2c.ts
 extensions/signal/src/approval-reactions.ts
-extensions/signal/src/channel.ts
 extensions/signal/src/client-container.test.ts
 extensions/signal/src/client-container.ts
 extensions/signal/src/core.test.ts
@@ -277,7 +276,6 @@ extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
 extensions/voice-call/index.test.ts
-extensions/voice-call/index.ts
 extensions/voice-call/src/cli.ts
 extensions/voice-call/src/media-stream.ts
 extensions/voice-call/src/webhook.test.ts
@@ -320,7 +318,6 @@ packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
-packages/speech-core/src/tts.test.ts
 packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts

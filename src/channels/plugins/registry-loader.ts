@@ -5,6 +5,7 @@
  */
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { ChannelId } from "./channel-id.types.js";
 
 type ChannelRegistryValueResolver<TValue> = (
@@ -25,6 +26,8 @@ export function createChannelRegistryLoader<TValue>(
       return pluginEntry ? resolveValue(pluginEntry) : undefined;
     };
 
-    return resolveFromRegistry(getActivePluginRegistry());
+    return resolveFromRegistry(
+      getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry(),
+    );
   };
 }

@@ -97,6 +97,23 @@ describe("processDiscordMessage provider preview hook safety", () => {
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
   });
 
+  it("uses an explicit partial preview despite inherited block delivery", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.disableBlockStreaming).toBe(true);
+      await params?.replyOptions?.onPartialReply?.({ text: "Hello" });
+      await params?.dispatcher.sendFinalReply({ text: "Hello" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      discordConfig: { streaming: { mode: "partial" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+  });
+
   it("does not re-enter final delivery after message_sending cancellation", async () => {
     registerHooks("message_sending");
     deliverDiscordReply.mockResolvedValueOnce({ visibleReplySent: false });

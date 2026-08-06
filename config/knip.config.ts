@@ -49,6 +49,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
+  "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs!",
   "scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs!",
   "scripts/e2e/lib/release-scenarios/write-marketplace.mjs!",
   "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs!",
@@ -116,11 +117,15 @@ const rootEntries = [
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  // Spawned by the agent concurrency benchmark; no static import edge exists.
+  "scripts/bench-agent-concurrency-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/audit/audit-event-writer.worker.ts!",
+  // Loaded by URL from the SQLite lifecycle archive owner.
+  "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
@@ -620,11 +625,6 @@ const config = {
       entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
     },
-    "packages/speech-core": {
-      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
-      project: ["**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
-    },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
@@ -735,11 +735,8 @@ const config = {
       "media-understanding-provider.ts!",
       "model-route-contract.ts!",
       "native-web-search.ts!",
-      "openai-chatgpt-oauth-abort.runtime.ts!",
       "openai-chatgpt-oauth-flow.runtime.ts!",
-      "openai-chatgpt-oauth-types.runtime.ts!",
       "openai-chatgpt-oauth.runtime.ts!",
-      "openai-chatgpt-pkce.runtime.ts!",
       "openai-chatgpt-provider.runtime.ts!",
       "openai-provider.ts!",
       "prompt-overlay.ts!",

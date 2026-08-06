@@ -19,13 +19,20 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
+  type DiagnosticEventMetadata,
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
+  formatDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
+import {
+  type DiagnosticTracePropagationBridge,
+  formatPropagatedDiagnosticTraceparent,
+  registerDiagnosticTracePropagationBridge,
+} from "./diagnostic-trace-propagation.js";
 
 describe("diagnostic-events", () => {
   beforeEach(() => {
@@ -268,6 +275,92 @@ describe("diagnostic-events", () => {
         { trusted: false, trustedTraceContext: true },
       ),
     ).toBeUndefined();
+  });
+
+  it("prepares trusted events synchronously without cloning private data", async () => {
+    const diagnosticTrace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    });
+    const exportedTrace = createDiagnosticTraceContext({
+      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      spanId: "bbbbbbbbbbbbbbbb",
+      traceFlags: "00",
+    });
+    const prepared: string[] = [];
+    let privateDataReads = 0;
+    const bridge: DiagnosticTracePropagationBridge<
+      DiagnosticEventPayload,
+      DiagnosticEventMetadata
+    > = {
+      shouldPrepareEvent(event) {
+        return event.type === "model.call.started";
+      },
+      prepareEvent(event) {
+        prepared.push(event.type);
+      },
+      resolveTraceContext(traceContext) {
+        expect(traceContext).toBe(diagnosticTrace);
+        return exportedTrace;
+      },
+    };
+    registerDiagnosticTracePropagationBridge(bridge);
+
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.started",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: diagnosticTrace,
+      },
+      {
+        modelContent: {
+          get inputMessages() {
+            privateDataReads += 1;
+            return ["secret prompt"];
+          },
+        },
+      },
+    );
+    expect(privateDataReads).toBe(0);
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 1,
+      trace: diagnosticTrace,
+    });
+
+    expect(prepared).toEqual(["model.call.started"]);
+    expect(formatDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${diagnosticTrace.traceId}-${diagnosticTrace.spanId}-01`,
+    );
+    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${exportedTrace.traceId}-${exportedTrace.spanId}-00`,
+    );
+    await waitForDiagnosticEventsDrained();
+    expect(privateDataReads).toBe(0);
+  });
+
+  it("does not fall back to diagnostic ids when an active propagation bridge misses", () => {
+    const diagnosticTrace = createDiagnosticTraceContext({
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    });
+    registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+    });
+
+    expect(formatDiagnosticTraceparent(diagnosticTrace)).toBe(
+      `00-${diagnosticTrace.traceId}-${diagnosticTrace.spanId}-01`,
+    );
+    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBeUndefined();
   });
 
   it("shares diagnostic state across duplicate module instances", async () => {
@@ -628,6 +721,46 @@ describe("diagnostic-events", () => {
     await waitForDiagnosticEventsDrained();
 
     expect(events).toHaveLength(250);
+  });
+
+  it("does not extend a drain barrier for events queued after it starts", async () => {
+    const callIds: string[] = [];
+    onDiagnosticEvent((event) => {
+      if (event.type === "model.call.started") {
+        callIds.push(event.callId);
+      }
+    });
+
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-before-barrier",
+      callId: "before-barrier",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    const drained = waitForDiagnosticEventsDrained();
+    for (let index = 0; index < 250; index += 1) {
+      emitDiagnosticEvent({
+        type: "model.call.started",
+        runId: `run-after-${index}`,
+        callId: `after-${index}`,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    }
+
+    await drained;
+
+    expect(callIds).toHaveLength(100);
+    expect(callIds[0]).toBe("before-barrier");
+    expect(
+      hasPendingInternalDiagnosticEvent(
+        (event) => event.type === "model.call.started" && event.callId === "after-249",
+      ),
+    ).toBe(true);
+
+    await waitForDiagnosticEventsDrained();
+    expect(callIds).toHaveLength(251);
   });
 
   it("reports pending async diagnostic events before they drain", async () => {

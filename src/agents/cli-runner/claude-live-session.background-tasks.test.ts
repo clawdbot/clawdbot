@@ -123,18 +123,34 @@ function getProcessSupervisorForTest() {
 
 function installLiveStdoutDriver(params?: {
   onWrite?: (stdout: (chunk: string) => void) => void;
+  autoStart?: boolean;
 }): {
   cancel: ReturnType<typeof vi.fn>;
-  stdout: { emit: (chunk: string) => void; waitReady: () => Promise<void> };
+  userInputUuids: string[];
+  stdout: {
+    emit: (chunk: string) => void;
+    startCurrentInput: () => void;
+    waitReady: () => Promise<void>;
+  };
 } {
   let stdoutListener: ((chunk: string) => void) | undefined;
   const cancel = vi.fn();
+  const userInputUuids: string[] = [];
   let markReady: (() => void) | undefined;
   const ready = new Promise<void>((resolve) => {
     markReady = resolve;
   });
   const stdin = {
-    write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+    write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+      const parsed = JSON.parse(data) as { type?: string; uuid?: string };
+      if (parsed.type === "user" && typeof parsed.uuid === "string") {
+        userInputUuids.push(parsed.uuid);
+        if (params?.autoStart !== false) {
+          stdoutListener?.(
+            jsonl([{ type: "command_lifecycle", command_uuid: parsed.uuid, state: "started" }]),
+          );
+        }
+      }
       if (stdoutListener && params?.onWrite) {
         params.onWrite(stdoutListener);
       }
@@ -157,9 +173,19 @@ function installLiveStdoutDriver(params?: {
   });
   return {
     cancel,
+    userInputUuids,
     stdout: {
       emit: (chunk: string) => {
         stdoutListener?.(chunk);
+      },
+      startCurrentInput: () => {
+        const inputUuid = userInputUuids.at(-1);
+        if (!inputUuid) {
+          throw new Error("Claude input UUID was not written");
+        }
+        stdoutListener?.(
+          jsonl([{ type: "command_lifecycle", command_uuid: inputUuid, state: "started" }]),
+        );
       },
       waitReady: () => ready,
     },
@@ -230,6 +256,7 @@ describe("claude live session provisional results", () => {
       credentialFingerprint: "credential-b",
     });
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(new Set(driver.userInputUuids).size).toBe(3);
     expect(driver.cancel).toHaveBeenCalledOnce();
   });
 
@@ -433,8 +460,8 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
-  it("keeps the turn open after a synthetic placeholder until the real result arrives", async () => {
-    const driver = installLiveStdoutDriver();
+  it("ignores exact synthetic replay until the matching input starts", async () => {
+    const driver = installLiveStdoutDriver({ autoStart: false });
     const resultPromise = startLiveTurn({
       runId: "run-synthetic-placeholder",
       useResume: true,
@@ -459,6 +486,11 @@ describe("claude live session provisional results", () => {
           session_id: "live-synthetic",
           result: "",
         },
+        {
+          type: "command_lifecycle",
+          command_uuid: "prior-synthetic-input",
+          state: "completed",
+        },
       ]),
     );
 
@@ -474,11 +506,8 @@ describe("claude live session provisional results", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(driver.cancel).not.toHaveBeenCalled();
-    await waitForDiagnosticEventsDrained();
-    expect(
-      getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:bg" }).lastProgressReason,
-    ).toBe("cli_live:result_deferred_synthetic_placeholder");
 
+    driver.stdout.startCurrentInput();
     driver.stdout.emit(
       jsonl([
         {
@@ -501,6 +530,70 @@ describe("claude live session provisional results", () => {
 
     const result = await resultPromise;
     expect(result.output.text).toBe("The background work is complete.");
+    expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("ignores markerless prior results until the matching input starts", async () => {
+    const driver = installLiveStdoutDriver({ autoStart: false });
+    const resultPromise = startLiveTurn({ runId: "run-markerless-prior-result", useResume: true });
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-markerless",
+          result: "",
+          origin: { kind: "task-notification" },
+        },
+        {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          session_id: "live-markerless",
+          result: "prior task failed",
+        },
+        {
+          type: "command_lifecycle",
+          command_uuid: "prior-markerless-input",
+          state: "completed",
+        },
+      ]),
+    );
+    let settled = false;
+    void resultPromise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    driver.stdout.startCurrentInput();
+    driver.stdout.emit(
+      jsonl([
+        {
+          type: "assistant",
+          session_id: "live-markerless",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "current answer" }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-markerless",
+          result: "current answer",
+        },
+      ]),
+    );
+
+    await expect(resultPromise).resolves.toMatchObject({ output: { text: "current answer" } });
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
@@ -597,57 +690,11 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).not.toHaveBeenCalled();
   });
 
-  it("expires a terminal resumed placeholder through the existing empty-result path", async () => {
+  it("times out and cleans up when lifecycle records never start the current input", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const driver = installLiveStdoutDriver();
+    const driver = installLiveStdoutDriver({ autoStart: false });
     const resultPromise = startLiveTurn({
-      runId: "run-synthetic-grace-expiry",
-      timeoutMs: 60_000,
-      noOutputTimeoutMs: 60_000,
-      useResume: true,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    await driver.stdout.waitReady();
-
-    driver.stdout.emit(
-      jsonl([
-        { type: "system", subtype: "init", session_id: "live-synthetic-expiry" },
-        {
-          type: "assistant",
-          session_id: "live-synthetic-expiry",
-          message: {
-            model: "<synthetic>",
-            role: "assistant",
-            content: [{ type: "text", text: "No response requested." }],
-          },
-        },
-        {
-          type: "result",
-          subtype: "success",
-          session_id: "live-synthetic-expiry",
-          result: "",
-        },
-      ]),
-    );
-
-    let settled = false;
-    void resultPromise.then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await resultPromise;
-    expect(result.output.text).toBe("");
-    expect(driver.cancel).not.toHaveBeenCalled();
-  });
-
-  it("expires the synthetic grace before a matching short no-output watchdog", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const driver = installLiveStdoutDriver();
-    const resultPromise = startLiveTurn({
-      runId: "run-synthetic-short-watchdog",
+      runId: "run-missing-input-lifecycle",
       timeoutMs: 60_000,
       noOutputTimeoutMs: 1_000,
       useResume: true,
@@ -657,44 +704,42 @@ describe("claude live session provisional results", () => {
 
     driver.stdout.emit(
       jsonl([
-        { type: "system", subtype: "init", session_id: "live-synthetic-short-watchdog" },
         {
-          type: "assistant",
-          session_id: "live-synthetic-short-watchdog",
-          message: {
-            model: "<synthetic>",
-            role: "assistant",
-            content: [{ type: "text", text: "No response requested." }],
-          },
+          type: "command_lifecycle",
+          command_uuid: "unrelated-input",
+          state: "started",
         },
         {
           type: "result",
-          subtype: "success",
-          session_id: "live-synthetic-short-watchdog",
-          result: "",
+          subtype: "error_during_execution",
+          is_error: true,
+          session_id: "live-missing-lifecycle",
+          result: "unrelated failure",
         },
       ]),
     );
 
-    await vi.advanceTimersByTimeAsync(999);
-    let settled = false;
-    void resultPromise.then(() => {
-      settled = true;
+    const rejection = expect(resultPromise).rejects.toMatchObject({
+      name: "FailoverError",
+      code: undefined,
+      cliTimeout: {
+        mode: "no-output",
+        timeoutSeconds: 1,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
     });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    const result = await resultPromise;
-    expect(result.output.text).toBe("");
-    expect(driver.cancel).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it.each([
     {
-      label: "marks a resumed synthetic-only stall as safe for cache-preserving recovery",
+      label: "does not replay after current-turn synthetic output",
       useResume: true,
-      expectedCode: "cli_no_output_timeout",
+      expectedCode: undefined,
       chunk: jsonl([
         { type: "system", subtype: "init", session_id: "live-synthetic-no-result" },
         {
@@ -782,7 +827,7 @@ describe("claude live session provisional results", () => {
     expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
-  it("still aborts on the turn timeout while waiting after a synthetic placeholder", async () => {
+  it("still aborts on the turn timeout after input starts but never returns a result", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const driver = installLiveStdoutDriver();
     const resultPromise = startLiveTurn({
@@ -805,12 +850,6 @@ describe("claude live session provisional results", () => {
             role: "assistant",
             content: [{ type: "text", text: "Continue from where you left off." }],
           },
-        },
-        {
-          type: "result",
-          subtype: "success",
-          session_id: "live-synthetic-timeout",
-          result: "",
         },
       ]),
     );

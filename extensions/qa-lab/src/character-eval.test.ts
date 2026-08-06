@@ -132,6 +132,7 @@ async function makeSuiteResult(params: {
     summaryPath,
     report: "# report",
     watchUrl: "http://127.0.0.1:43124",
+    startedScenarioIds: ["character-vibes"],
     scenarios: [
       {
         name: "Character vibes",

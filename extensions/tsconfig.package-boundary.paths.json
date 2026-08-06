@@ -356,6 +356,9 @@
       "openclaw/plugin-sdk/realtime-bootstrap-context": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-bootstrap-context.d.ts"
       ],
+      "openclaw/plugin-sdk/realtime-voice-audio-queue": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-audio-queue.d.ts"
+      ],
       "openclaw/plugin-sdk/realtime-voice": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice.d.ts"
       ],
