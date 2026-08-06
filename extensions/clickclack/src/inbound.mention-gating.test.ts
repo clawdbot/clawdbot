@@ -111,6 +111,7 @@ function createAgentAccount(
     reconnectMs: 1_500,
     agentActivity: false,
     commandMenu: true,
+    managedOnly: false,
     discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
     requireMention: false,
     mentionPatterns: [],
@@ -235,6 +236,118 @@ describe("ClickClack inbound mention gating", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
     expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
     expect(runtime.llm.complete).not.toHaveBeenCalled();
+  });
+
+  it("drops unbound messages from managed-only accounts", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        managedOnly: true,
+        agentId: "research",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: {
+        channels: {
+          clickclack: {
+            enabled: true,
+            accounts: {
+              research: {
+                enabled: true,
+                managedOnly: true,
+                agentId: "research",
+                baseUrl: "http://127.0.0.1:8080",
+                token: "test-token-placeholder",
+                workspace: "wsp_1",
+                discussions: { enabled: true, workspace: "wsp_1" },
+              },
+            },
+          },
+        },
+      } satisfies CoreConfig,
+      message: createMessage({ body: "ordinary workspace message" }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+  });
+
+  it("drops direct messages from managed-only accounts", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        managedOnly: true,
+        agentId: "research",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: {} satisfies CoreConfig,
+      message: createMessage({
+        direct_conversation_id: "dm_1",
+        body: "ordinary direct message",
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(runtime.llm.complete).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a bound discussion message from a managed-only account", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    getClickClackDiscussionBindingStore(runtime).set("agent:research:main", {
+      accountId: "research",
+      agentId: "research",
+      sessionId: "session-id",
+      serverBaseUrl: "http://127.0.0.1:8080",
+      externalRef: "openclaw:test:research-managed",
+      externalUrl: "",
+      workspaceRef: "wsp_1",
+      workspaceId: "wsp_1",
+      channelId: "chn_1",
+      channelRouteId: "discussion-route",
+      workspaceRouteId: "workspace-route",
+      section: "Sessions",
+      archived: false,
+      label: "Research managed",
+    });
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        accountId: "research",
+        managedOnly: true,
+        agentId: "research",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: {
+        channels: {
+          clickclack: {
+            enabled: true,
+            accounts: {
+              research: {
+                enabled: true,
+                managedOnly: true,
+                agentId: "research",
+                baseUrl: "http://127.0.0.1:8080",
+                token: "test-token-placeholder",
+                workspace: "wsp_1",
+                discussions: { enabled: true, workspace: "wsp_1" },
+              },
+            },
+          },
+        },
+      } satisfies CoreConfig,
+      message: createMessage({ body: "bound managed message" }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0]).toMatchObject({
+      route: { agentId: "research" },
+    });
   });
 
   it("dispatches a group message when its ClickClack bot handle is mentioned", async () => {

@@ -198,6 +198,7 @@ export function resolveClickClackAccount(params: {
     enabled,
     configured: Boolean(baseUrl && token && workspace),
     name: normalizeOptionalString(merged.name),
+    managedOnly: merged.managedOnly === true,
     baseUrl,
     token,
     workspace,

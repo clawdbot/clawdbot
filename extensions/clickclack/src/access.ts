@@ -237,7 +237,10 @@ export async function resolveClickClackInboundAccess(params: {
   });
 
   return {
-    shouldDispatch: !preparedRoute.revoked && resolved.ingress.admission === "dispatch",
+    shouldDispatch:
+      (!params.account.managedOnly || Boolean(preparedRoute.discussionRoute)) &&
+      !preparedRoute.revoked &&
+      resolved.ingress.admission === "dispatch",
     commandAuthorized: resolved.commandAccess.requested
       ? resolved.commandAccess.authorized
       : resolved.senderAccess.allowed,

@@ -280,6 +280,193 @@ describe("ClickClack discussion service contracts", () => {
     expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
+  it("selects a managed-only discussion account by the session agent", async () => {
+    const harness = createHarness({ label: "Managed account" });
+    harness.config.channels!.clickclack = {
+      accounts: {
+        compass: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "compass",
+          baseUrl: "https://clickclack-compass.example",
+          token: "compass-token",
+          workspace: "team",
+          discussions: { enabled: true },
+        },
+        forge: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "forge",
+          baseUrl: "https://clickclack-forge.example",
+          token: "forge-token",
+          workspace: "team",
+          discussions: { enabled: true },
+        },
+      },
+    };
+
+    await expect(harness.service.open("agent:compass:managed")).resolves.toMatchObject({
+      state: "open",
+    });
+    await expect(harness.service.open("agent:forge:managed")).resolves.toMatchObject({
+      state: "open",
+    });
+
+    expect(harness.store.lookup("agent:compass:managed")).toMatchObject({
+      accountId: "compass",
+      agentId: "compass",
+    });
+    expect(harness.store.lookup("agent:forge:managed")).toMatchObject({
+      accountId: "forge",
+      agentId: "forge",
+    });
+  });
+
+  it("keeps an unmatched managed-only discussion account unavailable", async () => {
+    const harness = createHarness({ label: "Unmatched managed account" });
+    harness.config.channels!.clickclack = {
+      accounts: {
+        compass: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "compass",
+          baseUrl: "https://clickclack-compass.example",
+          token: "compass-token",
+          workspace: "team",
+          discussions: { enabled: true },
+        },
+      },
+    };
+
+    await expect(harness.service.open("agent:forge:unmatched")).resolves.toEqual({
+      state: "none",
+    });
+    expect(harness.createChannel).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicate managed-only accounts for one agent", async () => {
+    const harness = createHarness({ label: "Duplicate managed accounts" });
+    harness.config.channels!.clickclack = {
+      accounts: {
+        first: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "compass",
+          baseUrl: "https://clickclack-one.example",
+          token: "first-token",
+          workspace: "team",
+          discussions: { enabled: true },
+        },
+        second: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "COMPASS",
+          baseUrl: "https://clickclack-two.example",
+          token: "second-token",
+          workspace: "team",
+          discussions: { enabled: true },
+        },
+      },
+    };
+
+    await expect(harness.service.open("agent:compass:duplicate")).rejects.toThrow(
+      "ClickClack discussions require exactly one enabled discussion account for agent compass",
+    );
+    expect(harness.createChannel).not.toHaveBeenCalled();
+  });
+
+  it("uses one ordinary discussion account as the unmatched-agent fallback", async () => {
+    const harness = createHarness({ label: "Fallback managed account" });
+    harness.config.channels!.clickclack = {
+      accounts: {
+        compass: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "compass",
+          baseUrl: "https://clickclack-compass.example",
+          token: "compass-token",
+          workspace: "team",
+          discussions: { enabled: true },
+        },
+        legacy: {
+          enabled: true,
+          baseUrl: "https://clickclack-legacy.example",
+          token: "legacy-token",
+          workspace: "team",
+          discussions: { enabled: true },
+        },
+      },
+    };
+
+    await expect(harness.service.open("agent:forge:fallback")).resolves.toMatchObject({
+      state: "open",
+    });
+    expect(harness.store.lookup("agent:forge:fallback")).toMatchObject({
+      accountId: "legacy",
+      agentId: "forge",
+    });
+  });
+
+  it("retries a pending open through the matching managed-only account", async () => {
+    const harness = createHarness({ label: "Managed retry" });
+    const sessionKey = "agent:forge:managed-retry";
+    const forgeToken = "forge-retry-token";
+    harness.config.channels!.clickclack = {
+      discussions: { enabled: false },
+      accounts: {
+        compass: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "compass",
+          baseUrl: "https://clickclack.example",
+          token: "compass-token",
+          workspace: "main",
+          discussions: { enabled: true, workspace: "team" },
+        },
+        forge: {
+          enabled: true,
+          managedOnly: true,
+          agentId: "forge",
+          baseUrl: "https://clickclack.example",
+          token: forgeToken,
+          workspace: "main",
+          discussions: { enabled: true, workspace: "team" },
+        },
+      },
+    };
+    const credentialFingerprint = discussionCredentialFingerprint(forgeToken);
+    const generation = reserveDiscussionBindingGeneration({
+      runtime: harness.runtime,
+      sessionKey,
+      accountId: "forge",
+      credentialFingerprint,
+      destinationIdentity: TEST_DESTINATION_IDENTITY,
+      createGeneration: () => "managed-retry-generation",
+    });
+    recordPendingDiscussionOpen({
+      runtime: harness.runtime,
+      sessionKey,
+      generation,
+      pending: {
+        accountId: "forge",
+        serverBaseUrl: "https://clickclack.example",
+        workspaceId: "wsp_team",
+        sessionId: "session-id",
+        externalRef: testExternalRef(sessionKey),
+        credentialFingerprint,
+      },
+    });
+
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.createChannel).toHaveBeenCalledTimes(1);
+    expect(harness.store.lookup(sessionKey)).toMatchObject({
+      accountId: "forge",
+      agentId: "forge",
+    });
+    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+  });
+
   it("stops honoring an existing binding when a second discussion account is enabled", async () => {
     const harness = createHarness({ label: "Previously unambiguous" });
     const sessionKey = "agent:main:became-ambiguous";

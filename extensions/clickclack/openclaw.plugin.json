@@ -12,6 +12,7 @@
         "type": "object",
         "additionalProperties": true,
         "properties": {
+          "managedOnly": { "type": "boolean" },
           "requireMention": { "type": "boolean" },
           "mentionPatterns": {
             "type": "array",
@@ -37,6 +38,7 @@
               "type": "object",
               "additionalProperties": true,
               "properties": {
+                "managedOnly": { "type": "boolean" },
                 "requireMention": { "type": "boolean" },
                 "mentionPatterns": {
                   "type": "array",
