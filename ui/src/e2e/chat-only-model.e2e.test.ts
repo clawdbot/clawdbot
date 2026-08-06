@@ -70,6 +70,7 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "lmstudio/qwen3-8b",
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       models,
       sessionKey,
       methodResponses: {

@@ -163,6 +163,18 @@ describe("formatBytes", () => {
     expect(formatBytes(12 * 1024)).toBe("12 KB");
     expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
   });
+
+  it("supports caller-owned fallback, unit cap, and precision", () => {
+    const options = {
+      fallback: "0 B",
+      maxUnit: "kilo" as const,
+      fractionDigits: (_value: number, unit: "byte" | "kilo" | "mega" | "giga" | "tera") =>
+        unit === "byte" ? null : 1,
+    };
+    expect(formatBytes(Number.NaN, options)).toBe("0 B");
+    expect(formatBytes(12 * 1024, options)).toBe("12.0 KB");
+    expect(formatBytes(1024 * 1024, options)).toBe("1024.0 KB");
+  });
 });
 
 describe("resolveEffectiveModelFallbacks", () => {

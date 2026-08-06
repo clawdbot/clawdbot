@@ -1,9 +1,11 @@
 // Control UI controller manages skill workshop gateway state.
-import { formatByteSize, formatErrorMessage } from "@openclaw/normalization-core";
+import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { formatBytes } from "../../lib/agents/display.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -187,18 +189,6 @@ function proposedVersionNumber(value: string | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 B";
-  }
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "kilo",
-    separator: " ",
-    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
-  });
-}
-
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
@@ -215,7 +205,11 @@ function supportFilesFromInspect(
   );
   return (result.supportFiles ?? []).map((file) => ({
     path: file.path,
-    size: formatBytes(sizes.get(file.path) ?? byteLength(file.content)),
+    size: formatBytes(Math.max(0, sizes.get(file.path) ?? byteLength(file.content)), {
+      fallback: "0 B",
+      maxUnit: "kilo",
+      fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+    }),
     contents: file.content,
   }));
 }
@@ -506,6 +500,10 @@ export async function runSkillWorkshopLifecycleAction(
   action: Extract<SkillWorkshopAction, "apply" | "reject">,
   proposalId: string,
 ): Promise<void> {
+  const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
+  if (!canCallGatewayMethod(context.gateway.snapshot, method, "operator.admin")) {
+    return;
+  }
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
   if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
@@ -516,7 +514,6 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
     const requestParams = { ...loadedSkillWorkshopAgentParams(state, context), proposalId };
     await client.request(method, requestParams);
     await refreshAfterMutation(state, context, proposalId);
@@ -542,7 +539,13 @@ export async function runSkillWorkshopEvaluation(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   proposalId: string,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
+  if (
+    !canCallGatewayMethod(context.gateway.snapshot, "skills.proposals.evaluate", "operator.admin")
+  ) {
+    return false;
+  }
   const snapshot = context.gateway.snapshot;
   const client = snapshot.client;
   if (!client || snapshot.phase !== "connected" || state.skillWorkshopActionBusy) {
@@ -563,7 +566,12 @@ export async function runSkillWorkshopEvaluation(
     const loaded = await loadSkillWorkshopProposalDetail(state, context, proposalId, {
       force: true,
     });
-    if (!loaded || state.skillWorkshopAgentId !== requestAgentId) {
+    if (
+      !loaded ||
+      !isCurrent() ||
+      state.skillWorkshopAgentId !== requestAgentId ||
+      !canCallGatewayMethod(context.gateway.snapshot, "skills.proposals.evaluate", "operator.admin")
+    ) {
       return false;
     }
     const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
@@ -575,7 +583,7 @@ export async function runSkillWorkshopEvaluation(
       proposalId,
       expectedRevisionHash: current.revisionHash,
     });
-    if (state.skillWorkshopAgentId !== requestAgentId) {
+    if (!isCurrent() || state.skillWorkshopAgentId !== requestAgentId) {
       return false;
     }
     if (result.evaluation.revisionHash !== current.revisionHash) {
@@ -613,7 +621,17 @@ export async function requestSkillWorkshopRevision(
     proposal: SkillWorkshopProposal,
     agentId: string,
   ) => Promise<void>,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
+  if (
+    !canCallGatewayMethod(
+      context.gateway.snapshot,
+      "skills.proposals.requestRevision",
+      "operator.admin",
+    )
+  ) {
+    return false;
+  }
   if (state.skillWorkshopActionBusy) {
     return false;
   }
@@ -631,7 +649,15 @@ export async function requestSkillWorkshopRevision(
   state.skillWorkshopError = null;
   try {
     await loadSkillWorkshopProposalDetail(state, context, proposalId);
-    if (state.skillWorkshopAgentId !== proposalAgentId) {
+    if (
+      !isCurrent() ||
+      state.skillWorkshopAgentId !== proposalAgentId ||
+      !canCallGatewayMethod(
+        context.gateway.snapshot,
+        "skills.proposals.requestRevision",
+        "operator.admin",
+      )
+    ) {
       return false;
     }
     const currentProposal =

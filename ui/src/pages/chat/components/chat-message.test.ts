@@ -5174,6 +5174,192 @@ describe("grouped chat rendering", () => {
     expect(requireFirstMockArg(onOpenSidebar, "sidebar open").kind).toBe("markdown");
   });
 
+  function renderAssistantDisclosureActionFixture(
+    expanded: boolean,
+    options: Partial<RenderMessageGroupOptions> = {},
+  ) {
+    const container = document.createElement("div");
+    const preview = "Assistant preview\n...(truncated)...";
+    const fullMessage = "Complete assistant message beyond the transcript preview.";
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: preview }],
+        __openclaw: { id: "assistant-disclosure-actions", seq: 1 },
+      },
+      {
+        sessionKey: "agent:main:main",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () => ({
+          status: "loaded",
+          expanded,
+          markdown: fullMessage,
+          revision: 1,
+        }),
+        onToggleAssistantMessageExpanded: vi.fn(),
+        ...options,
+      },
+    );
+    return { container, fullMessage, preview };
+  }
+
+  it.each([
+    { expanded: false, label: "collapsed" },
+    { expanded: true, label: "expanded" },
+  ])("copies the currently visible $label assistant message", async ({ expanded }) => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+    const { container, fullMessage, preview } = renderAssistantDisclosureActionFixture(expanded);
+    const expectedMessage = expanded ? fullMessage : preview;
+
+    expect(container.querySelector(".chat-message-disclosure__content")?.textContent).toContain(
+      expectedMessage,
+    );
+    container
+      .querySelector<HTMLButtonElement>(".chat-group-footer-actions .chat-copy-btn")
+      ?.click();
+
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(expectedMessage));
+  });
+
+  it.each([
+    { expanded: false, label: "collapsed" },
+    { expanded: true, label: "expanded" },
+  ])("replies to the currently visible $label assistant message", ({ expanded }) => {
+    const onReply = vi.fn();
+    const { container, fullMessage, preview } = renderAssistantDisclosureActionFixture(expanded, {
+      onReply,
+    });
+    const expectedMessage = expanded ? fullMessage : preview;
+
+    container
+      .querySelector<HTMLButtonElement>(
+        '.chat-group-footer-actions [aria-label="Reply to message"]',
+      )
+      ?.click();
+
+    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ text: expectedMessage }));
+    expect(container.querySelector<HTMLElement>(".chat-bubble")?.dataset.messageText).toBe(
+      expectedMessage,
+    );
+  });
+
+  it.each(["loading", "error"] as const)(
+    "keeps the transcript preview in %s assistant-message actions",
+    (status) => {
+      const onReply = vi.fn();
+      const { container, preview } = renderAssistantDisclosureActionFixture(false, {
+        onReply,
+        getAssistantMessageExpansion: () => ({ status, revision: 1 }),
+      });
+
+      container
+        .querySelector<HTMLButtonElement>(
+          '.chat-group-footer-actions [aria-label="Reply to message"]',
+        )
+        ?.click();
+      expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ text: preview }));
+      expect(container.querySelector<HTMLElement>(".chat-bubble")?.dataset.messageText).toBe(
+        preview,
+      );
+    },
+  );
+
+  it("keeps expanded assistant thinking private while bounding reply context", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+    const onReply = vi.fn();
+    const visibleMessage = `${"a".repeat(499)}😀 full expanded answer`;
+    const { container } = renderAssistantDisclosureActionFixture(true, {
+      onReply,
+      getAssistantMessageExpansion: () => ({
+        status: "loaded",
+        expanded: true,
+        markdown: `<thinking>private expanded reasoning</thinking>${visibleMessage}`,
+        revision: 1,
+      }),
+    });
+
+    container
+      .querySelector<HTMLButtonElement>(".chat-group-footer-actions .chat-copy-btn")
+      ?.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(visibleMessage));
+
+    container
+      .querySelector<HTMLButtonElement>(
+        '.chat-group-footer-actions [aria-label="Reply to message"]',
+      )
+      ?.click();
+    expect(onReply).toHaveBeenCalledWith(expect.objectContaining({ text: "a".repeat(499) }));
+    expect(container.querySelector<HTMLElement>(".chat-bubble")?.dataset.messageText).toBe(
+      visibleMessage,
+    );
+  });
+
+  it("keeps hidden-only expanded assistant messages recoverable without exposing stale text", () => {
+    const onReply = vi.fn();
+    const onToggleAssistantMessageExpanded = vi.fn();
+    const privateThinking = "private expanded reasoning only";
+    const { container, preview } = renderAssistantDisclosureActionFixture(true, {
+      onReply,
+      onToggleAssistantMessageExpanded,
+      getAssistantMessageExpansion: () => ({
+        status: "loaded",
+        expanded: true,
+        markdown: `<thinking>${privateThinking}</thinking>`,
+        revision: 1,
+      }),
+    });
+
+    const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
+    expect(disclosure.classList.contains("is-expanded")).toBe(true);
+    expect(disclosure.querySelector(".chat-message-disclosure__content")?.textContent?.trim()).toBe(
+      "",
+    );
+    expect(disclosure.textContent).not.toContain(privateThinking);
+    expect(disclosure.textContent).not.toContain(preview);
+    expect(container.querySelector(".chat-group-footer-actions .chat-copy-btn")).toBeNull();
+    expect(container.querySelector('[aria-label="Reply to message"]')).toBeNull();
+    expect(
+      container.querySelector<HTMLElement>(".chat-bubble")?.hasAttribute("data-message-text"),
+    ).toBe(false);
+
+    const toggle = expectElement(disclosure, ".chat-message-disclosure__toggle", HTMLButtonElement);
+    expect(toggle.textContent?.trim()).toBe("Show less");
+    toggle.click();
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("assistant-disclosure-actions");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: preview }],
+        __openclaw: { id: "assistant-disclosure-actions", seq: 1 },
+      },
+      {
+        sessionKey: "agent:main:main",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () => ({
+          status: "loaded",
+          expanded: false,
+          markdown: `<thinking>${privateThinking}</thinking>`,
+          revision: 2,
+        }),
+        onToggleAssistantMessageExpanded,
+        onReply,
+      },
+    );
+
+    expect(container.querySelector(".chat-message-disclosure__content")?.textContent).toContain(
+      preview,
+    );
+    expect(container.querySelector(".chat-message-disclosure__toggle")?.textContent?.trim()).toBe(
+      "Show more",
+    );
+    expect(container.querySelector<HTMLElement>(".chat-bubble")?.dataset.messageText).toBe(preview);
+  });
+
   it.each([
     {
       label: "marker",

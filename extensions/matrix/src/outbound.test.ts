@@ -46,6 +46,24 @@ function mockOptions(
   return value as Record<string, unknown>;
 }
 
+function createMatrixReceipt(
+  parts: Array<{ messageId: string; kind: "text" | "media" | "voice"; replyToId?: string }>,
+) {
+  const firstPart = parts[0];
+  return {
+    primaryPlatformMessageId: firstPart?.messageId,
+    platformMessageIds: parts.map(({ messageId }) => messageId),
+    parts: parts.map(({ messageId, kind, replyToId }, index) => ({
+      platformMessageId: messageId,
+      kind,
+      index,
+      ...(replyToId ? { replyToId } : {}),
+    })),
+    ...(firstPart?.replyToId ? { replyToId: firstPart.replyToId } : {}),
+    sentAt: 1,
+  };
+}
+
 describe("matrixOutbound cfg threading", () => {
   beforeEach(() => {
     mocks.sendMessageMatrix.mockReset();
@@ -108,6 +126,44 @@ describe("matrixOutbound cfg threading", () => {
     expect(options.threadId).toBe("$thread");
     expect(options.replyToId).toBe("$reply");
   });
+
+  it.each(["sendText", "sendMedia"] as const)(
+    "preserves the complete Matrix sender result through %s",
+    async (method) => {
+      const receipt = createMatrixReceipt([
+        { messageId: "$first", kind: "media", replyToId: "$reply" },
+        { messageId: "$last", kind: "text" },
+      ]);
+      mocks.sendMessageMatrix.mockResolvedValueOnce({
+        messageId: "$last",
+        roomId: "!room:example",
+        primaryMessageId: "$first",
+        receipt,
+        content: "first\nlast",
+      });
+      const send = matrixOutbound[method];
+      if (!send) {
+        throw new Error(`matrixOutbound.${method} missing`);
+      }
+
+      const result = await send({
+        cfg: {} as OpenClawConfig,
+        to: "room:!room:example",
+        text: "first\nlast",
+        mediaUrl: "file:///tmp/photo.png",
+        accountId: "default",
+      });
+
+      expect(result).toMatchObject({
+        channel: "matrix",
+        messageId: "$last",
+        roomId: "!room:example",
+        primaryMessageId: "$first",
+        content: "first\nlast",
+      });
+      expect(result.receipt).toBe(receipt);
+    },
+  );
 
   it("passes resolved cfg to sendMessageMatrix for media sends", async () => {
     const cfg = {
@@ -471,6 +527,65 @@ describe("matrixOutbound cfg threading", () => {
       "file:///tmp/b.png",
     );
     expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).threadId).toBe("$thread");
+  });
+
+  it("combines media payload receipts without inventing replies on later events", async () => {
+    const firstReceipt = createMatrixReceipt([
+      { messageId: "$image", kind: "media", replyToId: "$reply" },
+      { messageId: "$caption-overflow", kind: "text" },
+    ]);
+    const secondReceipt = createMatrixReceipt([{ messageId: "$second-image", kind: "media" }]);
+    mocks.sendMessageMatrix
+      .mockResolvedValueOnce({
+        messageId: "$caption-overflow",
+        roomId: "!room:example",
+        primaryMessageId: "$image",
+        receipt: firstReceipt,
+        content: "caption\noverflow",
+      })
+      .mockResolvedValueOnce({
+        messageId: "$second-image",
+        roomId: "!room:example",
+        primaryMessageId: "$second-image",
+        receipt: secondReceipt,
+        content: "second image",
+      });
+
+    const result = await matrixOutbound.sendPayload!({
+      cfg: {} as OpenClawConfig,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["file:///tmp/a.png", "file:///tmp/b.png"],
+      },
+      accountId: "default",
+      replyToId: "$reply",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 0).replyToId).toBe("$reply");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).replyToId).toBeUndefined();
+    expect(result).toMatchObject({
+      channel: "matrix",
+      messageId: "$second-image",
+      primaryMessageId: "$image",
+      content: "caption\noverflow\nsecond image",
+    });
+    expect(result.receipt?.primaryPlatformMessageId).toBe("$image");
+    expect(result.receipt?.platformMessageIds).toEqual([
+      "$image",
+      "$caption-overflow",
+      "$second-image",
+    ]);
+    expect(result.receipt?.parts).toMatchObject([
+      { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
+      { platformMessageId: "$caption-overflow", kind: "text", index: 1 },
+      { platformMessageId: "$second-image", kind: "media", index: 2 },
+    ]);
+    expect(result.receipt?.parts[1]).not.toHaveProperty("replyToId");
+    expect(result.receipt?.parts[2]).not.toHaveProperty("replyToId");
   });
 
   it("sends mediaUrls with extraContent only on first item", async () => {

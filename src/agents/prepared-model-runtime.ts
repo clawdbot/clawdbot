@@ -21,7 +21,6 @@ import {
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolvePublishedOwner,
-  startSerializedSnapshotBuildBatch,
   toError,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
@@ -63,6 +62,28 @@ let refreshRequestEpoch = 0;
 let pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
 type AuthMutationEvent = { agentDir?: string; affectsInheritedStores: boolean };
 const pendingAuthMutations: AuthMutationEvent[] = [];
+type PreparedModelRuntimePublicationEvent =
+  | { phase: "invalidated" | "published" }
+  | { phase: "failed"; error: Error };
+const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
+
+/** Observes committed prepared model/auth generations without starting discovery. */
+export function registerPreparedModelRuntimePublicationListener(
+  listener: (event: PreparedModelRuntimePublicationEvent) => void,
+): () => void {
+  publicationListeners.add(listener);
+  return () => publicationListeners.delete(listener);
+}
+
+function notifyPreparedModelRuntimePublication(event: PreparedModelRuntimePublicationEvent): void {
+  for (const listener of publicationListeners) {
+    try {
+      listener(event);
+    } catch (error) {
+      log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
+    }
+  }
+}
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
@@ -470,6 +491,10 @@ export function markPreparedModelRuntimeSnapshotsStale(
     owner.needsRefresh = true;
     owner.refreshError = staleError;
   }
+  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+  if (!pendingModelRuntimeReplacement) {
+    notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
+  }
   return pendingModelRuntimeReplacement?.gateId;
 }
 
@@ -483,7 +508,9 @@ export function rejectPendingPreparedModelRuntimeReplacement(
     return;
   }
   pendingModelRuntimeReplacement = undefined;
-  replacement.reject(toError(error));
+  const replacementError = toError(error);
+  replacement.reject(replacementError);
+  notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
 /** Rebuilds active owners after config/plugin runtime publication. */
@@ -548,74 +575,20 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
     owner.catalogMode = catalogMode;
     owner.provenance = "configured";
-    owner.generation += 1;
-    owner.needsRefresh = true;
-    owner.refreshError = undefined;
-    const generation = owner.generation;
-    const isCurrent = () =>
-      publicationEpoch === refreshRequestEpoch &&
-      owner.generation === generation &&
-      owners.get(ownerKey(input)) === owner;
-    return { input, isCurrent, owner };
+    return { input, owner };
   });
-  const build = startSerializedSnapshotBuildBatch(
-    candidates.map(({ input }) => input),
+  await publishPreparedModelRuntimeOwnerBatch({
+    entries: candidates,
+    owners,
     agentBuildCompletions,
-    modelRuntimeBuildTimeoutMs,
-    catalogMode,
-    options.onBuildStats,
-    new Map(candidates.map((candidate) => [candidate.input, candidate.isCurrent])),
-    () => publicationEpoch === refreshRequestEpoch,
-  );
-  for (const candidate of candidates) {
-    owners.set(ownerKey(candidate.input), candidate.owner);
-    candidate.owner.buildCompletion = build.completion;
-    void build.completion.then(() => {
-      if (candidate.owner.buildCompletion === build.completion) {
-        candidate.owner.buildCompletion = undefined;
-      }
-    });
-  }
-  const publication = (async () => {
-    try {
-      const snapshots = await build.pending;
-      for (const [index, candidate] of candidates.entries()) {
-        if (!candidate.isCurrent()) {
-          continue;
-        }
-        candidate.owner.snapshot = snapshots[index]!;
-        candidate.owner.pending = undefined;
-        candidate.owner.needsRefresh = false;
-      }
-      return snapshots;
-    } catch (error) {
-      const refreshError = toError(error);
-      for (const candidate of candidates) {
-        if (!candidate.isCurrent()) {
-          continue;
-        }
-        candidate.owner.pending = undefined;
-        candidate.owner.needsRefresh = true;
-        candidate.owner.refreshError = refreshError;
-      }
-      throw refreshError;
-    }
-  })();
-  for (const [index, candidate] of candidates.entries()) {
-    const pending = publication.then((snapshots) => {
-      // Config publication is atomic, including callers deduplicated against an individual owner.
-      // A superseded batch must not leak its unpublished snapshot through that pending promise.
-      if (!candidate.isCurrent()) {
-        throw new PreparedModelRuntimePublicationSupersededError(
-          `prepared model runtime publication was superseded for ${candidate.input.agentDir}`,
-        );
-      }
-      return snapshots[index]!;
-    });
-    candidate.owner.pending = pending;
-    void pending.catch(() => undefined);
-  }
-  await publication;
+    buildTimeoutMs: modelRuntimeBuildTimeoutMs,
+    isPublicationCurrent: () => publicationEpoch === refreshRequestEpoch,
+    // Config replacement is one transaction. Per-owner auth supersession may retire individual
+    // candidates, while a newer config epoch stops every remaining build in this publication.
+    isBuildCurrent: () => publicationEpoch === refreshRequestEpoch,
+    onBuildStats: options.onBuildStats,
+    registerEntriesAfterBuildStart: true,
+  });
 }
 
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
@@ -645,6 +618,9 @@ export function refreshPreparedModelRuntimeSnapshots(
       ) {
         pendingModelRuntimeReplacement = undefined;
         replacement.resolve();
+        // Publication listeners may synchronously read the committed owner. Clear the lifecycle
+        // gate before announcing availability so they cannot observe a false missing generation.
+        notifyPreparedModelRuntimePublication({ phase: "published" });
       }
     },
     (error: unknown) => {
@@ -666,6 +642,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       ) {
         pendingModelRuntimeReplacement = undefined;
         replacement.reject(refreshError);
+        notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
       }
       throw refreshError;
     },
@@ -736,12 +713,18 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     // mutation would immediately stale that initial generation even though no prior owner existed.
     return;
   }
+  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   pendingAuthMutations.push(normalizedEvent);
-  void enqueuePreparedModelRuntimePublication(drainPendingAuthMutations).catch((error: unknown) => {
+  void enqueuePreparedModelRuntimePublication(async () => {
+    await drainPendingAuthMutations();
+    notifyPreparedModelRuntimePublication({ phase: "published" });
+  }).catch((error: unknown) => {
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
       return;
     }
-    log.warn(`auth-triggered model runtime refresh failed: ${String(error)}`);
+    const refreshError = toError(error);
+    notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+    log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
   });
 }
 
@@ -758,6 +741,7 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   refreshTail = Promise.resolve();
   refreshRequestEpoch = 0;
   pendingAuthMutations.length = 0;
+  publicationListeners.clear();
   modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 }
 

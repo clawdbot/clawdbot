@@ -1,6 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 // Control UI tests cover build chat items behavior.
-import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -94,12 +95,7 @@ function firstMessageContent(group: MessageGroup): unknown[] {
   return Array.isArray(message.content) ? message.content : [];
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireGroup(value: unknown): MessageGroup {
   const record = requireRecord(value);
@@ -2584,6 +2580,48 @@ describe("buildCachedChatItems", () => {
       text: "I will inspect the file.",
     });
     expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+  });
+
+  it("renders one live card when active history contains the same tool call block", () => {
+    const groups = messageGroups({
+      runId: "run-live",
+      messages: [
+        { role: "user", content: "Read the file.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I will read it." },
+            {
+              type: "toolCall",
+              id: "call-read",
+              name: "read",
+              arguments: { path: "README.md" },
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      toolMessages: [
+        {
+          role: "assistant",
+          runId: "run-live",
+          toolCallId: "call-read",
+          content: [{ type: "toolcall", name: "read", arguments: { path: "README.md" } }],
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const cards = groups.flatMap((group, index) =>
+      group.messages.flatMap((entry) => extractToolCards(entry.message, `restored-${index}`)),
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ callId: "call-read", name: "read" });
+    expect(
+      groups.some((group) =>
+        firstMessageContent(group).some((block) => requireRecord(block).text === "I will read it."),
+      ),
+    ).toBe(true);
   });
 
   it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {

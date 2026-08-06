@@ -1,4 +1,5 @@
 // Whatsapp tests cover inbound dispatch plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
@@ -423,12 +424,7 @@ function getCapturedReplyOptions() {
   return (capturedDispatchParams as CapturedDispatchParams)?.replyOptions;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -906,45 +902,33 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.To).toBe("+2000");
   });
 
-  it("passes groupSystemPrompt into GroupSystemPrompt for group chats", async () => {
+  it.each([
+    [
+      "passes groupSystemPrompt into GroupSystemPrompt for group chats",
+      true,
+      "Specific group prompt",
+    ],
+    [
+      "passes groupSystemPrompt into GroupSystemPrompt for direct chats",
+      false,
+      "Specific direct prompt",
+    ],
+    ["omits GroupSystemPrompt when groupSystemPrompt is not provided", true, undefined],
+  ] as const)("%s", async (_name, isGroup, groupSystemPrompt) => {
+    const kind = isGroup ? "group" : "direct";
+    const conversationId = isGroup ? "123@g.us" : "+1555";
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
-      groupSystemPrompt: "Specific group prompt",
+      ...(groupSystemPrompt === undefined ? {} : { groupSystemPrompt }),
       msg: makeMsg({
-        admission: groupAdmission("123@g.us"),
-        group: { participants: [] },
+        admission: isGroup ? groupAdmission(conversationId) : directAdmission(conversationId),
+        ...(isGroup ? { group: { participants: [] } } : {}),
       }),
-      route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
-      sender: { e164: "+15550002222" },
+      route: makeRoute({ sessionKey: `agent:main:whatsapp:${kind}:${conversationId}` }),
+      sender: { e164: isGroup ? "+15550002222" : conversationId },
     });
 
-    expect(ctx.GroupSystemPrompt).toBe("Specific group prompt");
-  });
-
-  it("passes groupSystemPrompt into GroupSystemPrompt for direct chats", async () => {
-    const ctx = await buildWhatsAppInboundContext({
-      combinedBody: "hi",
-      groupSystemPrompt: "Specific direct prompt",
-      msg: makeMsg({ admission: directAdmission("+1555") }),
-      route: makeRoute({ sessionKey: "agent:main:whatsapp:direct:+1555" }),
-      sender: { e164: "+1555" },
-    });
-
-    expect(ctx.GroupSystemPrompt).toBe("Specific direct prompt");
-  });
-
-  it("omits GroupSystemPrompt when groupSystemPrompt is not provided", async () => {
-    const ctx = await buildWhatsAppInboundContext({
-      combinedBody: "hi",
-      msg: makeMsg({
-        admission: groupAdmission("123@g.us"),
-        group: { participants: [] },
-      }),
-      route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
-      sender: { e164: "+15550002222" },
-    });
-
-    expect(ctx.GroupSystemPrompt).toBeUndefined();
+    expect(ctx.GroupSystemPrompt).toBe(groupSystemPrompt);
   });
 
   it("preserves reply threading policy in the inbound context", async () => {

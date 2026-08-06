@@ -1,5 +1,6 @@
 // Cron notification tests protect completion-delivery warning behavior,
 // including URL redaction for invalid webhook destinations.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -44,12 +45,7 @@ function waitForFast(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, { interval: 1 });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function webhookRequestBody() {
   const call = (mocks.fetchWithSsrFGuard.mock.calls as unknown[][])[0];
@@ -93,6 +89,13 @@ function createCompletionWebhookJob(url = "https://example.invalid/cron"): CronJ
     mode: "announce",
     completionDestination: { mode: "webhook", to: url },
   });
+}
+
+const webhookSsrfPolicy = { allowedHostnames: ["127.0.0.1"] };
+const webhookSsrfPolicyRequest = expect.objectContaining({ policy: webhookSsrfPolicy });
+
+function expectWebhookSsrfPolicy() {
+  expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(webhookSsrfPolicyRequest);
 }
 
 describe("dispatchGatewayCronFinishedNotifications", () => {
@@ -383,8 +386,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       channel: "last",
       mode: "webhook",
       to: "https://example.invalid/cron",
+      ssrfPolicy: webhookSsrfPolicy,
     });
 
+    expectWebhookSsrfPolicy();
     expect(webhookRequestBody()).toEqual({
       jobId: job.id,
       jobName: job.name,
@@ -408,9 +413,11 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       deps: {} as CliDeps,
       logger,
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      ssrfPolicy: webhookSsrfPolicy,
     });
 
     await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce());
+    expectWebhookSsrfPolicy();
     expect(webhookRequestBody()).toMatchObject({
       jobId: job.id,
       action: "finished",
@@ -607,9 +614,11 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       deps: {} as CliDeps,
       logger: { warn: vi.fn() },
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      ssrfPolicy: webhookSsrfPolicy,
     });
 
     await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
+    expectWebhookSsrfPolicy();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));

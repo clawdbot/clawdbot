@@ -16,6 +16,7 @@ import {
   type BrowserProxyUploadV1,
 } from "./browser-proxy-envelope.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingUploadPaths } from "./browser/paths.js";
+import { asRecord } from "./record-shared.js";
 
 const logger = createSubsystemLogger("browser");
 const BROWSER_PROXY_UPLOAD_ROOT_NAME = ".proxy-uploads";
@@ -74,12 +75,6 @@ export function isBrowserProxyUploadRequest(params: {
   }
   const body = asRecord(params.body);
   return Boolean(body && Array.isArray(body.paths) && body.paths.length > 0);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function readUploadPaths(body: Record<string, unknown>): string[] | null {

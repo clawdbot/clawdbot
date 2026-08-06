@@ -65,6 +65,21 @@ type PendingFinalDeliveryState = {
   intentId?: string;
 } & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
+/**
+ * Durable transcript-repair record: an assistant final that was delivered to
+ * the user but could not be appended to the canonical transcript. Kept
+ * separate from `pendingFinalDelivery` so transport-replay cleanup never drops
+ * the only copy of the missing assistant turn.
+ */
+export type PendingTranscriptRepairState = {
+  /** Stable identity for retry-safe transcript insertion. */
+  id: string;
+  text: string;
+  provider?: string;
+  model?: string;
+  createdAt: number;
+};
+
 type FallbackNoticeState = {
   kind: "active";
   selectedModel: string;
@@ -276,11 +291,6 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
-export type PendingSkillSuggestion = {
-  skillName: string;
-  detectedAt: number;
-};
-
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -395,10 +405,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
     goal?: SessionGoal;
-    /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
-    pendingSkillSuggestion?: PendingSkillSuggestion;
-    /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
-    skillCaptureSignalHashes?: string[];
     /** Timestamp (ms) when the current sessionId first became active. */
     sessionStartedAt?: number;
     /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -515,6 +521,13 @@ type SessionEntryCore = SessionRestartRecoveryState &
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
     /**
+     * Ordered durable backlog of delivered assistant finals that failed to
+     * reach the canonical transcript. Session admission restores each item
+     * before another turn can extend that transcript. Kept as a list so
+     * independently admitted writers never overwrite an earlier reply.
+     */
+    pendingTranscriptRepair?: PendingTranscriptRepairState[];
+    /**
      * Whether totalTokens reflects a fresh context snapshot for the latest run.
      * Undefined means legacy/unknown freshness; false forces consumers to treat
      * totalTokens as stale/unknown for context-utilization displays.
@@ -575,6 +588,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Run that owns the current non-terminal Gateway lifecycle projection. */
+  lifecycleRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

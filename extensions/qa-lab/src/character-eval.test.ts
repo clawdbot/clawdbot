@@ -132,6 +132,7 @@ async function makeSuiteResult(params: {
     summaryPath,
     report: "# report",
     watchUrl: "http://127.0.0.1:43124",
+    startedScenarioIds: ["character-vibes"],
     scenarios: [
       {
         name: "Character vibes",
@@ -333,6 +334,70 @@ describe("runQaCharacterEval", () => {
     const report = await fs.readFile(result.reportPath, "utf8");
     expect(report).toContain("Judge model labels: blind");
     expect(report).toContain("1. codex-cli/test-model - 9.1 - Better vibes.");
+  });
+
+  it.each([
+    {
+      description: "a missing candidate",
+      rankings: [{ model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" }],
+    },
+    {
+      description: "a duplicated candidate",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "openai/gpt-5.6-luna", rank: 2, score: 7, summary: "again" },
+      ],
+    },
+    {
+      description: "duplicated ranks",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 1, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "a missing rank",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 3, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "a fractional rank",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 1.5, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "a non-positive rank",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 0, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 1, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "an unknown candidate",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "unknown/candidate", rank: 2, score: 7, summary: "unknown" },
+      ],
+    },
+  ])("marks a judge with $description as failed", async ({ rankings }) => {
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.6-luna", "moonshot/kimi-k2.5"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite: makeRunSuite(),
+      runJudge: makeRunJudge(rankings),
+    });
+
+    expect(result.runs.map((run) => run.status)).toEqual(["pass", "pass"]);
+    expect(result.judgments[0]).toMatchObject({
+      rankings: [],
+      error: "judge reply must rank every candidate exactly once with consecutive ranks",
+    });
   });
 
   it("defaults to the character eval model panel when no models are provided", async () => {
@@ -694,6 +759,7 @@ describe("runQaCharacterEval", () => {
     const runSuite = makeRunSuite();
     const runJudge = makeRunJudge([
       { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
     ]);
 
     await runQaCharacterEval({
@@ -740,7 +806,10 @@ describe("runQaCharacterEval", () => {
     });
     const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
       JSON.stringify({
-        rankings: [{ model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" }],
+        rankings: [
+          { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+          { model: "codex-cli/test-model", rank: 2, score: 0, summary: "failed" },
+        ],
       }),
     );
 

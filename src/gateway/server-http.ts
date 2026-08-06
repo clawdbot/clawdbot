@@ -71,7 +71,7 @@ import {
   type GatewayWsClient,
 } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 type PluginGatewayDispatchContext = {
   gatewayAuthSatisfied?: boolean;
@@ -523,16 +523,17 @@ export function createGatewayHttpServer(opts: {
         scopedRequestPath.startsWith("/__openclaw__/board/"),
         async () => (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
       );
-      addAdmittedStage(
-        "user-profile-avatar",
-        matchUserProfileAvatarPath(scopedRequestPath) !== undefined,
-        async () =>
-          (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
-            req,
-            res,
-            scopedRequestPath,
-            routeAuth,
-          ),
+      const userProfileAvatarPath = canonicalizeUserProfileAvatarPath(
+        scopedRequestPath,
+        controlUiRouteBasePath,
+      );
+      addAdmittedStage("user-profile-avatar", userProfileAvatarPath !== undefined, async () =>
+        (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
+          req,
+          res,
+          userProfileAvatarPath ?? scopedRequestPath,
+          routeAuth,
+        ),
       );
       addAdmittedStage(
         "openresponses",

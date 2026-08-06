@@ -59,6 +59,60 @@ describe("custodian page session lifecycle", () => {
     expect(page.textContent).toContain("started a fresh session");
   });
 
+  it("starts fresh after the gateway evicts a typed wizard session", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "evicted-wizard-session",
+        reply: "Choose a channel.",
+        action: "none",
+        wizardInputPending: true,
+        step: {
+          id: "channel",
+          type: "select",
+          message: "Which channel?",
+          options: [
+            { label: "Slack", value: "slack" },
+            { label: "Twitch", value: "twitch" },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "No active OpenClaw chat session is awaiting that wizard answer.",
+          details: buildSystemAgentSessionInvalidatedErrorDetails(),
+        }),
+      )
+      .mockResolvedValueOnce({
+        sessionId: "replacement-session",
+        reply: "Fresh session ready.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() =>
+      expect(page.querySelectorAll('.custodian__wizard-step input[type="radio"]')).toHaveLength(2),
+    );
+
+    page
+      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="radio"]')[1]!
+      .click();
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__wizard-step .btn.primary")!.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      sessionId: "evicted-wizard-session",
+      wizardAnswer: { stepId: "channel", value: "twitch" },
+    });
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("message");
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("wizardAnswer");
+    expect(request.mock.calls[2]?.[1]?.sessionId).not.toBe("evicted-wizard-session");
+    await waitForFast(() => expect(page.textContent).toContain("Fresh session ready."));
+    expect(page.querySelector(".custodian__wizard-step")).toBeNull();
+  });
+
   it("keeps the live session after an error that does not invalidate it", async () => {
     const request = vi
       .fn()

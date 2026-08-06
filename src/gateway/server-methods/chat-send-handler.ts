@@ -9,10 +9,8 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
-import {
-  clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
@@ -28,7 +26,6 @@ import {
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -96,6 +93,7 @@ export async function handleChatSend(
     backingSessionId,
     agentId,
     activeRunScopeKey,
+    expectedLeafEntryId,
     resolvedSessionModel,
     now,
   } = preparedSession.value;
@@ -107,6 +105,7 @@ export async function handleChatSend(
     finishAbortedChatSend,
     gatewayWorkAdmission,
     lifecycleGeneration,
+    retainGatewayWorkAdmission,
     restartSafeAdmission,
     setReleaseGatewayRootContinuation,
   } = admitted.value;
@@ -307,6 +306,7 @@ export async function handleChatSend(
       userTurnRecorder,
     });
     let queuedFollowupEnqueued = false;
+    let releaseQueuedFollowupWorkAdmission: (() => void) | undefined;
     const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
       admission: admitted.value,
       context,
@@ -404,14 +404,25 @@ export async function handleChatSend(
                 abortSignal: activeRunAbort.controller.signal,
                 // Keep a Gateway-owned cancel identity after this chat.send
                 // terminalizes while the prompt waits in followup/collect queue.
+                onFollowupQueueDisposition: (reason) => {
+                  context.logGateway.info("chat queue turn intentionally skipped", {
+                    runId: clientRunId,
+                    sessionKey,
+                    outcome: "skipped",
+                    reason,
+                  });
+                },
                 turnAdoptionLifecycle: {
                   // Gateway cancel identity only — share collect key via ownerKey.
                   admission: "cancel-only",
+                  ...(expectedLeafEntryId !== undefined
+                    ? { originatingLeafEntryId: expectedLeafEntryId }
+                    : {}),
                   ownerKey: queuedFollowupOwnerKey,
                   onAdopted: async () => {},
                   onDeferred: () => {
                     queuedFollowupEnqueued = registerQueuedChatTurn({
-                      chatQueuedTurns: ensureChatQueuedTurns(context),
+                      chatQueuedTurns: context.chatQueuedTurns,
                       runId: clientRunId,
                       controller: activeRunAbort.controller,
                       sessionId: backingSessionId ?? clientRunId,
@@ -420,21 +431,28 @@ export async function handleChatSend(
                       ownerConnId: normalizeOptionalText(client?.connId),
                       ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
                     });
+                    if (queuedFollowupEnqueued && !releaseQueuedFollowupWorkAdmission) {
+                      // The detached dispatch can finish before this queued turn is
+                      // adopted. Retain the session fence across that ownership gap.
+                      releaseQueuedFollowupWorkAdmission = retainGatewayWorkAdmission();
+                    }
                     return queuedFollowupEnqueued;
                   },
                   onCancellationRetired: () => {
                     retireQueuedChatTurnCancellation(
-                      ensureChatQueuedTurns(context),
+                      context.chatQueuedTurns,
                       clientRunId,
                       activeRunAbort.controller,
                     );
                   },
                   onSettled: () => {
                     completeQueuedChatTurn(
-                      ensureChatQueuedTurns(context),
+                      context.chatQueuedTurns,
                       clientRunId,
                       activeRunAbort.controller,
                     );
+                    releaseQueuedFollowupWorkAdmission?.();
+                    releaseQueuedFollowupWorkAdmission = undefined;
                   },
                 },
                 images: replyOptionImages,

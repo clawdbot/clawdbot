@@ -486,7 +486,6 @@ export async function executeSetup(
       `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route, or run \`openclaw onboard\` on the machine running OpenClaw, before retrying setup.`,
     );
   }
-  const workspace = resolveUserPath(operation.workspace ?? process.cwd());
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
@@ -496,23 +495,37 @@ export async function executeSetup(
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
+      const recovery =
+        surface === "cli"
+          ? await (await import("./setup-recovery.js")).loadLocalSetupRecovery(operation.workspace)
+          : undefined;
+      const workspace =
+        recovery?.workspace ?? resolveUserPath(operation.workspace ?? process.cwd());
       // The guarded setup transaction publishes the load-time injected main
       // roster before any workspace provisioning or other follow-up effect.
       // The outer boundary covers injected implementations. The production
       // setup helper also uses this same seam for each of its internal writes.
-      const applied = await ctx.commit(
-        async () =>
-          await applySetup(
-            {
-              workspace,
-              expectedInferenceRoute: verified.route,
-              surface,
-              runtime: ctx.runtime,
-            },
-            { commit: async (effect) => await ctx.commit(effect) },
-          ),
+      const applied = await ctx.commit(() =>
+        applySetup(
+          {
+            workspace,
+            expectedInferenceRoute: verified.route,
+            ...recovery?.applyOptions,
+            surface,
+            runtime: ctx.runtime,
+          },
+          { commit: (effect) => ctx.commit(effect) },
+        ),
       );
-      const after = await readConfigFileSnapshotLazy();
+      if (!applied.workspaceReady) {
+        throw new Error("The workspace could not be prepared. Retry onboarding to finish setup.");
+      }
+      if (applied.gateway.status === "failed") {
+        throw new Error(applied.gateway.error);
+      }
+      const after =
+        (await recovery?.complete(applied.configPath, (effect) => ctx.commit(effect))) ??
+        (await readConfigFileSnapshotLazy());
       ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
         ctx.runtime.log(line);

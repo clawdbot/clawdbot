@@ -74,6 +74,20 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("keeps RPC-only nodes reads off the config guard", () => {
+    expectResolvedPolicy(["nodes", "status"], {
+      configGuard: "skip",
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["nodes", "list"], {
+      configGuard: "skip",
+      networkProxy: "bypass",
+    });
+    // Bare `openclaw nodes` still resolves plugin subcommands from validated config.
+    expectResolvedPolicy(["nodes"], { networkProxy: "bypass" });
+    expectResolvedPolicy(["nodes", "pair"], { networkProxy: "bypass" });
+  });
+
   it("applies exact overrides after broader channel plugin rules", () => {
     expectResolvedPolicy(["channels", "send"], {
       loadPlugins: "always",
@@ -350,25 +364,32 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
-    for (const commandPath of [["hooks"], ["skills", "info"]]) {
+    for (const commandPath of [
+      ["hooks"],
+      ["hooks", "list"],
+      ["hooks", "info"],
+      ["hooks", "check"],
+      ["skills", "info"],
+    ]) {
       expectResolvedPolicy(commandPath, {
         configGuard: "skip",
         loadPlugins: "never",
         networkProxy: "bypass",
       });
     }
-    for (const commandPath of [
-      ["skills", "search"],
-      ["memory", "search"],
-    ]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-        loadPlugins: "never",
-      });
-    }
+    expectResolvedPolicy(["skills", "search"], {
+      configGuard: "skip",
+      loadPlugins: "never",
+    });
+    expectResolvedPolicy(["memory", "search"], {
+      configGuard: "skip",
+      loadPlugins: "always",
+      pluginRegistry: { scope: "memory" },
+    });
     const memoryStatusPolicy = resolveCliCommandPathPolicy(["memory", "status"]);
     expectConfigGuardResolver(memoryStatusPolicy);
-    expect(memoryStatusPolicy.loadPlugins).toBe("never");
+    expect(memoryStatusPolicy.loadPlugins).toBe("always");
+    expect(memoryStatusPolicy.pluginRegistry).toEqual({ scope: "memory" });
     expect(
       memoryStatusPolicy.configGuard({
         argv: ["node", "openclaw", "memory", "status"],

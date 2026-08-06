@@ -30,6 +30,7 @@ import {
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
+import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { isUnconfiguredConfigSource } from "./fresh-install-config.js";
 import {
@@ -314,13 +315,30 @@ function isUnconfiguredConfigSnapshot(
   return isUnconfiguredConfigSource(snapshot.sourceConfig);
 }
 
+async function shouldStartLocalOnboarding(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "path">,
+): Promise<boolean> {
+  if (isUnconfiguredConfigSnapshot(snapshot)) {
+    return true;
+  }
+  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
+    return false;
+  }
+  // Inference persists before setup finishes; only its owning receipt can
+  // distinguish interrupted local onboarding from an authored model-only config.
+  const { readLocalOnboardingStateForConfig } = await import("../state/local-onboarding-state.js");
+  return (
+    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status === "pending"
+  );
+}
+
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
   if (!shouldHandleBareRoot(argv)) {
     return false;
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
-  return isUnconfiguredConfigSnapshot(snapshot);
+  return shouldStartLocalOnboarding(snapshot);
 }
 
 type BareRootLaunchTarget =
@@ -349,7 +367,7 @@ async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaun
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
-  if (isUnconfiguredConfigSnapshot(snapshot)) {
+  if (await shouldStartLocalOnboarding(snapshot)) {
     return { kind: "onboarding" };
   }
   if (!snapshot.valid) {
@@ -701,12 +719,15 @@ export function resolveMissingPluginCommandMessage(
   );
 }
 
-function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+function shouldLoadCliDotEnv(
+  loadGlobalEnv: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
-  return existsSync(path.join(resolveStateDir(env), ".env"));
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(env), ".env"));
 }
 
 function isAgentExecInvocation(commandPath: string[]): boolean {
@@ -1131,10 +1152,15 @@ async function runCliWithPreparedOutputMode(
     }
     return;
   }
-  const normalizedArgv = normalizeRootHelpTargetArgv(normalizeRootNoColorArgv(parsedProfile.argv));
+  const normalizedArgv = rewriteUpdateFlagArgv(
+    normalizeRootHelpTargetArgv(normalizeRootNoColorArgv(parsedProfile.argv)),
+  );
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
+  // Gateway pre-bootstrap owns state/config dotenv selection. This phase only
+  // needs the workspace file, so avoid importing the loader when it is absent.
+  const loadGlobalEnv = !isGatewayRunInvocation;
   startupTrace.mark("argv");
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
@@ -1143,7 +1169,7 @@ async function runCliWithPreparedOutputMode(
   if (
     !isHelpOrVersionInvocation &&
     !isAgentExecInvocation(normalizedInvocation.commandPath) &&
-    (isGatewayRunInvocation || shouldLoadCliDotEnv())
+    shouldLoadCliDotEnv(loadGlobalEnv)
   ) {
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
@@ -1151,7 +1177,7 @@ async function runCliWithPreparedOutputMode(
         await loadGatewayDispatchCliDotEnv({ quiet: true });
       } else {
         const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ loadGlobalEnv: !isGatewayRunInvocation, quiet: true });
+        loadCliDotEnv({ loadGlobalEnv, quiet: true });
       }
     });
   }
@@ -1181,11 +1207,18 @@ async function runCliWithPreparedOutputMode(
   let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   const isolateProxyConfigEnv = isGatewayRunInvocation;
+  const skipBestEffortConfigObservation = resolveCliStartupPolicyForArgv({
+    argv: normalizedArgv,
+    commandPath: normalizedInvocation.commandPath,
+    jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
+    env: process.env,
+  }).skipConfigGuard;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
         readBestEffortConfig({
           ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
+          ...(skipBestEffortConfigObservation ? { observe: false } : {}),
           skipPluginValidation: true,
         }),
       );
@@ -1443,7 +1476,7 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    let parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
+    let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
     const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({

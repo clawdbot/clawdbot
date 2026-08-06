@@ -11,6 +11,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { computeBackoff } from "../infra/backoff.js";
 import { defaultRuntime } from "../runtime.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
@@ -28,11 +29,18 @@ import {
 } from "./subagent-session-reconciliation.js";
 
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
-export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
-const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
-export const MAX_ANNOUNCE_RETRY_COUNT = 3;
+export const MIN_ANNOUNCE_RETRY_DELAY_MS = 15_000;
+const MAX_ANNOUNCE_RETRY_DELAY_MS = 5 * 60_000;
+const ANNOUNCE_RETRY_JITTER = 0.2;
 export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
+
+const ANNOUNCE_RETRY_BACKOFF = {
+  initialMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
+  maxMs: MAX_ANNOUNCE_RETRY_DELAY_MS,
+  factor: 2,
+  jitter: ANNOUNCE_RETRY_JITTER,
+};
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
@@ -57,11 +65,7 @@ export function capFrozenResultText(resultText: string): string {
 
 /** Computes bounded exponential backoff for subagent announce retries. */
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
-  const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
-  // retryCount is "attempts already made", so retry #1 waits 1s, then 2s, 4s...
-  const backoffExponent = Math.max(0, boundedRetryCount - 1);
-  const baseDelay = MIN_ANNOUNCE_RETRY_DELAY_MS * 2 ** backoffExponent;
-  return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
+  return computeBackoff(ANNOUNCE_RETRY_BACKOFF, Math.max(1, retryCount));
 }
 
 function formatAnnounceGiveUpLogField(value: string): string {
@@ -72,7 +76,10 @@ function formatAnnounceGiveUpLogField(value: string): string {
 }
 
 /** Logs a sanitized final give-up line for failed subagent announce delivery. */
-export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
+export function logAnnounceGiveUp(
+  entry: SubagentRunRecord,
+  reason: "expiry" | "permanent_failure",
+) {
   const retryCount = getDeliveryAttemptCount(entry);
   const endedAt = entry.execution.endedAt;
   const endedAgoMs = typeof endedAt === "number" ? Math.max(0, Date.now() - endedAt) : undefined;
@@ -89,7 +96,10 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
 /** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(
   entry: SubagentRunRecord,
-  options?: { isCurrentGeneration?: () => boolean },
+  options?: {
+    isCurrentGeneration?: () => boolean;
+    assertCommitAllowed?: () => void;
+  },
 ) {
   const childSessionKey = entry.childSessionKey?.trim();
   if (!childSessionKey) {
@@ -164,7 +174,10 @@ export async function persistSubagentSessionTiming(
       }
       return next;
     },
-    { replaceEntry: true },
+    {
+      assertCommitAllowed: options?.assertCommitAllowed,
+      replaceEntry: true,
+    },
   );
 }
 
@@ -290,7 +303,12 @@ export function reconcileOrphanedRestoredRuns(params: {
       // child sessions. Restore replays the obligation before retiring them.
       continue;
     }
-    if (entry.killReconciliation || entry.terminalOwner === "interrupted-recovery") {
+    if (
+      entry.killReconciliation ||
+      entry.killIntent ||
+      entry.execution.restartRecovery ||
+      entry.terminalOwner === "interrupted-recovery"
+    ) {
       // Provider completion or interrupted recovery still owns these rows.
       // Their bounded reconciliation runs even when the session vanished.
       continue;

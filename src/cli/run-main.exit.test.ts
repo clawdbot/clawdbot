@@ -5,16 +5,21 @@ import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
+import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
-import { runCli, shouldStartProxyForCli } from "./run-main.js";
 import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
+
+type RunMainModule = typeof import("./run-main.js");
+
+let runCli: RunMainModule["runCli"];
+let shouldStartProxyForCli: RunMainModule["shouldStartProxyForCli"];
 
 type ConfigSnapshotStub = {
   exists: boolean;
@@ -37,6 +42,13 @@ type ConfigSnapshotReadOptionsStub = {
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
+const dotenvModuleImportState = vi.hoisted(() => ({ count: 0 }));
+const existsSyncOverride = vi.hoisted(
+  () =>
+    ({ value: undefined }) as {
+      value: ((target: string) => boolean) | undefined;
+    },
+);
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const pinConfigDirMock = vi.hoisted(() => vi.fn());
 const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
@@ -92,6 +104,14 @@ const readConfigFileSnapshotMock = vi.hoisted(() =>
     valid: true,
     sourceConfig: { gateway: { mode: "local" } },
   })),
+);
+const readLocalOnboardingStateMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      configPath: string,
+      config: { wizard?: { securityAcknowledgedAt?: string } },
+    ) => LocalOnboardingState | undefined
+  >(() => undefined),
 );
 const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runRemoteGatewayInferenceOnboardingMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -221,9 +241,23 @@ vi.mock("./container-target.js", () => ({
   parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
 }));
 
-vi.mock("./dotenv.js", () => ({
-  loadCliDotEnv: loadDotEnvMock,
-}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    existsSync: (target: Parameters<typeof actual.existsSync>[0]) =>
+      typeof target === "string" && existsSyncOverride.value
+        ? existsSyncOverride.value(target)
+        : actual.existsSync(target),
+  };
+});
+
+vi.mock("./dotenv.js", () => {
+  dotenvModuleImportState.count += 1;
+  return {
+    loadCliDotEnv: loadDotEnvMock,
+  };
+});
 
 vi.mock("./one-shot-exit.js", () => ({
   flushExitAfterOneShotOutput: flushExitAfterOneShotOutputMock,
@@ -370,6 +404,10 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
 
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingStateForConfig: readLocalOnboardingStateMock,
+}));
+
 vi.mock("../commands/onboard.js", () => ({
   setupWizardCommand: setupWizardCommandMock,
 }));
@@ -459,6 +497,14 @@ async function expectNonInteractiveBareCliError(
 }
 
 describe("runCli exit behavior", () => {
+  beforeAll(async () => {
+    expect(dotenvModuleImportState.count).toBe(0);
+    const runMainModule = await import("./run-main.js");
+    expect(dotenvModuleImportState.count).toBe(0);
+    runCli = runMainModule.runCli;
+    shouldStartProxyForCli = runMainModule.shouldStartProxyForCli;
+  });
+
   afterAll(() => {
     serviceEnvSnapshot.restore();
   });
@@ -472,12 +518,14 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
+    existsSyncOverride.value = undefined;
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
       sourceConfig: { gateway: { mode: "local" } },
     });
+    readLocalOnboardingStateMock.mockReset().mockReturnValue(undefined);
     probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     loadGatewayTlsRuntimeMock.mockReset().mockResolvedValue({
@@ -513,6 +561,32 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
     loggingState.forceConsoleToStderr = false;
+  });
+
+  it("does not import dotenv for gateway forms without a workspace file", async () => {
+    existsSyncOverride.value = () => false;
+    expect(dotenvModuleImportState.count).toBe(0);
+
+    await runCli(["node", "openclaw", "gateway"]);
+    await runCli(["node", "openclaw", "gateway", "run"]);
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "gateway", aliases: () => [] }],
+      parseAsync: commanderParseAsyncMock,
+    });
+    await runCli(["node", "openclaw", "--log-level", "debug", "gateway", "run"]);
+
+    expect(dotenvModuleImportState.count).toBe(0);
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).toHaveBeenCalledTimes(1);
+    expect(commanderParseAsyncMock).toHaveBeenLastCalledWith([
+      "node",
+      "openclaw",
+      "--log-level",
+      "debug",
+      "gateway",
+      "run",
+    ]);
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -2273,6 +2347,33 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
+    ["root shorthand", ["node", "openclaw", "--update", "--dry-run", "--json"]],
+  ])("reads proxy config without observation for the update dry-run %s", async (_name, argv) => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    loadConfigMock.mockReturnValueOnce({ proxy: { selected: "dry-run" } });
+
+    await runCli(argv);
+
+    expect(loadConfigMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
+  });
+
+  it("keeps observed proxy config reads for mutable updates", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "update"]);
+
+    expect(loadConfigMock).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+    });
+    expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it.each([
     {
       name: "version-pinned skill install",
       argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
@@ -2407,24 +2508,46 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["bare gateway fast path", ["node", "openclaw", "gateway"]],
     ["fast path", ["node", "openclaw", "gateway", "run"]],
     [
       "full Commander path with root options",
       ["node", "openclaw", "--log-level", "debug", "gateway", "run"],
     ],
   ])("loads trusted dotenv and isolates %s gateway proxy config reads", async (_name, argv) => {
+    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
     if (_name === "full Commander path with root options") {
-      tryRouteCliMock.mockResolvedValueOnce(true);
+      tryRouteCliMock.mockResolvedValueOnce(false);
+      buildProgramMock.mockReturnValueOnce({
+        commands: [{ name: () => "gateway", aliases: () => [] }],
+        parseAsync: commanderParseAsyncMock,
+      });
     }
     await runCli(argv);
 
     expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    if (_name === "full Commander path with root options") {
+      expect(buildProgramMock).toHaveBeenCalledTimes(1);
+      expect(commanderParseAsyncMock).toHaveBeenLastCalledWith(argv);
+    }
     expect(loadConfigMock).toHaveBeenCalledWith({
       isolateEnv: true,
       observe: false,
       skipPluginValidation: true,
     });
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps state dotenv loading for non-gateway commands", async () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-run-main-state");
+    existsSyncOverride.value = (target) => target === path.join(stateDir, ".env");
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      runCli(["node", "openclaw", "status"]),
+    );
+
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: true, quiet: true });
   });
 
   it("keeps agent exec outside the CLI dotenv loader", async () => {
@@ -3002,14 +3125,125 @@ describe("runCli exit behavior", () => {
         },
       },
     },
+    {
+      name: "resumes onboarding when an interrupted first run also persisted guarded access",
+      snapshot: {
+        exists: true,
+        valid: true,
+        sourceConfig: {
+          wizard: {
+            securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
+            accessMode: "guarded",
+          },
+        },
+      },
+    },
   ])("$name", async ({ snapshot }) => {
     readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
     await runBareCli();
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledOnce();
+    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).toHaveBeenCalledWith({});
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes pending local onboarding after inference persisted its model", async () => {
+    const configPath = "/tmp/openclaw.json";
+    const securityAcknowledgedAt = "2026-08-02T00:00:00.000Z";
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      wizard: { securityAcknowledgedAt },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: configPath,
+      sourceConfig,
+    });
+    readLocalOnboardingStateMock.mockReturnValueOnce({
+      version: 1,
+      status: "pending",
+      runId: "pending-onboarding",
+      configPath,
+      workspace: "/tmp/workspace",
+      securityAcknowledgedAt,
+      startedAtMs: 1,
+    });
+
+    await runBareCli();
+
+    expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a completed model-only onboarding on its existing local TUI path", async () => {
+    const configPath = "/tmp/openclaw.json";
+    const securityAcknowledgedAt = "2026-08-02T00:00:00.000Z";
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      wizard: { securityAcknowledgedAt },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: configPath,
+      sourceConfig,
+    });
+    readLocalOnboardingStateMock.mockReturnValueOnce({
+      version: 1,
+      status: "completed",
+      runId: "completed-onboarding",
+      configPath,
+      workspace: "/tmp/workspace",
+      securityAcknowledgedAt,
+      startedAtMs: 1,
+      completedAtMs: 2,
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({ kind: "unreachable" });
+
+    await runBareCli();
+
+    expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false, local: true }, {});
+  });
+
+  it("does not resume a receipt belonging to the config replaced at the same path", async () => {
+    const configPath = "/tmp/openclaw.json";
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
+      wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      path: configPath,
+      sourceConfig,
+    });
+    readLocalOnboardingStateMock.mockImplementationOnce((_configPath, config) =>
+      config.wizard?.securityAcknowledgedAt === "2026-08-02T00:00:00.000Z"
+        ? {
+            version: 1,
+            status: "pending",
+            runId: "stale-onboarding",
+            configPath,
+            workspace: "/tmp/stale-workspace",
+            securityAcknowledgedAt: "2026-08-02T00:00:00.000Z",
+            startedAtMs: 1,
+          }
+        : undefined,
+    );
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({ kind: "unreachable" });
+
+    await runBareCli();
+
+    expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(launchTuiCliMock).toHaveBeenCalledWith({ deliver: false, local: true }, {});
   });
 
   it("points noninteractive fresh bare root invocations to onboarding automation", async () => {
@@ -3090,6 +3324,7 @@ describe("runCli exit behavior", () => {
     await runBareCli();
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
     expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
       config: sourceConfig,
       gatewayUrl: "wss://gateway.example/ws",
@@ -3723,6 +3958,7 @@ describe("runCli exit behavior", () => {
 
     await runBareCli();
 
+    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).toHaveBeenCalledWith({ classic: true });
     expect(launchTuiCliMock).not.toHaveBeenCalled();
   });

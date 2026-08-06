@@ -19,6 +19,7 @@ import {
 import { hasErrnoCode } from "../infra/errors.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
@@ -212,9 +213,7 @@ async function listResetArchiveCandidatesForTranscriptAsync(
     dirSize: dirStat.size,
     archives: boundedArchives,
   });
-  if (resetArchiveDiscoveryCache.size > MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES) {
-    resetArchiveDiscoveryCache.delete(resetArchiveDiscoveryCache.keys().next().value ?? "");
-  }
+  pruneMapToMaxSize(resetArchiveDiscoveryCache, MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES);
   return boundedArchives;
 }
 

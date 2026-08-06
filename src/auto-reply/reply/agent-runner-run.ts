@@ -5,11 +5,11 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -41,6 +41,7 @@ import {
   isAudioPayload,
 } from "./agent-runner-helpers.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { finalizeAcceptedSteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -55,7 +56,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import * as replyRunState from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping, refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
@@ -111,7 +112,19 @@ export async function runReplyAgent(
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
-  const replyOperationRunState = resolveReplyOperationRunState(opts);
+  let didDeliverVisiblePartialReply = false;
+  const runOpts = opts?.onPartialReply
+    ? {
+        ...opts,
+        onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
+          await opts.onPartialReply?.(payload);
+          if (hasOutboundReplyContent(payload, { trimText: true })) {
+            didDeliverVisiblePartialReply = true;
+          }
+        },
+      }
+    : opts;
+  const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
@@ -296,38 +309,18 @@ export async function runReplyAgent(
       },
     );
     if (steerOutcome.queued) {
-      if (replyOperationRunState) {
-        // Transcript commit has already transferred this turn to the active
-        // session. Keep that acceptance even if ingress adoption is later lost:
-        // the losing dispatch must neither replay nor emit its own fallback.
-        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
-      }
-      activeReplyOperation?.recordActivity();
-      try {
-        await turnAdoptionLifecycle?.onAdopted();
-      } catch (error) {
-        if (isIngressAdoptionLostError(error)) {
-          // Claim was tombstoned/superseded/guillotined after transcript commit.
-          // Cancel the active run so steered tools do not keep executing. Keep
-          // admission accepted and do not rethrow: ingress ownership is gone,
-          // so replay or a local no-visible-reply fallback would duplicate or
-          // misreport the already-injected user turn.
-          const abortKey = sessionKey ?? queueKey;
-          if (abortKey) {
-            replyRunRegistry.abort(abortKey);
-          }
-          logVerbose(
-            `queue: active session ${steerSessionId} adoption lost after transcript commit (${error.code}); aborting steered turn without ingress replay`,
-          );
-          typing.cleanup();
-          return undefined;
-        }
-        // Ordinary callback failures: transcript-backed steering is irrevocable.
-        logVerbose(
-          `queue: active session ${steerSessionId} adoption finalizer failed after transcript commit: ${String(
-            error,
-          )}`,
-        );
+      const adoptionDisposition = await finalizeAcceptedSteer({
+        activeReplyOperation,
+        abortKey: sessionKey ?? queueKey,
+        cleanupTyping: () => typing.cleanup(),
+        errorMessage: steerOutcome.errorMessage,
+        onAdopted: turnAdoptionLifecycle ? () => turnAdoptionLifecycle.onAdopted() : undefined,
+        replyOperationRunState,
+        steerSessionId,
+        transcriptCommit: steerOutcome.transcriptCommit,
+      });
+      if (adoptionDisposition === "stop") {
+        return undefined;
       }
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
@@ -343,9 +336,11 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
-    // The active runtime still owns the turn but cannot prove transcript adoption.
-    // Keep the inbound message queued so ingress can finalize after a later run.
-    shouldQueueAfterSteerRejection = steerOutcome.reason === "transcript_commit_wait_unsupported";
+    // A vanished/non-streaming owner can fall through; every rejection from a
+    // still-owning runtime must retain this exact turn as a follow-up.
+    shouldQueueAfterSteerRejection = !["no_active_run", "not_streaming", "stale_run"].includes(
+      steerOutcome.reason,
+    );
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }
@@ -392,6 +387,7 @@ export async function runReplyAgent(
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
+    replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     const enqueued = enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -520,6 +516,7 @@ export async function runReplyAgent(
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,
+      originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: opts?.abortSignal,
       onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });
@@ -577,6 +574,7 @@ export async function runReplyAgent(
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,
+    confirmRestartRecoveryArmedAfterLeaseLoss,
     isArmed: isRestartRecoveryArmed,
   } = createReplyAgentRestartRecoveryController({
     activeSessionStore,
@@ -645,6 +643,7 @@ export async function runReplyAgent(
       blockStreamingEnabled,
       cfg,
       checkpointBeforeAgentReply,
+      confirmRestartRecoveryArmedAfterLeaseLoss,
       commandBody,
       defaultModel,
       followupRun,
@@ -652,7 +651,7 @@ export async function runReplyAgent(
       getActiveSessionEntry: () => activeSessionEntry,
       isHeartbeat,
       isRestartRecoveryArmed,
-      opts,
+      opts: runOpts,
       pendingToolTasks,
       performSessionReset: resetSession,
       queueKey,
@@ -692,7 +691,10 @@ export async function runReplyAgent(
     });
   } catch (error) {
     return await handleReplyAgentRunError(error, {
+      blockReplyPipeline,
       cfg,
+      didDeliverVisiblePartialReply: () => didDeliverVisiblePartialReply,
+      isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,
       resolvedVerboseLevel,

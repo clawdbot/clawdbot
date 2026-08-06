@@ -1,8 +1,9 @@
-// Cron store tests cover persisted scheduled job state and run metadata.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+// Cron store tests cover persisted scheduled job state and run metadata.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadLegacyCronQuarantineForMigration } from "../commands/doctor/cron/legacy-quarantine-migration.js";
 import {
@@ -79,12 +80,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 describe("resolveCronStorePath", () => {
   const envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME"]);
@@ -550,6 +546,25 @@ describe("cron store", () => {
     await expectPathMissing(store.storePath);
     await expectPathMissing(store.storePath.replace(/\.json$/, "-state.json"));
     await expectPathMissing(`${store.storePath}.bak`);
+  });
+
+  it("round-trips the auto-disable reason through runtime state JSON", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("auto-disabled-job", false);
+    const job = expectDefined(payload.jobs[0], "payload.jobs[0] test invariant");
+    await saveCronStore(store.storePath, payload);
+
+    job.state = {
+      consecutiveErrors: 10,
+      autoDisabled: {
+        reason: "consecutive-failures",
+        atMs: job.updatedAtMs,
+        consecutiveErrors: 10,
+      },
+    };
+    await saveCronStore(store.storePath, payload, { stateOnly: true });
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject(job.state);
   });
 
   it("stores queued reservations separately from active run markers", async () => {

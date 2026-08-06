@@ -280,17 +280,20 @@ export async function settleEmbeddedAttemptStream(input: {
           `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
       );
     }
+    const modelMessagesSnapshot = snapshotSelection.messagesSnapshot;
     messagesSnapshot = projectToolSearchTargetTranscriptMessages(
-      snapshotSelection.messagesSnapshot,
+      modelMessagesSnapshot,
       input.toolSearchTargetTranscriptProjections,
     );
     sessionIdUsed = snapshotSelection.sessionIdUsed;
-    lastAssistant = messagesSnapshot
+    // Projected target-tool assistants are transcript evidence, not model
+    // turns. Letting one own terminal state hides its parent tool's outcome.
+    lastAssistant = modelMessagesSnapshot
       .slice()
       .toReversed()
       .find((message): message is AssistantMessage => message.role === "assistant");
     currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-      messagesSnapshot,
+      messagesSnapshot: modelMessagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
     });
     currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();

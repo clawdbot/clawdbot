@@ -238,6 +238,41 @@ describe("chutes-models", () => {
     });
   });
 
+  it("selects Chutes context limits in provider precedence order", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          {
+            id: "provider/context-primary",
+            context_length: 131072,
+            max_model_len: 262144,
+          },
+          { id: "provider/serving-fallback", max_model_len: 131072 },
+          {
+            id: "provider/invalid-primary",
+            context_length: -1,
+            max_model_len: 131072,
+          },
+          {
+            id: "provider/default-control",
+            context_length: 0,
+            max_model_len: 0,
+          },
+        ],
+      }),
+    );
+
+    await withLiveChutesDiscovery(mockFetch, async () => {
+      const models = await discoverChutesModels("context-limit-precedence");
+      expect(models.map(({ id, contextWindow }) => ({ id, contextWindow }))).toEqual([
+        { id: "provider/context-primary", contextWindow: 131072 },
+        { id: "provider/serving-fallback", contextWindow: 131072 },
+        { id: "provider/invalid-primary", contextWindow: 131072 },
+        { id: "provider/default-control", contextWindow: 128000 },
+      ]);
+    });
+  });
+
   it("falls back from malformed live token metadata", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({

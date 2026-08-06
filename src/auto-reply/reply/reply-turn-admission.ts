@@ -123,6 +123,7 @@ type ReplyTurnAdmissionParams = {
   kind: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
+  originatingLeafEntryId?: string | null;
   /**
    * Move this already-held operation into sessionKey's run slot instead of
    * creating a new one. Used when a native command turn (admitted under its
@@ -296,6 +297,7 @@ async function admitReplyTurnWithWaitSignal(
             sessionId,
             resetTriggered: params.resetTriggered,
             routeThreadId: params.routeThreadId,
+            originatingLeafEntryId: params.originatingLeafEntryId,
             upstreamAbortSignal: params.upstreamAbortSignal,
             respectFollowupAdmissionBarrier:
               params.kind === "queued_followup" || params.kind === "heartbeat",

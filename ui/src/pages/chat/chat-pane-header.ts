@@ -9,7 +9,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { hasOperatorWriteAccess, hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
@@ -17,10 +17,12 @@ import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { renderBoardDockMenu, renderBoardFaceToggle } from "./board-session-surface.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
+import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { patchChatSessionLabel } from "./chat-state-route.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import {
@@ -93,13 +95,52 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
           sessionKey: this.state.sessionKey,
         })
       : false;
-    const branchSwitchDisabledReason = !hasOperatorAdminAccess(
-      this.context.gateway.snapshot.hello?.auth ?? null,
-    )
-      ? t("chat.sessionHeader.branchSwitchRequiresAdmin")
+    const branchSwitchAccess = readChatSessionActionAccess(
+      this.context.gateway.snapshot,
+      Boolean(this.state?.chatRunId),
+    ).branchSwitch;
+    const branchSwitchDisabledReason = !branchSwitchAccess.allowed
+      ? branchSwitchAccess.reason
       : branchSwitchWorking
         ? t("chat.sessionHeader.branchSwitchUnavailable")
         : null;
+    const sharingSnapshot = this.context.gateway.snapshot;
+    // Sharing was introduced behind this advertised method. Keep the control
+    // hidden for older Gateways that omit method metadata.
+    const sharingMethodsSupported =
+      isGatewayMethodAdvertised(sharingSnapshot, "session.visibility.set") === true;
+    const sharingReadAccess = readSessionMethodAccess(sharingSnapshot, {
+      method: "session.members.list",
+      requiredScope: "operator.read",
+    });
+    const sharingVisibilityAccess = readSessionMethodAccess(sharingSnapshot, {
+      method: "session.visibility.set",
+      requiredScope: "operator.write",
+    });
+    const sharingMemberAddAccess = readSessionMethodAccess(sharingSnapshot, {
+      method: "session.members.add",
+      requiredScope: "operator.write",
+    });
+    const sharingMemberRemoveAccess = readSessionMethodAccess(sharingSnapshot, {
+      method: "session.members.remove",
+      requiredScope: "operator.write",
+    });
+    const sharingOpenDisabledReason =
+      sharingReadAccess.allowed || sharingVisibilityAccess.allowed
+        ? undefined
+        : sharingReadAccess.reason;
+    const renameAccess = row
+      ? readSessionMethodAccess(this.context.gateway.snapshot, {
+          method: "sessions.patch",
+          params: { key: row.key, label: null },
+        })
+      : null;
+    const renameDisabledReason =
+      this.state?.connected !== true || !renameAccess
+        ? t("sessionsView.actionRequiresConnection")
+        : renameAccess.allowed
+          ? undefined
+          : renameAccess.reason;
     return renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -126,9 +167,7 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
       platform: this.headerPlatform,
       canReveal,
       copiedAction: this.headerCopiedAction,
-      canRename:
-        this.state?.connected === true &&
-        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      renameDisabledReason,
       terminalAction: renderCatalogTerminalButton(this.state, this.catalogSession),
       discussionAction: this.renderSessionDiscussionAction(),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
@@ -156,20 +195,31 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
         this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
         this.persistBoardSessionView({ face });
       }),
-      sharingControl:
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.visibility.set") === true
-          ? renderChatSessionSharing({
-              session: row,
-              state: row
-                ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
-                : undefined,
-              onOpen: () => row && void this.loadSessionSharing(row),
-              onVisibilityChange: (visibility) =>
-                row && void this.setSessionVisibility(row, visibility),
-              onMemberChange: (identityId, member) =>
-                row && void this.setSessionMember(row, identityId, member),
-            })
-          : nothing,
+      sharingControl: sharingMethodsSupported
+        ? renderChatSessionSharing({
+            session: row,
+            state: row
+              ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
+              : undefined,
+            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
+            membersAvailable: sharingReadAccess.allowed,
+            openDisabledReason: sharingOpenDisabledReason,
+            visibilityDisabledReason: sharingVisibilityAccess.allowed
+              ? undefined
+              : sharingVisibilityAccess.reason,
+            memberAddDisabledReason: sharingMemberAddAccess.allowed
+              ? undefined
+              : sharingMemberAddAccess.reason,
+            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
+              ? undefined
+              : sharingMemberRemoveAccess.reason,
+            onOpen: () => row && void this.loadSessionSharing(row),
+            onVisibilityChange: (visibility) =>
+              row && void this.setSessionVisibility(row, visibility),
+            onMemberChange: (identityId, member) =>
+              row && void this.setSessionMember(row, identityId, member),
+          })
+        : nothing,
       boardDockAction: renderBoardDockMenu(
         board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate,
         board.face,
@@ -195,7 +245,17 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
           this.handleHeaderMenuAction(action, row, workspace.root, branch);
         }
       },
-      onBranchSelect: (leafEntryId) => void this.switchToBranch(leafEntryId),
+      onBranchSelect: (leafEntryId) => {
+        const access = readChatSessionActionAccess(
+          this.context.gateway.snapshot,
+          Boolean(this.state?.chatRunId),
+        ).branchSwitch;
+        if (!access.allowed) {
+          this.publishHeaderError(access.reason);
+          return;
+        }
+        void this.switchToBranch(leafEntryId);
+      },
       onOpenSplitView: this.onOpenSplitView,
       onSplitDown: this.onSplitDown,
       onSplitRight: this.onSplitRight,
@@ -229,6 +289,14 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
   }
 
   protected beginHeaderRename(row: GatewaySessionRow): void {
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: row.key, label: null },
+    });
+    if (!access.allowed) {
+      this.publishHeaderError(access.reason);
+      return;
+    }
     const customLabel = row.label?.trim() || null;
     this.headerRenameSessionKey = row.key;
     this.headerRenameInitialLabel = customLabel;
@@ -261,6 +329,14 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     this.headerRenameSessionKey = "";
     const state = this.state;
     if (!key || !state || unchangedDerivedTitle || unchangedLabel) {
+      return;
+    }
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key, label },
+    });
+    if (!access.allowed) {
+      this.publishHeaderError(access.reason);
       return;
     }
     void patchChatSessionLabel(state, this.context.sessions, key, label).catch((error: unknown) =>
@@ -367,18 +443,14 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     branch: string | null,
     copy: (value: string) => Promise<boolean> = copyToClipboard,
   ): void {
-    if (action === "copy-path" && workspaceRoot) {
-      void copy(workspaceRoot).then((copied) => {
+    const copiedValue =
+      action === "copy-path" ? workspaceRoot : action === "copy-branch" ? branch : null;
+    if (copiedValue) {
+      void copy(copiedValue).then((copied) => {
         if (copied) {
           this.showHeaderCopied(action);
-        }
-      });
-      return;
-    }
-    if (action === "copy-branch" && branch) {
-      void copy(branch).then((copied) => {
-        if (copied) {
-          this.showHeaderCopied(action);
+        } else {
+          this.publishHeaderError(t("common.copyFailed"));
         }
       });
       return;
@@ -392,7 +464,8 @@ export abstract class ChatPaneHeader extends ChatPaneContext {
     if (!this.state) {
       return;
     }
-    this.state.chatError = error instanceof Error ? error.message : String(error);
+    this.state.lastError = error instanceof Error ? error.message : String(error);
+    this.state.chatError = this.state.lastError;
     this.state.requestUpdate?.();
   }
 

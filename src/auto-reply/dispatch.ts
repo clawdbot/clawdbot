@@ -22,6 +22,11 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
+import {
+  foregroundReplyFenceByKey,
+  type ForegroundReplyFenceState,
+  notifyForegroundReplyFenceWaiters,
+} from "./foreground-reply-fence-state.js";
 import { setReplyPayloadMetadata } from "./reply-payload.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
@@ -46,15 +51,6 @@ import type { ReplyPayload } from "./types.js";
 
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
 
-type ForegroundReplyFenceState = {
-  generation: number;
-  visibleDeliveryGeneration: number;
-  activeDispatches: number;
-  activeGenerations: Map<number, number>;
-  suspendedGenerations: Set<number>;
-  waiters: Set<() => void>;
-};
-
 type ForegroundReplyFenceSnapshot = {
   key: string;
   generation: number;
@@ -65,7 +61,6 @@ type ReplyPayloadRunState = {
   runId?: string;
 };
 
-const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
 const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
 
 function applyRuntimeToolsAllow(
@@ -144,14 +139,6 @@ function beginForegroundReplyFence(
     generation: state.generation,
     state,
   };
-}
-
-function notifyForegroundReplyFenceWaiters(state: ForegroundReplyFenceState): void {
-  const waiters = [...state.waiters];
-  state.waiters.clear();
-  for (const resolve of waiters) {
-    resolve();
-  }
 }
 
 function setForegroundReplyFenceAdmissionWaiting(

@@ -3,7 +3,7 @@
  *
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
-import { getAgentRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
@@ -120,5 +120,18 @@ export function getLatestSubagentRunByChildSessionKey(
       getSubagentRunsSnapshotForChildSession(subagentRuns, key),
       key,
     ) ?? null
+  );
+}
+
+/** Returns the authoritative process-local run for mutation ownership checks. */
+export function getLatestLiveSubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+  return (
+    getLatestSubagentRunByChildSessionKeyFromRuns(getSubagentRunsForChildSession(key), key) ?? null
   );
 }

@@ -429,6 +429,39 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps CLI preamble classification when quiet channel progress is hidden", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    const dispatcher = createDispatcher();
+    const onItemEvent = vi.fn();
+    let itemEventHandlerPresent = false;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      itemEventHandlerPresent = Boolean(opts?.onItemEvent);
+      await opts?.onItemEvent?.({ kind: "preamble", progressText: "Checking first" });
+      return { text: "Final answer" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:123",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onItemEvent, progressPreambleEnabled: true },
+    });
+
+    expect(itemEventHandlerPresent).toBe(true);
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Final answer" });
+  });
+
   it("suppresses direct native progress callbacks when send policy denies delivery", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

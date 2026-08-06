@@ -82,6 +82,17 @@ export function resolveEmbeddingProviderFallbackModel(
   return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
+export function resolveEmbeddingProviderFallbackRemote(
+  remote: MemoryEmbeddingProviderCreateOptions["remote"],
+): MemoryEmbeddingProviderCreateOptions["remote"] {
+  if (!remote) {
+    return undefined;
+  }
+  // Endpoint and auth belong to the primary provider; batch settings are safe to reuse.
+  const { baseUrl: _baseUrl, apiKey: _apiKey, headers: _headers, ...sharedRemote } = remote;
+  return Object.keys(sharedRemote).length > 0 ? sharedRemote : undefined;
+}
+
 export function resolveEmbeddingProviderAdapterId(
   providerId: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
@@ -162,6 +173,7 @@ export async function createEmbeddingProvider(
         const fallbackResult = await createWithAdapter(fallbackAdapter, {
           ...options,
           provider: options.fallback,
+          remote: resolveEmbeddingProviderFallbackRemote(options.remote),
         });
         return {
           ...fallbackResult,

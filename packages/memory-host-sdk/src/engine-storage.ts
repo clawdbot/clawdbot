@@ -52,6 +52,7 @@ export type {
   MemorySource,
   MemorySyncParams,
   MemorySyncProgressUpdate,
+  MemoryVectorIndexState,
 } from "./host/types.js";
 export {
   dropMemoryPathFtsTriggers,

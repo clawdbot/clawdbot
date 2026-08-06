@@ -1,0 +1,44 @@
+title: TUI local shell routing PTY contracts
+scenario:
+  id: tui-local-shell-pty
+  surface: tui
+  category: tui.local-shell-execution
+  coverage:
+    primary:
+      - tui.bang-command-routing
+      - tui.approval-prompt
+      - tui.command-output-display
+      - tui.execution-environment-marker
+  risk: high
+  objective: Prove local shell routing, confirmation, output, and environment behavior through the built local TUI and a real PTY.
+  successCriteria:
+    - Whitespace-prefixed bang input remains chat input after local shell execution has already been approved.
+    - Column-one bang input requires explicit session approval before execution.
+    - Approved commands visibly render stdout, stderr, and their terminal exit status.
+    - Approved commands receive the TUI local shell environment marker.
+  codeRefs:
+    - src/tui/components/custom-editor.ts
+    - src/tui/tui-submit.ts
+    - src/tui/tui-local-shell.ts
+    - src/tui/tui-pty-local.e2e.test.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    summary: Runs exact built local-TUI PTY assertions and authenticates their fresh Vitest results as QA evidence.
+    timeoutMs: 360000
+    args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
+    config:
+      requireBuiltCli: true
+      tuiPtyCases:
+        - coverageId: tui.bang-command-routing
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends keeps whitespace-prefixed bang input in chat after local shell approval$
+        - coverageId: tui.approval-prompt
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends confirms and renders local shell output and environment through a real local PTY$
+        - coverageId: tui.command-output-display
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends confirms and renders local shell output and environment through a real local PTY$
+        - coverageId: tui.execution-environment-marker
+          testFile: src/tui/tui-pty-local.e2e.test.ts
+          testNamePattern: ^TUI PTY real backends confirms and renders local shell output and environment through a real local PTY$

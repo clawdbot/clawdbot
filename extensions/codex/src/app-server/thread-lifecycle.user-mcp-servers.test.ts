@@ -36,7 +36,7 @@ function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp",
-      cliVersion: "0.146.0",
+      cliVersion: "0.146.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

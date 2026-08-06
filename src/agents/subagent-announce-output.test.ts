@@ -158,17 +158,51 @@ describe("readSubagentOutput", () => {
   });
 
   it.each(["toolUse", "functionCall", "function_call"])(
-    "reports visible tool activity for provider-specific %s transcript blocks",
+    "does not synthesize output from provider-specific %s transcript blocks",
     async (type) => {
       installOutputDeps({
         messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
       });
 
-      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-        "1 tool call(s) made without visible output.",
-      );
+      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
     },
   );
+
+  it.each(["toolUse", "functionCall", "function_call"])(
+    "summarizes provider-specific %s transcript blocks after a timeout",
+    async (type) => {
+      installOutputDeps({
+        messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
+      });
+
+      await expect(
+        readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+      ).resolves.toBe("1 tool call(s) made without visible output.");
+    },
+  );
+
+  it.each(["toolCalls", "tool_calls"])("summarizes top-level %s after a timeout", async (field) => {
+    installOutputDeps({
+      messages: [{ role: "assistant", [field]: [{ name: "read" }, { name: "exec" }] }],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("2 tool call(s) made without visible output.");
+  });
+
+  it("keeps an intentional silent reply ahead of timeout tool progress", async () => {
+    installOutputDeps({
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", name: "read" }] },
+        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("NO_REPLY");
+  });
 
   it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {
     installOutputDeps({
@@ -265,7 +299,7 @@ describe("readSubagentOutput", () => {
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it("reports only tool calls belonging to the latest user turn", async () => {
+  it("does not synthesize output from tool calls in the latest user turn", async () => {
     installOutputDeps({
       messages: [
         {
@@ -280,9 +314,30 @@ describe("readSubagentOutput", () => {
       ],
     });
 
-    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "1 tool call(s) made without visible output.",
-    );
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("resets timeout tool progress at the latest user turn", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "old-read", name: "read", arguments: {} },
+            { type: "toolCall", id: "old-exec", name: "exec", arguments: {} },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "Start the next task." }] },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "current-call", name: "write", arguments: {} }],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "timeout" }),
+    ).resolves.toBe("1 tool call(s) made without visible output.");
   });
 
   it("does not fall back to tool output when the last assistant turn is empty", async () => {
@@ -518,24 +573,18 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).not.toContain("(no output)");
   });
 
-  it("uses pending delivery payload text when completion text has been cleared", () => {
+  it("does not recover result text from delivery metadata after completion text is cleared", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         task: "child task",
         createdAt: 1,
         completion: { resultText: null },
-        delivery: {
-          payload: {
-            frozenResultText: "delivery payload output",
-          },
-        },
         execution: { outcome: { status: "ok" } },
       },
     ]);
 
-    expect(findings).toContain("delivery payload output");
-    expect(findings).not.toContain("(no output)");
+    expect(findings).toContain("(no output)");
   });
 
   it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {

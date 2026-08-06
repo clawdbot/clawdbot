@@ -839,14 +839,33 @@ describe("Slack native command argument menus", () => {
         slashCommand: { enabled: boolean };
       }
     ).slashCommand.enabled = true;
-    await registerCommands(configuredHarness.ctx, configuredHarness.account);
+    const registration = await registerCommands(configuredHarness.ctx, configuredHarness.account);
 
+    expect(registration).toEqual({ mode: "single", name: "openclaw" });
     expect(
       [...configuredHarness.commands.keys()].some(
         (command) => command instanceof RegExp && command.test("/openclaw"),
       ),
     ).toBe(true);
     expect(configuredHarness.commands.has("/usage")).toBe(false);
+  });
+
+  it("does not register native argument handlers for a configured slash command", async () => {
+    const configuredHarness = createArgMenusHarness();
+    const slashCommand = (
+      configuredHarness.ctx as {
+        slashCommand: { enabled: boolean; name: string };
+      }
+    ).slashCommand;
+    slashCommand.enabled = true;
+    slashCommand.name = "acme";
+
+    await expect(
+      registerCommands(configuredHarness.ctx, configuredHarness.account),
+    ).resolves.toEqual({ mode: "single", name: "acme" });
+
+    expect(configuredHarness.actions.size).toBe(0);
+    expect(configuredHarness.options.size).toBe(0);
   });
 
   it("registers options handlers without losing app receiver binding", async () => {

@@ -30,6 +30,7 @@ import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
+import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   createResponsesStreamWithEncryptedContentRetry,
@@ -193,6 +194,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           enforceCodeModeResponsesToolSurface(params, visibleToolNames);
           assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
+        const observePrompt = createResponsesPromptEgressObserver(
+          responsesOptions,
+          context.systemPrompt,
+        );
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
@@ -211,6 +216,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           request: params,
           requestOptions,
           model,
+          observePrompt,
         });
         await options?.onResponse?.(
           { status: response.status, headers: headersToRecord(response.headers) },
@@ -290,7 +296,8 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         resolveAzureDeploymentName(model),
         metadata,
       ),
-    createResponseStream: async ({ client, request, requestOptions }) => {
+    createResponseStream: async ({ client, request, requestOptions, observePrompt }) => {
+      observePrompt?.(request, { egress: "responses-sdk", payloadVariant: "initial" });
       const { data, response } = await client.responses
         .create(request as never, requestOptions)
         .withResponse();

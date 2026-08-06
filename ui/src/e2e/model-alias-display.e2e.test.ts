@@ -55,6 +55,7 @@ suite.define(() => {
     const context = await createProofContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
       models,
       sessionKey: "agent:main:main",
     });

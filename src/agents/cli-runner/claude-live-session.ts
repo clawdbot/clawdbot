@@ -28,7 +28,10 @@ import {
 } from "../../infra/exec-approvals.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendConfig,
+  CliBackendLiveSessionRequirement,
+} from "../../plugins/cli-backend.types.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   resolveAgentIdFromSessionKey,
@@ -38,6 +41,8 @@ import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
+  frameBoundedCliJsonlChunk,
+  normalizeClaudeCliStreamJsonRecord,
   parseCliOutput,
   type CliOutput,
   type CliUsage,
@@ -80,7 +85,6 @@ type ClaudeLiveTurn = {
   outputLimits: ClaudeLiveOutputLimits;
   startedAtMs: number;
   rawLines: string[];
-  rawChars: number;
   sessionId?: string;
   noOutputTimer: NodeJS.Timeout | null;
   /** Last stdout/stderr time; null until the process emits anything this turn. */
@@ -88,19 +92,15 @@ type ClaudeLiveTurn = {
   timeoutTimer: NodeJS.Timeout | null;
   activeTools: Map<string, ClaudeLiveActiveTool>;
   observedStdout: boolean;
+  /** UUID sent with this input; terminal records belong to the turn only after its started event. */
+  inputUuid: string;
+  inputStarted: boolean;
+  /** Reports process identity from init even when the current input has not started yet. */
+  onSessionId?: (sessionId: string) => void;
   /** Only resumed turns may replay a lifecycle-only stall through a fork. */
   useResume: boolean;
-  /** True after any output other than init or the exact synthetic queue placeholder. */
+  /** True after output that makes replaying the submitted input unsafe. */
   hasReplayUnsafeActivity: boolean;
-  /**
-   * Claude consumed queued session notifications before processing this turn.
-   * The following empty result is provisional; the same process can emit the
-   * real answer later, so a bounded grace observes whether output continues.
-   */
-  pendingSyntheticPlaceholder: boolean;
-  allowSyntheticContinuationGrace: boolean;
-  deferredSyntheticOutput: CliOutput | null;
-  syntheticContinuationTimer: NodeJS.Timeout | null;
   completedToolCallIds: Set<string>;
   toolEventCount: number;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
@@ -116,13 +116,15 @@ type ClaudeLiveSession = {
   fingerprint: string;
   systemPromptHash: string;
   systemPromptSwitchCapability: "unknown" | "supported" | "unsupported";
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
+  liveSessionCapabilityReady: boolean;
   managedRun: ManagedRun;
   providerId: string;
   modelId: string;
   sessionId?: string;
   noOutputTimeoutMs: number;
   stderr: string;
-  stdoutBuffer: string;
+  stdoutBuffer: { pending: string };
   currentTurn: ClaudeLiveTurn | null;
   idleTimer: NodeJS.Timeout | null;
   cleanup: () => Promise<void>;
@@ -184,17 +186,6 @@ const CLAUDE_LIVE_CONTROL_TIMEOUT_MS = 3_000;
 const CLAUDE_LIVE_SYSTEM_PROMPT_PROBE_ERROR =
   "set_model: system_prompt must be a non-empty string when present";
 const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
-// The observed queued-notification resume emits new process activity within
-// seconds. Cap this below the normal resumed no-output watchdog so terminal
-// placeholders still reach existing empty-response handling promptly.
-const CLAUDE_LIVE_SYNTHETIC_CONTINUATION_GRACE_MS = 30_000;
-// Claude Code uses these exact <synthetic> messages while draining internal
-// session work. Matching both the model sentinel and full text avoids treating
-// user-authored lookalikes as lifecycle signals.
-const CLAUDE_LIVE_PROVISIONAL_SYNTHETIC_PLACEHOLDERS = new Set([
-  "No response requested.",
-  "Continue from where you left off.",
-]);
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, ClaudeLiveSessionCreate>();
 const liveSessionTurns = new KeyedAsyncQueue();
@@ -508,11 +499,6 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
     clearTimeout(turn.timeoutTimer);
     turn.timeoutTimer = null;
   }
-  if (turn.syntheticContinuationTimer) {
-    clearTimeout(turn.syntheticContinuationTimer);
-    turn.syntheticContinuationTimer = null;
-  }
-  turn.deferredSyntheticOutput = null;
 }
 
 function clearOutstandingBackgroundTasks(session: ClaudeLiveSession): void {
@@ -865,7 +851,7 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
     }
     const retryableResumeStall =
       turn.useResume &&
-      session.stdoutBuffer.trim().length === 0 &&
+      session.stdoutBuffer.pending.trim().length === 0 &&
       !turn.hasReplayUnsafeActivity &&
       turn.toolEventCount === 0 &&
       turn.activeTools.size === 0 &&
@@ -876,9 +862,9 @@ function armNoOutputTimer(session: ClaudeLiveSession, turn: ClaudeLiveTurn, dela
       createTimeoutError(
         session,
         `CLI produced no output for ${Math.round((Date.now() - quietSinceMs) / 1000)}s and was terminated.`,
-        // Claude can emit only init or a synthetic queue placeholder before a
-        // resumed stream wedges. No assistant/tool work has happened, so
-        // recovery can fork the cached session before transcript reseed.
+        // A resumed stream can emit only lifecycle/init records before it
+        // wedges. No assistant/tool work has happened, so recovery can fork
+        // the cached session before transcript reseed.
         turn.lastOutputAtMs === null || retryableResumeStall ? "cli_no_output_timeout" : undefined,
         {
           mode: "no-output",
@@ -926,85 +912,58 @@ function applyBackgroundTasksChanged(
   }
 }
 
-function isClaudeLiveProvisionalSyntheticPlaceholder(parsed: Record<string, unknown>): boolean {
-  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
-    return false;
+function applyClaudeLiveInputLifecycle(
+  turn: ClaudeLiveTurn,
+  parsed: Record<string, unknown>,
+): void {
+  if (
+    parsed.type === "command_lifecycle" &&
+    parsed.command_uuid === turn.inputUuid &&
+    parsed.state === "started" &&
+    !turn.inputStarted
+  ) {
+    // A reused process may finish queued work before reading this input. Only
+    // Claude's matching started event makes later terminal records ours.
+    turn.inputStarted = true;
+    emitClaudeLiveProgress(turn, "cli_live:input_started");
   }
-  const message = parsed.message;
-  if (message.model !== "<synthetic>") {
-    return false;
-  }
-  const content = Array.isArray(message.content) ? message.content : [];
-  const text = content
-    .flatMap((block) =>
-      isRecord(block) && block.type === "text" && typeof block.text === "string"
-        ? [block.text]
-        : [],
-    )
-    .join("")
-    .trim();
-  return CLAUDE_LIVE_PROVISIONAL_SYNTHETIC_PLACEHOLDERS.has(text);
 }
 
-function isClaudeLiveSubstantiveAssistantProgress(parsed: Record<string, unknown>): boolean {
-  if (parsed.type === "assistant" && isRecord(parsed.message)) {
-    return parsed.message.model !== "<synthetic>";
+function applyClaudeLiveSessionRequirement(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): boolean {
+  const requirement = session.liveSessionRequirement;
+  if (!requirement || parsed.type !== "system" || parsed.subtype !== "init") {
+    return true;
   }
-  if (parsed.type !== "stream_event" || !isRecord(parsed.event)) {
-    return false;
+  const capabilities = Array.isArray(parsed.capabilities)
+    ? parsed.capabilities.filter((value): value is string => typeof value === "string")
+    : [];
+  if (capabilities.includes(requirement.capability)) {
+    session.liveSessionCapabilityReady = true;
+    return true;
   }
-  const event = parsed.event;
-  return (
-    event.type === "content_block_delta" &&
-    isRecord(event.delta) &&
-    event.delta.type === "text_delta" &&
-    typeof event.delta.text === "string" &&
-    event.delta.text.length > 0
+  const version =
+    typeof parsed.claude_code_version === "string"
+      ? parsed.claude_code_version.trim() || undefined
+      : undefined;
+  const versionDetail = version ? ` (version ${version})` : "";
+  closeLiveSession(
+    session,
+    "abort",
+    new FailoverError(
+      `The running Claude Code build${versionDetail} did not advertise the required ${requirement.capability} capability. Claude Code ${requirement.minimumVersion} is the first known compatible release. Run \`${requirement.updateCommand}\`, restart OpenClaw, and retry.`,
+      {
+        reason: "format",
+        provider: session.providerId,
+        model: session.modelId,
+        status: resolveFailoverStatus("format"),
+        code: "cli_live_session_unsupported",
+      },
+    ),
   );
-}
-
-function deferClaudeLiveSyntheticResult(
-  session: ClaudeLiveSession,
-  turn: ClaudeLiveTurn,
-  output: CliOutput,
-): void {
-  turn.pendingSyntheticPlaceholder = false;
-  turn.deferredSyntheticOutput = output;
-  if (turn.noOutputTimer) {
-    clearTimeout(turn.noOutputTimer);
-    turn.noOutputTimer = null;
-  }
-  if (turn.syntheticContinuationTimer) {
-    clearTimeout(turn.syntheticContinuationTimer);
-  }
-  const graceMs = Math.min(CLAUDE_LIVE_SYNTHETIC_CONTINUATION_GRACE_MS, session.noOutputTimeoutMs);
-  turn.syntheticContinuationTimer = setTimeout(() => {
-    if (session.currentTurn !== turn || !turn.deferredSyntheticOutput) {
-      return;
-    }
-    const terminalOutput = turn.deferredSyntheticOutput;
-    turn.syntheticContinuationTimer = null;
-    turn.deferredSyntheticOutput = null;
-    emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_grace_expired");
-    finishTurn(session, terminalOutput);
-  }, graceMs);
-  emitClaudeLiveProgress(turn, "cli_live:result_deferred_synthetic_placeholder");
-}
-
-function noteClaudeLiveContinuationAfterSyntheticPlaceholder(
-  session: ClaudeLiveSession,
-  turn: ClaudeLiveTurn,
-): void {
-  if (!turn.deferredSyntheticOutput) {
-    return;
-  }
-  if (turn.syntheticContinuationTimer) {
-    clearTimeout(turn.syntheticContinuationTimer);
-    turn.syntheticContinuationTimer = null;
-  }
-  turn.deferredSyntheticOutput = null;
-  armNoOutputTimer(session, turn, session.noOutputTimeoutMs);
-  emitClaudeLiveProgress(turn, "cli_live:synthetic_placeholder_continuation");
+  return false;
 }
 
 function resetNoOutputTimer(session: ClaudeLiveSession): void {
@@ -1077,21 +1036,7 @@ function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): Claude
   };
 }
 
-function parseClaudeLiveJsonLine(
-  session: ClaudeLiveSession,
-  trimmed: string,
-): Record<string, unknown> | null {
-  const maxPendingLineChars =
-    session.currentTurn?.outputLimits.maxPendingLineChars ??
-    CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS;
-  if (trimmed.length > maxPendingLineChars) {
-    closeLiveSession(
-      session,
-      "abort",
-      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
-    );
-    return null;
-  }
+function parseClaudeLiveJsonLine(trimmed: string): Record<string, unknown> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
@@ -1372,13 +1317,33 @@ function handleClaudeLiveControlRequest(
   })();
 }
 
+function pushClaudeLiveTurnLine(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+  line: string,
+): boolean {
+  turn.streamingParser.push(`${line}\n`);
+  if (!turn.streamingParser.getErrorText()) {
+    return true;
+  }
+  closeLiveSession(
+    session,
+    "abort",
+    createOutputLimitError(session, "Claude CLI turn output exceeded limit."),
+  );
+  return false;
+}
+
 function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   const turn = session.currentTurn;
   const trimmed = line.trim();
   if (!trimmed) {
+    if (turn) {
+      pushClaudeLiveTurnLine(session, turn, line);
+    }
     return;
   }
-  const parsed = parseClaudeLiveJsonLine(session, trimmed);
+  const parsed = parseClaudeLiveJsonLine(trimmed);
   if (turn) {
     turn.observedStdout = true;
   }
@@ -1391,6 +1356,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   const parsedSessionId = parseSessionId(parsed);
   if (parsedSessionId) {
     session.sessionId = parsedSessionId;
+    if (parsed.type === "system" && parsed.subtype === "init") {
+      turn?.onSessionId?.(parsedSessionId);
+    }
   }
   if (handleClaudeLiveControlResponse(session, parsed)) {
     return;
@@ -1398,36 +1366,34 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (!turn) {
     return;
   }
+  applyClaudeLiveInputLifecycle(turn, parsed);
+  if (!applyClaudeLiveSessionRequirement(session, parsed)) {
+    return;
+  }
+  // command_lifecycle can precede system/init. Retain the matching start, but
+  // never trust assistant/tool/result records until capability negotiation succeeds.
+  if (!session.liveSessionCapabilityReady) {
+    return;
+  }
+  if (!turn.inputStarted) {
+    if (!(parsed.type === "system" && parsed.subtype === "init")) {
+      turn.hasReplayUnsafeActivity = true;
+    }
+    return;
+  }
   if (
-    !(
-      (parsed.type === "system" && parsed.subtype === "init") ||
-      isClaudeLiveProvisionalSyntheticPlaceholder(parsed)
-    )
+    !(parsed.type === "system" && parsed.subtype === "init") &&
+    parsed.type !== "command_lifecycle"
   ) {
     turn.hasReplayUnsafeActivity = true;
   }
-  noteClaudeLiveContinuationAfterSyntheticPlaceholder(session, turn);
-  turn.rawChars += trimmed.length + 1;
-  if (
-    turn.rawChars > turn.outputLimits.maxTurnRawChars ||
-    turn.rawLines.length >= turn.outputLimits.maxTurnLines
-  ) {
-    closeLiveSession(
-      session,
-      "abort",
-      createOutputLimitError(session, "Claude CLI turn output exceeded limit."),
-    );
+  const normalizedLine = normalizeClaudeCliStreamJsonRecord(parsed)?.line ?? trimmed;
+  turn.rawLines.push(normalizedLine);
+  applyBackgroundTasksChanged(session, parsed);
+  const toolEventCountBefore = turn.toolEventCount;
+  if (!pushClaudeLiveTurnLine(session, turn, line)) {
     return;
   }
-  turn.rawLines.push(trimmed);
-  applyBackgroundTasksChanged(session, parsed);
-  if (turn.allowSyntheticContinuationGrace && isClaudeLiveProvisionalSyntheticPlaceholder(parsed)) {
-    turn.pendingSyntheticPlaceholder = true;
-  } else if (turn.pendingSyntheticPlaceholder && isClaudeLiveSubstantiveAssistantProgress(parsed)) {
-    turn.pendingSyntheticPlaceholder = false;
-  }
-  const toolEventCountBefore = turn.toolEventCount;
-  turn.streamingParser.push(`${trimmed}\n`);
   turn.sessionId = parsedSessionId ?? turn.sessionId;
   noteClaudeLiveProgress(turn, parsed, turn.toolEventCount !== toolEventCountBefore);
   handleClaudeLiveControlRequest(session, turn, parsed);
@@ -1470,36 +1436,27 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     emitClaudeLiveProgress(turn, "cli_live:result_deferred_background_tasks");
     return;
   }
-  // A resumed Claude session can first consume queued task notifications and
-  // emit an empty synthetic result, then continue the same user turn. Keep the
-  // live process and watchdogs authoritative instead of racing it with fallback.
-  if (turn.pendingSyntheticPlaceholder && !output.text.trim()) {
-    deferClaudeLiveSyntheticResult(session, turn, output);
-    return;
-  }
   finishTurn(session, output);
 }
 
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   session.currentTurn?.onCliOutput?.(chunk, "stdout");
   resetNoOutputTimer(session);
-  session.stdoutBuffer += chunk;
   const maxPendingLineChars =
     session.currentTurn?.outputLimits.maxPendingLineChars ??
     CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS;
-  if (session.stdoutBuffer.length > maxPendingLineChars) {
-    closeLiveSession(
-      session,
-      "abort",
-      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
-    );
-    return;
-  }
-  const lines = session.stdoutBuffer.split(/\r?\n/g);
-  session.stdoutBuffer = lines.pop() ?? "";
   try {
-    for (const line of lines) {
-      handleClaudeLiveLine(session, line);
+    if (
+      !frameBoundedCliJsonlChunk(session.stdoutBuffer, chunk, maxPendingLineChars, (line) => {
+        handleClaudeLiveLine(session, line);
+        return !session.closing;
+      })
+    ) {
+      closeLiveSession(
+        session,
+        "abort",
+        createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
+      );
     }
   } catch (error) {
     closeLiveSession(session, "abort", error);
@@ -1520,15 +1477,15 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
   if (!session.currentTurn) {
     return;
   }
-  if (session.stdoutBuffer.trim()) {
+  if (session.stdoutBuffer.pending.trim()) {
+    const pendingLine = session.stdoutBuffer.pending;
+    session.stdoutBuffer.pending = "";
     try {
-      handleClaudeLiveLine(session, session.stdoutBuffer);
+      handleClaudeLiveLine(session, pendingLine);
     } catch (error) {
-      session.stdoutBuffer = "";
       failTurn(session, error);
       return;
     }
-    session.stdoutBuffer = "";
   }
   if (!session.currentTurn) {
     return;
@@ -1569,9 +1526,10 @@ function handleClaudeExit(session: ClaudeLiveSession, exitCode: number | null): 
   );
 }
 
-function createClaudeUserInputMessage(content: string): string {
+function createClaudeUserInputMessage(content: string, uuid: string): string {
   return `${JSON.stringify({
     type: "user",
+    uuid,
     session_id: "",
     parent_tool_use_id: null,
     message: {
@@ -1665,12 +1623,14 @@ async function createClaudeLiveSession(params: {
     fingerprint: params.fingerprint,
     systemPromptHash: params.systemPromptHash,
     systemPromptSwitchCapability: "unknown",
+    liveSessionRequirement: params.context.backendResolved.liveSessionRequirement,
+    liveSessionCapabilityReady: !params.context.backendResolved.liveSessionRequirement,
     managedRun,
     providerId: params.context.params.provider,
     modelId: params.context.modelId,
     noOutputTimeoutMs: params.noOutputTimeoutMs,
     stderr: "",
-    stdoutBuffer: "",
+    stdoutBuffer: { pending: "" },
     currentTurn: null,
     idleTimer: null,
     cleanup: async () => {
@@ -1702,7 +1662,7 @@ async function createClaudeLiveSession(params: {
 function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
-  allowSyntheticContinuationGrace: boolean;
+  inputUuid: string;
   useResume: boolean;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
@@ -1735,18 +1695,16 @@ function createTurn(params: {
     outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),
     rawLines: [],
-    rawChars: 0,
     noOutputTimer: null,
     lastOutputAtMs: null,
     timeoutTimer: null,
     activeTools: new Map(),
     observedStdout: false,
+    inputUuid: params.inputUuid,
+    inputStarted: false,
+    onSessionId: params.onSessionId,
     useResume: params.useResume,
     hasReplayUnsafeActivity: false,
-    pendingSyntheticPlaceholder: false,
-    allowSyntheticContinuationGrace: params.allowSyntheticContinuationGrace,
-    deferredSyntheticOutput: null,
-    syntheticContinuationTimer: null,
     completedToolCallIds: new Set(),
     toolEventCount: 0,
     streamingParser: createCliJsonlStreamingParser({
@@ -1973,7 +1931,6 @@ async function runSerializedClaudeLiveSessionTurn(
     env: params.env,
   });
   const systemPromptHash = sha256(stripSystemPromptCacheBoundary(params.context.systemPrompt));
-  let createdSessionForTurn = false;
   let session = liveSessions.get(key) ?? null;
   if (
     session &&
@@ -2151,7 +2108,6 @@ async function runSerializedClaudeLiveSessionTurn(
       liveSessionCreates.set(key, { generation, promise: createSession });
       try {
         session = await createSession;
-        createdSessionForTurn = true;
       } catch (error) {
         await cleanup();
         throw error;
@@ -2189,11 +2145,12 @@ async function runSerializedClaudeLiveSessionTurn(
   liveSession.noOutputTimeoutMs = params.noOutputTimeoutMs;
   liveSession.stderr = "";
 
+  const inputUuid = crypto.randomUUID();
   const outputPromise = new Promise<CliOutput>((resolve, reject) => {
     liveSession.currentTurn = createTurn({
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
-      allowSyntheticContinuationGrace: params.useResume && createdSessionForTurn,
+      inputUuid,
       useResume: params.useResume,
       onAssistantDelta: params.onAssistantDelta,
       onThinkingDelta: params.onThinkingDelta,
@@ -2235,7 +2192,7 @@ async function runSerializedClaudeLiveSessionTurn(
       abort();
     } else {
       try {
-        const requestPayload = createClaudeUserInputMessage(params.prompt);
+        const requestPayload = createClaudeUserInputMessage(params.prompt, inputUuid);
         params.onRequestPayload?.(requestPayload);
         await Promise.race([writeTurnInput(liveSession, requestPayload), outputPromise]);
       } catch (error) {

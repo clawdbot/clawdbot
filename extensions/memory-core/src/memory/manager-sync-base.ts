@@ -257,6 +257,14 @@ export abstract class MemoryManagerSyncBase {
     );
   }
 
+  protected advanceSyncProgress(progress: MemorySyncProgressState | undefined, count = 1): void {
+    if (!progress) {
+      return;
+    }
+    progress.completed += count;
+    progress.report({ completed: progress.completed, total: progress.total });
+  }
+
   protected async indexQueuedFiles(
     items: MemoryIndexWorkItem[],
     progress?: MemorySyncProgressState,
@@ -276,13 +284,7 @@ export abstract class MemoryManagerSyncBase {
     for (const item of items) {
       item.afterIndex?.();
     }
-    if (progress) {
-      progress.completed += items.length;
-      progress.report({
-        completed: progress.completed,
-        total: progress.total,
-      });
-    }
+    this.advanceSyncProgress(progress, items.length);
   }
 
   protected async executeSourceSyncPlans(

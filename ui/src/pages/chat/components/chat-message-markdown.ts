@@ -11,7 +11,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
 import { renderDeleteButton } from "./chat-message-confirmation.ts";
 
 export type MessageReplyTarget = {
@@ -88,21 +88,12 @@ export function resolveMessageActionDetails(params: {
   message: unknown;
   messageId: string;
   canFetchFullMessage?: boolean;
+  getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
   onReply?: (target: MessageReplyTarget) => void;
   senderLabel: string;
 }): MessageActionDetails | null {
   const { message, messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
   const record = message as Record<string, unknown>;
-  const normalizedMessage = normalizeMessage(message);
-  const normalizedMarkdown = resolveNormalizedMessageMarkdown(normalizedMessage);
-  const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const visibleMarkdown =
-    role === "assistant" ? stripThinkingTags(normalizedMarkdown).trim() : normalizedMarkdown.trim();
-  const markdown = role === "assistant" ? visibleMarkdown : undefined;
-  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
-  if (!markdown && !replyText) {
-    return null;
-  }
   const transcriptMeta =
     record["__openclaw"] &&
     typeof record["__openclaw"] === "object" &&
@@ -115,9 +106,35 @@ export function resolveMessageActionDetails(params: {
       : typeof record.messageId === "string"
         ? record.messageId
         : undefined;
+  const normalizedMessage = normalizeMessage(message);
+  const normalizedMarkdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const role = normalizeRoleForGrouping(normalizedMessage.role);
+  const previewMarkdown =
+    role === "assistant" ? stripThinkingTags(normalizedMarkdown).trim() : normalizedMarkdown.trim();
+  // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
+  const shouldFetchFullMessage = Boolean(
+    canFetchFullMessage &&
+    messageId &&
+    !record.openclawMessageToolMirror &&
+    (transcriptMeta?.truncated === true ||
+      (role === "assistant" && previewMarkdown.includes("\n...(truncated)..."))),
+  );
+  const expansion =
+    role === "assistant" && shouldFetchFullMessage && messageId
+      ? params.getAssistantMessageExpansion?.(messageId)
+      : undefined;
+  const visibleMarkdown =
+    expansion?.status === "loaded" && expansion.expanded
+      ? stripThinkingTags(expansion.markdown).trim()
+      : previewMarkdown;
+  const markdown = role === "assistant" ? visibleMarkdown : undefined;
+  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
+  if (!markdown && !replyText && !(role === "assistant" && shouldFetchFullMessage)) {
+    return null;
+  }
   const sourceMessageId = persistedMessageEntryId(message);
   return {
-    ...(markdown ? { markdown } : {}),
+    ...(markdown === undefined ? {} : { markdown }),
     messageId,
     ...(replyText
       ? {
@@ -129,12 +146,7 @@ export function resolveMessageActionDetails(params: {
           },
         }
       : {}),
-    shouldFetchFullMessage: Boolean(
-      canFetchFullMessage &&
-      messageId &&
-      !record.openclawMessageToolMirror &&
-      (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
-    ),
+    shouldFetchFullMessage,
   };
 }
 

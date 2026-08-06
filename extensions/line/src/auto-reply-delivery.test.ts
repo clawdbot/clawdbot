@@ -101,6 +101,39 @@ describe("deliverLineAutoReply", () => {
     expect(result.visibleReplySent).toBe(true);
   });
 
+  it.each([
+    { name: "title", title: " ", address: "1 Main Street" },
+    { name: "address", title: "Meet here", address: " " },
+  ])("skips a direct location with a blank $name while delivering text", async (location) => {
+    const lineData = {
+      location: { ...location, latitude: 35.6895, longitude: 139.6917 },
+    };
+    const createLocationMessage = vi.fn<LineAutoReplyDeps["createLocationMessage"]>((value) =>
+      value.title.trim() && value.address.trim()
+        ? {
+            type: "location" as const,
+            ...value,
+          }
+        : null,
+    );
+    const { deps, replyMessageLine } = createDeps({ createLocationMessage });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "Meet me there.", channelData: { line: lineData } },
+      lineData,
+      deps,
+    });
+
+    expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
+      "token",
+      [{ type: "text", text: "Meet me there." }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(createLocationMessage).toHaveBeenCalledOnce();
+    expect(result.visibleReplySent).toBe(true);
+  });
+
   it("keeps an extracted markdown table on the reply token alongside text", async () => {
     // Tables are lifted out of the text into their own Flex bubble, which is the
     // shape that used to reach the quota-bound push path and vanish on a 429.

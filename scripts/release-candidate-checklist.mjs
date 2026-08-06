@@ -17,13 +17,20 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import {
+  booleanFlag,
+  parseFlagArgs,
+  stringFlag,
+  stringListFlag,
+  stripLeadingPackageManagerSeparator,
+} from "./lib/arg-utils.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
   extractChangelogSection,
   formatShippedBaselineExclusions,
+  parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesSectionForTag,
   releaseNotesVersionForTag,
@@ -109,14 +116,6 @@ Options:
 `;
 }
 
-function requireValue(argv, index, flag) {
-  const value = argv[index];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
 export function releaseBranchForTag(tag) {
   if (tag.includes("-alpha.")) {
     return "";
@@ -130,6 +129,8 @@ export function releaseBranchForTag(tag) {
  */
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
+  const terminatorIndex = args.indexOf("--");
+  const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
   const options = {
     repo: DEFAULT_REPO,
     provider: DEFAULT_PROVIDER,
@@ -154,86 +155,49 @@ export function parseArgs(argv) {
     windowsNodeInstallerDigests: "",
     outputDir: "",
   };
-  const seen = new Set();
-  const setOnce = (flag, key, value) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seen.add(flag);
-    options[key] = value;
-  };
-  parseArgv: for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    switch (arg) {
-      case "--":
-        break parseArgv;
-      case "--tag":
-        setOnce(arg, "tag", requireValue(args, ++index, arg));
-        break;
-      case "--target-sha":
-        setOnce(arg, "targetSha", requireValue(args, ++index, arg));
-        break;
-      case "--workflow-ref":
-        setOnce(arg, "workflowRef", requireValue(args, ++index, arg));
-        break;
-      case "--repo":
-        setOnce(arg, "repo", requireValue(args, ++index, arg));
-        break;
-      case "--full-release-run":
-        setOnce(arg, "fullReleaseRunId", requireValue(args, ++index, arg));
-        break;
-      case "--npm-preflight-run":
-        setOnce(arg, "npmPreflightRunId", requireValue(args, ++index, arg));
-        break;
-      case "--windows-node-tag":
-        setOnce(arg, "windowsNodeTag", requireValue(args, ++index, arg));
-        break;
-      case "--skip-dispatch":
-        setOnce(arg, "skipDispatch", true);
-        break;
-      case "--skip-local-generated-check":
-        setOnce(arg, "skipLocalGeneratedCheck", true);
-        break;
-      case "--skip-parallels":
-        setOnce(arg, "skipParallels", true);
-        break;
-      case "--parallels-registry-package-artifact":
-        options.parallelsRegistryPackageArtifactDirs.push(requireValue(args, ++index, arg));
-        break;
-      case "--skip-telegram":
-        setOnce(arg, "skipTelegram", true);
-        break;
-      case "--telegram-provider-mode":
-        setOnce(arg, "telegramProviderMode", requireValue(args, ++index, arg));
-        break;
-      case "--provider":
-        setOnce(arg, "provider", requireValue(args, ++index, arg));
-        break;
-      case "--mode":
-        setOnce(arg, "mode", requireValue(args, ++index, arg));
-        break;
-      case "--release-profile":
-        setOnce(arg, "releaseProfile", requireValue(args, ++index, arg));
-        break;
-      case "--npm-dist-tag":
-        setOnce(arg, "npmDistTag", requireValue(args, ++index, arg));
-        break;
-      case "--plugin-publish-scope":
-        setOnce(arg, "pluginPublishScope", requireValue(args, ++index, arg));
-        break;
-      case "--plugins":
-        setOnce(arg, "plugins", requireValue(args, ++index, arg));
-        break;
-      case "--output-dir":
-        setOnce(arg, "outputDir", requireValue(args, ++index, arg));
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
+  const helpIndex = cliArgs.findIndex((arg) => arg === "-h" || arg === "--help");
+  parseFlagArgs(
+    helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex),
+    options,
+    [
+      ...[
+        ["--tag", "tag"],
+        ["--target-sha", "targetSha"],
+        ["--workflow-ref", "workflowRef"],
+        ["--repo", "repo"],
+        ["--full-release-run", "fullReleaseRunId"],
+        ["--npm-preflight-run", "npmPreflightRunId"],
+        ["--windows-node-tag", "windowsNodeTag"],
+        ["--telegram-provider-mode", "telegramProviderMode"],
+        ["--provider", "provider"],
+        ["--mode", "mode"],
+        ["--release-profile", "releaseProfile"],
+        ["--npm-dist-tag", "npmDistTag"],
+        ["--plugin-publish-scope", "pluginPublishScope"],
+        ["--plugins", "plugins"],
+        ["--output-dir", "outputDir"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, { allowInline: false, rejectShortOptions: true }),
+      ),
+      stringListFlag(
+        "--parallels-registry-package-artifact",
+        "parallelsRegistryPackageArtifactDirs",
+        { allowInline: false, rejectShortOptions: true },
+      ),
+      booleanFlag("--skip-dispatch", "skipDispatch"),
+      booleanFlag("--skip-local-generated-check", "skipLocalGeneratedCheck"),
+      booleanFlag("--skip-parallels", "skipParallels"),
+      booleanFlag("--skip-telegram", "skipTelegram"),
+    ],
+    {
+      onUnhandledArg(arg) {
         throw new Error(`unknown option: ${arg}`);
-    }
+      },
+    },
+  );
+  if (helpIndex !== -1) {
+    process.stdout.write(usage());
+    process.exit(0);
   }
   if (!options.tag) {
     throw new Error("--tag is required");
@@ -788,35 +752,12 @@ function candidateContributionRecordPullRequests(
     Number(match.groups.number),
   );
   const rows = new Set(rowNumbers);
-  if (rows.size !== rowNumbers.length) {
-    const seen = new Set();
-    const duplicates = rowNumbers.filter((number) => {
-      if (seen.has(number)) {
-        return true;
-      }
-      seen.add(number);
-      return false;
-    });
-    throw new Error(
-      `${label} contains duplicate contribution record PR rows: ${[...new Set(duplicates)]
-        .map((number) => `#${number}`)
-        .join(", ")}`,
-    );
-  }
+  const provenance = parseContributionRecordProvenance(record);
   if (!requireExactProvenance) {
     return rows;
   }
-  const provenance = record.match(
-    /^This audited record covers the complete \S+\.\.[0-9a-f]{40} history: (?<count>[0-9]+) merged PRs?\./mu,
-  );
-  if (!provenance?.groups?.count) {
+  if (!provenance || !/^[0-9a-f]{40}$/u.test(provenance.target)) {
     throw new Error(`${label} is missing exact complete contribution record provenance`);
-  }
-  const declaredCount = Number(provenance.groups.count);
-  if (rows.size !== declaredCount) {
-    throw new Error(
-      `${label} contribution record declares ${declaredCount} PRs but contains ${rows.size}`,
-    );
   }
   return rows;
 }
@@ -921,12 +862,10 @@ export function validateCandidateChangelogProvenance({
     section,
     `CHANGELOG.md ## ${sectionVersion}`,
   );
-  const provenance = record.match(
-    /^This audited record covers the complete (?<base>\S+)\.\.(?<target>[0-9a-f]{40}) history:/mu,
-  );
-  const base = provenance?.groups?.base;
-  const recordedTarget = provenance?.groups?.target;
-  if (!base || !recordedTarget) {
+  const provenance = parseContributionRecordProvenance(record);
+  const base = provenance?.base;
+  const recordedTarget = provenance?.target;
+  if (!base || !recordedTarget || !/^[0-9a-f]{40}$/u.test(recordedTarget)) {
     throw new Error(
       `CHANGELOG.md ## ${sectionVersion} is missing exact complete contribution record provenance`,
     );

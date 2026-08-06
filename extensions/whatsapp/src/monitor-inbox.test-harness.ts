@@ -186,6 +186,13 @@ function createResolvedMock() {
   return vi.fn().mockResolvedValue(undefined);
 }
 
+function createAcceptedSendMessageMock() {
+  let sequence = 0;
+  return vi.fn().mockImplementation(async () => ({
+    key: { id: `mock-accepted-${++sequence}` },
+  }));
+}
+
 function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
@@ -193,7 +200,7 @@ function createMockSock(): MockSock {
     end: vi.fn(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
-    sendMessage: createResolvedMock(),
+    sendMessage: createAcceptedSendMessageMock(),
     fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({

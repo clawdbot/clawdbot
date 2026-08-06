@@ -497,6 +497,28 @@ describe("handleAssistantFailover", () => {
       expect(warn).not.toHaveBeenCalled();
     });
 
+    it("marks inline auth failures even when no profile id is active", async () => {
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "billing" },
+          failoverReason: "billing",
+          assistantProfileFailureReason: "billing",
+          lastProfileId: undefined,
+          advanceAuthProfile: vi.fn(async () => false),
+          maybeMarkAuthProfileFailure,
+        }),
+      );
+
+      expect(outcome.action).toBe("throw");
+      expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+        profileId: undefined,
+        reason: "billing",
+        modelId: "claude-haiku-4-5-20251001",
+      });
+    });
+
     it("marks provider-started timeout rotations against the failed profile", async () => {
       const maybeMarkAuthProfileFailure = vi.fn(async () => {});
 
@@ -697,7 +719,7 @@ describe("handleAssistantFailover", () => {
       // partial prompt-timeout fragment. Throwing a FailoverError here would
       // short-circuit that synthesis and break
       // timeout-compaction retry coverage in
-      // `run.timeout-triggered-compaction.test.ts`. The throw path is
+      // `run.timeout-context-recovery.test.ts`. The throw path is
       // reserved for concrete provider failures that have no other
       // downstream surface.
       const outcome = await handleAssistantFailover(

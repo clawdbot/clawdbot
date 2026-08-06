@@ -167,6 +167,7 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalOnly?: boolean;
   /** Mark proposals created by this internal review as autonomous captures. */
   skillWorkshopAutonomousCapture?: boolean;
+  skillWorkshopUpdateProposals?: boolean;
   /** Preserve the foreground run as proposal provenance for an internal review run. */
   skillWorkshopOrigin?: SkillProposalOrigin;
   /** Run-scoped mutation budget shared across internal runner attempts. */

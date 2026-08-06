@@ -10,11 +10,8 @@ import {
   resolveRepoSpecifier,
   writeLine,
 } from "./guard-inventory-utils.mjs";
-import {
-  collectTypeScriptFilesFromRoots,
-  resolveRepoRoot,
-  resolveSourceRoots,
-} from "./ts-guard-utils.mjs";
+import { resolveRepoRoot } from "./repo-root.mjs";
+import { collectTypeScriptFilesFromRoots, resolveSourceRoots } from "./ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const DEFAULT_BOUNDARY_SOURCE_MAX_BYTES = 2 * 1024 * 1024;

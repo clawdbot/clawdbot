@@ -29,13 +29,36 @@ describe("browser tab tool binding", () => {
     });
   });
 
-  it("rejects route, tab, and browser-wide action escapes", () => {
-    expect(() =>
-      applyBrowserTabToolBinding({ action: "snapshot", targetId: "target-b" }, binding),
-    ).toThrow("cannot override its run-bound tab target");
-    expect(() =>
-      applyBrowserTabToolBinding({ action: "snapshot", node: "other" }, binding),
-    ).toThrow("cannot override its run-bound node");
+  it("pins page extraction to the trusted tab and browser route", () => {
+    expect(
+      applyBrowserTabToolBinding(
+        { action: "extract", query: "When does the release ship?" },
+        binding,
+      ),
+    ).toEqual({
+      action: "extract",
+      query: "When does the release ship?",
+      target: "node",
+      node: "desktop",
+      profile: "chrome",
+      targetId: "target-a",
+    });
+  });
+
+  it("rejects page extraction route escapes and browser-wide actions", () => {
+    for (const [input, error] of [
+      [{ targetId: "target-b" }, "cannot override its run-bound tab target"],
+      [{ profile: "other" }, "cannot override its run-bound profile"],
+      [{ node: "other" }, "cannot override its run-bound node"],
+      [{ target: "host" }, "cannot override its run-bound target"],
+    ] as const) {
+      expect(() =>
+        applyBrowserTabToolBinding(
+          { action: "extract", query: "When does the release ship?", ...input },
+          binding,
+        ),
+      ).toThrow(error);
+    }
     expect(() => applyBrowserTabToolBinding({ action: "open" }, binding)).toThrow(
       "unavailable in a tab-bound run",
     );

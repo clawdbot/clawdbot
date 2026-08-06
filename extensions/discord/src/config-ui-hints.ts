@@ -22,7 +22,7 @@ export const discordChannelConfigUiHints = {
       chunkMode:
         'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
       "block.enabled":
-        'Enable chunked block-style Discord preview delivery when channels.discord.streaming.mode="block".',
+        "Enable normal Discord block replies. This takes precedence over editable preview delivery.",
       "block.coalesce": "Merge streamed Discord block replies before final delivery.",
       "preview.chunk.minChars":
         'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming.mode="block" (default: 200).',

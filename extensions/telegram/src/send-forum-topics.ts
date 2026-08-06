@@ -1,5 +1,4 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   createTelegramNonIdempotentRequestWithDiag,
@@ -9,26 +8,15 @@ import {
   resolveTelegramApiContext,
   withTelegramApiContextLease,
   type TelegramApiContext,
-  type TelegramApiOverride,
 } from "./send-context.js";
-import type { OpenClawConfig } from "./send.runtime.js";
+import type { TelegramApiCallOpts, TelegramMessageActionOpts } from "./send-message-types.js";
 import { parseTelegramTarget } from "./targets.js";
 
-type TelegramDeleteOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  notify?: boolean;
-  verbose?: boolean;
-  api?: TelegramApiOverride;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
-};
 type TelegramCreateForumTopicParams = NonNullable<
   Parameters<TelegramApiContext["api"]["createForumTopic"]>[2]
 >;
 
-type TelegramEditForumTopicOpts = TelegramDeleteOpts & {
+type TelegramEditForumTopicOpts = TelegramMessageActionOpts & {
   name?: string;
   iconCustomEmojiId?: string;
 };
@@ -122,7 +110,7 @@ export async function renameForumTopicTelegram(
   chatIdInput: string | number,
   messageThreadIdInput: string | number,
   name: string,
-  opts: TelegramDeleteOpts,
+  opts: TelegramMessageActionOpts,
 ): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
   const result = await editForumTopicTelegram(chatIdInput, messageThreadIdInput, {
     ...opts,
@@ -140,14 +128,7 @@ export async function renameForumTopicTelegram(
 // Forum topic creation
 // ---------------------------------------------------------------------------
 
-type TelegramCreateForumTopicOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  api?: TelegramApiOverride;
-  verbose?: boolean;
-  retry?: RetryConfig;
-  gatewayClientScopes?: readonly string[];
+type TelegramCreateForumTopicOpts = TelegramApiCallOpts & {
   /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
   iconColor?: TelegramCreateForumTopicParams["icon_color"];
   /** Custom emoji ID for the topic icon. */

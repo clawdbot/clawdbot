@@ -4616,21 +4616,6 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual(filesystemWriteViolations(668));
   });
 
-  it("flags duplicate copies when one current legacy-debt write is allowed", () => {
-    const relativePath = "extensions/memory-wiki/src/compile.ts";
-    const allowedWrite = `fs.writeFileSync("sessions.json", "{}\\n")`;
-    const currentLegacyWriteAllowances = new Map([
-      [`${relativePath}:legacy store filesystem write:${allowedWrite}`, 1],
-    ]);
-    const violations = collectDatabaseFirstLegacyStoreViolations(
-      [`import fs from "node:fs";`, `${allowedWrite};`, `${allowedWrite};`].join("\n"),
-      relativePath,
-      { currentLegacyWriteAllowances },
-    );
-
-    expect(violations).toEqual(filesystemWriteViolations(3));
-  });
-
   // Migration-owner allowlists and runtime exclusions.
   it.each(
     namedCases({
