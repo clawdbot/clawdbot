@@ -54,6 +54,49 @@ const modelRegistryState = {
   getAvailableError: undefined as unknown,
   findError: undefined as unknown,
 };
+
+function createMockModelRegistry() {
+  return new (class {
+    fork() {
+      return createMockModelRegistry();
+    }
+
+    find(provider: string, id: string) {
+      if (modelRegistryState.findError !== undefined) {
+        throw toLintErrorObject(modelRegistryState.findError, "Non-Error thrown");
+      }
+      return (
+        modelRegistryState.models.find((model) => model.provider === provider && model.id === id) ??
+        null
+      );
+    }
+
+    getAll() {
+      if (modelRegistryState.getAllError !== undefined) {
+        throw toLintErrorObject(modelRegistryState.getAllError, "Non-Error thrown");
+      }
+      return modelRegistryState.models;
+    }
+
+    getAvailable() {
+      if (modelRegistryState.getAvailableError !== undefined) {
+        throw toLintErrorObject(modelRegistryState.getAvailableError, "Non-Error thrown");
+      }
+      return modelRegistryState.available;
+    }
+
+    getProviderMetadataOwners() {
+      return undefined;
+    }
+
+    hasConfiguredAuth(model: { provider: string; id: string }) {
+      return modelRegistryState.available.some(
+        (available) => available.provider === model.provider && available.id === model.id,
+      );
+    }
+  })();
+}
+
 let previousExitCode: typeof process.exitCode;
 let previousOpenAiApiKey: string | undefined;
 
@@ -109,6 +152,30 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   },
 }));
 
+vi.mock("./models/list.scoped-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./models/list.scoped-catalog.js")>();
+  return {
+    ...actual,
+    loadScopedListModelCatalogSnapshot: async (
+      params: Parameters<typeof actual.loadScopedListModelCatalogSnapshot>[0],
+    ) => {
+      if (!params.providerIds.includes("zai")) {
+        return await actual.loadScopedListModelCatalogSnapshot(params);
+      }
+      const entries = await loadModelCatalog();
+      return { entries, routeVariants: entries, staticEntries: [] };
+    },
+  };
+});
+
+vi.mock("../agents/prepared-model-registry.js", () => ({
+  loadPreparedAgentModelRegistry: async (config: object, options?: { agentDir?: string }) => ({
+    agentDir: options?.agentDir ?? "/tmp/openclaw-agent",
+    config,
+    registry: createMockModelRegistry(),
+  }),
+}));
+
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelWithRegistry: ({
     provider,
@@ -121,67 +188,21 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   }) => modelRegistry.find(provider, modelId),
 }));
 
-vi.mock("../agents/agent-model-discovery.js", () => {
-  class MockAuthStorage {
-    getAll() {
-      return {};
-    }
-  }
+vi.mock("../agents/agent-model-discovery.js", () => ({
+  discoverAuthStorage: () => ({ getAll: () => ({}) }),
+  discoverModels: () => createMockModelRegistry(),
+  normalizeDiscoveredAgentModel: (model: unknown) => model,
+}));
 
-  class MockModelRegistry {
-    fork() {
-      return new MockModelRegistry();
-    }
-
-    find(provider: string, id: string) {
-      if (modelRegistryState.findError !== undefined) {
-        throw toLintErrorObject(modelRegistryState.findError, "Non-Error thrown");
-      }
-      return (
-        modelRegistryState.models.find((model) => model.provider === provider && model.id === id) ??
-        null
-      );
-    }
-
-    getAll() {
-      if (modelRegistryState.getAllError !== undefined) {
-        throw toLintErrorObject(modelRegistryState.getAllError, "Non-Error thrown");
-      }
-      return modelRegistryState.models;
-    }
-
-    getAvailable() {
-      if (modelRegistryState.getAvailableError !== undefined) {
-        throw toLintErrorObject(modelRegistryState.getAvailableError, "Non-Error thrown");
-      }
-      return modelRegistryState.available;
-    }
-
-    getProviderMetadataOwners() {
-      return undefined;
-    }
-
-    hasConfiguredAuth(model: { provider: string; id: string }) {
-      return modelRegistryState.available.some(
-        (available) => available.provider === model.provider && available.id === model.id,
-      );
-    }
-  }
-
-  return {
-    discoverAuthStorage: () => new MockAuthStorage() as unknown,
-    discoverModels: () => new MockModelRegistry() as unknown,
-    normalizeDiscoveredAgentModel: (model: unknown) => model,
-  };
-});
-
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
-  return {
-    ...actual,
-    normalizeProviderResolvedModelWithPlugin,
-  };
-});
+vi.mock("../plugins/provider-runtime.js", () => ({
+  applyProviderNativeStreamingUsageCompatWithPlugin: vi.fn(() => undefined),
+  buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
+  normalizeProviderConfigWithPlugin: vi.fn(() => undefined),
+  normalizeProviderResolvedModelWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin: vi.fn(() => undefined),
+  resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: vi.fn(() => false),
+}));
 
 vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
@@ -590,7 +611,6 @@ describe("models list/status", () => {
       },
     });
     const runtime = makeRuntime();
-
     try {
       await withEnvAsync(
         {
