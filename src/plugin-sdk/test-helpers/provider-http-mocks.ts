@@ -43,7 +43,9 @@ interface ProviderHttpMocks {
   pollProviderOperationJsonMock: AnyMock;
   assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
   assertOkOrThrowProviderErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
-  readProviderJsonResponseMock: Mock<<T>(response: Response, label: string) => Promise<T>>;
+  readProviderJsonResponseMock: Mock<
+    <T>(response: Response, label: string, opts?: { maxBytes?: number }) => Promise<T>
+  >;
   sanitizeConfiguredModelProviderRequestMock: Mock<
     (
       request: SanitizeConfiguredModelProviderRequestParams,
@@ -67,7 +69,46 @@ const providerHttpMocks = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   readProviderJsonResponseMock: vi.fn(
-    async <T>(response: Response, _label: string): Promise<T> => response.json() as T,
+    async <T>(response: Response, label: string, opts?: { maxBytes?: number }): Promise<T> => {
+      const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
+      if (!response.body) {
+        try {
+          return (await response.json()) as T;
+        } catch (cause) {
+          throw new Error(`${label}: malformed JSON response`, { cause });
+        }
+      }
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          totalBytes += value.byteLength;
+          if (totalBytes > maxBytes) {
+            await reader.cancel();
+            throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      const body = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      try {
+        return JSON.parse(new TextDecoder().decode(body)) as T;
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    },
   ),
   sanitizeConfiguredModelProviderRequestMock: vi.fn(
     (request: SanitizeConfiguredModelProviderRequestParams) => request,
@@ -237,50 +278,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
   postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
-  readProviderJsonResponse: async <T>(
-    response: Response,
-    label: string,
-    opts?: { maxBytes?: number },
-  ): Promise<T> => {
-    const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
-    if (!response.body) {
-      try {
-        return (await response.json()) as T;
-      } catch (cause) {
-        throw new Error(`${label}: malformed JSON response`, { cause });
-      }
-    }
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalBytes = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        totalBytes += value.byteLength;
-        if (totalBytes > maxBytes) {
-          await reader.cancel();
-          throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
-        }
-        chunks.push(value);
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    const body = new Uint8Array(totalBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    try {
-      return JSON.parse(new TextDecoder().decode(body)) as T;
-    } catch (cause) {
-      throw new Error(`${label}: malformed JSON response`, { cause });
-    }
-  },
   providerOperationRetryConfig: (_stage: string) => true,
   readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
