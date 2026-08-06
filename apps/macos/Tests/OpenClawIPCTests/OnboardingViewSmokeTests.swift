@@ -314,7 +314,6 @@ struct OnboardingViewSmokeTests {
             restoreOnboardingGatewayPreference(previousGatewayPreference)
             defaults.removePersistentDomain(forName: suiteName)
         }
-        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
@@ -322,6 +321,13 @@ struct OnboardingViewSmokeTests {
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             let state = AppState(preview: true)
             state.connectionMode = .remote
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "gateway-a",
+                routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: state.connectionMode,
+                    remoteTransport: state.remoteTransport,
+                    remoteURL: state.remoteUrl,
+                    remoteTarget: state.remoteTarget))
             let view = OnboardingView(
                 state: state,
                 permissionMonitor: PermissionMonitor.shared,
