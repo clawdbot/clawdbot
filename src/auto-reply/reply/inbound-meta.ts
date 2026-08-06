@@ -73,9 +73,7 @@ function refreshActiveGoalContextText(params: {
     return retained.join("\n\n");
   }
   if (insertionIndex === undefined) {
-    const anchorIndex = retained.findLastIndex(
-      (block) => block.startsWith("Current message:") || block.startsWith("Current event:"),
-    );
+    const anchorIndex = retained.findLastIndex((block) => block.startsWith("Current message:"));
     insertionIndex = anchorIndex >= 0 ? anchorIndex : retained.length;
   }
   retained.splice(Math.min(insertionIndex, retained.length), 0, params.activeGoalContext);

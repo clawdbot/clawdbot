@@ -54,7 +54,7 @@ import {
   consumePendingDelegates,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
-  peekSoonestUnmaturedDelegateDueAt,
+  peekEarliestQueuedDelegateDueAt,
   revalidatePendingDelegateForSpawn,
   requeuePendingDelegate,
 } from "./delegate-store.js";
@@ -136,13 +136,12 @@ export async function dispatchToolDelegates(
     ignoreDelay,
   });
 
-  // Arm (or re-arm) a hedge timer for any unmatured queued delegates so they
-  // still fire in fully-quiet channels where no further response-finalize
-  // arrives. The hedge re-invokes this function; idempotent per sessionKey.
-  const soonestUnmaturedDueAt = peekSoonestUnmaturedDelegateDueAt(sessionKey, {
+  // Arm (or re-arm) a hedge timer for any remaining queued delegates so a
+  // deadline crossed during consumption still fires in a fully-quiet channel.
+  const earliestQueuedDueAt = peekEarliestQueuedDelegateDueAt(sessionKey, {
     queuedCreatedAtOrBefore: hedgeQueuedCreatedAtOrBefore,
   });
-  if (soonestUnmaturedDueAt !== undefined) {
+  if (earliestQueuedDueAt !== undefined) {
     // Inherited silent/wake policy is recorded on each still-queued delegate
     // here, so the hedge never has to carry one chain's mode at the session
     // level and leak it onto an unrelated delegate queued by a later turn.
@@ -156,7 +155,7 @@ export async function dispatchToolDelegates(
     );
     armDelegateDispatchHedge(
       sessionKey,
-      soonestUnmaturedDueAt,
+      earliestQueuedDueAt,
       {
         chainState: params.chainState,
         ctx: params.ctx,

@@ -3,7 +3,7 @@ import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-contex
 
 const SUBAGENT_TRACEPARENT_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
-export type SubagentTraceparentHandoff = {
+type SubagentTraceparentHandoff = {
   idempotencyKey: string;
   sessionKey: string;
   traceparent: string;

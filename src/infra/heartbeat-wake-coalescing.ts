@@ -6,7 +6,6 @@ import type {
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
 import {
-  GLOBAL_HEARTBEAT_WAKE_TARGET_KEY,
   normalizeHeartbeatWakeTarget,
   resolveHeartbeatWakeTargetKey,
 } from "./heartbeat-wake-target.js";
@@ -106,9 +105,6 @@ export const UNSCOPED_WAKE_TARGET_KEYS = [
 export function isUnscopedWakeTargetKey(targetKey: string): boolean {
   return UNSCOPED_WAKE_TARGET_KEYS.includes(targetKey);
 }
-
-/** Upstream's bare global key, retained so target-module helpers stay reusable. */
-export const GLOBAL_WAKE_TARGET_BASE_KEY = GLOBAL_HEARTBEAT_WAKE_TARGET_KEY;
 
 export function mergePendingWakeReasons(
   previous: PendingWakeReason,

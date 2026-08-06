@@ -1758,9 +1758,8 @@ export function handleMessageEnd(
   const silentExpectedWithoutSentinel =
     ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
   const finalAssistantText = silentExpectedWithoutSentinel ? "" : cleanedText;
-  const terminalAssistantTextEvidence = replyTargetOnlyTerminalEvidence
-    ? trimmedText
-    : finalAssistantText;
+  const terminalAssistantTextEvidence =
+    replyTargetOnlyTerminalEvidence || parsedText?.isSilent ? trimmedText : finalAssistantText;
   const deliveredBlockReplyTexts = ctx.state.deliveredBlockReplyTexts.filter(Boolean);
   const attemptedBlockReplyTexts = (ctx.state.attemptedBlockReplyTexts ?? []).filter(Boolean);
   const effectiveDeliveredBlockReplyTexts =

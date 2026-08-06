@@ -930,7 +930,6 @@ describe("delegate dispatch ownership graph", () => {
     "src/auto-reply/continuation/delegate-dispatch.ts",
     "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
     "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
-    "src/auto-reply/continuation/post-compaction-release.ts",
     "src/gateway/server-runtime-services.ts",
   ] as const;
 
@@ -1029,7 +1028,7 @@ describe("delegate dispatch ownership graph", () => {
     );
   }
 
-  it("keeps live, recovery, neutral staged dispatch, release, and gateway edges one-way", () => {
+  it("keeps recovery, neutral staged dispatch, and gateway edges one-way", () => {
     const edges = collectOwnershipEdges();
     const recoveryModule = "src/auto-reply/continuation/delegate-dispatch-recovery.ts";
     const recoveryImporters = edges.filter((edge) => edge.to === recoveryModule);
@@ -1050,11 +1049,6 @@ describe("delegate dispatch ownership graph", () => {
       {
         from: "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
         kind: "static-import",
-        to: "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
-      },
-      {
-        from: "src/auto-reply/continuation/post-compaction-release.ts",
-        kind: "dynamic-import",
         to: "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
       },
       {

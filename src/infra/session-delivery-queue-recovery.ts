@@ -32,11 +32,6 @@ import {
 const FAILED_GC_AMORTIZATION_MS = 60_000;
 let lastGcAt = 0;
 
-// oxlint-disable-next-line eslint/no-underscore-dangle -- test-only reset hook
-export function __resetFailedGcWatermarkForTests(): void {
-  lastGcAt = 0;
-}
-
 async function maybePruneFailedRecords(opts: {
   failedMaxAgeMs?: number;
   stateDir?: string;

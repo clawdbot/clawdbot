@@ -156,13 +156,6 @@ export function resolveLiveContinuationRuntimeConfig(
 }
 
 /**
- * Convenience: resolve just the max delegates per turn.
- */
-export function resolveMaxDelegatesPerTurn(cfg: OpenClawConfig = getRuntimeConfig()): number {
-  return resolveContinuationRuntimeConfig(cfg).maxDelegatesPerTurn;
-}
-
-/**
  * Clamp a raw delay value to the configured [minDelayMs, maxDelayMs] range.
  */
 export function clampDelayMs(rawMs: number | undefined, config: ContinuationRuntimeConfig): number {

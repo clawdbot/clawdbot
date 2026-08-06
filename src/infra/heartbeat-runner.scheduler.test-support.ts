@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeat } from "./heartbeat-wake.js";
 
-export type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
-export type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
+type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
+type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
 
 export const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
 

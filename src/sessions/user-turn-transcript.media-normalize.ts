@@ -29,10 +29,7 @@ function normalizeStructuredMediaKind(value: string | null | undefined): MediaFa
     : undefined;
 }
 
-export function resolveTranscriptMediaPath(
-  pathValue: string,
-  workspaceDir: string | undefined,
-): string {
+function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
   // Relative staged media paths are anchored to the media workspace; absolute
   // paths and URL-like refs are already stable transcript references.
   if (!workspaceDir || path.isAbsolute(pathValue) || URL_LIKE_MEDIA_PATH_PATTERN.test(pathValue)) {

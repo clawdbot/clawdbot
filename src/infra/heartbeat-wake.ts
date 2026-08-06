@@ -35,15 +35,6 @@ export {
   getActiveHeartbeatWakeContext,
   getHeartbeatWakeAbortSignal,
 } from "./heartbeat-wake-lifecycle.js";
-export type {
-  HeartbeatRunResult,
-  HeartbeatScheduledTask,
-  HeartbeatWakeHandler,
-  HeartbeatWakeIntent,
-  HeartbeatWakeRequest,
-  HeartbeatWakeSource,
-} from "./heartbeat-wake-contracts.js";
-
 export const HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT = "requests-in-flight";
 export const HEARTBEAT_SKIP_CRON_IN_PROGRESS = "cron-in-progress";
 export const HEARTBEAT_SKIP_LANES_BUSY = "lanes-busy";
@@ -714,16 +705,6 @@ export function requestHeartbeatNow(opts?: {
     markTrustedContinuationRoutingCarrier(request);
   }
   requestHeartbeat(request);
-}
-
-export function hasHeartbeatWakeHandler() {
-  return handler !== null;
-}
-
-export function hasPendingHeartbeatWake() {
-  // Per-target dispatch replaced the single `scheduled`/`running` pair: work is
-  // still outstanding while any target turn is mid-flight.
-  return pendingWakes.size > 0 || Boolean(timer) || activeWakeTargets.size > 0;
 }
 
 export function resetHeartbeatWakeStateForTests() {

@@ -13,12 +13,12 @@
 //
 // Keep skip-and-log callers distinguishable from bottom-of-stack invariants.
 
-export type SessionKeyParams = {
+type SessionKeyParams = {
   sessionKey?: string | null;
   sessionId?: string | null;
 };
 
-export type SessionKeyLogger = {
+type SessionKeyLogger = {
   warn: (msg: string) => void;
 };
 

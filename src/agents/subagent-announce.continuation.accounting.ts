@@ -4,7 +4,7 @@ import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { generateChainId } from "../infra/secure-random.js";
 import { defaultRuntime } from "../runtime.js";
 
-export const CONTINUATION_CHAIN_HOP_PATTERN = /\[continuation:chain-hop:(\d+)\]/;
+const CONTINUATION_CHAIN_HOP_PATTERN = /\[continuation:chain-hop:(\d+)\]/;
 
 export type ContinuationChainState = {
   currentChainCount: number;

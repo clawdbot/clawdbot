@@ -51,11 +51,11 @@ export const CONTINUATION_WORK_RETRY_EXHAUSTED_NOTICE =
   "[system:continuation-warning] continue_work permanently failed after exhausting its retries; the scheduled follow-up turn will not run. Reissue continue_work if the work is still needed.";
 
 /** Flow-stable so a replayed handoff reuses one durable row instead of adding another. */
-export function continuationWorkTerminalNoticeIdempotencyKey(flowId: string): string {
+function continuationWorkTerminalNoticeIdempotencyKey(flowId: string): string {
   return `continuation-work-terminal-notice:${flowId}`;
 }
 
-export type ContinuationWorkTerminalNoticeDeps = {
+type ContinuationWorkTerminalNoticeDeps = {
   enqueueSessionDeliveryWithStatus: typeof enqueueSessionDeliveryWithStatus;
   scheduleSessionDelivery: typeof scheduleSessionDelivery;
   enqueueSystemEvent: typeof enqueueSystemEvent;

@@ -14,8 +14,8 @@ import type {
   ContinuationDelegateFanoutMode,
 } from "./targeting-pure.js";
 
-export type ContinuationDelegateAttachment = InlineAttachment;
-export type ContinuationDelegateAttachAs = InlineAttachmentMount;
+type ContinuationDelegateAttachment = InlineAttachment;
+type ContinuationDelegateAttachAs = InlineAttachmentMount;
 
 // ---------------------------------------------------------------------------
 // Continuation signals — parsed from response text or captured from tool calls

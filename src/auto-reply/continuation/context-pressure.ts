@@ -72,7 +72,7 @@ export function resolveContextPressureBand(
   return band;
 }
 
-export interface CheckSessionContextPressureParams {
+interface CheckSessionContextPressureParams {
   sessionEntry: SessionEntry;
   sessionKey: string;
   contextPressureThreshold: number | undefined;
@@ -81,7 +81,7 @@ export interface CheckSessionContextPressureParams {
   postCompaction?: boolean;
 }
 
-export interface CheckTokenContextPressureParams {
+interface CheckTokenContextPressureParams {
   sessionKey: string;
   totalTokens: number;
   contextWindow: number;
@@ -90,7 +90,7 @@ export interface CheckTokenContextPressureParams {
   postCompaction?: boolean;
 }
 
-export interface CheckContextPressureResult {
+interface CheckContextPressureResult {
   fired: boolean;
   band: PressureBand;
 }

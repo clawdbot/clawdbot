@@ -34,7 +34,6 @@ import {
   createSubagentRunManager,
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
-import { configureSubagentRegistrySpawnRuntime } from "./subagent-registry-spawn-runtime.js";
 import { clearSubagentRunsReadCacheForTest } from "./subagent-registry-state.js";
 import { SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP } from "./subagent-registry-suspended-delivery.js";
 import { resolveSubagentTaskForRun } from "./subagent-registry-sweep-kill.js";
@@ -600,11 +599,6 @@ const publicApi = createSubagentRegistryPublicApi({
   },
   startAnnounceCleanup: startSubagentAnnounceCleanupFlow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
-});
-configureSubagentRegistrySpawnRuntime({
-  countActiveRunsForSession: (requesterSessionKey) =>
-    publicApi.countActiveRunsForSession(requesterSessionKey),
-  registerSubagentRun: (params) => subagentRunManager.registerSubagentRun(params),
 });
 
 export const leasePendingAgentSteeringItems = publicApi.leasePendingAgentSteeringItems;

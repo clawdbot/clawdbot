@@ -2065,6 +2065,9 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action],
+    // Trusted direct operators retain opaque resource-id workflows. Native conversation
+    // aliases still normalize above and remain subject to the shared cross-context policy.
+    allowResourceOnly: input.conversationReadOrigin === "direct-operator",
   });
   let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {

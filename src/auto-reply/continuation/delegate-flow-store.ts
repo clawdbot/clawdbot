@@ -41,12 +41,7 @@ import type { ChainState, PendingContinuationDelegate } from "./types.js";
 
 const log = createSubsystemLogger("continuation/delegate-store");
 
-export {
-  CONTINUATION_DELEGATE_CONTROLLER_ID,
-  CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
-  isContinuationDelegateFlow,
-  scrubStoredDelegateAttachmentState,
-};
+export { CONTINUATION_DELEGATE_CONTROLLER_ID, CONTINUATION_POST_COMPACTION_CONTROLLER_ID };
 
 const TraceparentStateSchema = z
   .preprocess(
@@ -214,7 +209,7 @@ export type PendingDelegateCutoffOptions = {
   includeRunningUpdatedAtOrBefore?: number;
 };
 
-export type ContinuationDelegateQueueDepths = {
+type ContinuationDelegateQueueDepths = {
   pendingQueued: number;
   pendingRunnable: number;
   pendingScheduled: number;
@@ -708,12 +703,6 @@ export function rejectCorruptDelegateFlow(
       ? "Staged post-compaction delegate payload could not be decoded."
       : "Pending continuation delegate payload could not be decoded.",
   });
-}
-
-export function warnCorruptRecoverablePostCompactionFlow(flow: TaskFlowRecord): void {
-  log.warn(
-    `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} ${delegateFlowDiagnostics.describeDelegateState(flow.stateJson)}`,
-  );
 }
 
 const continuationQueueDiagnostics = delegateFlowDiagnostics.createContinuationQueueDiagnostics({

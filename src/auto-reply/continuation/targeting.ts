@@ -24,7 +24,6 @@ import {
   normalizeContinuationTargetKeys,
 } from "./targeting-pure.js";
 import type {
-  ContinuationCrossSessionTargetingPolicy,
   ContinuationDelegateFanoutMode,
   ContinuationDelegateTargeting,
 } from "./targeting-pure.js";
@@ -35,12 +34,6 @@ export {
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
 };
-export type {
-  ContinuationCrossSessionTargetingPolicy,
-  ContinuationDelegateFanoutMode,
-  ContinuationDelegateTargeting,
-};
-
 export function resolveContinuationReturnTargetSessionKeys(
   params: ContinuationDelegateTargeting & {
     defaultSessionKey: string;

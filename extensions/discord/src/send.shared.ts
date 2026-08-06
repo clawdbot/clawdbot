@@ -48,6 +48,7 @@ export {
   buildDiscordMessageRequest,
   createDiscordMessageNonce,
   resolveDiscordMessageFlags,
+  resolveDiscordSuppressEmbeds,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   stripUndefinedFields,

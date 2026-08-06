@@ -41,7 +41,6 @@ const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
 const BOUNDED_COMPLETION_RECOVERY_STATE = "completed_bounded";
 
 export type {
-  CorruptDeliveryQueueEntry,
   DeliveryQueueEntryLoadResult,
   DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite-codec.js";

@@ -378,11 +378,6 @@ export function _setPending(sessionKey: string): void {
   pendingCompactionSessions.add(sessionKey);
 }
 
-/** Check whether a session has a pending compaction. Exported for tests only. */
-export function hasPendingCompactionSession(sessionKey: string): boolean {
-  return pendingCompactionSessions.has(sessionKey);
-}
-
 /** Reset volitional compaction counters. Exported for tests only. */
 // oxlint-disable-next-line eslint/no-underscore-dangle -- test-only export
 export function _resetVolitionalCounts(sessionKey?: string): void {

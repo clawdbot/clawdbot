@@ -355,6 +355,40 @@ const splitLintUse = [
 void splitLintUse;
 
 describe("hedge timer ref/handle cleanup", () => {
+  it("arms an immediate hedge when a deadline crosses after the consume snapshot", async () => {
+    const sessionKey = "session-hedge-crossed-deadline";
+    vi.setSystemTime(0);
+    enqueuePendingDelegate(sessionKey, { task: "crossed deadline work", delayMs: 100 });
+    vi.setSystemTime(99);
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(99)
+      .mockReturnValueOnce(99)
+      .mockReturnValue(101);
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: 0, accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(true);
+
+    vi.setSystemTime(101);
+    now.mockRestore();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.runAllTimersAsync();
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ task: expect.stringContaining("crossed deadline work") }),
+      expect.anything(),
+    );
+    expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
+  });
+
   it("enters fresh gateway admission when a delayed delegate outlives its request", async () => {
     const sessionKey = "session-hedge-released-parent";
     const observedAdmissionClosed: boolean[] = [];

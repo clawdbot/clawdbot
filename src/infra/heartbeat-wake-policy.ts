@@ -11,7 +11,7 @@ export type HeartbeatWakePayloadFlags = {
   isWakePayload: boolean;
 };
 
-export function isContinuationHeartbeatWakeReason(reason?: string): boolean {
+function isContinuationHeartbeatWakeReason(reason?: string): boolean {
   const normalized = (reason ?? "").trim();
   return (
     normalized === "continuation" ||

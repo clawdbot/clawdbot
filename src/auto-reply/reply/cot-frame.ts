@@ -1,4 +1,4 @@
-export type CotFramePrefixOptions = {
+type CotFramePrefixOptions = {
   speakerLabels?: readonly string[];
 };
 

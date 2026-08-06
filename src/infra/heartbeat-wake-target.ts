@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-export const GLOBAL_HEARTBEAT_WAKE_TARGET_KEY = "::";
+const GLOBAL_HEARTBEAT_WAKE_TARGET_KEY = "::";
 
 type HeartbeatWakeReadiness = {
   readyAtMs?: number;

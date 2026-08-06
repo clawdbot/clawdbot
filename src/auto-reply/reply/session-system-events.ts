@@ -118,7 +118,7 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   );
 }
 
-export type PreparedSystemEventBlock = {
+type PreparedSystemEventBlock = {
   key?: string;
   text: string;
 };
@@ -128,7 +128,7 @@ export type PreparedManagedSystemEventDelivery = {
   acknowledge: () => Promise<void>;
 };
 
-export type PreparedFormattedSystemEvents = {
+type PreparedFormattedSystemEvents = {
   blocks: PreparedSystemEventBlock[];
   managedDeliveries: PreparedManagedSystemEventDelivery[];
 };

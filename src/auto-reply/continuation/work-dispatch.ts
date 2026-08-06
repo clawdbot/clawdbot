@@ -180,7 +180,7 @@ export function resetContinuationWorkDispatchForTests(): void {
  * `ceilingMs`. `factor ** n` overflowing to Infinity is harmless — `Math.min`
  * clamps it to the ceiling.
  */
-export type BusySkipBackoffParams = { baseMs: number; ceilingMs: number; factor: number };
+type BusySkipBackoffParams = { baseMs: number; ceilingMs: number; factor: number };
 
 export function computeBusySkipBackoffMs(
   busySkipCount: number,
@@ -199,7 +199,7 @@ export function computeBusySkipBackoffMs(
  * parent authorizes the cull — `alive`, `uncertain`, and the no-lineage gate all
  * quiesce (rate-cap-forever, the Pillar-0 trickle).
  */
-export type BucketOneReapVerdict = "reap" | "rate-cap-forever";
+type BucketOneReapVerdict = "reap" | "rate-cap-forever";
 
 export function bucket1ReapVerdict(
   parentRunId: string | undefined,
@@ -709,7 +709,7 @@ export async function scheduleContinuationWork(params: {
   return { scheduled: true, capped: false, chainState: nextState };
 }
 
-export type ContinuationWorkBatchResult = {
+type ContinuationWorkBatchResult = {
   /** Elections that successfully enqueued a durable wake. */
   scheduledCount: number;
   /** Elections rejected once the cumulative chain/cost cap was reached. */

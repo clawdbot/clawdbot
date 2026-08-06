@@ -407,14 +407,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
     startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
   }));
 
-  // Spawn pipeline owns count/register through this leaf seam; Swarm lifecycle
-  // functions remain owned by subagent-registry.js.
-  vi.doMock("./subagent-registry-spawn-runtime.js", () => ({
-    countActiveRunsForSession: countActiveRunsForSessionImpl,
-    registerSubagentRun: registerSubagentRunImpl,
-    configureSubagentRegistrySpawnRuntime: () => undefined,
-  }));
-
   const subagentSpawnModule = await import("./subagent-spawn.js");
   // resetModules gives the SUT a fresh handoff map; return functions from that
   // same module instance so tests consume the handoff the spawn path registered.

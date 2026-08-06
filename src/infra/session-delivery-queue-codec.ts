@@ -46,7 +46,7 @@ export type DelegateArtifactDeliveryReceipt = {
   recipientSessionId: string;
 };
 
-export type ManagedDelegateArtifactDelivery = {
+type ManagedDelegateArtifactDelivery = {
   receipt: DelegateArtifactDeliveryReceipt;
   projection: DelegateArtifactRecipientProjectionV1;
 };
@@ -68,7 +68,7 @@ export type SessionDeliveryRoute = {
 
 export type SessionDeliverySettledOutcome = "recovered" | "moved-to-failed";
 
-export type SessionDeliveryOwnerReference = {
+type SessionDeliveryOwnerReference = {
   kind: "subagent_completion";
   runId: string;
   taskId: string;
@@ -165,7 +165,7 @@ export type QueuedSessionDeliveryPayload = (
 ) &
   SessionDeliveryRetryPolicy;
 
-export type QueuedSessionDeliveryPayloadWithRetry = QueuedSessionDeliveryPayload &
+type QueuedSessionDeliveryPayloadWithRetry = QueuedSessionDeliveryPayload &
   SessionDeliveryRetryPolicy;
 
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayloadWithRetry & {
@@ -529,7 +529,7 @@ type InvalidSessionDelivery = {
   retryCount: number;
 };
 
-export type DecodedSessionDelivery =
+type DecodedSessionDelivery =
   | { status: "loaded"; entry: QueuedSessionDelivery }
   | { status: "invalid"; entry: InvalidSessionDelivery; error: string; entryJson: string };
 

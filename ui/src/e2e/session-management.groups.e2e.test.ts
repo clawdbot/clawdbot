@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   actionOpacity,
+  actionPointerEvents,
   activateMenuItem,
   captureUiProof,
   collapsedSessionSectionsStorageKey,
@@ -221,16 +222,20 @@ suite.define(() => {
       const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin thread" });
       await page.mouse.move(900, 500);
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("0");
+      await expect.poll(() => actionPointerEvents(sidebarResearchPin)).toBe("none");
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
         .getByRole("button", { name: "Unpin thread" });
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
+      await expect.poll(() => actionPointerEvents(sidebarReleasePin)).toBe("none");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
+      await expect.poll(() => actionPointerEvents(sidebarResearchPin)).toBe("auto");
       await captureUiProof(page, "sidebar-sessions.png");
 
       await sidebarRows.filter({ hasText: "Release planning" }).hover();
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
+      await expect.poll(() => actionPointerEvents(sidebarReleasePin)).toBe("auto");
       await sidebarReleasePin.click();
       const pinPatch = await waitForPatch(
         gateway,

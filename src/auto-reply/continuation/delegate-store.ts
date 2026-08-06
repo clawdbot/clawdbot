@@ -375,11 +375,10 @@ export function markPendingDelegateChainStatePersistPlanned(
   return plannedDelegate;
 }
 
-export function peekSoonestUnmaturedDelegateDueAt(
+export function peekEarliestQueuedDelegateDueAt(
   sessionKey: string,
   options: Pick<PendingDelegateCutoffOptions, "queuedCreatedAtOrBefore"> = {},
 ): number | undefined {
-  const now = Date.now();
   let soonest: number | undefined;
   for (const flow of listQueuedPendingFlows(sessionKey)) {
     if (
@@ -394,7 +393,7 @@ export function peekSoonestUnmaturedDelegateDueAt(
       continue;
     }
     const dueAt = delegateDueAt(flow, delegate);
-    if (dueAt > now && (soonest === undefined || dueAt < soonest)) {
+    if (soonest === undefined || dueAt < soonest) {
       soonest = dueAt;
     }
   }

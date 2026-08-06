@@ -1853,6 +1853,38 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-1");
   });
 
+  it("preserves raw tgcb1 callbacks emitted before the prefix became reserved", async () => {
+    const pluginHandler = vi.fn(async (ctx) => {
+      expect(ctx.callback.namespace).toBe("tgcb1");
+      expect(ctx.callback.payload).toBe("inspect:123");
+      return { handled: true };
+    });
+    expect(
+      registerPluginInteractiveHandler("legacy-tgcb1", {
+        channel: "telegram",
+        namespace: "tgcb1",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-legacy-tgcb1",
+        data: "tgcb1:inspect:123",
+        messageId: 10,
+      }),
+    );
+
+    expect(pluginHandler).toHaveBeenCalledOnce();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalledWith(
+      1234,
+      "This action is no longer available.",
+      undefined,
+    );
+  });
+
   it("preserves raw slash callback_query payloads as command text", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getCallbackHandler();
@@ -2033,6 +2065,120 @@ describe("createTelegramBot", () => {
     expect(payload.CommandSource).toBe("native");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
   });
+
+  it("keeps tgcmd native when a plugin registers the same namespace", async () => {
+    const pluginHandler = vi.fn(async () => ({ handled: true }));
+    expect(
+      registerPluginInteractiveHandler("namespace-collision", {
+        channel: "telegram",
+        namespace: "tgcmd",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-native-collision",
+        data: "tgcmd:/fast status",
+        messageId: 10,
+      }),
+    );
+
+    expect(pluginHandler).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(requireValue(replySpy.mock.calls.at(0), "replySpy call")[0]).toMatchObject({
+      CommandBody: "/fast status",
+      CommandSource: "native",
+    });
+  });
+
+  it("terminalizes native callbacks after inline buttons are disabled", async () => {
+    const pluginHandler = vi.fn(async () => ({ handled: true }));
+    registerPluginInteractiveHandler("disabled-native-collision", {
+      channel: "telegram",
+      namespace: "tgcmd",
+      handler: pluginHandler,
+    });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          capabilities: { inlineButtons: "off" },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-disabled-native",
+        data: "tgcmd:/fast status",
+        messageId: 10,
+        message: {
+          reply_markup: {
+            inline_keyboard: [[{ text: "Status", callback_data: "tgcmd:/fast status" }]],
+          },
+        },
+      }),
+    );
+
+    expect(pluginHandler).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "This action is no longer available.",
+      undefined,
+    );
+  });
+
+  it.each([
+    ["stale", buildTelegramOpaqueCallbackData("missing-plugin:approve-1")],
+    ["malformed", "tgcb1:invalid"],
+  ])("terminalizes %s typed callbacks without raw-text fallthrough", async (_name, data) => {
+    const pluginHandler = vi.fn(async () => ({ handled: true }));
+    registerPluginInteractiveHandler("disabled-typed-owner", {
+      channel: "telegram",
+      namespace: "missing-plugin",
+      handler: pluginHandler,
+    });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          capabilities: { inlineButtons: "off" },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: `cbq-opaque-${_name}`,
+        data,
+        messageId: 10,
+        message: {
+          reply_markup: { inline_keyboard: [[{ text: "Approve", callback_data: data }]] },
+        },
+      }),
+    );
+
+    expect(pluginHandler).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "This action is no longer available.",
+      undefined,
+    );
+  });
+
   it("reloads callback model routing bindings without recreating the bot", async () => {
     const buildModelsProviderDataMock =
       telegramBotDepsForTest.buildModelsProviderData as unknown as BuildModelsProviderDataMock;

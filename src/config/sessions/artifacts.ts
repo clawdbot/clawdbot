@@ -151,7 +151,7 @@ export function isUsageCountedSessionTranscriptFileName(fileName: string): boole
  * session IDs that happen to contain the substring "checkpoint" do not
  * false-positive.
  */
-export function isCheckpointSessionTranscriptFileName(fileName: string): boolean {
+function isCheckpointSessionTranscriptFileName(fileName: string): boolean {
   return CHECKPOINT_MARKER_RE.test(fileName);
 }
 

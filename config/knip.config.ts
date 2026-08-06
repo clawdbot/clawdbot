@@ -119,6 +119,8 @@ const rootEntries = [
   "scripts/openclaw-cross-os-release-checks.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
+  // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
+  "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
@@ -386,6 +388,44 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
+    // Continuation and delivery owner tests import these explicit seams. The
+    // all-exports companion config still audits each named consumer.
+    "extensions/codex/src/app-server/dynamic-tools.ts": ["exports"],
+    "extensions/diagnostics-otel/src/continuation-tracer-adapter.ts": ["exports"],
+    "src/agents/delegate-artifact-delivery.ts": ["exports"],
+    "src/agents/delegate-artifacts.ts": ["exports", "types"],
+    "src/agents/embedded-agent-runner/compact-reasons.ts": ["exports", "types"],
+    "src/agents/subagent-run-liveness.ts": ["exports"],
+    "src/agents/subagent-session-cleanup.ts": ["exports"],
+    "src/agents/subagent-spawn.ts": ["types"],
+    "src/agents/subagent-traceparent-handoff.ts": ["exports"],
+    "src/agents/tools/request-compaction-tool.ts": ["exports"],
+    "src/auto-reply/continuation/context-pressure.ts": ["exports", "types"],
+    "src/auto-reply/continuation/delegate-dispatch-hedge.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-dispatch-recovery.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-dispatch.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-flow-store.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-store-post-compaction.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-store.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-turn-admission.ts": ["exports"],
+    "src/auto-reply/continuation/signal.ts": ["exports"],
+    "src/auto-reply/continuation/state.ts": ["exports"],
+    "src/auto-reply/continuation/work-dispatch.ts": ["exports"],
+    "src/auto-reply/continuation/work-terminal-notice.ts": ["exports"],
+    "src/auto-reply/reply/agent-runner-fallback-candidate.ts": ["exports"],
+    "src/auto-reply/reply/agent-runner-post-compaction-release.ts": ["exports"],
+    "src/auto-reply/reply/no-op-rearm-guard.ts": ["exports", "types"],
+    "src/auto-reply/reply/post-compaction-delegate-delivery.ts": ["types"],
+    "src/auto-reply/reply/post-compaction-delegate-dispatch.ts": ["exports", "types"],
+    "src/auto-reply/reply/run-provenance.ts": ["exports"],
+    "src/auto-reply/reply/session-system-events.ts": ["exports"],
+    "src/commands/status.command-report-data.ts": ["exports"],
+    "src/infra/continuation-tracer.ts": ["exports", "types"],
+    "src/infra/diagnostic-trace-context.ts": ["exports"],
+    "src/infra/heartbeat-reason.ts": ["exports"],
+    "src/infra/session-delivery-queue-storage.ts": ["exports"],
+    "src/process/command-queue-waiters.ts": ["exports"],
+    "src/status/status-text.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],

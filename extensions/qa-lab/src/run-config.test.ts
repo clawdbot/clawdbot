@@ -352,7 +352,7 @@ describe("qa run config", () => {
     expect(execution.excludedScenarios).toEqual([]);
   });
 
-  it("keeps portable threads but excludes live-only scenarios from Crabline plans", () => {
+  it("keeps portable threads but excludes module flows from Crabline plans", () => {
     const catalog = readQaScenarioPack();
     const scenarioIds = new Set([
       "matrix-approval-channel-target-both",
@@ -387,15 +387,33 @@ describe("qa run config", () => {
         execution.excludedScenarios.map(({ scenario, reasons }) => [scenario.id, reasons]),
       ),
     ).toEqual({
-      "matrix-approval-channel-target-both": ["channelDriver=live"],
-      "matrix-approval-deny-reaction": ["channelDriver=live"],
-      "matrix-approval-exec-metadata-chunked": ["channelDriver=live"],
-      "matrix-approval-exec-metadata-single-event": ["channelDriver=live"],
-      "matrix-approval-plugin-metadata-single-event": ["channelDriver=live"],
-      "matrix-approval-thread-target": ["channelDriver=live"],
-      "matrix-mxid-prefixed-command-block": ["channelDriver=live"],
-      "slack-codex-approval-exec-native": ["channelDriver=live"],
-      "slack-codex-approval-plugin-native": ["channelDriver=live"],
+      "matrix-approval-channel-target-both": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-deny-reaction": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-exec-metadata-chunked": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-exec-metadata-single-event": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-plugin-metadata-single-event": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-thread-target": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-mxid-prefixed-command-block": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "slack-codex-approval-exec-native": [
+        "module flow unsupported by implementation=crabline:slack",
+      ],
+      "slack-codex-approval-plugin-native": [
+        "module flow unsupported by implementation=crabline:slack",
+      ],
     });
   });
 

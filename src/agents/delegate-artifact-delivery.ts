@@ -33,7 +33,7 @@ export function recordDelegateArtifactDelivery(params: {
   });
 }
 
-export type DelegateArtifactDeliveryPreparation =
+type DelegateArtifactDeliveryPreparation =
   | { status: "ready"; projection: DelegateArtifactRecipientProjectionV1 }
   | { status: "acknowledged" }
   | { status: "deferred" }

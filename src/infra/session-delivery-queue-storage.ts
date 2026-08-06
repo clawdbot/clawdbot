@@ -35,13 +35,10 @@ import {
   type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-codec.js";
 
-export type { AttachmentRef } from "./session-delivery-queue-attachment-metadata.js";
 export type {
   DelegateArtifactDeliveryReceipt,
-  ManagedDelegateArtifactDelivery,
   QueuedSessionDelivery,
   QueuedSessionDeliveryPayload,
-  QueuedSessionDeliveryPayloadWithRetry,
   SessionDeliveryContext,
   SessionDeliveryRoute,
   SessionDeliverySettledOutcome,
@@ -50,9 +47,6 @@ export type {
 // Session delivery queue persists session-scoped messages until channel
 // delivery acknowledges them or recovery exhausts retry policy.
 export const SESSION_DELIVERY_QUEUE_NAME = "session";
-
-/** Default age threshold for purging failed entries (14 days). */
-export const DEFAULT_FAILED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
@@ -260,7 +254,7 @@ export async function enqueueSessionDelivery(
  * tombstone — and would emit a duplicate notice for an outcome already
  * delivered.
  */
-export type SessionDeliveryEnqueueResult = {
+type SessionDeliveryEnqueueResult = {
   id: string;
   /** `completed` means a tombstone settled this key; no new work was created. */
   status: "pending" | "completed" | "unknown";

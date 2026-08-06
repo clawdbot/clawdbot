@@ -527,10 +527,9 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
   });
 });
 
-// RFC §4.4 stale-TTL enforcement at TaskFlow release. This dispatcher is shared
-// by the live post-compaction release (post-compaction-release.ts) and by
-// startup recovery (delegate-dispatch-recovery.ts), so gating here covers both
-// and is what stops a crash-orphaned row from materializing an expired snapshot
+// RFC §4.4 stale-TTL enforcement at TaskFlow release. This dispatcher owns
+// startup recovery; the live reply path has its own delivery-queue owner.
+// Gating here stops a crash-orphaned row from materializing an expired snapshot
 // at a later compaction (karmaterminal/openclaw#1198).
 describe("dispatchStagedPostCompactionDelegates stale TTL", () => {
   const STALE_SECRET_TASK = "STALE_TASK_SENTINEL_1198";

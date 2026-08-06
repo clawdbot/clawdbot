@@ -131,7 +131,7 @@ import type { ChainState } from "./types.js";
  * (notably `subagent-announce.ts` — cycle-avoidance) can satisfy the
  * helper signature without an extra type import.
  */
-export type ContinuationChainSource = {
+type ContinuationChainSource = {
   continuationChainCount?: number;
   continuationChainStartedAt?: number;
   continuationChainTokens?: number;

@@ -1,6 +1,6 @@
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
 
-export type ToolDisplaySpec = ToolDisplaySpecBase & {
+type ToolDisplaySpec = ToolDisplaySpecBase & {
   emoji?: string;
 };
 

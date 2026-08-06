@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
 type DefaultModelCatalogFacts = ReturnType<
@@ -1316,6 +1317,75 @@ describe("finalizeSetupWizard", () => {
 
     expect(result.gateway).toEqual({ status: "failed", error: "service install exploded" });
     expectNoteContains(prompter, "service install exploded", "Gateway");
+  });
+
+  it("recognizes external supervision before probing Linux systemd", async () => {
+    await withPlatform("linux", async () => {
+      await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
+        isSystemdUserServiceAvailable.mockResolvedValue(false);
+        isContainerEnvironment.mockReturnValue(true);
+        const prompter = createLaterPrompter();
+
+        const result = await ensureGatewayServiceForOnboarding({
+          flow: "quickstart",
+          opts: {},
+          nextConfig: {},
+          settings: { port: 18789 },
+          prompter,
+          runtime: createRuntime(),
+        });
+
+        expect(result).toEqual({
+          gateway: { status: "skipped", reason: "external" },
+          containerWithoutUserSystemd: false,
+        });
+        expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
+        expect(isContainerEnvironment).not.toHaveBeenCalled();
+        expectNoteContains(
+          prompter,
+          "OpenClaw gateway lifecycle is managed by an external supervisor",
+          "Gateway",
+        );
+        expectNoteNotContains(prompter, "Systemd user services are not available");
+        expect(gatewayServiceInstall).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  it("preserves external supervision through unreachable container recovery", async () => {
+    await withPlatform("linux", async () => {
+      await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
+        isSystemdUserServiceAvailable.mockResolvedValue(false);
+        isContainerEnvironment.mockReturnValue(true);
+        waitForGatewayReachable.mockResolvedValue({
+          ok: false,
+          detail: "external gateway is offline",
+        });
+        probeGatewayReachable.mockResolvedValue({
+          ok: false,
+          detail: "external gateway is offline",
+        });
+        const prompter = createLaterPrompter();
+        const args = createAdvancedFinalizeArgs({ prompter });
+
+        await finalizeSetupWizard({
+          ...args,
+          opts: { ...args.opts, skipHealth: false, skipUi: false },
+        });
+
+        expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
+        expect(isContainerEnvironment).not.toHaveBeenCalled();
+        expect(startGatewayServer).not.toHaveBeenCalled();
+        expectNoteContains(prompter, "Use that supervisor to start the gateway.", "Gateway");
+        expectNoteNotContains(prompter, "openclaw gateway run");
+        expectNoteNotContains(prompter, "openclaw onboard --install-daemon");
+        expect(prompter.outro).toHaveBeenCalledWith(
+          "Gateway not detected yet. OpenClaw gateway lifecycle is managed by an external " +
+            "supervisor (OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the " +
+            "gateway.",
+        );
+      });
+    });
   });
 
   it("installs a missing gateway service when onboarding resumes before installation", async () => {

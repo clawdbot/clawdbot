@@ -14,7 +14,7 @@ type DeliveryQueueTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
 
 export type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
-export type DeliveryQueueSqliteRow = {
+type DeliveryQueueSqliteRow = {
   id: string;
   entry_json: string;
   enqueued_at: number | bigint;
@@ -25,7 +25,7 @@ export type DeliveryQueueSqliteRow = {
   recovery_state: string | null;
 };
 
-export type DeliveryQueueRowMetadata = {
+type DeliveryQueueRowMetadata = {
   entryKind?: string;
   sessionKey?: string;
   channel?: string;
@@ -53,9 +53,7 @@ type BoundDeliveryQueueEntry = {
   completeExisting: boolean;
 };
 
-export function inflateDeliveryQueueRow(
-  row: DeliveryQueueSqliteRow,
-): DeliveryQueueEntryState | null {
+function inflateDeliveryQueueRow(row: DeliveryQueueSqliteRow): DeliveryQueueEntryState | null {
   let parsed: DeliveryQueueEntryState;
   try {
     parsed = JSON.parse(row.entry_json) as DeliveryQueueEntryState;

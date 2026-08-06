@@ -11,7 +11,7 @@ export type InlineAttachmentMount = {
   mountPath?: string;
 };
 
-export type InlineAttachmentMountPathResult =
+type InlineAttachmentMountPathResult =
   | { status: "absent" }
   | { status: "valid"; mountPath: string }
   | {

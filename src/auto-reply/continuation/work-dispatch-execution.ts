@@ -54,7 +54,7 @@ export type ContinuationWorkIdleRetryTrigger =
   | { kind: "reply-run-ended" }
   | { kind: "command-lane-idle"; lane: string };
 
-export type ContinuationWorkExecutionPolicy = Readonly<{
+type ContinuationWorkExecutionPolicy = Readonly<{
   reasonCategory: ContinuationWorkReasonCategory;
   busyRetryDelayMs: number;
   idleRetryHedgeMs: number;
@@ -75,23 +75,23 @@ export type ContinuationWorkExecutionDirective = Readonly<
   | { kind: "unchanged" }
 >;
 
-export type ContinuationWorkFoldExecutionResult = Readonly<{
+type ContinuationWorkFoldExecutionResult = Readonly<{
   folded: number;
   requeues: readonly Extract<ContinuationWorkExecutionDirective, { kind: "requeued" }>[];
 }>;
 
-export type ContinuationWorkFoldCandidate = Readonly<{
+type ContinuationWorkFoldCandidate = Readonly<{
   work: PendingContinuationWork;
   reasonCategory: ContinuationWorkReasonCategory;
 }>;
 
-export type ContinuationWorkFoldAttempt = Readonly<{
+type ContinuationWorkFoldAttempt = Readonly<{
   now: number;
   retryDelayMs: number;
   delivery: { delivered: true; deliveredAt: number } | { delivered: false; reason: string };
 }>;
 
-export type ContinuationWorkFoldPolicy = Readonly<{
+type ContinuationWorkFoldPolicy = Readonly<{
   deliveryTimeoutMs: number;
   retryDelayMs: number;
 }>;

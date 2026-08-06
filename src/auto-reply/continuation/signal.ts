@@ -16,7 +16,7 @@ import {
 } from "./targeting-pure.js";
 import type { ContinueWorkRequest, ContinuationSignal } from "./types.js";
 
-export type { ContinueWorkRequest, ContinuationSignal };
+export type { ContinuationSignal };
 
 export const CONTINUE_WORK_TOKEN = "CONTINUE_WORK";
 
@@ -328,7 +328,7 @@ const log = createSubsystemLogger("continuation/signal");
  * A reply payload with optional text content.
  * Matches the shape used by agent-runner.ts payload arrays.
  */
-export type ReplyPayload = {
+type ReplyPayload = {
   text?: string;
   [key: string]: unknown;
 };

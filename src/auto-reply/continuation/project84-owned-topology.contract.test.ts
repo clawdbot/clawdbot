@@ -17,7 +17,7 @@ const MONITORED_MODULES = [
   "src/process/command-queue-waiters.ts",
   "src/auto-reply/reply/agent-runner-embedded-candidate.ts",
   "src/auto-reply/reply/agent-runner-post-compaction-release.ts",
-  "src/gateway/server-methods/sessions.ts",
+  "src/gateway/server-methods.ts",
   "src/gateway/server-methods/sessions-compact.ts",
   "src/auto-reply/continuation/work-store.ts",
   "src/auto-reply/continuation/work-flow-state.ts",
@@ -32,7 +32,6 @@ const MONITORED_MODULES = [
   "src/auto-reply/continuation/delegate-dispatch.ts",
   "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
   "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
-  "src/auto-reply/continuation/post-compaction-release.ts",
   "src/gateway/server-runtime-services.ts",
 ] as const;
 
@@ -311,21 +310,12 @@ describe("Project 84 owned topology contract", () => {
       "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
     );
     expectEdge(
-      "src/auto-reply/continuation/post-compaction-release.ts",
-      "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
-      "dynamic-import",
-    );
-    expectEdge(
       "src/gateway/server-runtime-services.ts",
       "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
       "dynamic-import",
     );
     expectNoEdge(
       "src/auto-reply/continuation/delegate-dispatch.ts",
-      "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
-    );
-    expectNoEdge(
-      "src/auto-reply/continuation/post-compaction-release.ts",
       "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
     );
     expectNoEdge(
@@ -376,8 +366,9 @@ describe("Project 84 owned topology contract", () => {
       "src/auto-reply/reply/agent-runner-post-compaction-release.ts",
     );
     expectEdge(
-      "src/gateway/server-methods/sessions.ts",
+      "src/gateway/server-methods.ts",
       "src/gateway/server-methods/sessions-compact.ts",
+      "dynamic-import",
     );
     expectEdge(
       "src/gateway/server-methods/sessions-compact.ts",

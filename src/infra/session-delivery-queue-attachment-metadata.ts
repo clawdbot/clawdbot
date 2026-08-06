@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export interface AttachmentRef {
+interface AttachmentRef {
   kind: "blob-sha256";
   sha256: string;
   mediaType?: string;
@@ -83,7 +83,7 @@ export function stripQueuedAttachmentMountWithoutAttachments<
   return normalized;
 }
 
-export function isAttachmentRef(value: unknown): value is AttachmentRef {
+function isAttachmentRef(value: unknown): value is AttachmentRef {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }

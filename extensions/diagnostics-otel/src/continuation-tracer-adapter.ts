@@ -52,7 +52,7 @@ import {
  */
 export const CONTINUATION_OTEL_TRACER_NAME = "openclaw.continuation";
 
-export type ContinuationOtelTracerAdapterOptions = {
+type ContinuationOtelTracerAdapterOptions = {
   resolveParentContext?: (traceContext: DiagnosticTraceContext) => Context | undefined;
   resolveSpanContext?: (traceContext: DiagnosticTraceContext) => SpanContext | undefined;
 };

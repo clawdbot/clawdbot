@@ -1,6 +1,6 @@
 import type { DiagnosticContinuationQueueMetrics } from "../infra/diagnostic-events.js";
 
-export type DiagnosticContinuationQueueMetricsProvider = (
+type DiagnosticContinuationQueueMetricsProvider = (
   now: number,
 ) => DiagnosticContinuationQueueMetrics | null | undefined;
 

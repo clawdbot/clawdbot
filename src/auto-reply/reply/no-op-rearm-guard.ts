@@ -35,7 +35,7 @@ export const DEFAULT_NO_OP_REARM_THRESHOLD = 4;
  * provider-cadence self-rearm bursts accumulate. Slow/periodic self-rearm never
  * reaches the threshold.
  */
-export const DEFAULT_NO_OP_REARM_WINDOW_MS = 5 * 60 * 1000;
+const DEFAULT_NO_OP_REARM_WINDOW_MS = 5 * 60 * 1000;
 
 const MAX_LEDGER_KEYS = 512;
 const MAX_RECORDED_RUN_IDS = 16;
@@ -57,7 +57,7 @@ const NO_OP_LOW_VALUE_TOOLS: ReadonlySet<string> = new Set([
 // Wake-source classification (pure)
 // ---------------------------------------------------------------------------
 
-export type NoOpRearmSelfRearmSource = "continuation";
+type NoOpRearmSelfRearmSource = "continuation";
 
 export type NoOpRearmWakeClass =
   | { kind: "fresh_human_edge"; messageId?: string }
@@ -148,7 +148,7 @@ export function classifyNoOpRearmWake(input: NoOpRearmWakeInput): NoOpRearmWakeC
 // Turn-outcome classification (pure)
 // ---------------------------------------------------------------------------
 
-export type NoOpRearmTurnFacts = {
+type NoOpRearmTurnFacts = {
   /** A visible text/media reply was actually produced or delivered. */
   hasVisibleReply: boolean;
   /** Deduped tool names invoked during the turn. */
@@ -159,7 +159,7 @@ export type NoOpRearmTurnFacts = {
   errorOnlyNoGain: boolean;
 };
 
-export type NoOpRearmTurnOutcome =
+type NoOpRearmTurnOutcome =
   | { kind: "substantive"; reason: string }
   | { kind: "structured_completion"; reason: string }
   | { kind: "no_op"; reason: string }
@@ -281,7 +281,7 @@ export function resolveNoOpRearmKey(input: {
 // Bounded ledger + admission / recording
 // ---------------------------------------------------------------------------
 
-export type NoOpRearmDiagnostic = {
+type NoOpRearmDiagnostic = {
   code: "noop-rearm-suppressed";
   key: string;
   sessionKey: string;
@@ -301,7 +301,7 @@ export type NoOpRearmDecision =
       diagnostic?: NoOpRearmDiagnostic;
     };
 
-export type NoOpRearmRecordInput = {
+type NoOpRearmRecordInput = {
   sessionKey: string;
   flowId?: string;
   chainId?: string;
@@ -313,7 +313,7 @@ export type NoOpRearmRecordInput = {
   outcome?: NoOpRearmTurnOutcome;
 };
 
-export type NoOpRearmGuardOptions = {
+type NoOpRearmGuardOptions = {
   threshold?: number;
   windowMs?: number;
   now?: () => number;

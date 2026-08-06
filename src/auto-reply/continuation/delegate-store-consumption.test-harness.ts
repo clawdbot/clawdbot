@@ -5,7 +5,7 @@ import {
   consumePendingDelegates,
   enqueuePendingDelegate,
   markPendingDelegateFailed,
-  peekSoonestUnmaturedDelegateDueAt,
+  peekEarliestQueuedDelegateDueAt,
   pendingDelegateCount,
 } from "./delegate-store.js";
 
@@ -57,9 +57,9 @@ export function registerDelegateStoreConsumptionSuite(params: {
     });
   });
 
-  describe("peekSoonestUnmaturedDelegateDueAt", () => {
+  describe("peekEarliestQueuedDelegateDueAt", () => {
     it("returns undefined when no entries are queued", () => {
-      expect(peekSoonestUnmaturedDelegateDueAt("empty")).toBeUndefined();
+      expect(peekEarliestQueuedDelegateDueAt("empty")).toBeUndefined();
     });
 
     describe("markPendingDelegateFailed", () => {
@@ -79,9 +79,13 @@ export function registerDelegateStoreConsumptionSuite(params: {
       });
     });
 
-    it("returns undefined when all queued entries are already due", () => {
+    it("returns an already-due deadline so callers can arm an immediate hedge", () => {
+      const before = Date.now();
       enqueuePendingDelegate("session-1", { task: "due", delayMs: 0 });
-      expect(peekSoonestUnmaturedDelegateDueAt("session-1")).toBeUndefined();
+      const earliest = peekEarliestQueuedDelegateDueAt("session-1");
+      expect(earliest).toBeDefined();
+      expect(earliest!).toBeGreaterThanOrEqual(before);
+      expect(earliest!).toBeLessThanOrEqual(Date.now());
     });
 
     it("returns the soonest dueAt across multiple unmatured entries", () => {
@@ -90,7 +94,7 @@ export function registerDelegateStoreConsumptionSuite(params: {
       enqueuePendingDelegate("session-1", { task: "near", delayMs: 30_000 });
       enqueuePendingDelegate("session-1", { task: "mid", delayMs: 60_000 });
 
-      const soonest = peekSoonestUnmaturedDelegateDueAt("session-1");
+      const soonest = peekEarliestQueuedDelegateDueAt("session-1");
       expect(soonest).toBeDefined();
       expect(soonest!).toBeGreaterThanOrEqual(before + 30_000);
       expect(soonest!).toBeLessThan(before + 30_000 + 5_000);

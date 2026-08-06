@@ -17,7 +17,7 @@ export const POST_COMPACTION_DELEGATE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * authoritative; `createdAt` is the legacy fallback for rows staged before the
  * field existed, and an absent pair reads as freshly armed rather than ancient.
  */
-export type PostCompactionArmedWork = {
+type PostCompactionArmedWork = {
   firstArmedAt?: number;
   createdAt?: number;
 };

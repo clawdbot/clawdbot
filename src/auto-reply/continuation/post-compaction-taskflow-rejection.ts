@@ -5,7 +5,7 @@ import {
 } from "./delegate-flow-store.js";
 import { markPendingDelegateFailed } from "./delegate-store.js";
 
-export type RejectablePostCompactionDelegate = {
+type RejectablePostCompactionDelegate = {
   flowId?: string;
   expectedRevision?: number;
   task: string;

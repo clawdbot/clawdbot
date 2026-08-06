@@ -1178,6 +1178,18 @@ describe("resolveSlackAttachmentContent", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("preserves forwarded file identities when downloads fail", async () => {
+    const file = { id: "FFORWARD", name: "forwarded-report.pdf" };
+    const result = await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, files: [file] }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual({ text: "", media: [], files: [file] });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("skips forwarded image URLs on non-Slack hosts", async () => {
     const result = await resolveSlackAttachmentContent({
       attachments: [{ is_share: true, image_url: "https://example.com/forwarded.jpg" }],

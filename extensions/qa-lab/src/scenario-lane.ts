@@ -102,6 +102,7 @@ export function describeQaProviderLaneMismatches(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  supportsModuleFlows?: boolean;
 }) {
   const mismatches: string[] = [];
   const config = params.scenario.execution.config ?? {};
@@ -126,6 +127,17 @@ export function describeQaProviderLaneMismatches(params: {
     params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
   if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
     mismatches.push(`channel=${allowedChannels.join("|")}`);
+  }
+  if (
+    params.scenario.execution.kind === "flow" &&
+    params.scenario.execution.flowKind === "module" &&
+    params.supportsModuleFlows !== true
+  ) {
+    const implementation =
+      effectiveChannel && effectiveChannel !== effectiveChannelDriver
+        ? `${effectiveChannelDriver}:${effectiveChannel}`
+        : effectiveChannelDriver;
+    mismatches.push(`module flow unsupported by implementation=${implementation}`);
   }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);

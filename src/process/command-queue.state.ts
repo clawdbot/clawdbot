@@ -36,7 +36,7 @@ export type LaneState = {
   generation: number;
 };
 
-export type ActiveTaskWaiter = {
+type ActiveTaskWaiter = {
   activeTaskIds: Set<number>;
   resolve: (value: { drained: boolean }) => void;
   timeout?: ReturnType<typeof setTimeout>;

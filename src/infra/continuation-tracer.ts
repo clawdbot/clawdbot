@@ -4,7 +4,7 @@
 // install an adapter see no behavior change, and diagnostics plugins can wire a
 // concrete exporter without changing continuation call sites.
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   formatDiagnosticTraceparent,
@@ -492,7 +492,7 @@ export function resolveContinuationTraceparent(
   return parsed ? formatContinuationTraceparent(parsed) : undefined;
 }
 
-export type ContinuationDelegateSpanArgs = {
+type ContinuationDelegateSpanArgs = {
   chainId: string | undefined;
   chainStepRemaining: number;
   delayMs: number;
@@ -1004,64 +1004,5 @@ export function emitContinuationCompactionReleasedSpan(args: {
     span.end();
   } catch (err) {
     args.log?.(`Failed to emit continuation.compaction.released span: ${String(err)}`);
-  }
-}
-
-/**
- * Emit a `heartbeat` span at the runtime heartbeat-poll cadence. Heartbeats fire on poll cadence regardless of
- * whether continuation context is present, but the span only emits in
- * production when continuation context is present.
- *
- * Span shape:
- *  - `signal.kind` = `"heartbeat"` (always)
- *  - `heartbeat.id` (always; auto-minted via `crypto.randomUUID()` if
- *    omitted by caller)
- *  - `chain.id` (omitted iff `chainId` is `undefined`)
- *  - `chain.step.remaining` (omitted iff `chainStepRemaining` is
- *    `undefined`; otherwise clamped via `Math.max(0, ...)` matching
- *    `emitContinuationWorkSpan` discipline)
- *  - `continuation.disabled` (omitted iff `disabledReason` is `undefined`;
- *    set to `true` whenever `disabledReason` is supplied)
- *  - `disabled.reason` (omitted iff `disabledReason` is `undefined`;
- *    otherwise the supplied gate-axis string)
- *
- * Negative assertions:
- *  - `delay.ms` MUST NOT appear — heartbeats fire on cadence, not
- *    caller-elected delay
- *  - `chain.step.remaining_at_dispatch` is NOT a heartbeat axis —
- *    heartbeats are snapshot-by-nature; the canonical attr is
- *    `chain.step.remaining`
- *
- * Wraps tracer interactions in a try/catch and logs via the caller's
- * `log` callback if provided — the heartbeat path must never block on
- * span emission.
- */
-export function emitContinuationHeartbeatSpan(args: {
-  heartbeatId?: string;
-  chainId?: string;
-  chainStepRemaining?: number;
-  disabledReason?: string;
-  log?: (message: string) => void;
-}): void {
-  try {
-    const heartbeatId = args.heartbeatId ?? randomUUID();
-    const continuationDisabled = args.disabledReason !== undefined;
-    const attrs: ContinuationSpanAttrs = {
-      "signal.kind": "heartbeat",
-      "heartbeat.id": heartbeatId,
-      ...(args.chainId !== undefined && { "chain.id": args.chainId }),
-      ...(args.chainStepRemaining !== undefined && {
-        "chain.step.remaining": Math.max(0, args.chainStepRemaining),
-      }),
-      ...(continuationDisabled && {
-        "continuation.disabled": true,
-        "disabled.reason": args.disabledReason,
-      }),
-    };
-    const span = getContinuationTracer().startSpan("heartbeat", { attributes: attrs });
-    span.setStatus("OK");
-    span.end();
-  } catch (err) {
-    args.log?.(`Failed to emit heartbeat span: ${String(err)}`);
   }
 }

@@ -16,15 +16,8 @@
 // `auto-reply/continuation/lazy.runtime` in `tsdown.config.ts`.
 
 export { resolveContinuationRuntimeConfig } from "./config.js";
-export { checkContextPressure, clearContextPressureState } from "./context-pressure.js";
 export { dispatchToolDelegates } from "./delegate-dispatch.js";
-export { scheduleContinuationWork, scheduleContinuationWorkBatch } from "./work-dispatch.js";
+export { scheduleContinuationWorkBatch } from "./work-dispatch.js";
 export { pendingDelegateCount } from "./delegate-store.js";
-export {
-  assertStagedPostCompactionFinalizationComplete,
-  claimStagedPostCompactionTaskFlowDelegates,
-  finalizeStagedPostCompactionDelegates,
-  stagedPostCompactionDelegateCount,
-} from "./delegate-store-post-compaction.js";
-export { hasLiveOrRecentlyDispatchedContinuationWork } from "./work-store.js";
-export { loadContinuationChainState, persistContinuationChainState } from "./state.js";
+export { stagedPostCompactionDelegateCount } from "./delegate-store-post-compaction.js";
+export { loadContinuationChainState } from "./state.js";

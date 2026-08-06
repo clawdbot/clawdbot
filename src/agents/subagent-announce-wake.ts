@@ -27,9 +27,9 @@ const log = createSubsystemLogger("agents/subagent-announce-wake");
  * never proven stopped, so the caller must keep child-session ownership instead of
  * treating the failed wake as a clean no-op.
  */
-export type SubagentDescendantWakeOutcome = "woke" | "not-woken" | "termination-unconfirmed";
+type SubagentDescendantWakeOutcome = "woke" | "not-woken" | "termination-unconfirmed";
 
-export type SubagentDescendantWakeDeps = {
+type SubagentDescendantWakeDeps = {
   callGateway: typeof import("../gateway/call.js").callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;

@@ -1,4 +1,4 @@
-export const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
+const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
 
 export function internalProtocolField<T extends object>(schema: T): T {
   Object.defineProperty(schema, INTERNAL_PROTOCOL_FIELD, {
@@ -8,7 +8,7 @@ export function internalProtocolField<T extends object>(schema: T): T {
   return schema;
 }
 
-export function isInternalProtocolField(schema: unknown): boolean {
+function isInternalProtocolField(schema: unknown): boolean {
   return (
     typeof schema === "object" &&
     schema !== null &&

@@ -39,7 +39,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 
 const OPENCLAW_ENV_PREFIX = "OPENCLAW_";
 
-export interface HermeticOpenclawEnvOptions {
+interface HermeticOpenclawEnvOptions {
   /**
    * `OPENCLAW_*` keys to leave untouched. Use for tests that set state-dir,
    * config-path, or other workspace-rooting vars in `beforeAll` and rely on

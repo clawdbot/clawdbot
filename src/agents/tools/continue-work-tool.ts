@@ -29,7 +29,7 @@ const ContinueWorkToolSchema = Type.Object({
   ),
 });
 
-export type ContinueWorkToolOpts = {
+type ContinueWorkToolOpts = {
   agentSessionKey?: string;
   requestContinuation: (request: ContinueWorkRequest) => void;
 };

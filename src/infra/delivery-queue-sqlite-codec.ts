@@ -1,4 +1,4 @@
-export type DeliveryQueueCompletionRetention =
+type DeliveryQueueCompletionRetention =
   | "permanent"
   | Readonly<{
       idPrefix: string;
@@ -16,7 +16,7 @@ export type DeliveryQueueRowMetadata = {
 };
 
 /** Persisted queue entry fields common to all delivery queue payloads. */
-export type DeliveryQueueEntryState = {
+type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
@@ -48,7 +48,7 @@ export type DeliveryQueueSqliteRow = {
   recovery_state: string | null;
 };
 
-export type CorruptDeliveryQueueEntry = {
+type CorruptDeliveryQueueEntry = {
   id: string;
   entryKind?: string;
   enqueuedAt: number;
@@ -107,28 +107,5 @@ export function inflateDeliveryQueueEntryResult(
       retryCount: Number(row.retry_count),
     },
     entryJson: row.entry_json,
-  };
-}
-
-export function extractDeliveryQueueMetadata(
-  queueName: string,
-  entry: DeliveryQueueEntryState,
-): DeliveryQueueRowMetadata {
-  const item = entry as DeliveryQueueEntryState & {
-    kind?: string;
-    sessionKey?: string;
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    session?: { key?: string };
-    route?: { channel?: string; to?: string; accountId?: string };
-    deliveryContext?: { channel?: string; to?: string; accountId?: string };
-  };
-  return {
-    entryKind: item.kind ?? queueName,
-    sessionKey: item.sessionKey ?? item.session?.key,
-    channel: item.channel ?? item.route?.channel ?? item.deliveryContext?.channel,
-    target: item.to ?? item.route?.to ?? item.deliveryContext?.to,
-    accountId: item.accountId ?? item.route?.accountId ?? item.deliveryContext?.accountId,
   };
 }

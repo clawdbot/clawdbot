@@ -32,7 +32,7 @@ export const ALLOWED_MIME_PATTERNS = [
   "application/zip",
 ] as const;
 
-export type DelegateArtifactModeV1 = "forbidden" | "optional" | "required";
+type DelegateArtifactModeV1 = "forbidden" | "optional" | "required";
 
 export type DelegateArtifactRecipientV1 = {
   sessionKey: string;
@@ -64,7 +64,7 @@ export type DelegateArtifactPolicyV1 = {
   route: DelegateArtifactRouteV1;
 };
 
-export type DelegateArtifactClaim = {
+type DelegateArtifactClaim = {
   claimId: string;
   flowId: string;
   type: string;
@@ -83,7 +83,7 @@ export type DelegateArtifactSummaryV1 = Pick<
   download: { mode: "unsupported" };
 };
 
-export type DelegateArtifactArrivalContextV1 = {
+type DelegateArtifactArrivalContextV1 = {
   deliveryClass: "delegate result" | "inter-session enrichment";
   deliveryMode: "announced" | "silent";
   dispatchId: string;
@@ -114,7 +114,7 @@ export type DelegateArtifactOperationOutcome =
   | "corrupt"
   | "unauthorized";
 
-export type DelegateArtifactDatabase = {
+type DelegateArtifactDatabase = {
   delegate_artifact_policies: {
     flow_id: string;
     producer_session_key: string;
@@ -203,8 +203,8 @@ export type DelegateArtifactDatabase = {
   };
 };
 
-export type PolicyRow = DelegateArtifactDatabase["delegate_artifact_policies"];
-export type ClaimRow = DelegateArtifactDatabase["delegate_artifact_claims"];
+type PolicyRow = DelegateArtifactDatabase["delegate_artifact_policies"];
+type ClaimRow = DelegateArtifactDatabase["delegate_artifact_claims"];
 type DelegateArtifactDatabaseHandle = OpenClawStateDatabase["db"];
 
 function hasControlCharacter(value: string): boolean {

@@ -17,7 +17,7 @@
  */
 import { vi } from "vitest";
 
-export type MockTaskFlowRecord = {
+type MockTaskFlowRecord = {
   flowId: string;
   syncMode: "managed";
   ownerKey: string;

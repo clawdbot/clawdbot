@@ -24,12 +24,12 @@ import {
   type DelegateArtifactRouteV1,
 } from "./delegate-artifact-store.js";
 
-export type DelegateArtifactPublicationCandidate = {
+type DelegateArtifactPublicationCandidate = {
   bytes: Uint8Array;
   mimeType: string;
 };
 
-export type DelegateArtifactPublicationResult =
+type DelegateArtifactPublicationResult =
   | { status: "published"; count: number }
   | {
       status: "rejected";
@@ -180,7 +180,7 @@ export function publishDelegateArtifactCandidates(params: {
   );
 }
 
-export type DelegateArtifactFinalizeResult =
+type DelegateArtifactFinalizeResult =
   | { status: "not-configured" }
   | { status: "deferred" }
   | {

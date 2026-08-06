@@ -2377,6 +2377,32 @@ describe("handleMessageEnd", () => {
     }
   });
 
+  it("preserves real-parser NO_REPLY as terminal evidence without channel delivery", () => {
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const accumulator = createStreamingDirectiveAccumulator();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      finalizeAssistantTexts,
+      consumeReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+        accumulator.consume(text, options),
+      ),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void endMessage(ctx, {
+      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    });
+
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "counts a completed provider assistant message",
