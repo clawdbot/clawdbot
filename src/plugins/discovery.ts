@@ -828,18 +828,6 @@ export function resolveMaterializableInstalledPluginRecords(params: {
   return materializableInstallRecords;
 }
 
-/** Returns whether any installed record can cross the manifest registry materialization boundary. */
-export function hasMaterializableInstalledPluginRecords(params: {
-  installRecords?: Record<string, PluginInstallRecord>;
-  existingPluginIds?: readonly string[];
-  configuredLoadPaths?: readonly string[];
-  ownershipUid?: number | null;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  return Object.keys(resolveMaterializableInstalledPluginRecords(params)).length > 0;
-}
-
 function isManagedPluginDir(params: {
   dir: string;
   realpath?: string;
