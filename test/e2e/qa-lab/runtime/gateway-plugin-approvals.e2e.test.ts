@@ -181,7 +181,9 @@ describe("gateway plugin approvals QA", () => {
         .finally(() => {
           waitSettled = true;
         });
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
       expect(waitSettled).toBe(false);
 
       markStage("reviewer resolve");

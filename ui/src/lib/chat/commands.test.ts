@@ -1,4 +1,4 @@
-import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";

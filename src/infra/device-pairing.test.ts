@@ -118,10 +118,6 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 const requireRecord = createRequireRecord("record", "message");
 
 function expectRecordFields(

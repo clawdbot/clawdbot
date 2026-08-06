@@ -177,10 +177,6 @@ async function withSymlinkPathEscape<T>(params: {
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {

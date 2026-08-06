@@ -248,10 +248,6 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 describe("update_plan progress events", () => {
   it("emits the typed full plan snapshot after a successful result", async () => {
     const { ctx, onAgentEvent } = createTestContext();

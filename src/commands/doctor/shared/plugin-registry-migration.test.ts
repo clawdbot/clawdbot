@@ -80,10 +80,6 @@ function createCurrentIndex(): InstalledPluginIndex {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {

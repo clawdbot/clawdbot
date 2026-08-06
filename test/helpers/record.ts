@@ -23,7 +23,10 @@ type LabeledRecordRequirementMessage = Exclude<
   FixedRecordRequirementMessage
 >;
 
-function recordRequirementError(message: RecordRequirementMessage, label?: string): string {
+function recordRequirementError(
+  message: RecordRequirementMessage,
+  label?: string,
+): string | undefined {
   switch (message) {
     case "expected-label":
       return `expected ${label}`;
@@ -50,6 +53,7 @@ function recordRequirementError(message: RecordRequirementMessage, label?: strin
     case "message":
       return label ?? "expected record";
   }
+  return undefined;
 }
 
 export function createRequireRecord(
