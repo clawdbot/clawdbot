@@ -8,7 +8,6 @@ import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/se
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
-  captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
