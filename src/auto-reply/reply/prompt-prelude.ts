@@ -197,17 +197,12 @@ export function buildReplyPromptEnvelopeBase(
   const softResetTail = params.softResetTail?.trim() ?? "";
   const isRoomEvent = params.inboundEventKind === "room_event";
   const inboundUserContext = params.inboundUserContext.trim();
-  const roomEventContext = buildRoomEventContext(params, inboundUserContext);
   const resumableRoomEventContext = isRoomEvent
     ? buildRoomEventContext(params, buildResumableRoomContext(inboundUserContext))
     : undefined;
-  const userRequestDeliveryDirective = resolvePerTurnDeliveryDirective({
-    inboundEventKind: params.inboundEventKind,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-  });
   const currentInboundContextText = isRoomEvent
-    ? roomEventContext
-    : [inboundUserContext, userRequestDeliveryDirective].filter(Boolean).join("\n\n");
+    ? buildRoomEventContext(params, inboundUserContext)
+    : [inboundUserContext, resolvePerTurnDeliveryDirective(params)].filter(Boolean).join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
