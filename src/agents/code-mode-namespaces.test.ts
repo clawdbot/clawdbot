@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   createCodeModeNamespaceRuntime,
@@ -167,11 +166,7 @@ describe("Code Mode MCP namespace model", () => {
   });
 
   it("does not split UTF-16 surrogate pairs in node display names at the 128-char boundary", () => {
-    // 127 ASCII code units + one supplementary character (2 UTF-16 code units) = 129 units.
-    // A naive .slice(0, 128) keeps the high surrogate and drops the low surrogate,
-    // producing a lone surrogate in the model-facing system prompt.
-    const emoji = "\uD83D\uDCF1"; // 📱 U+1F4F1
-    const displayName = "a".repeat(127) + emoji;
+    const displayName = `${"a".repeat(127)}\uD83D\uDCF1`;
     const catalog = [
       mcpCatalogEntry({
         id: "github__read_file",
@@ -179,12 +174,8 @@ describe("Code Mode MCP namespace model", () => {
       }),
     ];
     const prompt = describeCodeModeNamespacesForPrompt(catalog);
-    // The prompt should mention the node label without a dangling high surrogate.
-    const labelMatch = prompt.match(/\(node: (.+)\)/);
-    expect(labelMatch).not.toBeNull();
-    const label = expectDefined(labelMatch?.[1], "node label capture group");
-    // No lone high surrogate at the end: the emoji must be fully present or fully absent.
-    expect(label.endsWith("\uD83D")).toBe(false);
-    expect(label.length).toBe(127);
+
+    expect(prompt).toContain(`visible servers: github (node: ${"a".repeat(127)}).`);
+    expect(prompt).not.toContain("\uD83D");
   });
 });
