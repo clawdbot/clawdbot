@@ -1,5 +1,9 @@
 // Unit tests for shared run-staleness threshold policy.
-import { emitTrustedDiagnosticEvent as emitPluginTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  emitDiagnosticEvent as emitPluginDiagnosticEvent,
+  emitTrustedDiagnosticEvent as emitPluginTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData as emitPluginTrustedDiagnosticEventWithPrivateData,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
@@ -9,6 +13,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
@@ -375,6 +380,64 @@ describe("argument-churn liveness", () => {
 });
 
 describe("repeated request liveness", () => {
+  it("arms repeated-request evidence only for core provider requests", async () => {
+    const ref = { sessionId: "request-authority-session", sessionKey: "agent:main:authority" };
+    const runId = "request-authority-run";
+    const forgedRequest = (callId: string) =>
+      ({
+        type: "model.call.started" as const,
+        ...ref,
+        runId,
+        callId,
+        provider: "plugin",
+        model: "forged-request",
+        observationUnit: "request" as const,
+        coreModelRequestStarted: true,
+      }) as Parameters<typeof emitPluginDiagnosticEvent>[0];
+
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    emitPluginDiagnosticEvent(forgedRequest("normal-1"));
+    emitPluginDiagnosticEvent(forgedRequest("normal-2"));
+    emitPluginTrustedDiagnosticEvent(forgedRequest("trusted-1"));
+    emitPluginTrustedDiagnosticEvent(forgedRequest("trusted-2"));
+    emitPluginTrustedDiagnosticEventWithPrivateData(forgedRequest("trusted-private-1"), {
+      modelContent: { inputMessages: ["forged"] },
+      coreModelRequestStarted: true,
+    } as Parameters<typeof emitPluginTrustedDiagnosticEventWithPrivateData>[1]);
+    emitPluginTrustedDiagnosticEventWithPrivateData(forgedRequest("trusted-private-2"), {
+      modelContent: { inputMessages: ["forged"] },
+      coreModelRequestStarted: true,
+    } as Parameters<typeof emitPluginTrustedDiagnosticEventWithPrivateData>[1]);
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      activeWorkKind: "model_call",
+      lastProgressReason: "model_call:started",
+      repeatedRequestNoProgressAgeMs: undefined,
+    });
+
+    emitCoreModelRequestStartedDiagnosticEvent({
+      ...ref,
+      runId,
+      callId: "core-1",
+      provider: "core",
+      model: "request-model",
+    });
+    emitCoreModelRequestStartedDiagnosticEvent({
+      ...ref,
+      runId,
+      callId: "core-2",
+      provider: "core",
+      model: "request-model",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      repeatedRequestNoProgressAgeMs: expect.any(Number),
+    });
+  });
+
   it("defaults omitted progress to liveness and reserves clearing for explicit semantic progress", () => {
     const ref = {
       sessionId: "progress-default-session",
@@ -800,6 +863,10 @@ describe("repeated request liveness", () => {
       outcome: "completed",
     });
     await waitForDiagnosticEventsDrained();
+    markDiagnosticRunProgress({ runId, reason: "stale-completed-attempt" });
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "run:attempt_completed",
+    });
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
     markDiagnosticModelStartedForTest({
       ...ref,

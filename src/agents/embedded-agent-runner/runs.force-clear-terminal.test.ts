@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createReplyOperation,
@@ -94,6 +94,79 @@ describe("force-clear terminal state persistence", () => {
     });
     await Promise.resolve();
     expect(followupObservedActiveHandle).toEqual([false]);
+  });
+
+  it("force-clears exact owners before releasing followups after cancel throws", async () => {
+    const sessionKey = "agent:main:reply-cancel-throws";
+    const sessionId = "session-reply-cancel-throws";
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    const handle = createRunHandle({
+      abort: () => {
+        throw new Error("cancel failed");
+      },
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: handle.abort,
+      isStreaming: handle.isStreaming,
+    });
+    operation.setPhase("running");
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+    const followupObservedActiveHandle: boolean[] = [];
+    runAfterReplyOperationClear(operation, () => {
+      followupObservedActiveHandle.push(isEmbeddedAgentRunHandleActive(sessionId));
+    });
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 20,
+    });
+
+    expect(result).toEqual({ aborted: false, drained: false, forceCleared: true });
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
+    await vi.waitFor(() => {
+      expect(followupObservedActiveHandle).toEqual([false]);
+    });
+  });
+
+  it("force-clears a throwing reply backend without an embedded handle", async () => {
+    const sessionKey = "agent:main:reply-only-cancel-throws";
+    const sessionId = "session-reply-only-cancel-throws";
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {
+        throw new Error("cancel failed");
+      },
+      isStreaming: () => true,
+    });
+    operation.setPhase("running");
+
+    const followupObservedActiveOwner: boolean[] = [];
+    runAfterReplyOperationClear(operation, () => {
+      followupObservedActiveOwner.push(isReplyRunActiveForSessionId(sessionId));
+    });
+
+    const result = await abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
+      reason: "stuck_recovery",
+      forceClear: true,
+      settleMs: 20,
+    });
+
+    expect(result).toEqual({ aborted: false, drained: false, forceCleared: true });
+    expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
+    await vi.waitFor(() => {
+      expect(followupObservedActiveOwner).toEqual([false]);
+    });
   });
 
   it("persists killed status after a force-cleared run", async () => {

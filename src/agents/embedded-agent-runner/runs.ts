@@ -895,8 +895,10 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
       afterClearBarrier: staleExpiryBarrier,
       followupAdmissionBarrierTimeout: settleMs + 1_000,
     });
+  const stampedStaleReplyRun =
+    params.reason === "stuck_recovery" && replyOperation?.staleExpiryReason === "stuck_recovery";
   const waitForExpiredOwnerSettlement = async () => {
-    if (!expiredReplyRun || !replyOperation) {
+    if (!stampedStaleReplyRun || !replyOperation) {
       return true;
     }
     const settled = await waitForReplyOperationOwnerSettlement(
@@ -933,7 +935,8 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
         ? tryLoadForceClearSessionSnapshot(params.sessionKey)
         : undefined;
     const forceCleared =
-      params.forceClear === true && (!aborted || !drained)
+      params.forceClear === true &&
+      ((!expiredReplyRun && stampedStaleReplyRun) || !aborted || !drained)
         ? forceClearEmbeddedAgentRun(
             params.sessionId,
             embeddedRunHandle,

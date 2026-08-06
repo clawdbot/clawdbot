@@ -357,13 +357,19 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     );
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
 
+    const repeatedRequestAges: Array<number | undefined> = [];
     for (let index = 0; index < 4; index += 1) {
       const observed = wrapped({} as never, {} as never, {} as never) as unknown as {
         result: () => Promise<unknown>;
       };
       await observed.result();
+      await waitForDiagnosticEventsDrained();
+      repeatedRequestAges.push(
+        getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+      );
     }
-    await waitForDiagnosticEventsDrained();
+
+    expect(repeatedRequestAges).toEqual([undefined, expect.any(Number), undefined, undefined]);
 
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       hasActiveEmbeddedRun: true,

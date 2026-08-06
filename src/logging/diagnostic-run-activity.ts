@@ -4,6 +4,7 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { isCoreModelRequestStartedDiagnosticMetadata } from "../infra/diagnostic-model-request.js";
 import { isCoreSemanticRunProgressDiagnosticMetadata } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   applyArgumentChurnObservation,
@@ -70,7 +71,7 @@ type DiagnosticToolStartedActivityEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
 > & { seq?: number };
 
-type DiagnosticModelStartedActivityEvent = Pick<
+type ModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
   "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "observationUnit"
 > & { seq?: number };
@@ -262,10 +263,7 @@ function modelCallKey(event: { runId?: string; provider?: string; model?: string
 
 function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   const activity = resolveSessionActivity({ ...event, create: true });
-  if (!activity) {
-    return;
-  }
-  if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
+  if (!activity || shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
   }
   const now = Date.now();
@@ -296,7 +294,7 @@ function recordToolEnded(
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
 }
 
-function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
+function recordModelStarted(event: ModelStartedActivityEvent, coreRequest: boolean): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
@@ -304,7 +302,9 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
   }
-  recordRepeatedRequestObservation(activity, activity.activeEmbeddedRuns.values(), event);
+  if (coreRequest) {
+    recordRepeatedRequestObservation(activity, activity.activeEmbeddedRuns.values(), event);
+  }
   activity.activeModelCalls.set(modelCallKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
@@ -361,11 +361,11 @@ function recordRunCompleted(
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
+  activityByRunId.delete(event.runId);
   if (activity.repeatedRequestOwnerRunId === event.runId) {
-    touchSessionActivity(activity, "run:attempt_completed"); // This run id re-arms after retries.
+    touchSessionActivity(activity, "run:attempt_completed"); // Session evidence survives retry re-arm.
     return;
   }
-  activityByRunId.delete(event.runId);
   embeddedRunIndex.clear(activity);
   clearArgumentChurnActivity(activity, { runId: event.runId });
   clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
@@ -708,8 +708,8 @@ function markDiagnosticToolStartedForTest(params: {
   recordToolStarted(params);
 }
 
-function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void {
-  recordModelStarted(params);
+function markDiagnosticModelStartedForTest(params: ModelStartedActivityEvent): void {
+  recordModelStarted(params, true);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {
@@ -750,7 +750,7 @@ export function startDiagnosticRunActivityTracking(): void {
         recordToolEnded(event);
         return;
       case "model.call.started":
-        recordModelStarted(event);
+        recordModelStarted(event, isCoreModelRequestStartedDiagnosticMetadata(metadata));
         return;
       case "model.call.completed":
       case "model.call.error":

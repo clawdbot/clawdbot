@@ -629,6 +629,7 @@ export function createReplyOperation(params: {
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
   let clearBarrierSettlement: Promise<void> | undefined;
+  let pendingClearBarrier: ReplyRunFollowupAdmissionBarrier | undefined;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
@@ -682,7 +683,8 @@ export function createReplyOperation(params: {
           afterClearBarrier,
           followupAdmissionBarrierTimeout,
         )
-      : undefined;
+      : pendingClearBarrier;
+    pendingClearBarrier = undefined;
     updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
     markReplyRunDiagnosticProgress({
       sessionKey: currentSessionKey,
@@ -959,13 +961,16 @@ export function createReplyOperation(params: {
         phase = "completed";
       }
       const wasAlreadyCleared = stateCleared;
+      const ownerCompletionSettlement = pendingClearBarrier
+        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
+        : undefined;
       clearState(barrier, timeoutMs);
       // This barrier owns dispatch delivery and terminal persistence. Stale
       // expiry may have already cleared the slot, but recovery must still wait
       // for that old owner's durable work before admitting a queued turn.
       const completionSettlement = wasAlreadyCleared
         ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : clearBarrierSettlement;
+        : (ownerCompletionSettlement ?? clearBarrierSettlement);
       if (completionSettlement) {
         void completionSettlement.then(settleOwner);
       } else {
@@ -1040,17 +1045,43 @@ export function createReplyOperation(params: {
       setResult({ kind: "failed", code: "run_stalled" });
       phase = "failed";
     }
-    // Install the recovery fence before backend cancellation. Cancel can
-    // synchronously re-enter complete(), which must not flush queued turns
-    // while the old lifecycle owner is still finalizing.
-    clearState(options?.afterClearBarrier, options?.followupAdmissionBarrierTimeout);
-    getAttachedBackend(operation)?.cancel("superseded");
+    const logStaleTakeoverRelease = () => {
+      diag.warn(
+        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+          result,
+        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+      );
+    };
+    if (options?.afterClearBarrier) {
+      // Prepare the recovery fence before cancellation, but retain exact lane
+      // ownership until cancel returns or the backend re-enters completion.
+      pendingClearBarrier = registerFollowupAdmissionBarrier(
+        currentSessionKey,
+        currentSessionId,
+        options.afterClearBarrier,
+        options.followupAdmissionBarrierTimeout,
+      );
+    }
+    let cancelFailed = false;
+    try {
+      getAttachedBackend(operation)?.cancel("superseded");
+    } catch (error) {
+      cancelFailed = true;
+      diag.warn(
+        `reply run stale takeover cancel failed: sessionKey=${currentSessionKey} reason=${reason} owner=${stateCleared ? "completed" : "retained"} error=${String(error)}`,
+      );
+    }
     abortInternally(createAbortError("Reply operation expired as stale"));
-    diag.warn(
-      `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-        result,
-      )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-    );
+    if (stateCleared) {
+      logStaleTakeoverRelease();
+      return true;
+    }
+    if (cancelFailed) {
+      scheduleTerminalSettle();
+      return false;
+    }
+    clearState();
+    logStaleTakeoverRelease();
     return true;
   });
   const finalizationLease = replyRunSettle.createReplyRunFinalizationLease({

@@ -22,6 +22,7 @@ import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
+import { emitCoreModelRequestStartedDiagnosticEvent } from "../../../infra/diagnostic-model-request.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
 import {
   createChildDiagnosticTraceContext,
@@ -621,9 +622,8 @@ function emitModelCallStarted(
   modelContent: DiagnosticModelCallContent | undefined,
   suppressPluginHooks: boolean,
 ): void {
-  emitTrustedDiagnosticEventWithPrivateData(
+  emitCoreModelRequestStartedDiagnosticEvent(
     {
-      type: "model.call.started",
       ...eventBase,
     },
     modelContentPrivateData(modelContent),

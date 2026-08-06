@@ -8,6 +8,10 @@ import {
   getAgentRunExecutionLifecycleGeneration,
 } from "./agent-run-execution-context.js";
 import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
+import {
+  consumeCoreModelRequestStartedDiagnosticEvent,
+  CORE_MODEL_REQUEST_STARTED_METADATA_KEY,
+} from "./diagnostic-model-request-provenance.js";
 import { isTrustedOtelDiagnosticListener } from "./diagnostic-otel-listener-provenance.js";
 import { consumeHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage-provenance.js";
 import {
@@ -875,6 +879,7 @@ export type DiagnosticEventMetadata = Readonly<{
 
 type InternalDiagnosticEventMetadata = DiagnosticEventMetadata &
   Readonly<{
+    [CORE_MODEL_REQUEST_STARTED_METADATA_KEY]?: boolean;
     // String metadata survives duplicate module instances sharing dispatcher state;
     // only the non-SDK core emitter can set this semantic authority.
     [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]?: boolean;
@@ -1318,6 +1323,7 @@ function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMeta
 
 type EmitDiagnosticEventOptions = {
   allowSecurityEvent?: boolean;
+  coreModelRequestStarted?: boolean;
   coreSemanticRunProgress?: boolean;
   hostPluginId?: string;
   internal?: boolean;
@@ -1346,6 +1352,9 @@ function emitDiagnosticEventWithTrust(
   const trustedTraceContext = options.trustedTraceContext === true;
   const metadata: InternalDiagnosticEventMetadata = {
     ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
+    ...(options.coreModelRequestStarted === true
+      ? { [CORE_MODEL_REQUEST_STARTED_METADATA_KEY]: true }
+      : {}),
     ...(options.coreSemanticRunProgress === true
       ? { [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]: true }
       : {}),
@@ -1489,8 +1498,9 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   event: DiagnosticEventInput,
   privateData?: DiagnosticEventPrivateData,
 ) {
+  const coreModelRequestStarted = consumeCoreModelRequestStartedDiagnosticEvent(event);
   if (!privateData || !Object.hasOwn(privateData, "hostPluginId")) {
-    emitDiagnosticEventWithTrust(event, true, { privateData });
+    emitDiagnosticEventWithTrust(event, true, { coreModelRequestStarted, privateData });
     return;
   }
   // Plugin-facing emitters may provide trusted private content, but host attribution
@@ -1500,6 +1510,7 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   } as Record<string, unknown>;
   delete sanitized.hostPluginId;
   emitDiagnosticEventWithTrust(event, true, {
+    coreModelRequestStarted,
     privateData: sanitized as DiagnosticEventPrivateData,
   });
 }
