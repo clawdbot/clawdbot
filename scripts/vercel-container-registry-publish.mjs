@@ -19,12 +19,9 @@ function requireImageName(value, label) {
   return normalized;
 }
 
-/** Build the immutable tag-copy plan for one stable release. */
+/** Build the immutable tag-copy plan for one Docker release. */
 export function createVercelContainerRegistryPublishPlan({ version, sourceImage, targetImage }) {
   const policy = resolveDockerReleasePolicy(version);
-  if (policy.channel === "beta") {
-    throw new Error("Vercel Container Registry publishing is disabled for beta releases.");
-  }
   const source = requireImageName(sourceImage, "Source image");
   const target = requireImageName(targetImage, "Target image");
   const copies = [];

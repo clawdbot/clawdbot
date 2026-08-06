@@ -918,7 +918,7 @@ jobs:
   publish-vcr:
     name: Publish Vercel Container Registry images
     needs: [resolve_release_policy, verify-attestations]
-    if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.resolve_release_policy.outputs.channel != 'beta' && needs.verify-attestations.result == 'success' }}
+    if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.verify-attestations.result == 'success' }}
     uses: ./.github/workflows/vercel-container-registry-publish.yml
     with:
       version: ${{ needs.resolve_release_policy.outputs.version }}

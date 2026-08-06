@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable or extended-stable release tag
+        description: Existing Docker release tag
         required: true
         type: string
       publish_target:

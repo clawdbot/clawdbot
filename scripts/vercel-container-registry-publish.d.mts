@@ -1,5 +1,5 @@
 export type VercelContainerRegistryPublishPlan = {
-  channel: "stable" | "extended-stable";
+  channel: "stable" | "extended-stable" | "beta";
   copies: Array<{ sourceRef: string; targetRef: string; targetTag: string }>;
   readinessTags: string[];
   sourceImage: string;

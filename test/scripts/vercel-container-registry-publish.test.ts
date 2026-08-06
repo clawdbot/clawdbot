@@ -50,6 +50,7 @@ describe("Vercel Container Registry publishing", () => {
   it.each([
     ["stable", "2026.7.2"],
     ["extended-stable", "2026.6.33"],
+    ["beta", "2026.7.2-beta.1"],
   ])("plans the full immutable %s image set", (channel, version) => {
     const plan = createVercelContainerRegistryPublishPlan({
       sourceImage,
@@ -72,14 +73,7 @@ describe("Vercel Container Registry publishing", () => {
     ]);
   });
 
-  it("rejects beta releases and tagged image names", () => {
-    expect(() =>
-      createVercelContainerRegistryPublishPlan({
-        sourceImage,
-        targetImage,
-        version: "2026.7.2-beta.1",
-      }),
-    ).toThrow("disabled for beta releases");
+  it("rejects tagged image names", () => {
     expect(() =>
       createVercelContainerRegistryPublishPlan({
         sourceImage: `${sourceImage}:latest`,
@@ -154,7 +148,7 @@ describe("Vercel Container Registry publishing", () => {
     ).toThrow(`resolved to ${changedDigest}, expected ${digest}`);
   });
 
-  it("wires stable-only release and branch-proof publication through one reusable workflow", () => {
+  it("wires every Docker release channel and branch-proof publication through one reusable workflow", () => {
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
     const manualPromotion = readWorkflow(".github/workflows/docker-channel-promote.yml");
@@ -165,7 +159,7 @@ describe("Vercel Container Registry publishing", () => {
     const manualVcrPublish = requireJob(manualPromotion, "publish_vcr");
 
     expect(releasePublish.needs).toEqual(["resolve_release_policy", "verify-attestations"]);
-    expect(releasePublish.if).toContain("outputs.channel != 'beta'");
+    expect(releasePublish.if).not.toContain("outputs.channel != 'beta'");
     expect(releasePublish.uses).toBe("./.github/workflows/vercel-container-registry-publish.yml");
     expect(releasePublish.secrets).toEqual({
       VERCEL_TOKEN: "${{ secrets.VERCEL_TOKEN }}",
@@ -188,6 +182,11 @@ describe("Vercel Container Registry publishing", () => {
         (step) => step.name === "Authenticate Docker to Vercel Container Registry",
       )?.run,
     ).toContain("vercel@${VERCEL_CLI_VERSION}");
+    expect(
+      reusablePublish.steps?.find(
+        (step) => step.name === "Promote and verify Vercel channel aliases",
+      )?.run,
+    ).toContain('[[ "${channel}" == "beta" ]]');
     expect(
       reusablePublish.steps?.find((step) => step.name === "Run custom-image Sandbox smoke")?.run,
     ).toContain("sandbox run \\\n");

@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: Final stable or extended-stable version without the v prefix
+        description: Docker release version without the v prefix
         required: true
         type: string
       source_image:
@@ -89,6 +89,11 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          channel="$(node scripts/lib/docker-release-policy.mjs "${VERSION}" | jq -r '.channel')"
+          if [[ "${channel}" == "beta" ]]; then
+            echo "Beta releases have no moving Docker channel aliases."
+            exit 0
+          fi
           node scripts/docker-channel-promote.mjs \
             --version "${VERSION}" \
             --image "${TARGET_IMAGE}"
