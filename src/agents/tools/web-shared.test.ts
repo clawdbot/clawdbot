@@ -29,7 +29,9 @@ function responseFromReader(params: {
     done: false,
     value: new TextEncoder().encode(chunk),
   }));
-  chunks.push({ done: true, value: undefined });
+  if (!params.readError) {
+    chunks.push({ done: true, value: undefined });
+  }
   const reader = {
     read: async () => {
       const chunk = chunks.shift();
