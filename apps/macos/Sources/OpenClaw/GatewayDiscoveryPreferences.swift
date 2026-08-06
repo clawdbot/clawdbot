@@ -55,7 +55,7 @@ enum GatewayDiscoveryPreferences {
         let loadedRoot = OpenClawConfigFile.loadDict()
         let migration = isPreview
             ? (root: loadedRoot, changed: false)
-            : self.migrateLegacyUnboundDiscoveryRoute(loadedRoot)
+            : self.migrateUnsafeDiscoveryRoute(loadedRoot)
         let persisted = !migration.changed || saver(migration.root)
         if !persisted {
             self.logger.error("legacy discovery route migration could not be persisted")
@@ -78,14 +78,24 @@ enum GatewayDiscoveryPreferences {
     }
 
     @MainActor
-    static func migrateLegacyUnboundDiscoveryRoute(_ currentRoot: [String: Any])
+    static func migrateUnsafeDiscoveryRoute(_ currentRoot: [String: Any])
         -> (root: [String: Any], changed: Bool)
     {
         let connectionMode = ConnectionModeResolver.resolve(root: currentRoot).mode
         guard let preferredStableID = self.preferredStableID(),
-              self.preferredRouteBinding() == nil,
               GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
         else {
+            return (currentRoot, false)
+        }
+        let storedBinding = self.preferredRouteBinding()
+        let expectedDirectBinding = self.routeBinding(
+            connectionMode: .remote,
+            remoteTransport: .direct,
+            remoteURL: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "",
+            remoteTarget: "")
+        let isInactiveBoundRoute = connectionMode != .remote &&
+            storedBinding != nil && storedBinding == expectedDirectBinding
+        guard storedBinding == nil || isInactiveBoundRoute else {
             return (currentRoot, false)
         }
         if connectionMode == .remote,
