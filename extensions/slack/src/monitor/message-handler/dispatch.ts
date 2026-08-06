@@ -166,23 +166,28 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       previewFinalTextFitsEdit &&
       trimmedFinalText.length > 0
     ) {
+      await draftStream.flush();
       const channelId = draftStream.channelId();
       const messageId = draftStream.messageId();
       if (channelId && messageId) {
         const finalThreadTs = delivery.usedReplyThreadTs ?? statusThreadTs;
-        await draftStream.flush();
         await draftStream.seal();
         try {
-          await finalizeSlackPreviewEdit({
-            client: slackClient,
-            token: ctx.botToken,
-            accountId: account.accountId,
-            channelId,
-            messageId,
-            text: previewFinalText,
-            ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-            threadTs: finalThreadTs,
+          const finalized = await draftStream.finalizeMessage(messageId, async () => {
+            await finalizeSlackPreviewEdit({
+              client: slackClient,
+              token: ctx.botToken,
+              accountId: account.accountId,
+              channelId,
+              messageId,
+              text: previewFinalText,
+              ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+              threadTs: finalThreadTs,
+            });
           });
+          if (!finalized) {
+            throw new Error("Slack preview moved below a newer conversation message");
+          }
         } catch (err) {
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
@@ -265,16 +270,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (delivery.hasDelivered({ kind: info.kind, payload, threadTs: edit.threadTs })) {
             return;
           }
-          await finalizeSlackPreviewEdit({
-            client: slackClient,
-            token: ctx.botToken,
-            accountId: account.accountId,
-            channelId: preview.channelId,
-            messageId: preview.messageId,
-            text: edit.text,
-            ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
-            threadTs: edit.threadTs,
+          const finalized = await draftStream?.finalizeMessage(preview.messageId, async () => {
+            await finalizeSlackPreviewEdit({
+              client: slackClient,
+              token: ctx.botToken,
+              accountId: account.accountId,
+              channelId: preview.channelId,
+              messageId: preview.messageId,
+              text: edit.text,
+              ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
+              threadTs: edit.threadTs,
+            });
           });
+          if (!finalized) {
+            throw new Error("Slack preview moved below a newer conversation message");
+          }
           if (!ttsSupplement) {
             emitSlackMessageSentHooks({
               ...messageSentHookContext,

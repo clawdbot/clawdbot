@@ -24,7 +24,6 @@ import { markInboundContextLabel } from "./inbound-context-marker.js";
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
-const MAX_SKILL_SUGGESTION_NAME_CHARS = 120;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
 const ACTIVE_GOAL_CONTEXT_SUFFIX =
   " — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
@@ -41,16 +40,6 @@ export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | u
       ? objective
       : `${truncateUtf16Safe(objective, MAX_ACTIVE_GOAL_OBJECTIVE_CHARS - 1).trimEnd()}…`;
   return `${ACTIVE_GOAL_CONTEXT_PREFIX}${boundedObjective}${ACTIVE_GOAL_CONTEXT_SUFFIX}`;
-}
-
-function formatPendingSkillSuggestionContext(sessionEntry?: SessionEntry): string | undefined {
-  const rawSkillName = normalizeOptionalString(sessionEntry?.pendingSkillSuggestion?.skillName);
-  if (!rawSkillName) {
-    return undefined;
-  }
-  const normalizedSkillName = rawSkillName.replace(/\s+/gu, " ").replaceAll('"', "'");
-  const skillName = truncateUtf16Safe(normalizedSkillName, MAX_SKILL_SUGGESTION_NAME_CHARS);
-  return `A reusable workflow ("${skillName}") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.`;
 }
 
 function isQueuedGoalOnlyBlock(block: string, injectedGoals: ReadonlySet<string>): boolean {
@@ -812,11 +801,6 @@ export function buildInboundUserContextPrefix(
   const activeGoalContext = formatActiveGoalContext(sessionEntry);
   if (activeGoalContext) {
     blocks.push(activeGoalContext);
-  }
-
-  const pendingSkillSuggestionContext = formatPendingSkillSuggestionContext(sessionEntry);
-  if (pendingSkillSuggestionContext) {
-    blocks.push(pendingSkillSuggestionContext);
   }
 
   if (currentMessageContext) {

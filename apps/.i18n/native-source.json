@@ -30355,7 +30355,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 429,
+      "line": 490,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Repairing the OpenClaw Gateway update…",
       "surface": "apple",
@@ -30363,7 +30363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 430,
+      "line": 491,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
       "surface": "apple",
@@ -30371,7 +30371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 451,
+      "line": 512,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update needs attention.",
       "surface": "apple",
@@ -30379,7 +30379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 453,
+      "line": 514,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update failed.",
       "surface": "apple",
@@ -30387,7 +30387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 468,
+      "line": 529,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update finished, but verification failed.",
       "surface": "apple",
@@ -30395,7 +30395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 475,
+      "line": 536,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway \\(installedVersion) is installed.",
       "surface": "apple",
@@ -33123,7 +33123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 569,
+      "line": 578,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "not linked",
       "surface": "apple",
@@ -33131,7 +33131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 582,
+      "line": 591,
       "path": "apps/macos/Sources/OpenClaw/GatewayProcessManager.swift",
       "source": "unknown error",
       "surface": "apple",

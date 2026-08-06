@@ -1,6 +1,67 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { testing } from "../../scripts/bench-agent-concurrency.ts";
+import {
+  testing,
+  WORKER_RESULT_SENTINEL,
+  type WorkerResult,
+  type WorkerScenario,
+} from "../../scripts/bench-agent-concurrency.ts";
+
+function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
+  const invariant: Record<string, number | boolean> =
+    scenario === "spawnPipelineInMemory" || scenario === "spawnPipelineDurable"
+      ? {
+          ok: true,
+          registeredRuns: size,
+          reservationsReleased: size,
+          blockedWaits: size,
+          settledRuns: size,
+          settledTasks: size,
+          outstandingWaits: 0,
+          durableSubagentRows: scenario === "spawnPipelineDurable" ? size : 0,
+          durableTaskRows: scenario === "spawnPipelineDurable" ? size : 0,
+          durableStateFile: scenario === "spawnPipelineDurable",
+          postTeardownRegistryRows: 0,
+          postTeardownTaskRows: 0,
+          postTeardownDurableSubagentRows: 0,
+          postTeardownDurableTaskRows: 0,
+        }
+      : scenario === "admission"
+        ? { ok: true, admissionCap: size, overflowRejected: true, released: true }
+        : scenario === "recoverySweep"
+          ? {
+              ok: true,
+              seededRows: size * 3,
+              removedRows: size * 2,
+              retainedCurrent: size,
+              sessionEffects: 0,
+              recoveryProjections: size,
+              lostContextCompletions: 0,
+            }
+          : {
+              ok: true,
+              inputRowsPerOrdering: size * 3,
+              newestFirstSelectedRows: size,
+              oldestFirstSelectedRows: size,
+              newestFirstSelectedNewest: true,
+              oldestFirstSelectedNewest: true,
+            };
+  return {
+    scenario,
+    size,
+    timingsMs,
+    memory: {
+      rssStartBytes: 100,
+      rssEndBytes: 120,
+      processMaxRssBytes: 150,
+    },
+    invariant,
+  };
+}
+
+function workerStdout(result: WorkerResult): string {
+  return `${WORKER_RESULT_SENTINEL}${JSON.stringify(result)}\n`;
+}
 
 describe("agent concurrency benchmark", () => {
   it("parses bounded options and rejects ambiguous arguments", () => {
@@ -36,60 +97,189 @@ describe("agent concurrency benchmark", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
   });
 
-  it("summarizes min and nearest-rank percentiles", () => {
+  it("emits tail percentiles only when the sample supports them", () => {
     expect(testing.summarizeTimings([100, 1, 4, 2, 3])).toEqual({
       count: 5,
       min: 1,
       p50: 3,
-      p95: 100,
-      p99: 100,
       max: 100,
     });
+    const summary = testing.summarizeTimings(Array.from({ length: 20 }, (_, index) => index + 1));
+    expect(summary).toMatchObject({ count: 20, p50: 10, p95: 19, p99: 20, max: 20 });
   });
 
-  it("emits schema version 1, RSS, scenarios, and invariants in a tiny real smoke", async () => {
-    const previousNodeEnv = process.env.NODE_ENV;
-    const report = await testing.benchmark(
-      testing.parseOptions(["--runs", "1", "--warmup", "0", "--fanout", "2", "--sweep-rows", "2"]),
+  it("aggregates synthetic worker results into schema version 2", () => {
+    const options = testing.parseOptions([
+      "--runs",
+      "3",
+      "--warmup",
+      "1",
+      "--fanout",
+      "2",
+      "--sweep-rows",
+      "4",
+    ]);
+    const report = testing.aggregateWorkerResults(
+      options,
+      [
+        workerResult("spawnPipelineInMemory", 2),
+        workerResult("spawnPipelineDurable", 2),
+        workerResult("admission", 2),
+        workerResult("recoverySweep", 4),
+        workerResult("duplicateSuppression", 4),
+      ],
+      { rssStartBytes: 10, rssEndBytes: 20 },
     );
 
     expect(report).toMatchObject({
-      schemaVersion: 1,
-      runtime: { node: process.version },
-      options: { runs: 1, warmup: 0, fanout: [2], sweepRows: [2] },
+      schemaVersion: 2,
+      options: { runs: 3, warmup: 1, fanout: [2], sweepRows: [4] },
       memory: {
-        rssStartBytes: expect.any(Number),
-        rssPeakBytes: expect.any(Number),
-        rssEndBytes: expect.any(Number),
-        rssDeltaBytes: expect.any(Number),
+        rssStartBytes: 10,
+        rssEndBytes: 20,
+        workerProcessMaxRssBytes: 150,
       },
       invariants: {
         ok: true,
         failures: [],
+        spawnPipelineInMemory: true,
+        spawnPipelineDurable: true,
         admissionCapOverflowRelease: true,
-        uniqueRegisteredRunsAndReleasedReservations: true,
         sweepRecoveryRowsWithoutSessionEffects: true,
         dedupeNewestPerChild: true,
       },
     });
-    expect(process.env.NODE_ENV).toBe(previousNodeEnv);
+    expect(report.scenarios.spawnPipelineDurable[0]?.timingsMs).toEqual({
+      count: 3,
+      min: 1,
+      p50: 2,
+      max: 3,
+    });
     expect(report.generatedAt).toEqual(expect.any(String));
-    expect(report.scenarios.spawnPipeline[0]?.timingsMs.count).toBe(1);
-    expect(report.scenarios.recoverySweep[0]?.invariant).toMatchObject({
-      seededRows: 6,
-      removedRows: 4,
-      retainedCurrent: 2,
-      sessionEffects: 0,
-      recoveryProjections: 2,
-      lostContextCompletions: 0,
-    });
-    expect(report.scenarios.duplicateSuppression[0]?.invariant).toMatchObject({
-      selectedRows: 2,
-      newestSelected: true,
-    });
   });
 
-  it("supports native Node TypeScript help and ends failures with the marker", () => {
+  it("reports deterministic parent progress around every worker", () => {
+    const options = testing.parseOptions([
+      "--runs",
+      "3",
+      "--warmup",
+      "0",
+      "--fanout",
+      "2",
+      "--sweep-rows",
+      "4",
+    ]);
+    const progress: string[] = [];
+    let now = 0;
+    const report = testing.benchmark(options, {
+      runWorker: (_options, scenario, size) => workerResult(scenario, size),
+      writeProgress: (line) => progress.push(line),
+      now: () => {
+        const value = now;
+        now += 250;
+        return value;
+      },
+    });
+
+    expect(report.invariants.ok).toBe(true);
+    expect(progress).toHaveLength(10);
+    expect(progress[0]).toBe(
+      "[bench-agent-concurrency] worker 1/5 start scenario=spawnPipelineInMemory size=2",
+    );
+    expect(progress[1]).toBe(
+      "[bench-agent-concurrency] worker 1/5 complete scenario=spawnPipelineInMemory size=2 elapsed=0.250s",
+    );
+    expect(progress.at(-2)).toBe(
+      "[bench-agent-concurrency] worker 5/5 start scenario=duplicateSuppression size=4",
+    );
+    expect(progress.at(-1)).toBe(
+      "[bench-agent-concurrency] worker 5/5 complete scenario=duplicateSuppression size=4 elapsed=0.250s",
+    );
+  });
+
+  it("rejects incomplete synthetic worker sets", () => {
+    const options = testing.parseOptions(["--fanout", "1", "--sweep-rows", "1"]);
+    expect(() =>
+      testing.aggregateWorkerResults(options, [workerResult("spawnPipelineInMemory", 1)]),
+    ).toThrow("worker result mismatch");
+  });
+
+  it("rejects malformed, duplicate, mismatched, partial, and timed-out worker results", () => {
+    const expected = { scenario: "admission" as const, size: 2, runs: 3 };
+    const valid = workerResult("admission", 2);
+    expect(
+      testing.parseWorkerProcessResult(
+        { status: 0, stdout: workerStdout(valid), stderr: "" },
+        expected,
+      ),
+    ).toEqual(valid);
+
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        { status: 0, stdout: `${WORKER_RESULT_SENTINEL}{\n`, stderr: "" },
+        expected,
+      ),
+    ).toThrow("returned invalid JSON");
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        { status: 0, stdout: `${workerStdout(valid)}${workerStdout(valid)}`, stderr: "" },
+        expected,
+      ),
+    ).toThrow("returned 2 result payloads");
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        { status: 0, stdout: workerStdout(workerResult("admission", 3)), stderr: "" },
+        expected,
+      ),
+    ).toThrow("mismatched identity");
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        {
+          status: 0,
+          stdout: `${WORKER_RESULT_SENTINEL}${JSON.stringify({ ...valid, memory: {} })}\n`,
+          stderr: "",
+        },
+        expected,
+      ),
+    ).toThrow("memory.rssStartBytes");
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        {
+          status: 0,
+          stdout: workerStdout({ ...valid, timingsMs: [1, 2] }),
+          stderr: "",
+        },
+        expected,
+      ),
+    ).toThrow("returned 2 samples; expected 3");
+    const missingInvariant = structuredClone(valid);
+    delete missingInvariant.invariant.admissionCap;
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        { status: 0, stdout: workerStdout(missingInvariant), stderr: "" },
+        expected,
+      ),
+    ).toThrow("invariant.admissionCap is missing or invalid");
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        { status: 7, stdout: "", stderr: "worker exploded" },
+        expected,
+      ),
+    ).toThrow("failed (7): worker exploded");
+    expect(() =>
+      testing.parseWorkerProcessResult(
+        {
+          status: null,
+          stdout: "",
+          stderr: "",
+          error: Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" }),
+        },
+        expected,
+      ),
+    ).toThrow("timed out after 300000ms");
+  });
+
+  it("supports help and ends failures with the marker", () => {
     const help = spawnSync(
       process.execPath,
       ["--import", "tsx", "scripts/bench-agent-concurrency.ts", "--help"],

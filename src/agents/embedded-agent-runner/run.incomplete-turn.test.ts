@@ -1088,27 +1088,56 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("continues once after settled side-effecting tools finish without a final answer", async () => {
+    const acceptedSessionSpawns = [
+      { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+    ];
     const toolUseAssistant = {
       role: "assistant",
       stopReason: "toolUse",
       provider: "openai",
       model: "gpt-5.5",
-      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } }],
+      content: [
+        { type: "toolCall", id: "tool_write", name: "write", arguments: { path: "note.txt" } },
+        { type: "toolCall", id: "tool_cron", name: "cron", arguments: { action: "add" } },
+        {
+          type: "toolCall",
+          id: "tool_spawn",
+          name: "sessions_spawn",
+          arguments: { task: "follow up" },
+        },
+      ],
     } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     const settledToolResults = [
       toolUseAssistant,
-      { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+      { role: "toolResult", toolCallId: "tool_write", toolName: "write", isError: false },
+      { role: "toolResult", toolCallId: "tool_cron", toolName: "cron", isError: false },
+      {
+        role: "toolResult",
+        toolCallId: "tool_spawn",
+        toolName: "sessions_spawn",
+        isError: false,
+      },
     ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"];
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
       markUserMessagePersisted(attemptParams);
       return makeAttemptResult({
         assistantTexts: [],
-        toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
-        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        latestMcpAppChannelView: { viewId: "view-after-tools" },
+        toolMetas: [
+          { toolName: "write", meta: "path=note.txt" },
+          { toolName: "cron" },
+          { toolName: "sessions_spawn" },
+        ],
+        acceptedSessionSpawns,
+        successfulCronAdds: 1,
+        itemLifecycle: { startedCount: 3, completedCount: 3, activeCount: 0 },
         messagesSnapshot: settledToolResults,
         lastAssistant: toolUseAssistant,
         currentAttemptAssistant: toolUseAssistant,
+        codeModeEngaged: true,
+        assistantTurns: 1,
+        bridgeCalls: { search: 1, describe: 2, call: 3 },
       });
     });
     const finalAssistant = {
@@ -1139,6 +1168,19 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.text).toBe("Write completed. Here is the final answer.");
+    expect(result.latestMcpAppChannelView).toEqual({ viewId: "view-after-tools" });
+    expect(result.successfulCronAdds).toBe(1);
+    expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+    expect(result.meta.toolSummary).toEqual({
+      calls: 3,
+      tools: ["write", "cron", "sessions_spawn"],
+      failures: 0,
+    });
+    expect(result.meta.agentMeta).toMatchObject({
+      codeModeEngaged: true,
+      assistantTurns: 2,
+      bridgeCalls: { search: 1, describe: 2, call: 3 },
+    });
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(secondCall.disableTools).toBe(true);
@@ -1205,7 +1247,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
         lastAssistant: toolUseAssistant,
         currentAttemptAssistant: toolUseAssistant,
-        lastToolError: { toolName: "exec", error: "post-processing error" },
+        lastToolError: {
+          toolName: "exec",
+          error: "post-processing error",
+          errorCode: "SYSTEM_RUN_DENIED",
+        },
       });
     });
     const finalAssistant = {
@@ -1243,6 +1289,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(finalizationCall.prompt).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(finalizationCall.prompt).toContain(
       "If any tool failed, state that failure plainly and do not claim it succeeded.",
+    );
+    expect(result.meta.failureSignal).toEqual(
+      runPolicy.trigger === "cron"
+        ? {
+            kind: "execution_denied",
+            source: "tool",
+            toolName: "exec",
+            code: "SYSTEM_RUN_DENIED",
+            message: "post-processing error",
+            fatalForCron: true,
+          }
+        : undefined,
     );
   });
 
