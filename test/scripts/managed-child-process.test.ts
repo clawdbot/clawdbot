@@ -418,6 +418,40 @@ setInterval(() => {}, 1_000);
     expect(isProcessAlive(childPid)).toBe(false);
   });
 
+  posixIt("accepts a process group that vanishes before its cleanup signal", async () => {
+    const originalKill = process.kill;
+    let childPid = 0;
+    let injectedLiveGroup = false;
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -childPid && signal === 0 && !injectedLiveGroup) {
+        injectedLiveGroup = true;
+        return true;
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: ["-e", "process.exit(0)"],
+          onReady: (child) => {
+            childPid = expectProcessPid(child.pid);
+          },
+          requireProcessTreeExit: true,
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe(0);
+    } finally {
+      process.kill = originalKill;
+    }
+
+    expect(injectedLiveGroup).toBe(true);
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
   it("allows bounded retry output and normal long-running work to complete", async () => {
     await expect(
       runManagedCommand({

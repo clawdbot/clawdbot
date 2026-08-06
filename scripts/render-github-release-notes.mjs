@@ -40,6 +40,62 @@ function validateTag(tag) {
   }
 }
 
+export function formatContributionRecordProvenance(provenance) {
+  const { base, target, inRangePullRequests, retainedSeedOnlyPullRequests } = provenance;
+  if (inRangePullRequests === undefined || retainedSeedOnlyPullRequests === undefined) {
+    fail("canonical contribution record provenance requires split PR counts");
+  }
+  const uniquePullRequests = inRangePullRequests + retainedSeedOnlyPullRequests;
+  const count = (value) => value.toLocaleString("en-US");
+  const prs = (value) => `PR${value === 1 ? "" : "s"}`;
+  return `This audited record covers the complete ${base}..${target} history: ${count(inRangePullRequests)} in-range ${prs(inRangePullRequests)} + ${count(retainedSeedOnlyPullRequests)} retained seed-only ${prs(retainedSeedOnlyPullRequests)} = ${count(uniquePullRequests)} unique ${prs(uniquePullRequests)}.`;
+}
+export function parseContributionRecordProvenance(section) {
+  const rows = Array.from(section.matchAll(/^- \*\*PR #(\d+)\*\*/gmu), (match) => Number(match[1]));
+  const duplicate = rows.find((value, index) => rows.indexOf(value) !== index);
+  if (duplicate !== undefined) {
+    fail(`duplicate contribution record PR #${duplicate}`);
+  }
+  const line = section.match(/^This audited record covers the complete .+$/mu)?.[0];
+  if (!line) {
+    return undefined;
+  }
+  const canonical = line.match(
+    /^This audited record covers the complete (?<base>\S+)\.\.(?<target>[0-9a-f]{40}) history: (?<inRange>0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) in-range PRs? \+ (?<seedOnly>0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) retained seed-only PRs? = (?<unique>0|[1-9][0-9]{0,2}(?:,[0-9]{3})*) unique PRs?\./u,
+  );
+  const legacy =
+    canonical ??
+    line.match(
+      /^This audited record covers the complete (?<base>\S+)\.\.(?<target>\S+) history: (?<unique>[0-9]+) merged PRs?\./u,
+    );
+  if (!legacy?.groups) {
+    fail("release contribution record provenance is malformed");
+  }
+  const number = (value) => Number(value.replaceAll(",", ""));
+  const provenance = {
+    base: legacy.groups.base,
+    target: legacy.groups.target,
+    uniquePullRequests: number(legacy.groups.unique),
+  };
+  if (canonical?.groups) {
+    provenance.inRangePullRequests = number(canonical.groups.inRange);
+    provenance.retainedSeedOnlyPullRequests = number(canonical.groups.seedOnly);
+    if (
+      provenance.inRangePullRequests + provenance.retainedSeedOnlyPullRequests !==
+      provenance.uniquePullRequests
+    ) {
+      fail("release contribution record provenance arithmetic is invalid");
+    }
+  }
+  if (provenance.uniquePullRequests > 0 && !/^#### Pull requests\r?$/mu.test(section)) {
+    fail("positive contribution record requires a Pull requests section");
+  }
+  if (rows.length !== provenance.uniquePullRequests) {
+    fail(`contribution record row count ${rows.length} != ${provenance.uniquePullRequests}`);
+  }
+  return provenance;
+}
+
 function githubReleaseBodySize(body) {
   return {
     characters: [...body].length,

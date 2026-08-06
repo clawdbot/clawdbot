@@ -1,4 +1,5 @@
 // Discord tests cover send.webhook activity plugin behavior.
+import { MessageFlags } from "discord-api-types/v10";
 import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -155,9 +156,72 @@ describe("sendWebhookMessageDiscord activity", () => {
         },
         body: JSON.stringify({
           content: "hello <@123456789012345678>",
+          flags: MessageFlags.SuppressEmbeds,
         }),
         signal: expect.any(AbortSignal),
       },
     ]);
   });
+
+  it.each([
+    {
+      name: "the default",
+      channelSuppressEmbeds: undefined,
+      accountSuppressEmbeds: undefined,
+      expectedFlags: MessageFlags.SuppressEmbeds,
+    },
+    {
+      name: "the channel opt-out",
+      channelSuppressEmbeds: false,
+      accountSuppressEmbeds: undefined,
+      expectedFlags: undefined,
+    },
+    {
+      name: "an account opt-out",
+      channelSuppressEmbeds: true,
+      accountSuppressEmbeds: false,
+      expectedFlags: undefined,
+    },
+    {
+      name: "an account opt-in",
+      channelSuppressEmbeds: false,
+      accountSuppressEmbeds: true,
+      expectedFlags: MessageFlags.SuppressEmbeds,
+    },
+  ])(
+    "applies $name for webhook link-preview suppression",
+    async ({ channelSuppressEmbeds, accountSuppressEmbeds, expectedFlags }) => {
+      const cfg = {
+        channels: {
+          discord: {
+            token: "resolved-token",
+            ...(channelSuppressEmbeds === undefined
+              ? {}
+              : { suppressEmbeds: channelSuppressEmbeds }),
+            accounts: {
+              runtime:
+                accountSuppressEmbeds === undefined
+                  ? {}
+                  : { suppressEmbeds: accountSuppressEmbeds },
+            },
+          },
+        },
+      };
+
+      await sendWebhookMessageDiscord("https://example.com", {
+        cfg,
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+        accountId: "runtime",
+        threadId: "thread-1",
+      });
+
+      const request = firstMockCall(vi.mocked(fetch), "fetch")[1] as RequestInit;
+      if (typeof request.body !== "string") {
+        throw new Error("expected webhook request body");
+      }
+      const body = JSON.parse(request.body) as { flags?: number };
+      expect(body.flags).toBe(expectedFlags);
+    },
+  );
 });

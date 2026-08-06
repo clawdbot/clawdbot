@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
-  MODEL_CONTEXT_TOKEN_CACHE,
+  getContextWindowCaches,
   providerContextTokenCacheKey,
 } from "../../agents/context-cache.js";
 import {
@@ -116,7 +116,7 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
 }));
 
 afterEach(() => {
-  MODEL_CONTEXT_TOKEN_CACHE.clear();
+  getContextWindowCaches().discoveredTokenCache.clear();
   cliBackendsTesting.resetDepsForTest();
   vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
@@ -749,8 +749,8 @@ describe("createModelSelectionState catalog loading", () => {
 
 describe("resolveContextTokens", () => {
   it("prefers provider-qualified cache keys over bare model ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("gemini-3.1-pro-preview", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set(
+    getContextWindowCaches().discoveredTokenCache.set("gemini-3.1-pro-preview", 200_000);
+    getContextWindowCaches().discoveredTokenCache.set(
       providerContextTokenCacheKey("google-gemini-cli", "gemini-3.1-pro-preview"),
       1_000_000,
     );
@@ -766,7 +766,10 @@ describe("resolveContextTokens", () => {
   });
 
   it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("openai", "gpt-5.5"), 272_000);
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey("openai", "gpt-5.5"),
+      272_000,
+    );
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
@@ -779,7 +782,10 @@ describe("resolveContextTokens", () => {
   });
 
   it("allows agent contextTokens to lower a larger model window", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("qwen", "qwen3.6-plus"), 1_000_000);
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey("qwen", "qwen3.6-plus"),
+      1_000_000,
+    );
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,

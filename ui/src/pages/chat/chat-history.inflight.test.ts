@@ -171,6 +171,18 @@ describe("chat history in-flight assistant recovery", () => {
     expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-reconnected" });
   });
 
+  it("restores the authoritative run start even before assistant text exists", async () => {
+    const history = activeHistory("run-reconnected");
+    history.inFlightRun!.startedAt = 123_456;
+    const state = createState(history);
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBe("run-reconnected");
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBe(123_456);
+  });
+
   it("adopts an active snapshot while binding its durable session identity", async () => {
     const history = activeHistory("run-reconnected");
     history.sessionId = "current-session";

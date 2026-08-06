@@ -81,6 +81,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
         sessionLifecyclePatch: {
           abortedLastRun: false,
           endedAt: now,
+          lifecycleRunId: undefined,
           mainRestartRecovery: {
             ...recoveryState,
             revision: recoveryState.revision + 1,

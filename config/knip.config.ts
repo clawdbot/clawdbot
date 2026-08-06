@@ -117,6 +117,10 @@ const rootEntries = [
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  // Spawned by the agent concurrency benchmark; no static import edge exists.
+  "scripts/bench-agent-concurrency-worker.ts!",
+  // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
+  "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
@@ -733,11 +737,8 @@ const config = {
       "media-understanding-provider.ts!",
       "model-route-contract.ts!",
       "native-web-search.ts!",
-      "openai-chatgpt-oauth-abort.runtime.ts!",
       "openai-chatgpt-oauth-flow.runtime.ts!",
-      "openai-chatgpt-oauth-types.runtime.ts!",
       "openai-chatgpt-oauth.runtime.ts!",
-      "openai-chatgpt-pkce.runtime.ts!",
       "openai-chatgpt-provider.runtime.ts!",
       "openai-provider.ts!",
       "prompt-overlay.ts!",

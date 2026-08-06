@@ -11,6 +11,7 @@ import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
+  resolveQaScenarioRequiredProviderMode,
 } from "./scenario-catalog.js";
 import {
   flowContainsCall,
@@ -189,6 +190,25 @@ describe("qa scenario catalog", () => {
     expect(cronAuthorityFlow).toContain("overbroad policy was not intersected");
     expect(cronAuthorityFlow).not.toContain("cron.run");
     expect(cronAuthorityFlow).not.toContain("waitForCronRunCompletion");
+  });
+
+  it("rejects invalid provider metadata at the catalog boundary", () => {
+    const scenario = structuredClone(
+      requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback")),
+    );
+    scenario.execution.config = {
+      ...scenario.execution.config,
+      requiredProviderMode: "live-frontier",
+    };
+
+    expect(() => resolveQaScenarioRequiredProviderMode(scenario)).toThrow(
+      "QA scenario subagent-completion-direct-fallback declares conflicting provider modes: execution.providerMode=mock-openai, execution.config.requiredProviderMode=live-frontier",
+    );
+
+    scenario.execution.config.requiredProviderMode = "mock-ish";
+    expect(() => resolveQaScenarioRequiredProviderMode(scenario)).toThrow(
+      "QA scenario subagent-completion-direct-fallback declares unknown provider mode: mock-ish",
+    );
   });
 
   it("requires explicit suite isolation for gateway state restart scenarios", () => {

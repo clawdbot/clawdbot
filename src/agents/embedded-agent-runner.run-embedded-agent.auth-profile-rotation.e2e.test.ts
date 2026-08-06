@@ -939,14 +939,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
   it("marks inline provider api key billing prompt failures without an auth profile", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      await fs.writeFile(
-        path.join(agentDir, "auth-profiles.json"),
-        JSON.stringify({ version: 1, profiles: {} }),
-      );
-      await fs.writeFile(
-        path.join(agentDir, "auth-state.json"),
-        JSON.stringify({ version: 1, usageStats: {} }),
-      );
+      saveAuthProfileStore({ version: 1, profiles: {}, usageStats: {} }, agentDir);
       runEmbeddedAttemptMock.mockResolvedValueOnce(
         makeAttempt({
           terminal: { kind: "failed", source: "prompt", error: new Error("insufficient credits") },
@@ -957,7 +950,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         runEmbeddedAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:test:inline-api-key-prompt-billing",
-          sessionFile: path.join(workspaceDir, "session.jsonl"),
           workspaceDir,
           agentDir,
           config: makeConfig(),

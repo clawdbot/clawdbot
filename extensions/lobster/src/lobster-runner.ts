@@ -45,32 +45,19 @@ type EmbeddedToolContext = {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   signal?: AbortSignal;
-  registry?: unknown;
-  llmAdapters?: Record<string, unknown>;
 };
 
 type EmbeddedToolEnvelope = {
-  protocolVersion?: number;
   ok: boolean;
   status?: "ok" | "needs_approval" | "needs_input" | "cancelled";
   output?: unknown[];
   requiresApproval?: {
-    type?: "approval_request";
     prompt: string;
     items: unknown[];
-    preview?: string;
-    resumeToken?: string;
-    approvalId?: string;
-  } | null;
-  requiresInput?: {
-    prompt: string;
-    schema?: unknown;
-    items?: unknown[];
     resumeToken?: string;
     approvalId?: string;
   } | null;
   error?: {
-    type?: string;
     message: string;
   };
 };
@@ -86,13 +73,9 @@ type EmbeddedToolRuntime = {
     token?: string;
     approvalId?: string;
     approved?: boolean;
-    response?: unknown;
-    cancel?: boolean;
     ctx?: EmbeddedToolContext;
   }) => Promise<EmbeddedToolEnvelope>;
 };
-
-type LoadEmbeddedToolRuntime = () => Promise<EmbeddedToolRuntime>;
 
 const workflowExts = new Set([".lobster", ".yaml", ".yml", ".json"]);
 
@@ -136,63 +119,31 @@ function createLimitedSink(maxBytes: number, label: "stdout" | "stderr") {
   });
 }
 
-function normalizeEnvelope(envelope: EmbeddedToolEnvelope): LobsterEnvelope {
-  if (envelope.ok) {
-    if (envelope.status === "needs_input") {
-      return {
-        ok: false,
-        error: {
-          type: "unsupported_status",
-          message: "Lobster input requests are not supported by the OpenClaw Lobster tool yet",
-        },
-      };
-    }
-    return {
-      ok: true,
-      status: envelope.status ?? "ok",
-      output: Array.isArray(envelope.output) ? envelope.output : [],
-      requiresApproval: envelope.requiresApproval
-        ? {
-            type: "approval_request",
-            prompt: envelope.requiresApproval.prompt,
-            items: envelope.requiresApproval.items,
-            ...(envelope.requiresApproval.resumeToken
-              ? { resumeToken: envelope.requiresApproval.resumeToken }
-              : {}),
-            ...(envelope.requiresApproval.approvalId
-              ? { approvalId: envelope.requiresApproval.approvalId }
-              : {}),
-          }
-        : null,
-    };
+function normalizeEnvelope(envelope: EmbeddedToolEnvelope): Extract<LobsterEnvelope, { ok: true }> {
+  if (!envelope.ok) {
+    throw new Error(envelope.error?.message ?? "lobster runtime failed");
+  }
+  if (envelope.status === "needs_input") {
+    throw new Error("Lobster input requests are not supported by the OpenClaw Lobster tool yet");
   }
   return {
-    ok: false,
-    error: {
-      type: envelope.error?.type,
-      message: envelope.error?.message ?? "lobster runtime failed",
-    },
+    ok: true,
+    status: envelope.status ?? "ok",
+    output: Array.isArray(envelope.output) ? envelope.output : [],
+    requiresApproval: envelope.requiresApproval
+      ? {
+          type: "approval_request",
+          prompt: envelope.requiresApproval.prompt,
+          items: envelope.requiresApproval.items,
+          ...(envelope.requiresApproval.resumeToken
+            ? { resumeToken: envelope.requiresApproval.resumeToken }
+            : {}),
+          ...(envelope.requiresApproval.approvalId
+            ? { approvalId: envelope.requiresApproval.approvalId }
+            : {}),
+        }
+      : null,
   };
-}
-
-function throwOnErrorEnvelope(envelope: LobsterEnvelope): Extract<LobsterEnvelope, { ok: true }> {
-  if (envelope.ok) {
-    return envelope;
-  }
-  throw new Error(envelope.error.message);
-}
-
-async function resolveWorkflowFile(candidate: string, cwd: string) {
-  const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
-  const fileStat = await stat(resolved);
-  if (!fileStat.isFile()) {
-    throw new Error("Workflow path is not a file");
-  }
-  const ext = path.extname(resolved).toLowerCase();
-  if (!workflowExts.has(ext)) {
-    throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
-  }
-  return resolved;
 }
 
 function isMissingPathError(error: unknown) {
@@ -204,30 +155,23 @@ function isMissingPathError(error: unknown) {
   );
 }
 
-function hasWorkflowFileExtension(candidate: string) {
-  return workflowExts.has(path.extname(candidate).toLowerCase());
-}
-
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
-  if (!trimmed || trimmed.includes("|") || !hasWorkflowFileExtension(trimmed)) {
+  if (!trimmed || trimmed.includes("|") || !workflowExts.has(path.extname(trimmed).toLowerCase())) {
     return null;
   }
-  if (!/\s/.test(trimmed)) {
-    return await resolveWorkflowFile(trimmed, cwd);
-  }
+  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, trimmed);
   try {
-    return await resolveWorkflowFile(trimmed, cwd);
+    if (!(await stat(resolved)).isFile()) {
+      throw new Error("Workflow path is not a file");
+    }
+    return resolved;
   } catch (error) {
-    if (isMissingPathError(error)) {
+    if (/\s/.test(trimmed) && isMissingPathError(error)) {
       return null;
     }
     throw error;
   }
-}
-
-function parseWorkflowArgs(argsJson: string) {
-  return JSON.parse(argsJson) as Record<string, unknown>;
 }
 
 function createEmbeddedToolContext(
@@ -282,7 +226,7 @@ async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime
 }
 
 export function createEmbeddedLobsterRunner(options?: {
-  loadRuntime?: LoadEmbeddedToolRuntime;
+  loadRuntime?: () => Promise<EmbeddedToolRuntime>;
 }): LobsterRunner {
   const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
   let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
@@ -305,19 +249,15 @@ export function createEmbeddedLobsterRunner(options?: {
             let args: Record<string, unknown> | undefined;
             if (parsedArgsJson) {
               try {
-                args = parseWorkflowArgs(parsedArgsJson);
+                args = JSON.parse(parsedArgsJson) as Record<string, unknown>;
               } catch {
                 throw new Error("run --args-json must be valid JSON");
               }
             }
-            return throwOnErrorEnvelope(
-              normalizeEnvelope(await runtime.runToolRequest({ filePath, args, ctx })),
-            );
+            return normalizeEnvelope(await runtime.runToolRequest({ filePath, args, ctx }));
           }
 
-          return throwOnErrorEnvelope(
-            normalizeEnvelope(await runtime.runToolRequest({ pipeline, ctx })),
-          );
+          return normalizeEnvelope(await runtime.runToolRequest({ pipeline, ctx }));
         }
 
         const token = params.token?.trim() ?? "";
@@ -329,15 +269,13 @@ export function createEmbeddedLobsterRunner(options?: {
           throw new Error("approve required");
         }
 
-        return throwOnErrorEnvelope(
-          normalizeEnvelope(
-            await runtime.resumeToolRequest({
-              ...(token ? { token } : {}),
-              ...(approvalId ? { approvalId } : {}),
-              approved: params.approve,
-              ctx,
-            }),
-          ),
+        return normalizeEnvelope(
+          await runtime.resumeToolRequest({
+            ...(token ? { token } : {}),
+            ...(approvalId ? { approvalId } : {}),
+            approved: params.approve,
+            ctx,
+          }),
         );
       });
     },

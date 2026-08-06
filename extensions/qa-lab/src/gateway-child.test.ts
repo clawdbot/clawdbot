@@ -1653,18 +1653,85 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it("treats bind collisions as retryable gateway startup errors", () => {
+  it("classifies bind collisions separately from migration convergence restarts", () => {
     expect(
-      testing.isRetryableGatewayStartupError(
+      testing.classifyQaGatewayStartupRetry(
         "another gateway instance is already listening on ws://127.0.0.1:43124",
       ),
-    ).toBe(true);
+    ).toBe("bind-collision");
     expect(
-      testing.isRetryableGatewayStartupError(
+      testing.classifyQaGatewayStartupRetry(
         "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
       ),
-    ).toBe(true);
-    expect(testing.isRetryableGatewayStartupError("gateway failed to become healthy")).toBe(false);
+    ).toBe("bind-collision");
+    expect(
+      testing.classifyQaGatewayStartupRetry(
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
+      ),
+    ).toBe("migration-convergence-restart");
+  });
+
+  it.each([
+    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+    "OpenClaw plugin migration inputs changed during startup convergence",
+    "Restart OpenClaw so state migrations can continue.",
+    "gateway failed to become healthy",
+  ])("does not retry unrelated startup failure: %s", (details) => {
+    expect(testing.classifyQaGatewayStartupRetry(details)).toBeNull();
+  });
+
+  it("restarts migration convergence once with the same launch state", () => {
+    const first = testing.resolveQaGatewayStartupRetry({
+      attempt: 1,
+      details:
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
+      migrationConvergenceRestartUsed: false,
+    });
+
+    expect(first).toEqual({
+      kind: "migration-convergence-restart",
+      reuseLaunchState: true,
+      migrationConvergenceRestartUsed: true,
+    });
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 2,
+        details:
+          "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
+        migrationConvergenceRestartUsed: first?.migrationConvergenceRestartUsed ?? false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rotates launch state only for a bind collision", () => {
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 1,
+        details: "listen EADDRINUSE: address already in use",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toEqual({
+      kind: "bind-collision",
+      reuseLaunchState: false,
+      migrationConvergenceRestartUsed: false,
+    });
+  });
+
+  it("fails immediately for generic exits and after the startup attempt budget", () => {
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 1,
+        details: "gateway exited with code 1",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toBeNull();
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 5,
+        details: "listen EADDRINUSE",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toBeNull();
   });
 
   it("treats startup token mismatches as retryable rpc startup errors", () => {
