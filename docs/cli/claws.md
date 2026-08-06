@@ -405,6 +405,13 @@ managed state has drifted:
 openclaw claws export incident-triage --out ./incident-triage-export --json
 ```
 
+Use `--bootstrap <path>` to attach an explicitly reviewed Markdown file as the
+package-root `BOOTSTRAP.md`. The exporter validates the completed package and
+removes the new output directory if validation fails. Bootstrap is
+package-authored prompt content: do not include credentials, tokens, private
+answers, or machine-specific paths. Export does not infer questions, render
+personal-data templates, persist answers, or add a separate setup lifecycle.
+
 The result contains `package.json`, canonical `CLAW.md`, and managed workspace
 sidecars. Managed `SOUL.md` content is emitted as the `CLAW.md` body when it is
 non-empty UTF-8 and the combined document fits the manifest limit. Otherwise,

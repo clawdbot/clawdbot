@@ -358,6 +358,82 @@ describe("exportClawAgent", () => {
     });
   });
 
+  it("attaches an explicit reviewed package bootstrap and re-reads the export", async () => {
+    const fixture = await installedFixture();
+    const bootstrapPath = join(fixture.root, "reviewed-bootstrap.md");
+    const out = join(fixture.root, "exported-with-bootstrap");
+    await writeFile(bootstrapPath, "# First run\n\nAsk for the operator's timezone.\n", "utf8");
+
+    const result = await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
+      bootstrapPath,
+    });
+
+    expect(result.filesWritten).toContain("BOOTSTRAP.md");
+    await expect(readFile(join(out, "BOOTSTRAP.md"), "utf8")).resolves.toBe(
+      "# First run\n\nAsk for the operator's timezone.\n",
+    );
+    const exported = await readClawManifestFile(out);
+    expect(exported.ok).toBe(true);
+    if (!exported.ok) {
+      throw new Error(JSON.stringify(exported.diagnostics));
+    }
+    expect(exported.packageBootstrap).toMatchObject({
+      sourcePath: "BOOTSTRAP.md",
+      byteLength: 46,
+    });
+
+    const originalPackage = JSON.parse(await readFile(join(out, "package.json"), "utf8")) as {
+      version: string;
+    };
+    await writeFile(bootstrapPath, "# First run\n\nAsk for the operator's locale.\n", "utf8");
+    const changedOut = join(fixture.root, "exported-with-changed-bootstrap");
+    await exportClawAgent("worker", changedOut, {
+      env: fixture.env,
+      config: fixture.config,
+      sourceMcpServers: fixture.sourceMcpServers,
+      bootstrapPath,
+    });
+    const changedPackage = JSON.parse(await readFile(join(changedOut, "package.json"), "utf8")) as {
+      version: string;
+    };
+    expect(changedPackage.version).not.toBe(originalPackage.version);
+  });
+
+  it("rejects empty bootstrap authoring without leaving an export target", async () => {
+    const fixture = await installedFixture();
+    const bootstrapPath = join(fixture.root, "empty-bootstrap.md");
+    const out = join(fixture.root, "exported-empty-bootstrap");
+    await writeFile(bootstrapPath, " \n", "utf8");
+
+    await expect(
+      exportClawAgent("worker", out, {
+        env: fixture.env,
+        config: fixture.config,
+        sourceMcpServers: fixture.sourceMcpServers,
+        bootstrapPath,
+      }),
+    ).rejects.toMatchObject({ code: "bootstrap_empty" });
+    await expect(readFile(join(out, "CLAW.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("rejects non-UTF-8 bootstrap authoring", async () => {
+    const fixture = await installedFixture();
+    const bootstrapPath = join(fixture.root, "binary-bootstrap.md");
+    await writeFile(bootstrapPath, Buffer.from([0xff]));
+
+    await expect(
+      exportClawAgent("worker", join(fixture.root, "exported-binary-bootstrap"), {
+        env: fixture.env,
+        config: fixture.config,
+        sourceMcpServers: fixture.sourceMcpServers,
+        bootstrapPath,
+      }),
+    ).rejects.toMatchObject({ code: "bootstrap_invalid" });
+  });
+
   it("rejects modified managed content instead of silently creating a snapshot", async () => {
     const fixture = await installedFixture();
     await writeFile(join(fixture.plan.agent.workspace, "SOUL.md"), "operator revision\n", "utf8");
