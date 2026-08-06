@@ -2,6 +2,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 // Persistent operator approval lifecycle and first-answer-wins transitions.
 import type { Selectable } from "kysely";
 import {
+  type DecisionReceiptV1,
   type ApprovalPresentation,
   isWellFormedApprovalId,
   validateApprovalPresentation,
@@ -16,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
@@ -166,6 +168,12 @@ export class OperatorApprovalHistoryCursorError extends Error {
 type ListTerminalOperatorApprovalsResult = {
   records: OperatorApprovalRecord[];
   nextCursor?: string;
+};
+
+type OperatorApprovalReceiptContext = {
+  contextId: string;
+  executionId: string;
+  runId: string;
 };
 
 const OPERATOR_APPROVAL_DECISIONS = new Set<OperatorApprovalDecision>([
@@ -478,6 +486,276 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
     consumedAtMs: row.consumed_at_ms,
     consumedBy: row.consumed_by,
   };
+}
+
+function operatorApprovalReasonCode(record: OperatorApprovalRecord): string {
+  if (record.status === "allowed") {
+    return record.decision === "allow-always"
+      ? "operator_approval_allowed_always"
+      : "operator_approval_allowed_once";
+  }
+  if (record.status === "expired") {
+    return "operator_approval_expired";
+  }
+  if (record.status === "cancelled") {
+    return record.terminalReason === "gateway-restart"
+      ? "operator_approval_cancelled_gateway_restart"
+      : "operator_approval_cancelled_run_aborted";
+  }
+  switch (record.terminalReason) {
+    case "malformed-verdict":
+      return "operator_approval_denied_malformed_verdict";
+    case "no-route":
+      return "operator_approval_denied_no_route";
+    case "storage-corrupt":
+      return "operator_approval_denied_storage_corrupt";
+    default:
+      return "operator_approval_denied_by_reviewer";
+  }
+}
+
+function operatorApprovalPolicyRefs(record: OperatorApprovalRecord): string[] {
+  const refs = ["operator-approval:first-answer-wins"];
+  switch (record.terminalReason) {
+    case "user":
+      refs.push("operator-approval:human-decision");
+      break;
+    case "timeout":
+      refs.push("operator-approval:deadline");
+      break;
+    case "no-route":
+      refs.push("operator-approval:delivery-route-required");
+      break;
+    case "run-aborted":
+      refs.push("operator-approval:run-lifecycle");
+      break;
+    case "gateway-restart":
+      refs.push("operator-approval:runtime-lifecycle");
+      break;
+    case "malformed-verdict":
+      refs.push("operator-approval:valid-verdict-required");
+      break;
+    case "storage-corrupt":
+      refs.push("operator-approval:fail-closed-storage");
+      break;
+  }
+  return refs.toSorted();
+}
+
+function operatorApprovalRemediation(
+  record: OperatorApprovalRecord,
+): DecisionReceiptV1["remediation"] {
+  if (record.status === "allowed") {
+    return [];
+  }
+  switch (record.terminalReason) {
+    case "timeout":
+      return [
+        {
+          code: "request_approval_again",
+          text: "Request the action again and resolve the new approval before its deadline.",
+        },
+      ];
+    case "no-route":
+      return [
+        {
+          code: "restore_approval_route",
+          text: "Connect an eligible approval client or configure an approval delivery route, then request the action again.",
+        },
+      ];
+    case "run-aborted":
+      return [
+        {
+          code: "start_new_run",
+          text: "Start a new run and request the action again if it is still needed.",
+        },
+      ];
+    case "gateway-restart":
+      return [
+        {
+          code: "request_after_restart",
+          text: "After the Gateway is available, request the action again to create a current approval.",
+        },
+      ];
+    case "malformed-verdict":
+      return [
+        {
+          code: "submit_supported_decision",
+          text: "Request the action again and resolve it with one of the decisions shown by the approval prompt.",
+        },
+      ];
+    case "storage-corrupt":
+      return [
+        {
+          code: "inspect_state_integrity",
+          text: "Run openclaw doctor and inspect the shared state database before requesting the action again.",
+        },
+      ];
+    default:
+      return [
+        {
+          code: "review_and_request_again",
+          text: "Review the denial, then request the action again only if an eligible reviewer should reconsider it.",
+        },
+      ];
+  }
+}
+
+function projectOperatorApprovalReceipt(
+  record: OperatorApprovalRecord,
+  context: OperatorApprovalReceiptContext,
+): DecisionReceiptV1 {
+  const allowed = record.status === "allowed";
+  const sourceRef = record.resolutionRef;
+  return {
+    schemaVersion: 1,
+    receiptId: `approval:${sourceRef}`,
+    contextId: context.contextId,
+    executionId: context.executionId,
+    runId: context.runId,
+    actionId: sourceRef,
+    occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
+    action: {
+      family: record.kind,
+      operation: "approval",
+      summary: allowed
+        ? `A ${record.kind} approval allowed the requested action.`
+        : `A ${record.kind} approval stopped the requested action.`,
+    },
+    decision: {
+      outcome: allowed ? "allowed" : "denied",
+      reasonCode: operatorApprovalReasonCode(record),
+    },
+    enforcement: {
+      coverageState: "enforced",
+      evaluatorRef: `operator-approval:${record.resolver?.kind ?? "system"}`,
+      policyRefs: operatorApprovalPolicyRefs(record),
+      grantRefs: allowed ? [`operator-approval-grant:${sourceRef}`] : [],
+      contextFieldsUsed: ["runId"],
+    },
+    source: {
+      owner: "operator_approvals",
+      recordRef: sourceRef,
+      decisionBoundary: "gateway.operator-approval.first-answer",
+    },
+    missingEvidence: [],
+    remediation: operatorApprovalRemediation(record),
+  };
+}
+
+function projectCorruptOperatorApprovalReceipt(
+  row: OperatorApprovalRow,
+  context: OperatorApprovalReceiptContext,
+): DecisionReceiptV1 {
+  const kind = OPERATOR_APPROVAL_KINDS.has(row.kind as OperatorApprovalKind)
+    ? (row.kind as OperatorApprovalKind)
+    : "exec";
+  const sourceRef = isApprovalResolutionRef(row.resolution_ref)
+    ? row.resolution_ref
+    : buildApprovalResolutionRef({ approvalId: row.approval_id, approvalKind: kind });
+  const occurredAt = isValidTimestamp(row.resolved_at_ms ?? -1)
+    ? row.resolved_at_ms!
+    : isValidTimestamp(row.updated_at_ms)
+      ? row.updated_at_ms
+      : 0;
+  return {
+    schemaVersion: 1,
+    receiptId: `approval:${sourceRef}`,
+    contextId: context.contextId,
+    executionId: context.executionId,
+    runId: context.runId,
+    actionId: sourceRef,
+    occurredAt,
+    action: { family: kind, operation: "approval" },
+    decision: { outcome: "unknown", reasonCode: "operator_approval_record_corrupt" },
+    enforcement: {
+      coverageState: "unknown",
+      policyRefs: [],
+      grantRefs: [],
+      contextFieldsUsed: ["runId"],
+    },
+    source: {
+      owner: "operator_approvals",
+      recordRef: sourceRef,
+      decisionBoundary: "gateway.operator-approval.first-answer",
+    },
+    missingEvidence: ["operator_approval.valid"],
+    remediation: [
+      {
+        code: "inspect_state_integrity",
+        text: "Run openclaw doctor and inspect the shared state database before trusting this approval.",
+      },
+    ],
+  };
+}
+
+function terminalApprovalsForRunQuery(
+  database: ReturnType<typeof getNodeSqliteKysely<OperatorApprovalDatabase>>,
+  runId: string,
+  nowMs: number,
+) {
+  return database
+    .selectFrom("operator_approvals")
+    .selectAll()
+    .where("source_run_id", "=", runId)
+    .where("status", "!=", "pending")
+    .where("resolved_at_ms", "is not", null)
+    .where("resolved_at_ms", ">=", nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS);
+}
+
+/** Count authoritative retained approval decisions linked by their recorded source run. */
+export function countOperatorApprovalReceiptsForRun(params: {
+  runId: string;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): number {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "operator_approvals")) {
+        return 0;
+      }
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        terminalApprovalsForRunQuery(stateDb, params.runId, params.nowMs ?? Date.now())
+          .clearSelect()
+          .select((eb) => eb.fn.countAll<number>().as("count")),
+      );
+      return typeof row?.count === "number" ? row.count : Number(row?.count ?? 0);
+    }, params.databaseOptions) ?? 0
+  );
+}
+
+/** Project authoritative approval rows directly; no generic decision fact is written. */
+export function listOperatorApprovalReceiptsForRun(params: {
+  context: OperatorApprovalReceiptContext;
+  offset: number;
+  limit: number;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): DecisionReceiptV1[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "operator_approvals")) {
+        return [];
+      }
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+      const rows = executeSqliteQuerySync(
+        db,
+        terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now())
+          .orderBy("resolved_at_ms", "asc")
+          .orderBy("approval_id", "asc")
+          .offset(params.offset)
+          .limit(params.limit),
+      ).rows;
+      return rows.map((row) => {
+        const record = decodeOperatorApprovalRow(row);
+        return record
+          ? projectOperatorApprovalReceipt(record, params.context)
+          : projectCorruptOperatorApprovalReceipt(row, params.context);
+      });
+    }, params.databaseOptions) ?? []
+  );
 }
 
 function selectOperatorApprovalRow(

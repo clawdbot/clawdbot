@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  insertOperatorApproval,
+  resolveOperatorApproval,
+} from "../gateway/operator-approval-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -117,6 +121,36 @@ function prepareExecutionIdentityContextAtAdmission(
     ...database,
     ...(now !== undefined ? { now } : {}),
     ...(limits !== undefined ? { limits } : {}),
+  });
+}
+
+function recordDeniedApprovalForRun(
+  runId: string,
+  databaseOptions: ReturnType<typeof databaseOptions>,
+  id = "denied-approval",
+): void {
+  insertOperatorApproval({
+    approval: {
+      id,
+      kind: "exec",
+      presentation: {
+        kind: "exec",
+        commandText: "details withheld",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      source: { runId, toolCallId: "private-tool-call", toolName: "exec" },
+      runtimeEpoch: "runtime-1",
+      createdAtMs: 100,
+      expiresAtMs: 1_000,
+    },
+    databaseOptions,
+  });
+  resolveOperatorApproval({
+    id,
+    decision: "deny",
+    resolver: { kind: "device", id: "private-reviewer-device" },
+    nowMs: 200,
+    databaseOptions,
   });
 }
 
@@ -882,5 +916,77 @@ describe("execution identity context storage", () => {
         { ...database, now: 123 },
       ).decisions,
     ).toEqual([]);
+  });
+
+  it("projects an authoritative denied approval by run before and after restart", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("run-denied-receipt"), {
+      ...database,
+      now: 100,
+      contextId: "context-denied-receipt",
+      executionId: "execution-denied-receipt",
+      runtimeInstanceId: "runtime-1",
+    });
+    recordDeniedApprovalForRun("run-denied-receipt", database);
+
+    const beforeRestart = inspectExecutionIdentityRun(
+      { runId: "run-denied-receipt" },
+      { ...database, now: 300 },
+    );
+    expect(beforeRestart).toMatchObject({
+      coverage: { state: "enforced" },
+      decisions: [
+        { decision: { outcome: "not-applicable" } },
+        {
+          contextId: "context-denied-receipt",
+          executionId: "execution-denied-receipt",
+          runId: "run-denied-receipt",
+          decision: {
+            outcome: "denied",
+            reasonCode: "operator_approval_denied_by_reviewer",
+          },
+          enforcement: {
+            coverageState: "enforced",
+            contextFieldsUsed: ["runId"],
+          },
+          source: { owner: "operator_approvals" },
+        },
+      ],
+    });
+    expect(JSON.stringify(beforeRestart)).not.toContain("private-reviewer-device");
+    expect(JSON.stringify(beforeRestart)).not.toContain("private-tool-call");
+
+    closeOpenClawStateDatabaseForTest();
+    expect(
+      inspectExecutionIdentityRun({ runId: "run-denied-receipt" }, { ...database, now: 300 }),
+    ).toEqual(beforeRestart);
+    expect(
+      inspectExecutionIdentityRun(
+        { runId: "run-denied-receipt", decisionOffset: 1, decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      decisions: [{ decision: { reasonCode: "operator_approval_denied_by_reviewer" } }],
+    });
+  });
+
+  it("reports a retained approval with no identity context as an unknown missing link", () => {
+    const database = databaseOptions();
+    recordDeniedApprovalForRun("run-missing-context", database);
+
+    expect(
+      inspectExecutionIdentityRun({ runId: "run-missing-context" }, { ...database, now: 300 }),
+    ).toMatchObject({
+      run: { runId: "run-missing-context", status: "known" },
+      identity: {
+        state: "unknown",
+        reasonCode: "decision_context_link_missing",
+      },
+      decisions: [],
+      coverage: {
+        state: "unknown",
+        missingEvidence: ["identity.context", "decision.context_link"],
+      },
+    });
   });
 });

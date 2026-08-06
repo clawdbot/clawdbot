@@ -8,6 +8,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import {
+  countOperatorApprovalReceiptsForRun,
+  listOperatorApprovalReceiptsForRun,
+} from "../gateway/operator-approval-store.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -22,6 +26,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { clearAuditIdentityKeyCacheForDatabase } from "./audit-identity.js";
+import {
+  countExecutionDecisionFactsForContext,
+  countExecutionDecisionFactsForRun,
+  listExecutionDecisionFactsForContext,
+} from "./execution-decision-facts.js";
 import {
   parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
@@ -473,12 +482,76 @@ function presentResult(params: {
   context: ExecutionIdentityContextV1;
   decisionOffset?: number;
   decisionLimit?: number;
+  options: ExecutionIdentityReadOptions;
 }): AuditRunInspectResult {
-  const allDecisions = [admissionDecision(params.context)];
   const offset = params.decisionOffset ?? 0;
   const limit = params.decisionLimit ?? 50;
-  const decisions = allDecisions.slice(offset, offset + limit);
+  const now = params.options.now ?? Date.now();
+  const approvalCount = countOperatorApprovalReceiptsForRun({
+    runId: params.context.runId,
+    nowMs: now,
+    databaseOptions: params.options,
+  });
+  const genericCount = countExecutionDecisionFactsForContext({
+    contextId: params.context.contextId,
+    now,
+    database: params.options,
+  });
+  const totalDecisions = 1 + approvalCount + genericCount;
+  const decisions: DecisionReceiptV1[] = [];
+  let remainingOffset = offset;
+  let remainingLimit = limit;
+
+  if (remainingOffset === 0 && remainingLimit > 0) {
+    decisions.push(admissionDecision(params.context));
+    remainingLimit -= 1;
+  } else {
+    remainingOffset = Math.max(0, remainingOffset - 1);
+  }
+  if (remainingLimit > 0 && remainingOffset < approvalCount) {
+    const page = listOperatorApprovalReceiptsForRun({
+      context: {
+        contextId: params.context.contextId,
+        executionId: params.context.executionId,
+        runId: params.context.runId,
+      },
+      offset: remainingOffset,
+      limit: remainingLimit,
+      nowMs: now,
+      databaseOptions: params.options,
+    });
+    decisions.push(...page);
+    remainingLimit -= page.length;
+    remainingOffset = 0;
+  } else {
+    remainingOffset = Math.max(0, remainingOffset - approvalCount);
+  }
+  if (remainingLimit > 0 && remainingOffset < genericCount) {
+    decisions.push(
+      ...listExecutionDecisionFactsForContext({
+        contextId: params.context.contextId,
+        offset: remainingOffset,
+        limit: remainingLimit,
+        now,
+        database: params.options,
+      }),
+    );
+  }
   const nextOffset = offset + decisions.length;
+  const pageCoverage = decisions.map((receipt) => receipt.enforcement.coverageState);
+  const coverageState = pageCoverage.includes("unsupported")
+    ? "unsupported"
+    : pageCoverage.includes("unknown")
+      ? "unknown"
+      : approvalCount > 0 || pageCoverage.includes("enforced")
+        ? "enforced"
+        : params.context.coverageState;
+  const missingEvidence = [
+    ...new Set([
+      ...params.context.missingEvidence,
+      ...decisions.flatMap((receipt) => receipt.missingEvidence),
+    ]),
+  ].toSorted();
   return {
     schemaVersion: 1,
     run: {
@@ -489,10 +562,10 @@ function presentResult(params: {
     identity: { state: "present", context: params.context },
     decisions,
     coverage: {
-      state: params.context.coverageState,
-      missingEvidence: [...params.context.missingEvidence],
+      state: coverageState,
+      missingEvidence,
     },
-    ...(nextOffset < allDecisions.length ? { nextDecisionCursor: String(nextOffset) } : {}),
+    ...(nextOffset < totalDecisions ? { nextDecisionCursor: String(nextOffset) } : {}),
   };
 }
 
@@ -508,6 +581,7 @@ function inspectExactExecution(
       context: contextResult.context,
       decisionOffset: params.decisionOffset,
       decisionLimit: params.decisionLimit,
+      options,
     });
   }
   if (contextResult.status === "corrupt") {
@@ -605,6 +679,7 @@ function inspectRunSelector(
             context: parseExecutionIdentityRow(firstMatches[0]!),
             decisionOffset: params.decisionOffset,
             decisionLimit: params.decisionLimit,
+            options,
           });
         } catch {
           return unavailableResult({
@@ -650,6 +725,24 @@ function inspectRunSelector(
           coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
           ...(page.length > limit ? { nextExecutionCursor: String(offset + limit) } : {}),
         };
+      }
+      if (
+        countOperatorApprovalReceiptsForRun({ runId, nowMs: now, databaseOptions: options }) > 0 ||
+        countExecutionDecisionFactsForRun({ runId, now, database: options }) > 0
+      ) {
+        return unavailableResult({
+          selector: { runId },
+          runStatus: "known",
+          state: "unknown",
+          reasonCode: "decision_context_link_missing",
+          missingEvidence: ["identity.context", "decision.context_link"],
+          remediation: [
+            {
+              code: "record_new_identity_context",
+              text: "Confirm execution identity collection is enabled, then run and request the action again to record a linked context.",
+            },
+          ],
+        });
       }
       if (tableExists(db, "execution_identity_contexts") && hasAnyRunContext(db, runId)) {
         return unavailableIdentityContext(

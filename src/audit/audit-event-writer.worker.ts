@@ -3,6 +3,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { pruneExpiredAuditEvents, recordAuditEvent } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
+import { pruneExpiredExecutionDecisionFacts } from "./execution-decision-facts.js";
 import {
   processExecutionIdentityAdmissionWork,
   pruneExpiredExecutionIdentityContexts,
@@ -57,6 +58,11 @@ function reportMaintenance(): void {
   }
   try {
     pruneExpiredExecutionIdentityContexts({ database });
+  } catch (error) {
+    port.postMessage({ type: "maintenance-error", error: String(error) });
+  }
+  try {
+    pruneExpiredExecutionDecisionFacts({ database });
   } catch (error) {
     port.postMessage({ type: "maintenance-error", error: String(error) });
   }

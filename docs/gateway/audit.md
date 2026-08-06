@@ -1,5 +1,5 @@
 ---
-summary: "Metadata-only audit history for agent runs, tool actions, and opt-in message lifecycles"
+summary: "Metadata-only activity history plus durable run identity and decision receipts"
 read_when:
   - You need a durable record of what the Gateway did without storing content
   - You are deciding whether to enable message lifecycle auditing
@@ -24,6 +24,11 @@ The Gateway also keeps an adjacent execution identity context for newly
 admitted agent runs. This context is authoritative for the identity facts it
 contains; it does not make the activity ledger lossless and does not turn audit
 records into authorization evidence.
+
+Terminal operator approvals are a separate authoritative source. Run
+inspection adapts their existing first-answer-wins rows directly into decision
+receipts; it does not copy approvals into the audit ledger or the generic
+decision-fact table.
 
 ## Run identity inspection
 
@@ -105,16 +110,47 @@ remain unattributed. If authenticated user evidence promises a durable profile
 but profile resolution fails, the invoker is `unknown` rather than guessed from
 headers, device ids, connection ids, or credentials.
 
-Each present context currently projects one run-admission receipt. Its outcome
+Each present context projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason
 states that no identity-aware policy or grant evaluation was proven. This is
 an explanation of admission evidence, not an enforcement claim.
+
+When the same `runId` has a retained terminal row in `operator_approvals`, the
+inspector also projects an approval receipt from that row. The receipt names
+the durable owner and record reference, the exact stable reason code, the
+first-answer and terminal policy references, any grant created by an allow
+decision, the run correlation used, and a bounded next step. It never includes
+the command, arguments, path, environment, reviewer device id, resolver id, or
+approval presentation text.
+
+Approval outcomes map to stable receipt reasons:
+
+| Recorded approval result       | Receipt reason code                                                                       |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| Allow once / allow always      | `operator_approval_allowed_once` / `operator_approval_allowed_always`                     |
+| Reviewer denial                | `operator_approval_denied_by_reviewer`                                                    |
+| Deadline expiry                | `operator_approval_expired`                                                               |
+| Run abort / Gateway restart    | `operator_approval_cancelled_run_aborted` / `operator_approval_cancelled_gateway_restart` |
+| No approval delivery route     | `operator_approval_denied_no_route`                                                       |
+| Malformed approval verdict     | `operator_approval_denied_malformed_verdict`                                              |
+| Fail-closed storage state      | `operator_approval_denied_storage_corrupt`                                                |
+| Unreadable or inconsistent row | `operator_approval_record_corrupt`                                                        |
+
+Allowed, denied, expired, and cancelled rows are `enforced` because the
+recorded human decision or fail-closed owner policy changed whether the action
+could proceed. A no-route denial is `enforced` only because the approval owner
+records `no-route` as the winning terminal reason before returning the
+non-action. An unreadable row is `unknown`, never reconstructed. If a retained
+approval names a run but its expected execution context is missing, run
+inspection returns `decision_context_link_missing` with `unknown` coverage and
+does not invent a receipt context.
 
 Run inspection returns successful typed diagnostics instead of inventing
 facts:
 
 - `unknown`: the selected run or execution is not known, or expected context is
-  corrupt or unreadable;
+  corrupt or unreadable; this also covers a retained decision whose expected
+  context link is missing;
 - `unsupported`: best-effort activity shows the run, but no context is
   available, as with a pre-feature, disabled, or failed context write. A
   context just beyond retention also uses this state while its bounded cleanup
@@ -277,6 +313,16 @@ remains. That transition does not prove the run did not occur. These limits
 make the inspector an operational diagnostic surface, not a compliance
 archive.
 
+Terminal approvals remain in their owner-native `operator_approvals` table for
+30 days. Inspection applies that cutoff even when physical pruning has not run.
+The additive `execution_decision_facts` table is reserved for future action
+boundaries that have no owner-native durable record. It is created lazily on
+first generic fact write, retains facts for 30 days, caps the table at 250,000
+rows, and prunes at most 1,024 rows per write or maintenance tick. Approval
+paths never write this table. Its facts and approval rows are authoritative for
+their recorded decisions; the audit activity writer remains best-effort and
+cannot recreate either source after loss.
+
 ## Querying
 
 - CLI: [`openclaw audit`](/cli/audit) with filters for agent, session, run,
@@ -287,8 +333,9 @@ archive.
   [Gateway protocol](/gateway/protocol#audit-ledger-rpc).
 - Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
   `executionId` for exact inspection or one `runId` for bounded discovery. It
-  returns the immutable V1 context and admission receipt for an exact match, or
-  a typed ambiguous candidate page when a run has multiple executions.
+  returns the immutable V1 context plus paged admission, approval, and future
+  generic decision receipts for an exact match, or a typed ambiguous candidate
+  page when a run has multiple executions.
 
 ## Related
 

@@ -419,8 +419,36 @@ describe("audit run explanation", () => {
           missingEvidence: ["invoker.principal"],
           remediation: [{ code: "no_claim", text: "Treat this receipt as attribution only." }],
         },
+        {
+          schemaVersion: 1,
+          receiptId: "approval:receipt-1",
+          contextId: "context-1",
+          executionId: "execution-1",
+          runId: "run-1",
+          actionId: "receipt-1",
+          occurredAt: 2,
+          action: { family: "exec", operation: "approval" },
+          decision: {
+            outcome: "denied",
+            reasonCode: "operator_approval_denied_by_reviewer",
+          },
+          enforcement: {
+            coverageState: "enforced",
+            evaluatorRef: "operator-approval:device",
+            policyRefs: ["operator-approval:human-decision"],
+            grantRefs: [],
+            contextFieldsUsed: ["runId"],
+          },
+          source: {
+            owner: "operator_approvals",
+            recordRef: "receipt-1",
+            decisionBoundary: "gateway.operator-approval.first-answer",
+          },
+          missingEvidence: [],
+          remediation: [{ code: "review_and_request_again", text: "Review the denial and retry." }],
+        },
       ],
-      coverage: { state: "unattributed", missingEvidence: ["invoker.principal"] },
+      coverage: { state: "enforced", missingEvidence: ["invoker.principal"] },
     });
 
     await auditListCommand({ explain: true, runId: "run-1", cursor: "1", limit: "25" }, runtime);
@@ -453,6 +481,10 @@ describe("audit run explanation", () => {
     }
     expect(output).toContain("not-applicable");
     expect(output).toContain("run_admission_identity_not_evaluated");
+    expect(output).toContain("operator_approval_denied_by_reviewer");
+    expect(output).toContain("authoritative owner-native SQLite record; retained 30 days");
+    expect(output).toContain("Policy refs: operator-approval:human-decision");
+    expect(output).toContain("Context used: runId");
   });
 
   it("renders ambiguous run discovery and selects an exact execution", async () => {

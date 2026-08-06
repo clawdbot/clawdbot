@@ -335,11 +335,19 @@ function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
 }
 
 function decisionLines(receipt: DecisionReceiptV1): string[] {
+  const evidence =
+    receipt.source.owner === "operator_approvals"
+      ? "authoritative owner-native SQLite record; retained 30 days"
+      : "named authoritative decision source";
   return [
     `  ${safe(receipt.action.family)}.${safe(receipt.action.operation)}: ${safe(receipt.decision.outcome)}`,
     `    Coverage: ${safe(receipt.enforcement.coverageState)}`,
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
     `    Source: ${safe(receipt.source.owner)} at ${safe(receipt.source.decisionBoundary)}`,
+    `    Evidence: ${evidence}`,
+    `    Policy refs: ${receipt.enforcement.policyRefs.length > 0 ? receipt.enforcement.policyRefs.map(safe).join(", ") : "none"}`,
+    `    Grant refs: ${receipt.enforcement.grantRefs.length > 0 ? receipt.enforcement.grantRefs.map(safe).join(", ") : "none"}`,
+    `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,
     ...(receipt.action.summary ? [`    Summary: ${safe(receipt.action.summary)}`] : []),
   ];
 }
