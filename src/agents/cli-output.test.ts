@@ -978,7 +978,7 @@ describe("parseCliJsonl", () => {
     });
   });
 
-  it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
+  it("captures every Claude assistant transcript UUID while preserving the resume checkpoint", () => {
     const result = parseCliJsonl(
       [
         JSON.stringify({ type: "system", subtype: "init", session_id: "session-checkpoint" }),
@@ -1025,6 +1025,11 @@ describe("parseCliJsonl", () => {
     );
 
     expect(result?.resumeCheckpointId).toBe("assistant-checkpoint-2");
+    expect(result?.nativeAssistantIds).toEqual([
+      "assistant-checkpoint-1",
+      "assistant-checkpoint-2",
+      "subagent-checkpoint",
+    ]);
   });
 
   it("preserves Claude session metadata even when the final result text is empty", () => {

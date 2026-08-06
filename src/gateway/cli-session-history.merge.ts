@@ -62,7 +62,7 @@ function resolveComparableRole(message: unknown): string | undefined {
 // External identity survives text edits, so it is the strongest match signal
 // for imported messages from Claude CLI or similar external histories.
 type ImportedExternalIdentity = {
-  externalId: string;
+  externalIds: string[];
   importedFrom?: string;
   cliSessionId?: string;
 };
@@ -77,10 +77,18 @@ function resolveImportedExternalIdentity(message: unknown): ImportedExternalIden
     typeof (message as { __openclaw?: unknown })["__openclaw"] === "object"
       ? ((message as { __openclaw?: Record<string, unknown> })["__openclaw"] ?? {})
       : undefined;
+  const externalIds = Array.isArray(meta?.externalIds)
+    ? meta.externalIds
+        .map((value) => normalizeOptionalString(value))
+        .filter((value): value is string => value !== undefined)
+    : [];
   const externalId = normalizeOptionalString(meta?.externalId);
-  return externalId
+  if (externalId) {
+    externalIds.push(externalId);
+  }
+  return externalIds.length > 0
     ? {
-        externalId,
+        externalIds,
         importedFrom: normalizeOptionalString(meta?.importedFrom),
         cliSessionId: normalizeOptionalString(meta?.cliSessionId),
       }
@@ -94,7 +102,9 @@ function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean 
     return undefined;
   }
   return (
-    importedIdentity.externalId === existingIdentity.externalId &&
+    importedIdentity.externalIds.some((externalId) =>
+      existingIdentity.externalIds.includes(externalId),
+    ) &&
     importedIdentity.importedFrom === existingIdentity.importedFrom &&
     importedIdentity.cliSessionId === existingIdentity.cliSessionId
   );

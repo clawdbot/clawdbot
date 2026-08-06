@@ -924,6 +924,57 @@ describe("cli session history", () => {
     });
   });
 
+  it("deduplicates every imported assistant fragment in a durable Claude turn", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const externalIds = [
+        "assistant-leading-text",
+        "assistant-tool-use",
+        "assistant-final-text",
+      ] as const;
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          {
+            role: "assistant",
+            uuid: externalIds[0],
+            content: "leading native text",
+          },
+          {
+            role: "assistant",
+            uuid: externalIds[1],
+            content: "native tool fragment",
+          },
+          {
+            role: "assistant",
+            uuid: externalIds[2],
+            content: "final native text",
+          },
+        ]),
+        "utf-8",
+      );
+      const localMessages = [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "final durable text" }],
+          __openclaw: {
+            importedFrom: "claude-cli",
+            externalIds,
+            cliSessionId: sessionId,
+          },
+        },
+      ];
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(messages).toBe(localMessages);
+    });
+  });
+
   it("does not surface a secret present only in imported history after merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const importedSecret = "sk-abcdef1234567890xyz";

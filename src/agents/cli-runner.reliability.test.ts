@@ -3397,6 +3397,10 @@ describe("runCliAgent reliability", () => {
           idempotencyKey: "cli-assistant:run-persist-cli",
         }),
       );
+      const assistantMessage = messages.find(
+        (message) => (message as { role?: string }).role === "assistant",
+      );
+      expect(requireRecord(assistantMessage, "persisted assistant")["__openclaw"]).toBeUndefined();
       expect(
         messages.filter((message) => (message as { role?: string }).role === "user"),
       ).toHaveLength(1);
@@ -3408,6 +3412,104 @@ describe("runCliAgent reliability", () => {
         storePath,
       });
       expect(events).toContainEqual(expect.objectContaining({ type: "session", cwd: dir }));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists every Claude native assistant identity on successful output", async () => {
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      input.onStdout?.(
+        [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "claude-session" }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "assistant-leading-text",
+            session_id: "claude-session",
+            message: {
+              model: "claude-opus-5",
+              role: "assistant",
+              content: [{ type: "text", text: "leading text" }],
+            },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "assistant-tool-use",
+            session_id: "claude-session",
+            message: {
+              model: "claude-opus-5",
+              role: "assistant",
+              content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: {} }],
+            },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "assistant-native-turn",
+            session_id: "claude-session",
+            message: {
+              model: "claude-opus-5",
+              role: "assistant",
+              content: [{ type: "text", text: "hello from Claude" }],
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            session_id: "claude-session",
+            result: "hello from Claude",
+          }),
+        ].join("\n") + "\n",
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const { dir, sessionFile, storePath } = createSessionFile();
+
+    try {
+      await seedSqliteSessionEntry({ sessionFile, storePath });
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-claude",
+        provider: "claude-cli",
+        model: "claude-opus-5",
+      });
+      context.backendResolved.config.output = "jsonl";
+
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          storePath,
+          workspaceDir: dir,
+          persistAssistantTranscript: true,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from Claude" }]);
+      const messages = await readTranscriptMessages(sessionFile);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "hello from Claude" }],
+          provider: "claude-cli",
+          idempotencyKey: "cli-assistant:run-persist-claude",
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "claude-session",
+            externalIds: ["assistant-leading-text", "assistant-tool-use", "assistant-native-turn"],
+          },
+        }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
