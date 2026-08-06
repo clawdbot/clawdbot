@@ -280,6 +280,34 @@ describe("auth.test boot call", () => {
     expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("timeout of 10000ms exceeded"));
   });
 
+  it("re-resolves blocked identity with backoff while the connection stays up", async () => {
+    const runtimeLog = vi.fn();
+    const authFailure = new Error(
+      "A request error occurred: The operation was aborted due to timeout",
+    );
+    // Startup auth.test and the onStarted recovery both fail; the connection then
+    // stays up, so only the backoff recovery loop can restore identity.
+    getSlackClient()
+      .auth.test.mockRejectedValueOnce(authFailure)
+      .mockRejectedValueOnce(authFailure);
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+    });
+    try {
+      await vi.waitFor(
+        () =>
+          expect(runtimeLog).toHaveBeenCalledWith(
+            expect.stringContaining("slack identity recovered"),
+          ),
+        { timeout: 50_000, interval: 500 },
+      );
+      expect(getSlackClient().auth.test.mock.calls.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      await stopSlackMonitor(monitor);
+    }
+  }, 55_000);
+
   it("settles and closes a real stalled startup auth request before degraded startup", async () => {
     const events: string[] = [];
     for (const key of PROXY_ENV_KEYS) {

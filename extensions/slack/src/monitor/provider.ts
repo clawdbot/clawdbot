@@ -129,6 +129,15 @@ const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-sourc
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+// Identity re-resolution after a failed startup auth.test. Without it, mention
+// detection stays disabled until the next socket restart, which a healthy
+// long-lived connection may never trigger.
+const SLACK_IDENTITY_RECOVERY_POLICY = {
+  initialMs: 10_000,
+  maxMs: 600_000,
+  factor: 2,
+  jitter: 0.25,
+} as const;
 
 type SlackRuntimeIdentity = {
   botUserId: string;
@@ -625,6 +634,34 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   monitorContextRef.current = ctx;
 
+  // A transient startup auth.test failure must not disable mention detection for
+  // the life of the process: the onStarted hook below only re-resolves identity
+  // when the socket (re)starts, so a stable connection never retries. Re-resolve
+  // with bounded backoff until identity adopts or the provider shuts down.
+  // Status output catches up on the next connect/disconnect publish.
+  const runSlackIdentityRecoveryLoop = async () => {
+    for (
+      let attempt = 1;
+      ctx.identityHealth.lifecycle === "blocked" && !opts.abortSignal?.aborted;
+      attempt += 1
+    ) {
+      try {
+        await sleepWithAbort(
+          computeBackoff(SLACK_IDENTITY_RECOVERY_POLICY, attempt),
+          opts.abortSignal,
+        );
+      } catch {
+        return;
+      }
+      if (await recoverSlackIdentity()) {
+        return;
+      }
+    }
+  };
+  if (identityHealth.lifecycle === "blocked") {
+    void runSlackIdentityRecoveryLoop();
+  }
+
   // Slack's socket-mode client keeps ping/pong health private and closes on
   // missed pongs. App events are useful status activity, but not transport proof.
   const trackEvent = opts.setStatus
@@ -909,6 +946,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         if (!adopted) {
           return false;
         }
+        runtime.log?.(
+          `[${account.accountId}] slack identity recovered; explicit mention detection enabled`,
+        );
         installationState.update(recoveredInstallationIdentity.kind);
         await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
         return true;
