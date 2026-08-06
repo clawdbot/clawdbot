@@ -41,7 +41,6 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
-import { runSkillResearchAutoCapture } from "../skills/research/autocapture.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
@@ -92,10 +91,6 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../skills/research/autocapture.js", () => ({
-  runSkillResearchAutoCapture: vi.fn(async () => undefined),
-}));
-
 vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
   resolveModelOverridePolicy: vi.fn(),
@@ -103,7 +98,6 @@ vi.mock("../tts/tts-settings.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
-const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -383,8 +377,6 @@ describe("runCliAgent reliability", () => {
     restoreCliRunnerTestDeps();
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
-    mockAutoCapture.mockReset();
-    mockAutoCapture.mockResolvedValue(undefined);
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
@@ -3254,71 +3246,6 @@ describe("runCliAgent reliability", () => {
     expect(resolved).toBe(false);
 
     releaseAgentEnd();
-    await expect(run).resolves.toMatchObject({
-      payloads: [{ text: "hello from cli" }],
-    });
-    expect(resolved).toBe(true);
-  });
-
-  it("waits for eligible Skill Research auto-capture before resolving direct CLI runs", async () => {
-    let releaseAutoCapture: () => void = () => undefined;
-    const autoCaptureSettled = new Promise<void>((resolve) => {
-      releaseAutoCapture = resolve;
-    });
-    mockAutoCapture.mockReturnValueOnce(autoCaptureSettled);
-
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "hello from cli",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const context = buildPreparedContext({ sessionKey: "agent:main:main" });
-    let resolved = false;
-    const run = runPreparedCliAgent({
-      ...context,
-      params: {
-        ...context.params,
-        agentId: "main",
-        trigger: "user",
-        config: {
-          skills: {
-            workshop: {
-              autonomous: {
-                mode: "propose",
-              },
-            },
-          },
-        },
-      },
-    }).then((result) => {
-      resolved = true;
-      return result;
-    });
-
-    await vi.waitFor(() => {
-      expect(mockAutoCapture).toHaveBeenCalledTimes(1);
-    });
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-    expect(mockAutoCapture).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          trigger: "user",
-        }),
-      }),
-    );
-
-    releaseAutoCapture();
     await expect(run).resolves.toMatchObject({
       payloads: [{ text: "hello from cli" }],
     });

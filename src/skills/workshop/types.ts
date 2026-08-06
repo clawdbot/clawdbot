@@ -93,6 +93,7 @@ export type SkillWorkshopProposalReviewCompletion = {
 export type SkillWorkshopRunOptions = {
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
+  updateProposals?: boolean;
   autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;

@@ -234,7 +234,7 @@ type WritableWorkspaceSkillSummary = {
 
 /**
  * Lists the workspace skills the workshop can target with update proposals, using the same
- * status discovery as `proposeUpdateSkill` so callers that route corrections to existing
+ * status discovery as `proposeUpdateSkill` so callers that route learnings to existing
  * skills stay in lockstep with what an update can actually write.
  */
 export function listWritableWorkspaceSkillSummaries(

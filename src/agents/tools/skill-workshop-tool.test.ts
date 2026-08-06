@@ -232,6 +232,46 @@ describe("skill_workshop tool", () => {
     ).rejects.toThrow("reached its proposal mutation limit");
   });
 
+  it("lets internal review runs draft update proposals for existing skills", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-update-");
+    const fullTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    const created = await fullTool.execute("seed-create", {
+      action: "create",
+      name: "weather-planner",
+      description: "Plan around the weather forecast",
+      proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    });
+    await fullTool.execute("seed-apply", {
+      action: "apply",
+      proposal_id: (created.details as { id: string }).id,
+      reason: "seed live skill",
+    });
+
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+    });
+    const update = await reviewTool.execute("review-update", {
+      action: "update",
+      skill_name: "weather-planner",
+      proposal_content:
+        "# Weather Planner\n\nCheck weather before outdoor recommendations.\nCheck alerts and timing.\n",
+    });
+
+    expect(update.details).toMatchObject({
+      status: "pending",
+      kind: "update",
+      skillKey: "weather-planner",
+    });
+    expect(proposalMutationBudget.remaining).toBe(0);
+  });
+
   it("does not refund the review mutation budget after a failed mutation", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-failure-");
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
