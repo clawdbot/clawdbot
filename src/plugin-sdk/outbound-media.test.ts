@@ -14,13 +14,17 @@ const loadWebMediaMock = vi.hoisted(() => vi.fn());
 type OutboundMediaModule = typeof import("./outbound-media.js");
 
 let createHostedOutboundMediaStore: OutboundMediaModule["createHostedOutboundMediaStore"];
+let buildHostedOutboundMediaResponseHeaders: OutboundMediaModule["buildHostedOutboundMediaResponseHeaders"];
 let loadOutboundMediaFromUrl: OutboundMediaModule["loadOutboundMediaFromUrl"];
 
 beforeAll(async () => {
   const webMedia = await import("./web-media.js");
   vi.spyOn(webMedia, "loadWebMedia").mockImplementation(loadWebMediaMock);
-  ({ createHostedOutboundMediaStore, loadOutboundMediaFromUrl } =
-    await import("./outbound-media.js"));
+  ({
+    buildHostedOutboundMediaResponseHeaders,
+    createHostedOutboundMediaStore,
+    loadOutboundMediaFromUrl,
+  } = await import("./outbound-media.js"));
 });
 
 afterAll(() => {
@@ -39,6 +43,7 @@ describe("loadOutboundMediaFromUrl", () => {
       buffer: Buffer.from("x"),
       kind: "image",
       contentType: "image/png",
+      fileName: "floor-plan.png",
     });
 
     await loadOutboundMediaFromUrl("file:///tmp/image.png", {
@@ -146,6 +151,7 @@ describe("createHostedOutboundMediaStore", () => {
       buffer: Buffer.from("image-bytes"),
       kind: "image",
       contentType: "image/png",
+      fileName: "floor-plan.png",
     });
     const store = createStore();
 
@@ -164,6 +170,7 @@ describe("createHostedOutboundMediaStore", () => {
       routePath: "/hook/media/",
       token: "token123",
       contentType: "image/png",
+      fileName: "floor-plan.png",
       byteLength: Buffer.byteLength("image-bytes"),
     });
     expect(entry?.buffer.toString("utf8")).toBe("image-bytes");
@@ -901,5 +908,75 @@ describe("createHostedOutboundMediaStore", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("buildHostedOutboundMediaResponseHeaders", () => {
+  it("creates download-only no-sniff headers with a sanitized UTF-8 filename", () => {
+    const headers = buildHostedOutboundMediaResponseHeaders({
+      byteLength: 123,
+      contentType: "application/pdf; charset=binary",
+      fileName: '../測試\r\nX-Evil: yes/"plan".pdf',
+    });
+
+    expect(headers).toMatchObject({
+      "Content-Type": "application/pdf",
+      "Content-Length": "123",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    expect(headers["Content-Disposition"]).toContain("attachment");
+    expect(headers["Content-Disposition"]).toContain("filename*=UTF-8''");
+    expect(headers["Content-Disposition"]).not.toMatch(/[\r\n]/u);
+  });
+});
+
+describe("hosted outbound media aggregate byte capacity", () => {
+  it("rejects a new entry without evicting a live capability", async () => {
+    let id = 0;
+    const ids = ["111111111111111111111111", "222222222222222222222222"];
+    const store = createHostedOutboundMediaStore({
+      metadataStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+        namespace: "aggregate-byte-media",
+        maxEntries: 2,
+        overflowPolicy: "reject-new",
+      }),
+      chunkStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+        namespace: "aggregate-byte-media-chunks",
+        maxEntries: 4,
+        overflowPolicy: "reject-new",
+      }),
+      ttlMs: 120_000,
+      resolveExpiresAtMs: () => Date.now() + 120_000,
+      createId: () => ids[id++] ?? "ffffffffffffffffffffffff",
+      createToken: () => "token123",
+      rawChunkBytes: 4,
+      maxEntries: 2,
+      maxChunkRows: 4,
+      maxTotalBytes: 5,
+      overflowPolicy: "reject-new",
+    });
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("abc"),
+      kind: "image",
+      contentType: "image/png",
+    });
+
+    await store.prepareUrl({
+      mediaUrl: "https://example.com/first.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 10,
+    });
+    await expect(
+      store.prepareUrl({
+        mediaUrl: "https://example.com/second.png",
+        routePath: "/hook/media/",
+        publicBaseUrl: "https://gateway.example.com",
+        maxBytes: 10,
+      }),
+    ).rejects.toThrow("hosted outbound media capacity is full");
+    expect(await store.read(ids[0] ?? "")).not.toBeNull();
+    expect(await store.read(ids[1] ?? "")).toBeNull();
   });
 });

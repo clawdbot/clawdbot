@@ -1,5 +1,7 @@
 // Outbound media helpers normalize plugin media attachments before channel delivery.
 import { randomBytes } from "node:crypto";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import { loadWebMedia } from "./web-media.js";
@@ -54,6 +56,7 @@ export type HostedOutboundMediaMetadata = {
   routePath: string;
   token: string;
   contentType?: string;
+  fileName?: string;
   expiresAt: number;
   byteLength: number;
 };
@@ -89,6 +92,7 @@ export type HostedOutboundMediaStore = {
     /** Host-authorized local media access forwarded to the shared outbound loader. */
     mediaAccess?: OutboundMediaAccess;
     proxyUrl?: string;
+    requestInit?: RequestInit;
   }) => Promise<string>;
   readMetadata: (id: string, nowMs?: number) => Promise<HostedOutboundMediaMetadata | null>;
   read: (id: string, nowMs?: number) => Promise<HostedOutboundMediaEntry | null>;
@@ -107,6 +111,8 @@ export type CreateHostedOutboundMediaStoreOptions = {
   rawChunkBytes?: number;
   maxEntries?: number;
   maxChunkRows?: number;
+  /** Aggregate live payload budget. Omit only when the backing owner enforces an equivalent cap. */
+  maxTotalBytes?: number;
   chunkRowsPerEntryBudget?: number;
   /**
    * Capacity action before storing a new entry. Defaults to `"evict-oldest"`.
@@ -159,6 +165,7 @@ function createHostedOutboundMediaMetaRecord(params: {
   routePath: string;
   token: string;
   contentType?: string;
+  fileName?: string;
   expiresAt: number;
   chunkCount: number;
   byteLength: number;
@@ -168,6 +175,7 @@ function createHostedOutboundMediaMetaRecord(params: {
     routePath: params.routePath,
     token: params.token,
     ...(params.contentType ? { contentType: params.contentType } : {}),
+    ...(params.fileName ? { fileName: params.fileName } : {}),
     expiresAt: params.expiresAt,
     chunkCount: params.chunkCount,
     byteLength: params.byteLength,
@@ -181,6 +189,7 @@ function createHostedOutboundMediaMetadata(
     routePath: meta.routePath,
     token: meta.token,
     ...(meta.contentType ? { contentType: meta.contentType } : {}),
+    ...(meta.fileName ? { fileName: meta.fileName } : {}),
     expiresAt: meta.expiresAt,
     byteLength: meta.byteLength,
   };
@@ -219,6 +228,12 @@ export function createHostedOutboundMediaStore(
   }
   if (!Number.isSafeInteger(maxChunkRows) || maxChunkRows < 1) {
     throw new Error("hosted outbound media maxChunkRows must be a positive integer");
+  }
+  if (
+    options.maxTotalBytes !== undefined &&
+    (!Number.isSafeInteger(options.maxTotalBytes) || options.maxTotalBytes < 1)
+  ) {
+    throw new Error("hosted outbound media maxTotalBytes must be a positive integer");
   }
   if (overflowPolicy !== "evict-oldest" && overflowPolicy !== "reject-new") {
     throw new Error("hosted outbound media overflowPolicy must be evict-oldest or reject-new");
@@ -288,7 +303,11 @@ export function createHostedOutboundMediaStore(
     });
   }
 
-  async function pruneForCapacity(incomingChunkCount: number, nowMs = Date.now()): Promise<void> {
+  async function pruneForCapacity(
+    incomingChunkCount: number,
+    incomingByteLength: number,
+    nowMs = Date.now(),
+  ): Promise<void> {
     const rows = await options.metadataStore.entries();
     const validRows = rows.filter((row) => {
       const id = parseHostedOutboundMediaMetaKey(row.key);
@@ -298,6 +317,8 @@ export function createHostedOutboundMediaStore(
         Number.isSafeInteger(row.value.chunkCount) &&
         row.value.chunkCount > 0 &&
         row.value.chunkCount <= maxChunkRows &&
+        Number.isSafeInteger(row.value.byteLength) &&
+        row.value.byteLength >= 0 &&
         isFutureHostedOutboundMediaExpiry(row.value.expiresAt, nowMs)
       );
     });
@@ -312,18 +333,29 @@ export function createHostedOutboundMediaStore(
 
     let entryCount = orderedRows.length;
     let chunkCount = orderedRows.reduce((total, row) => total + row.value.chunkCount, 0);
+    let totalBytes = orderedRows.reduce((total, row) => total + row.value.byteLength, 0);
     if (
       overflowPolicy === "reject-new" &&
-      (entryCount >= maxEntries || chunkCount + incomingChunkCount > maxChunkRows)
+      (entryCount >= maxEntries ||
+        chunkCount + incomingChunkCount > maxChunkRows ||
+        (options.maxTotalBytes !== undefined &&
+          totalBytes + incomingByteLength > options.maxTotalBytes))
     ) {
       throw new Error(
         `hosted outbound media capacity is full (${entryCount}/${maxEntries} entries, ${
           chunkCount + incomingChunkCount
-        }/${maxChunkRows} chunk rows)`,
+        }/${maxChunkRows} chunk rows, ${totalBytes + incomingByteLength}/${
+          options.maxTotalBytes ?? "unbounded"
+        } bytes)`,
       );
     }
     for (const row of orderedRows) {
-      if (entryCount < maxEntries && chunkCount + incomingChunkCount <= maxChunkRows) {
+      if (
+        entryCount < maxEntries &&
+        chunkCount + incomingChunkCount <= maxChunkRows &&
+        (options.maxTotalBytes === undefined ||
+          totalBytes + incomingByteLength <= options.maxTotalBytes)
+      ) {
         break;
       }
       const id = parseHostedOutboundMediaMetaKey(row.key);
@@ -333,6 +365,7 @@ export function createHostedOutboundMediaStore(
       await deleteEntry(id);
       entryCount -= 1;
       chunkCount -= row.value.chunkCount;
+      totalBytes -= row.value.byteLength;
     }
   }
 
@@ -346,6 +379,7 @@ export function createHostedOutboundMediaStore(
         maxBytes: params.maxBytes,
         mediaAccess: params.mediaAccess,
         ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
+        ...(params.requestInit ? { requestInit: params.requestInit } : {}),
       });
       const id = createId();
       const token = createToken();
@@ -359,7 +393,7 @@ export function createHostedOutboundMediaStore(
       // Capacity check and writes stay serialized per helper instance. Cross-process
       // callers rely on reject-new backing stores so a race cannot evict live URLs.
       return await withCapacityMutation(async () => {
-        await pruneForCapacity(chunkCount);
+        await pruneForCapacity(chunkCount, media.buffer.byteLength);
         try {
           for (let index = 0; index < chunkCount; index += 1) {
             const chunk = media.buffer.subarray(index * rawChunkBytes, (index + 1) * rawChunkBytes);
@@ -380,6 +414,7 @@ export function createHostedOutboundMediaStore(
               routePath: params.routePath,
               token,
               contentType: media.contentType,
+              fileName: media.fileName,
               expiresAt,
               chunkCount,
               byteLength: media.buffer.byteLength,
@@ -425,5 +460,33 @@ export function createHostedOutboundMediaStore(
         async () => await Promise.all([options.metadataStore.clear(), options.chunkStore.clear()]),
       );
     },
+  };
+}
+
+function encodeHostedOutboundMediaFileName(fileName: string): string {
+  return encodeURIComponent(fileName).replace(
+    /[\x27()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+/** Build download-only response headers for immutable hosted outbound media. */
+export function buildHostedOutboundMediaResponseHeaders(
+  metadata: Pick<HostedOutboundMediaMetadata, "byteLength" | "contentType" | "fileName">,
+  options: { fallbackFileName?: string } = {},
+): Record<string, string> {
+  const contentType =
+    normalizeMimeType(metadata.contentType?.split(";", 1)[0]?.trim()) ?? "application/octet-stream";
+  const fileName = sanitizeUntrustedFileName(
+    metadata.fileName ?? options.fallbackFileName ?? "attachment.bin",
+    "attachment.bin",
+  );
+  const asciiFallback = fileName.replace(/[^\x20-\x7e]|[%"\\]/g, "_").trim() || "attachment.bin";
+  return {
+    "Content-Type": contentType,
+    "Content-Length": String(metadata.byteLength),
+    "Content-Disposition": `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeHostedOutboundMediaFileName(fileName)}`,
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
   };
 }

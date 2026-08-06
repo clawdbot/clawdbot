@@ -235,7 +235,13 @@ export async function registerSynologyWebhookRoute(params: {
       accountId: account.accountId,
       log: (msg: string) => log?.info?.(msg),
       throwOnFailure: true,
-      handler,
+      handler: async (req, res) => {
+        const { tryHandleSynologyHostedMediaRequest } = await import("./outbound-media.js");
+        if (await tryHandleSynologyHostedMediaRequest(req, res, account)) {
+          return true;
+        }
+        return await handler(req, res);
+      },
     });
   } catch (error) {
     await ingress.stop();

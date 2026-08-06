@@ -2339,6 +2339,14 @@
                 }
               },
               {
+                "key": "webhookUrl",
+                "kind": "string",
+                "cli": {
+                  "flags": "--webhook-url <url>",
+                  "description": "Public HTTPS Synology Chat callback URL used for attachments"
+                }
+              },
+              {
                 "key": "webhookPath",
                 "kind": "string",
                 "cli": {

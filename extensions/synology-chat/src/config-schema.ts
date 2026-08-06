@@ -5,6 +5,7 @@ import { z } from "zod";
 export const SynologyChatChannelConfigSchema = buildChannelConfigSchema(
   z
     .object({
+      webhookUrl: z.string().optional(),
       dangerouslyAllowNameMatching: z.boolean().optional(),
       dangerouslyAllowInheritedWebhookPath: z.boolean().optional(),
     })

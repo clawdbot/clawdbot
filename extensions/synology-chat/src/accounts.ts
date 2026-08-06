@@ -133,6 +133,7 @@ export function resolveAccount(
     enabled: merged.enabled ?? true,
     token: merged.token ?? envToken,
     incomingUrl: merged.incomingUrl ?? envIncomingUrl,
+    webhookUrl: normalizeOptionalString(merged.webhookUrl) ?? "",
     nasHost: merged.nasHost ?? envNasHost,
     webhookPath: merged.webhookPath ?? "/webhook/synology",
     webhookPathSource,
