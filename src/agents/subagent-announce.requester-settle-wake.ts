@@ -5,7 +5,9 @@
  * this module selects a drained wave and delivers its synthesized wake.
  */
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { getFallbackGatewayContext } from "../gateway/server-plugin-fallback-context.js";
 import { logWarn } from "../logger.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -35,10 +37,17 @@ function loadSubagentRegistryRuntime() {
 }
 
 type RequesterSettleWakeDeps = {
+  hasInProcessGatewayRequestContext: () => boolean;
   loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
 };
 
+/** True while an in-process gateway request scope or fallback context exists. */
+function hasInProcessGatewayRequestContext(): boolean {
+  return Boolean(getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext());
+}
+
 const defaultRequesterSettleWakeDeps: RequesterSettleWakeDeps = {
+  hasInProcessGatewayRequestContext,
   loadSubagentRegistryRuntime,
 };
 
@@ -57,6 +66,11 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
+// Restored wakes can be admitted before the Gateway finishes installing its
+// in-process request scope. Dispatching then fails for every restored batch at
+// once and replays on the same deadline, producing a synchronized retry storm.
+// Spread the no-scope deferral so restored sessions cannot align on one retry.
+const REQUESTER_SETTLE_WAKE_NO_SCOPE_JITTER_MS = 15_000;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
 function buildRequesterSettleWakeMessage(params: {
@@ -162,6 +176,7 @@ function deferRequesterSettleWakeBatch(params: {
   batchRunIds: readonly string[];
   state: RequesterSettleWakeBatchState;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
+  jitterMs?: number;
 }): void {
   params.transitionBatch(params.batchRunIds, {
     status: params.state.status,
@@ -169,7 +184,7 @@ function deferRequesterSettleWakeBatch(params: {
     ...(params.state.replayCount !== undefined ? { replayCount: params.state.replayCount } : {}),
     nextAttemptAt: Math.max(
       params.state.nextAttemptAt ?? 0,
-      Date.now() + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
+      Date.now() + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0] + (params.jitterMs ?? 0),
     ),
     batchRunIds: [...params.batchRunIds],
     ...(params.state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
@@ -362,6 +377,26 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         state,
         transitionBatch: params.transitionBatch,
       });
+      return false;
+    }
+    // Restored requester-settle wakes can be admitted before the Gateway has a
+    // usable in-process request scope or fallback context (supervised restart).
+    // Dispatching now fails with a no-scope error for every restored batch at
+    // once and replays them on the same deadline, creating a retry storm that
+    // delays channel replies. Defer with jitter until the scope is available.
+    if (!requesterSettleWakeDeps.hasInProcessGatewayRequestContext()) {
+      deferRequesterSettleWakeBatch({
+        batchRunIds,
+        state,
+        transitionBatch: params.transitionBatch,
+        jitterMs: Math.floor(Math.random() * REQUESTER_SETTLE_WAKE_NO_SCOPE_JITTER_MS),
+      });
+      logWarn(
+        `requester settle wake deferred: gateway request scope not ready; retrying in ${Math.round(
+          (REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0] + REQUESTER_SETTLE_WAKE_NO_SCOPE_JITTER_MS) /
+            1000,
+        )}s max`,
+      );
       return false;
     }
 
