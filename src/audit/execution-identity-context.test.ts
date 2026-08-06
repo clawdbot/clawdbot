@@ -126,7 +126,7 @@ function prepareExecutionIdentityContextAtAdmission(
 
 function recordDeniedApprovalForRun(
   runId: string,
-  databaseOptions: ReturnType<typeof databaseOptions>,
+  database: ReturnType<typeof databaseOptions>,
   id = "denied-approval",
 ): void {
   insertOperatorApproval({
@@ -143,14 +143,14 @@ function recordDeniedApprovalForRun(
       createdAtMs: 100,
       expiresAtMs: 1_000,
     },
-    databaseOptions,
+    databaseOptions: database,
   });
   resolveOperatorApproval({
     id,
     decision: "deny",
     resolver: { kind: "device", id: "private-reviewer-device" },
     nowMs: 200,
-    databaseOptions,
+    databaseOptions: database,
   });
 }
 

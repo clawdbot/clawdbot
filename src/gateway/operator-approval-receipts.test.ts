@@ -28,7 +28,7 @@ function databaseOptions() {
 function approval(
   id: string,
   overrides: { runId?: string; createdAtMs?: number; expiresAtMs?: number } = {},
-) {
+): Parameters<typeof insertOperatorApproval>[0]["approval"] {
   const createdAtMs = overrides.createdAtMs ?? 1_000;
   return {
     id,
@@ -37,7 +37,7 @@ function approval(
       kind: "exec" as const,
       commandText: "secret command --token private-value",
       agentId: "main",
-      allowedDecisions: ["allow-once", "allow-always", "deny"] as const,
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
     },
     requester: {
       deviceId: "requester-device-secret",
