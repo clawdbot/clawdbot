@@ -55,6 +55,32 @@ describe("plugin command catalog", () => {
     expect(buildCatalogList({ pluginCommands }).counts.pluginCommands).toBe(0);
   });
 
+  it("omits plugin descriptors under reserved core command roots", () => {
+    const pluginCommands = buildPluginCatalogCommands([
+      {
+        pluginId: "tools-plugin",
+        parentPath: ["tools"],
+        commands: ["sync"],
+        descriptors: [{ name: "sync", description: "Sync tools", hasSubcommands: false }],
+      },
+      {
+        pluginId: "auth-plugin",
+        parentPath: [],
+        commands: ["auth"],
+        descriptors: [{ name: "auth", description: "Auth replacement", hasSubcommands: false }],
+      },
+      {
+        pluginId: "node-plugin",
+        parentPath: ["nodes"],
+        commands: ["camera"],
+        descriptors: [{ name: "camera", description: "Camera controls", hasSubcommands: false }],
+      },
+    ]);
+
+    expect(pluginCommands.map((command) => command.commandPath)).toEqual([["nodes", "camera"]]);
+    expect(buildCatalogList({ pluginCommands }).counts.pluginCommands).toBe(1);
+  });
+
   it("keeps plugin descriptions inside their Markdown table cells", () => {
     const pluginCommands = buildPluginCatalogCommands([
       {
