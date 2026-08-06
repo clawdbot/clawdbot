@@ -670,7 +670,7 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("keeps Codex cold install separate from generic package compatibility evidence", () => {
+  it("separates Codex install, package compatibility, and drift diagnostics evidence", () => {
     const coldInstall = readQaScenarioById("codex-plugin-cold-install");
     expect(coldInstall.runtimePairLane).toBe("core");
     expect(coldInstall.coverage?.primary).toEqual(["plugins.lifecycle-hot-install"]);
@@ -688,6 +688,21 @@ describe("qa scenario catalog", () => {
       kind: "vitest",
       path: "src/plugins/install-compatibility.test.ts",
     });
+
+    const driftDiagnostics = readQaScenarioById("official-plugin-version-drift-doctor");
+    expect(driftDiagnostics.runtimePairLane).toBeUndefined();
+    expect(driftDiagnostics.runtimeParityUsage).toBeUndefined();
+    expect(driftDiagnostics.coverage).toEqual({
+      primary: [`${codex}.doctor-diagnostics`],
+    });
+    expect(driftDiagnostics.execution).toMatchObject({
+      kind: "vitest",
+      path: "src/commands/doctor-workspace-status.plugin-version-drift.test.ts",
+    });
+
+    expect(readQaScenarioPack().scenarios.map((scenario) => scenario.id)).not.toEqual(
+      expect.arrayContaining(["codex-plugin-pinned-old", "codex-plugin-pinned-new"]),
+    );
   });
 
   it("routes the Codex doctor migration row through the product-backed Vitest", () => {
