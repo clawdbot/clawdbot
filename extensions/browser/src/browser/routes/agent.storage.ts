@@ -562,6 +562,7 @@ export function registerBrowserAgentStorageRoutes(
           cdpUrl,
           targetId: tab.targetId,
           name,
+          signal,
         });
         signal.throwIfAborted();
         res.json({ ok: true, targetId: tab.targetId });

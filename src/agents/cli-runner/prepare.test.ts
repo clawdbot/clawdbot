@@ -12,6 +12,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -595,6 +596,64 @@ describe("prepareCliRunContext", () => {
     );
   });
 
+  it("preserves a selected Gemini profile when backend auth preparation fails", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google-gemini-cli:legacy";
+    const backendError = new CliBackendAuthProfilePreparationError(
+      "Gemini CLI OAuth profile is incomplete and cannot be repaired by OpenClaw.",
+    );
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "google-gemini-cli",
+            access: "expired-access-token",
+            refresh: "",
+            expires: 0,
+          },
+        },
+      },
+      agentDir,
+    );
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution: vi.fn(async () => {
+        throw backendError;
+      }),
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "json",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "google-gemini-cli",
+      agentDir,
+      cause: backendError,
+    });
+  });
+
   it("selects the configured Gemini CLI OAuth profile when no explicit profile is passed", async () => {
     const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
@@ -984,6 +1043,13 @@ describe("prepareCliRunContext", () => {
     await expect(preparation).rejects.toThrow(
       `could not materialize selected auth profile "${authProfileId}"`,
     );
+    await expect(preparation).rejects.toMatchObject({
+      name: "CliAuthProfilePreparationError",
+      reason: "auth",
+      profileId: authProfileId,
+      provider: "anthropic",
+      agentDir,
+    });
     await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
     expect(prepareExecution).not.toHaveBeenCalled();
   });

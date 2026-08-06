@@ -10,10 +10,8 @@ import {
   type ChannelIngressQueueRecord,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { TelegramBotInfo } from "./bot-info.js";
-import {
-  openTelegramIngressQueue,
-  telegramSpooledUpdateLaneKey,
-} from "./telegram-ingress-spool.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
+import { openTelegramIngressQueue, resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
 import {
   TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
   type TelegramSpooledUpdatePayload,
@@ -43,6 +41,40 @@ export type ClaimedTelegramSpooledUpdate = TelegramSpooledUpdate & {
 
 export function telegramQueueEventId(updateId: number): string {
   return String(updateId).padStart(16, "0");
+}
+
+export function telegramSpooledUpdateLaneKey(update: unknown, botInfo?: TelegramBotInfo): string {
+  return getTelegramSequentialKey({
+    update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+    ...(botInfo ? { me: botInfo } : {}),
+  });
+}
+
+export async function writeTelegramSpooledUpdate(params: {
+  spoolDir: string;
+  update: unknown;
+  laneKey?: string;
+  now?: number;
+}): Promise<number> {
+  const updateId = resolveTelegramUpdateId(params.update);
+  if (updateId === null) {
+    throw new Error("Telegram update missing numeric update_id.");
+  }
+  const receivedAt = params.now ?? Date.now();
+  await openTelegramIngressQueue(params.spoolDir).enqueue(
+    telegramQueueEventId(updateId),
+    {
+      version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
+      updateId,
+      receivedAt,
+      update: params.update,
+    },
+    {
+      receivedAt,
+      laneKey: params.laneKey ?? telegramSpooledUpdateLaneKey(params.update),
+    },
+  );
+  return updateId;
 }
 
 function spoolFileName(updateId: number): string {

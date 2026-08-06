@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById, readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
+import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 describe("qa scenario catalog causality", () => {
   it("loads live gateway sentinel scenarios for harness self-health", () => {
@@ -144,24 +146,30 @@ describe("qa scenario catalog causality", () => {
       "thread-memory-isolation",
       "poll",
       "finalRequest.toolOutputCallId === searchResultRequest.plannedToolCallId",
+      null,
     ],
     [
       "memory-tools-channel-context",
       "poll",
       "finalRequest.toolOutputCallId === searchResultRequest.plannedToolCallId",
+      "durableChannelLifecycle",
     ],
     [
       "agent-tool-consumption",
       "immediate",
       "getResultRequest.toolOutputCallId === searchResultRequest.plannedToolCallId",
+      null,
     ],
   ] as const)(
     "asserts the complete memory tool chain before %s delivery",
-    (scenarioId, requestCollectionMode, finalLinkNeedle) => {
+    (scenarioId, requestCollectionMode, finalLinkNeedle, durableWaitSaveAs) => {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
-      const outboundIndex = actions.findIndex(
-        (action) => (action as { call?: string }).call === "waitForOutboundMessage",
+      const outboundIndex = actions.findIndex((action) =>
+        durableWaitSaveAs
+          ? (action as { call?: string }).call === "waitForCondition" &&
+            (action as { saveAs?: string }).saveAs === durableWaitSaveAs
+          : (action as { call?: string }).call === "waitForOutboundMessage",
       );
       const requestCollectionIndex = actions.findIndex((action) =>
         requestCollectionMode === "poll"
@@ -193,6 +201,15 @@ describe("qa scenario catalog causality", () => {
       expect(finalRequestAssertIndex, scenarioId).toBeGreaterThan(searchResultAssertIndex);
       expect(outboundIndex, scenarioId).toBeGreaterThan(finalRequestAssertIndex);
 
+      if (durableWaitSaveAs) {
+        const durableWait = actions[outboundIndex] as
+          | { args?: Array<{ lambda?: { expr?: string } }> }
+          | undefined;
+        const durableExpr = durableWait?.args?.[0]?.lambda?.expr ?? "";
+        expect(durableExpr, scenarioId).toContain("event.cursor < finalSent.cursor");
+        expect(durableExpr, scenarioId).toContain("event.cursor < previewRetired.cursor");
+      }
+
       if (requestCollectionMode === "poll") {
         const requestPoll = actions[requestCollectionIndex] as
           | { args?: Array<{ lambda?: { expr?: string } }> }
@@ -212,4 +229,166 @@ describe("qa scenario catalog causality", () => {
       }
     },
   );
+
+  it.each([
+    ["memory-tools-channel-context", "durableChannelLifecycle", 30000],
+    ["agent-progress-evidence", "durableCompletionLifecycle", 60000],
+  ] as const)("keeps the policy-aware durable delivery budget for %s", (scenarioId, saveAs, ms) => {
+    const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+    const durableWait = actions.find(
+      (action) =>
+        (action as { call?: string }).call === "waitForCondition" &&
+        (action as { saveAs?: string }).saveAs === saveAs,
+    );
+
+    expect(durableWait, scenarioId).toMatchObject({
+      args: [expect.any(Object), { expr: `liveTurnTimeoutMs(env, ${ms})` }],
+    });
+  });
+
+  it.each([
+    {
+      scenarioId: "memory-tools-channel-context",
+      saveAs: "durableChannelLifecycle",
+      cursorName: "busCursorBeforeInbound",
+      conversationKey: "channelId",
+      markerKey: "expectedNeedle",
+      targetPrefix: "channel",
+    },
+    {
+      scenarioId: "agent-progress-evidence",
+      saveAs: "durableCompletionLifecycle",
+      cursorName: "busCursorBefore",
+      conversationKey: "conversationId",
+      markerKey: "completionText",
+      targetPrefix: "dm",
+    },
+  ] as const)("isolates $scenarioId durable lifecycle evidence by account", async (fixture) => {
+    const scenario = requireFlowScenario(readQaScenarioById(fixture.scenarioId));
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+    const durableWaitIndex = actions.findIndex(
+      (action) =>
+        (action as { call?: string }).call === "waitForCondition" &&
+        (action as { saveAs?: string }).saveAs === fixture.saveAs,
+    );
+    const cardinalityAssertIndex = actions.findIndex((action) =>
+      readFlowAssertExpression(action).includes(
+        fixture.scenarioId === "memory-tools-channel-context"
+          ? "visibleChannelOutbounds.length === 1"
+          : "completionMessages.length === 1",
+      ),
+    );
+    expect(durableWaitIndex, fixture.scenarioId).toBeGreaterThanOrEqual(0);
+    expect(cardinalityAssertIndex, fixture.scenarioId).toBeGreaterThan(durableWaitIndex);
+    if (durableWaitIndex < 0 || cardinalityAssertIndex <= durableWaitIndex) {
+      throw new Error(`missing durable lifecycle assertion path for ${fixture.scenarioId}`);
+    }
+    const postWaitAssertionPath = actions.slice(durableWaitIndex, cardinalityAssertIndex + 1);
+
+    const config = scenario.execution.config ?? {};
+    const conversationId = String(config[fixture.conversationKey]);
+    const marker = String(config[fixture.markerKey]);
+    const target = `${fixture.targetPrefix}:${conversationId}`;
+    const state = createQaBusState();
+    for (const accountId of ["foreign", "qa-channel"]) {
+      const preview = state.addOutboundMessage({ accountId, to: target, text: marker });
+      state.deleteMessage({ accountId, messageId: preview.id });
+      state.addOutboundMessage({ accountId, to: target, text: marker });
+    }
+    const foreignKind = fixture.targetPrefix === "dm" ? "channel" : "dm";
+    const foreignKindTarget = `${foreignKind}:${conversationId}`;
+    const foreignKindPreview = state.addOutboundMessage({
+      accountId: "qa-channel",
+      to: foreignKindTarget,
+      text: marker,
+    });
+    state.deleteMessage({ accountId: "qa-channel", messageId: foreignKindPreview.id });
+    state.addOutboundMessage({
+      accountId: "qa-channel",
+      to: foreignKindTarget,
+      text: marker,
+    });
+
+    await expect(
+      runLoadedScenarioFlow(fixture.scenarioId, {
+        state,
+        flow: {
+          steps: [
+            {
+              name: "keeps foreign account lifecycle evidence isolated",
+              actions: [
+                { set: "outboundStartIndex", value: { expr: "0" } },
+                { set: fixture.cursorName, value: { expr: "0" } },
+                ...postWaitAssertionPath,
+                {
+                  assert: {
+                    expr: `${fixture.saveAs}.message.accountId === transport.accountId`,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({ status: "pass" });
+  });
+
+  it("isolates Active Memory request traces from interleaved heartbeats", async () => {
+    const scenario = requireFlowScenario(readQaScenarioById("active-memory-preprompt-recall"));
+    const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+    const baselineTrace = actions.find(
+      (action) => (action as { set?: string }).set === "baselineMockRequests",
+    );
+    const activeTrace = actions.find(
+      (action) => (action as { set?: string }).set === "activeRequests",
+    );
+    expect(baselineTrace).toBeDefined();
+    expect(activeTrace).toBeDefined();
+    if (!baselineTrace || !activeTrace) {
+      throw new Error("active-memory-preprompt-recall request trace actions are missing");
+    }
+
+    const marker = String(scenario.execution.config?.turnMarker);
+    const heartbeat = { allInputText: "[OpenClaw heartbeat poll]" };
+    const scenarioRequest = (suffix: string) => ({ allInputText: `${marker} ${suffix}` });
+    const traces = new Map<string, unknown[]>([
+      ["10", [heartbeat, scenarioRequest("baseline main")]],
+      [
+        "20",
+        [
+          heartbeat,
+          scenarioRequest("You are a memory search agent. search plan"),
+          scenarioRequest("You are a memory search agent. search result"),
+          scenarioRequest("You are a memory search agent. memory get result"),
+          scenarioRequest("active main"),
+        ],
+      ],
+    ]);
+
+    await expect(
+      runLoadedScenarioFlow("active-memory-preprompt-recall", {
+        flow: {
+          steps: [
+            {
+              name: "filters provider-global traces before exact counts",
+              actions: [
+                { set: "requestCursorBeforeBaseline", value: { expr: "10" } },
+                baselineTrace,
+                { assert: "baselineMockRequests.length === 1" },
+                { set: "requestCursorBeforeActive", value: { expr: "20" } },
+                activeTrace,
+                { assert: "activeRequests.length === 4" },
+              ],
+            },
+          ],
+        },
+        api: {
+          env: { mock: { baseUrl: "http://mock.invalid" } },
+          fetchJson: async (url: string) =>
+            traces.get(new URL(url).searchParams.get("after") ?? "") ?? [],
+        },
+      }),
+    ).resolves.toMatchObject({ status: "pass" });
+  });
 });

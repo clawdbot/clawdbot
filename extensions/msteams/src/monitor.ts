@@ -12,17 +12,14 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
-import { resolveMSTeamsAccountConfig, withAccountScopedMSTeamsConfig } from "./accounts.js";
+import { resolveMSTeamsRuntimeAccount, withAccountScopedMSTeamsConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
-import {
-  createAccountScopedMSTeamsConversationStore,
-  createMSTeamsConversationStoreState,
-} from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
+import { createMSTeamsMonitorStores } from "./monitor-account-stores.js";
 import {
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,
@@ -38,9 +35,7 @@ import {
   type MSTeamsStatusSink,
 } from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
-import { createAccountScopedMSTeamsPollStore } from "./poll-store-scoped.js";
 import {
-  createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
 } from "./polls.js";
@@ -68,7 +63,6 @@ import {
   type MSTeamsCardActionResponse,
 } from "./sdk.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
-import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 type MonitorMSTeamsOpts = {
@@ -92,22 +86,16 @@ export async function monitorMSTeamsProvider(
 ): Promise<MonitorMSTeamsResult> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
-  const accountId = opts.accountId ?? DEFAULT_ACCOUNT_ID;
+  const account = resolveMSTeamsRuntimeAccount(opts);
+  const { accountId, credentials: creds } = account;
   let cfg = opts.cfg;
-  let msteamsCfg = opts.msteamsCfg ?? resolveMSTeamsAccountConfig(cfg, accountId);
+  let msteamsCfg = account.config;
   if (!msteamsCfg || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
     return { app: null, shutdown: async () => {} };
   }
 
-  const creds = resolveMSTeamsCredentials(msteamsCfg, {
-    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
-    pathPrefix:
-      accountId === DEFAULT_ACCOUNT_ID
-        ? "channels.msteams"
-        : `channels.msteams.accounts.${accountId}`,
-  });
   if (!creds) {
     log.error("msteams credentials not configured");
     publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
@@ -223,11 +211,7 @@ export async function monitorMSTeamsProvider(
     typeof agentDefaults?.mediaMaxMb === "number" && agentDefaults.mediaMaxMb > 0
       ? Math.floor(agentDefaults.mediaMaxMb * MB)
       : 8 * MB;
-  const conversationStore =
-    opts.conversationStore ??
-    createAccountScopedMSTeamsConversationStore(createMSTeamsConversationStoreState(), accountId);
-  const pollStore =
-    opts.pollStore ?? createAccountScopedMSTeamsPollStore(createMSTeamsPollStoreState(), accountId);
+  const { conversationStore, pollStore } = createMSTeamsMonitorStores(accountId, opts);
 
   log.info(`starting provider (port ${port})`);
 

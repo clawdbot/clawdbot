@@ -278,6 +278,7 @@ export function resolveQaLabRunPlan(params: {
   scorecardReport: QaScorecardTaxonomyReport;
   defaultChannel?: string;
   supportsChannel?: (channel: string) => boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }): QaLabResolvedRunPlan {
   const { selection } = params;
   const explicitScenarioSelection = selection.scenarioIds !== null;
@@ -314,6 +315,7 @@ export function resolveQaLabRunPlan(params: {
       scenarios: membership.profileScenarios,
       runtimePairLanes: selection.runtimePairLane ? [selection.runtimePairLane] : [],
       runtimePair: selection.runtimePair !== null,
+      resolveModuleFlowSupport: params.resolveModuleFlowSupport,
     });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
@@ -368,6 +370,7 @@ export function resolveQaLabRunPlan(params: {
     channel: selection.channel,
     defaultChannel: selection.channelDriver === "crabline" ? params.defaultChannel : undefined,
     supportsChannel: params.supportsChannel,
+    resolveModuleFlowSupport: params.resolveModuleFlowSupport,
   });
   exclusions.push(
     ...profileExecution.excludedScenarios.map(({ scenario, reasons }) => ({

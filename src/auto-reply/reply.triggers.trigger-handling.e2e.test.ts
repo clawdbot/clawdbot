@@ -284,6 +284,7 @@ function mockSuccessfulCompaction() {
       summary: "summary",
       firstKeptEntryId: "x",
       tokensBefore: 12000,
+      tokensAfter: 1000,
     },
   });
 }
@@ -561,7 +562,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
       const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
@@ -587,7 +588,7 @@ describe("trigger handling", () => {
       );
 
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
       const call = firstMockCallArg(
         getCompactEmbeddedAgentSessionMock(),

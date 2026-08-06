@@ -19,7 +19,7 @@ import {
 } from "./installs.js";
 import type { PackageManifest } from "./manifest.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
@@ -171,11 +171,21 @@ export async function updateNpmInstalledPlugins(params: {
     }
 
     const trustedOfficialNpmSpec = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
+    const trustedOfficialClawHubInstall = resolveTrustedSourceLinkedOfficialClawHubInstall({
+      pluginId,
+      record,
+    });
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      ? trustedOfficialClawHubInstall?.clawhubSpec
       : undefined;
-    const officialSyncUpdateChannel = params.officialPluginUpdateChannel ?? params.updateChannel;
+    // Targeted updates inherit the core channel only for catalog-verified official records.
+    // An explicit channel remains authoritative, and third-party selectors stay untouched.
+    const updateChannel =
+      params.updateChannel ??
+      (trustedOfficialNpmSpec || trustedOfficialClawHubInstall
+        ? params.officialPluginUpdateChannel
+        : undefined);
     const officialNpmPackageName = resolveNpmSpecPackageName(trustedOfficialNpmSpec);
 
     if (normalizedPluginConfig) {
@@ -210,7 +220,7 @@ export async function updateNpmInstalledPlugins(params: {
             record,
             specOverride: params.specOverrides?.[pluginId],
             officialSpecOverride: officialNpmSpec,
-            updateChannel: officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel,
+            updateChannel,
             officialPackageName: officialNpmPackageName,
             coreVersion: params.coreVersion,
           })
@@ -220,7 +230,7 @@ export async function updateNpmInstalledPlugins(params: {
         ? resolveClawHubUpdateSpecs({
             record,
             officialSpecOverride: officialClawHubSpec,
-            updateChannel: officialClawHubSpec ? officialSyncUpdateChannel : params.updateChannel,
+            updateChannel,
           })
         : undefined;
     const effectiveSpec =
@@ -238,7 +248,7 @@ export async function updateNpmInstalledPlugins(params: {
     const preserveNpmRecordIntent =
       record.source === "npm" &&
       npmSpecs?.installSpec !== npmSpecs?.recordSpec &&
-      (officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel) === "extended-stable";
+      updateChannel === "extended-stable";
     const officialNpmFallbackSpecs =
       record.source === "clawhub"
         ? resolveTrustedSourceLinkedOfficialNpmFallbackForClawHubUpdate({
@@ -246,9 +256,7 @@ export async function updateNpmInstalledPlugins(params: {
             record,
             effectiveClawHubSpec: effectiveSpec,
             recordClawHubSpec: recordSpec,
-            updateChannel: params.syncOfficialPluginInstalls
-              ? officialSyncUpdateChannel
-              : params.updateChannel,
+            updateChannel,
             coreVersion: params.coreVersion,
           })
         : null;
@@ -434,7 +442,7 @@ export async function updateNpmInstalledPlugins(params: {
                   currentVersion,
                   effectiveSpec,
                   probeNpmVersion: metadataResult.metadata.version,
-                  updateChannel: params.updateChannel,
+                  updateChannel,
                   timeoutMs: params.timeoutMs,
                 })
               : undefined;
@@ -626,7 +634,7 @@ export async function updateNpmInstalledPlugins(params: {
           usedOfficialNpmFallback,
           hasSpecOverride: Boolean(params.specOverrides?.[pluginId]),
           hasOfficialNpmSpec: Boolean(officialNpmSpec),
-          updateChannel: officialNpmSpec ? officialSyncUpdateChannel : params.updateChannel,
+          updateChannel,
           timeoutMs: params.timeoutMs,
           channelFallbackSuffix,
           npmChannelFallback,
@@ -655,7 +663,7 @@ export async function updateNpmInstalledPlugins(params: {
               (params.syncOfficialPluginInstalls &&
                 trustedSourceLinkedOfficialInstall &&
                 !preserveNpmRecordIntent) ||
-              (usedOfficialNpmFallback && officialSyncUpdateChannel !== "extended-stable"),
+              (usedOfficialNpmFallback && updateChannel !== "extended-stable"),
           }),
           installPath: result.targetDir,
           version: nextVersion,

@@ -306,6 +306,15 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
+  it("declares native chat IDs as delivery targets for guarded message mutations", () => {
+    for (const action of ["edit", "pin", "unpin"] as const) {
+      expect(feishuPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+        deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+      });
+    }
+  });
+
   it("does not advertise reactions when disabled via actions config", () => {
     const disabledCfg = {
       channels: {

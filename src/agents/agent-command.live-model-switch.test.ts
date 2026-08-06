@@ -249,6 +249,10 @@ vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
 
+vi.mock("./runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+}));
+
 // Harness selection has dedicated coverage; this command suite registers no auto harnesses.
 vi.mock("./harness/support.js", () => ({
   resolveAutoAgentHarnessId: () => undefined,

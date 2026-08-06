@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
@@ -17,6 +18,7 @@ type TerminalNote = (message: string, title?: string) => void;
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
@@ -251,6 +253,21 @@ vi.mock("./doctor/repair-sequencing.js", async () => {
       return actual.runDoctorRepairSequence(
         params as Parameters<typeof actual.runDoctorRepairSequence>[0],
       );
+    },
+  };
+});
+
+vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("./doctor/shared/plugin-metadata-snapshot-scope.js")
+  >("./doctor/shared/plugin-metadata-snapshot-scope.js");
+  return {
+    ...actual,
+    createDoctorPluginMetadataSnapshotScope: (
+      params: Parameters<typeof actual.createDoctorPluginMetadataSnapshotScope>[0],
+    ) => {
+      createDoctorPluginMetadataSnapshotScopeParamsMock(params);
+      return actual.createDoctorPluginMetadataSnapshotScope(params);
     },
   };
 });
@@ -1595,6 +1612,7 @@ describe("doctor config flow", () => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({});
     runDoctorRepairSequenceMock.mockReset();
+    createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
@@ -1899,6 +1917,53 @@ describe("doctor config flow", () => {
     expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ doctorOnlyStateMigrations: true }),
     );
+  });
+
+  it("prepares plugin metadata for the complete Doctor lifecycle", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ preparePluginMetadataSnapshot: true }),
+    );
+    expect(result.runWithPluginMetadataSnapshot).toEqual(expect.any(Function));
+    expect(result.invalidatePluginMetadataSnapshot).toEqual(expect.any(Function));
+    expect(collectDoctorPreviewNotesParamsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runWithPluginMetadataSnapshot: result.runWithPluginMetadataSnapshot,
+      }),
+    );
+  });
+
+  it("exposes cleanup-refreshed plugin metadata to later Doctor scopes", async () => {
+    const refreshedSnapshot = {
+      plugins: [],
+      index: { installRecords: {} },
+    } as unknown as PluginMetadataSnapshot;
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: ['Removed stale managed install record for bundled plugin "google-meet".'],
+      warningNotes: [],
+      authProfilesRepaired: false,
+      pluginMetadataSnapshot: refreshedSnapshot,
+    }));
+
+    const result = await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.pluginMetadataSnapshot).toBe(refreshedSnapshot);
+    const scopeParams = createDoctorPluginMetadataSnapshotScopeParamsMock.mock.lastCall?.[0] as {
+      getBaseSnapshot: () => PluginMetadataSnapshot | undefined;
+    };
+    expect(scopeParams.getBaseSnapshot()).toBe(refreshedSnapshot);
+    expect(scopeParams.getBaseSnapshot()?.index.installRecords).not.toHaveProperty("google-meet");
+    result.invalidatePluginMetadataSnapshot();
+    expect(scopeParams.getBaseSnapshot()).toBeUndefined();
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {

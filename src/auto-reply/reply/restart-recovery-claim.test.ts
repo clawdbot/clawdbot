@@ -38,6 +38,57 @@ function replaceSessionEntryFromIndependentConnection(params: {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  it.each([
+    { receiptState: undefined, expectedStatus: "done" },
+    { receiptState: "terminal-pending" as const, expectedStatus: "failed" },
+  ])(
+    "clears lifecycle ownership when claim cleanup settles $expectedStatus",
+    async ({ receiptState, expectedStatus }) => {
+      const root = tempDirs.make(`openclaw-reply-claim-${expectedStatus}-`);
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const sessionId = "session";
+      let entry: InternalSessionEntry = {
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-run",
+        restartRecoveryBeforeAgentReplyState: "admitted",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        sessionId,
+        startedAt: 1,
+        status: "running",
+        updatedAt: 1,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      const controller = createReplyRestartRecoveryClaimController({
+        admissionRunId: "recovery-run",
+        getEntry: () => entry,
+        getSessionId: () => sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        sessionKey,
+        setEntry: (next) => {
+          entry = next;
+        },
+        storePath,
+      });
+
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      if (receiptState) {
+        entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+          restartRecoveryDeliveryReceiptState: receiptState,
+        }))) as InternalSessionEntry;
+      } else {
+        await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+        await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+      }
+      await controller.clear();
+
+      const persisted = loadSessionEntry({ storePath, sessionKey }) as InternalSessionEntry;
+      expect(persisted.status).toBe(expectedStatus);
+      expect(persisted.lifecycleRunId).toBeUndefined();
+    },
+  );
+
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const root = tempDirs.make("openclaw-reply-admission-");
     const storePath = path.join(root, "sessions.json");

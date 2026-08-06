@@ -4,17 +4,9 @@
  * Depends on utils/platform.ts for detection functions, but no plugin-sdk.
  */
 
-import * as fs from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
 import { debugLog } from "./log.js";
-import {
-  getHomeDir,
-  getTempDir,
-  getQQBotDataDir,
-  isWindows,
-  checkSilkWasmAvailable,
-} from "./platform.js";
+import { getHomeDir, getTempDir, checkSilkWasmAvailable } from "./platform.js";
 
 interface DiagnosticReport {
   platform: string;
@@ -22,7 +14,6 @@ interface DiagnosticReport {
   nodeVersion: string;
   homeDir: string;
   tempDir: string;
-  dataDir: string;
   silkWasm: boolean;
   warnings: string[];
 }
@@ -39,7 +30,6 @@ export async function runDiagnostics(): Promise<DiagnosticReport> {
   const nodeVersion = process.version;
   const homeDir = getHomeDir();
   const tempDir = getTempDir();
-  const dataDir = getQQBotDataDir();
 
   const silkWasm = await checkSilkWasmAvailable();
   if (!silkWasm) {
@@ -48,29 +38,12 @@ export async function runDiagnostics(): Promise<DiagnosticReport> {
     );
   }
 
-  try {
-    const testFile = path.join(dataDir, ".write-test");
-    fs.writeFileSync(testFile, "test");
-    fs.unlinkSync(testFile);
-  } catch {
-    warnings.push(`⚠️ Data directory is not writable: ${dataDir}. Check filesystem permissions.`);
-  }
-
-  if (isWindows()) {
-    if (/[\u4e00-\u9fa5]/.test(homeDir) || homeDir.includes(" ")) {
-      warnings.push(
-        `⚠️ Home directory contains Chinese characters or spaces: ${homeDir}. Some tools may fail. Consider setting QQBOT_DATA_DIR to an ASCII-only path.`,
-      );
-    }
-  }
-
   const report: DiagnosticReport = {
     platform,
     arch,
     nodeVersion,
     homeDir,
     tempDir,
-    dataDir,
     silkWasm,
     warnings,
   };
@@ -79,7 +52,6 @@ export async function runDiagnostics(): Promise<DiagnosticReport> {
   debugLog(`  Platform: ${platform} (${arch})`);
   debugLog(`  Node: ${nodeVersion}`);
   debugLog(`  Home: ${homeDir}`);
-  debugLog(`  Data dir: ${dataDir}`);
   debugLog(`  silk-wasm: ${silkWasm ? "available" : "unavailable"}`);
   if (warnings.length > 0) {
     debugLog("  --- Warnings ---");

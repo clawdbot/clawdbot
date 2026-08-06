@@ -124,9 +124,9 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
   if (!withOpenClawAgentDatabaseReadOnly(() => true, databaseOptions).found) {
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
   }
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+  const cleanupPlan = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(databaseOptions);
-    const cleanupPlan = planSqliteSessionLifecycleArtifactCleanup(database, {
+    return planSqliteSessionLifecycleArtifactCleanup(database, {
       ...(params.agentId !== undefined ? { agentId: resolved.agentId } : {}),
       archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts !== false,
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
@@ -136,9 +136,9 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
       orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
       nowMs: params.nowMs ?? Date.now(),
     });
-    const materializedPlans = await materializeSqliteSessionStateDeletePlans(
-      cleanupPlan.deletePlans,
-    );
+  });
+  const materializedPlans = await materializeSqliteSessionStateDeletePlans(cleanupPlan.deletePlans);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let removedEntries = 0;
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
@@ -371,16 +371,28 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         );
       }
     }
-    const historicalArchivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-    for (const sessionId of historicalGenerationIds) {
+    return { archiveDirectory, current, entryPlans, historicalGenerationIds, targetSnapshot };
+  });
+  if (!prepared) {
+    return { archivedTranscripts: [], deleted: false };
+  }
+
+  const historicalArchivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+  for (const sessionId of prepared.historicalGenerationIds) {
+    const plan = await runExclusiveSqliteSessionWrite(resolved, async () => {
+      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+      assertSqliteLifecycleTargetSnapshotUnchanged(
+        prepared.targetSnapshot,
+        readSqliteLifecycleTargetSnapshot(database, params.target),
+        "delete session entry",
+      );
+      const referencedAfterDelete = readReferencedSqliteSessionIdsAfterTargetMutation(
+        database,
+        params.target,
+      );
       if (referencedAfterDelete.has(sessionId)) {
-        // Another live entry or route still owns this generation; deleting
-        // this entry must not destroy shared history.
-        continue;
+        return null;
       }
-      // Recomputed per generation so a run admitted after preflight cannot
-      // lose the generation it just adopted; such a race aborts the deletion,
-      // and since the live entry is still present a retry finishes the rest.
       const admissionProtected = collectAdmissionProtectedSessionIds({
         database,
         storePath: params.storePath,
@@ -390,25 +402,27 @@ async function deleteSqliteSessionEntryLifecycleLocked(
           `cannot delete session history while work is in flight for ${sessionId}; retry after the run completes`,
         );
       }
-      const plan = planSqliteSessionStateDeleteIfUnreferenced({
-        archiveDirectory,
+      return planSqliteSessionStateDeleteIfUnreferenced({
+        archiveDirectory: prepared.archiveDirectory,
         archiveTranscript: params.archiveTranscript,
         database,
         reason: "deleted",
         referencedSessionIds: referencedAfterDelete,
         sessionId,
       });
-      if (!plan) {
-        continue;
-      }
-      const materializedGeneration = await materializeSqliteSessionStateDeletePlans([plan]);
-      const archivedGeneration: SessionLifecycleArchivedTranscript[] = [];
+    });
+    if (!plan) {
+      continue;
+    }
+    const materializedGeneration = await materializeSqliteSessionStateDeletePlans([plan]);
+    const archivedGeneration = await runExclusiveSqliteSessionWrite(resolved, async () => {
+      let committed: SessionLifecycleArchivedTranscript[] = [];
       runOpenClawAgentWriteTransaction((transactionDb) => {
-        // Authoritative fence: admissions are process-local sync state and this
-        // callback runs synchronously, so a run admitted after the pre-checks
-        // cannot interleave past this point. An outer lifecycle-mutation hold
-        // (as eviction uses) would invert lock order against the exclusive
-        // SQLite write this function already holds.
+        assertSqliteLifecycleTargetSnapshotUnchanged(
+          prepared.targetSnapshot,
+          readSqliteLifecycleTargetSnapshot(transactionDb, params.target),
+          "delete session entry",
+        );
         const fenceAtDelete = collectAdmissionProtectedSessionIds({
           database: transactionDb,
           storePath: params.storePath,
@@ -418,20 +432,18 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             `cannot delete session history while work is in flight for ${sessionId}; retry after the run completes`,
           );
         }
-        archivedGeneration.push(
-          ...deleteMaterializedSqliteSessionStatePlans(transactionDb, materializedGeneration),
+        committed = deleteMaterializedSqliteSessionStatePlans(
+          transactionDb,
+          materializedGeneration,
         );
       }, toDatabaseOptions(resolved));
-      // Publish each committed generation immediately: a later archive or
-      // transaction failure aborts the deletion, and observers must still see
-      // the removals that already happened (retry completes the remainder).
-      emitArchivedSqliteTranscriptUpdates(archivedGeneration);
-      historicalArchivedTranscripts.push(...archivedGeneration);
-    }
-    return { current, entryPlans, historicalArchivedTranscripts, targetSnapshot };
-  });
-  if (!prepared) {
-    return { archivedTranscripts: [], deleted: false };
+      return committed;
+    });
+    // Publish each committed generation immediately: a later archive or
+    // transaction failure aborts the deletion, and observers must still see
+    // the removals that already happened (retry completes the remainder).
+    emitArchivedSqliteTranscriptUpdates(archivedGeneration);
+    historicalArchivedTranscripts.push(...archivedGeneration);
   }
 
   // Archive materialization is the expensive phase. It must run between short
@@ -494,7 +506,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   emitArchivedSqliteTranscriptUpdates(result.archivedTranscripts);
   // Historical generations were emitted per commit above; merge them into
   // the result after the final emit so callers still see every archive.
-  result.archivedTranscripts.push(...prepared.historicalArchivedTranscripts);
+  result.archivedTranscripts.push(...historicalArchivedTranscripts);
   return result;
 }
 

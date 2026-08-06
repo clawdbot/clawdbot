@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -29,7 +30,10 @@ import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/di
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  isSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -519,6 +523,7 @@ describe("gateway server chat", () => {
         ).toEqual({
           runId: "run-active",
           text: "partial reply",
+          startedAt: 1_000,
           plan: {
             explanation: "Replay on reconnect",
             steps: [{ step: "Reconnect clients", status: "in_progress" }],
@@ -639,6 +644,7 @@ describe("gateway server chat", () => {
         ).toEqual({
           runId: "run-active",
           text: "",
+          startedAt: 1_000,
           events: [
             {
               runId: "run-active",
@@ -901,7 +907,14 @@ describe("gateway server chat", () => {
           }),
         ]),
       );
-      expect(startup.payload?.metadata?.commands).toBeUndefined();
+      expect(startup.payload?.metadata?.commands).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "model",
+            textAliases: expect.arrayContaining(["/model"]),
+          }),
+        ]),
+      );
       expect(startup.payload?.messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -911,78 +924,6 @@ describe("gateway server chat", () => {
         ]),
       );
     });
-  });
-
-  test("chat.startup memoizes config projections and invalidates them on config change", async () => {
-    openDirectChatSession();
-    testState.agentConfig = {
-      model: { primary: "test-provider/memo-model" },
-      models: { "test-provider/memo-model": {} },
-    };
-    testState.agentsConfig = {
-      list: [{ id: "main", default: true, name: "Before reload" }],
-    };
-    clearConfigCache();
-    try {
-      await writeSessionStore({
-        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
-      });
-      let catalog = [{ id: "memo-model", name: "Memo Model", provider: "test-provider" }];
-      let runtimeConfig = getRuntimeConfig();
-      let catalogConfig = runtimeConfig;
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => runtimeConfig,
-        loadGatewayModelCatalogSnapshot: vi.fn(async () => {
-          return {
-            agentId: "main",
-            agentDir: "/tmp/chat-memo-agent",
-            workspaceDir: "/tmp/chat-memo-workspace",
-            config: catalogConfig,
-            entries: catalog,
-            routeVariants: catalog,
-          };
-        }),
-      });
-      const requestStartup = async () => {
-        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-        await callDirectChat("chat.startup", {
-          id: `startup-memo-${responses.length}`,
-          params: { sessionKey: "main" },
-          respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
-          context,
-        });
-        expect(responses[0]?.ok).toBe(true);
-        return responses[0]?.payload as {
-          agentsList?: { agents?: Array<{ id?: string; name?: string }> };
-          metadata?: { models?: Array<{ id?: string; name?: string }> };
-        };
-      };
-
-      const first = await requestStartup();
-      const second = await requestStartup();
-      expect(second.agentsList).toBe(first.agentsList);
-      expect(second.metadata).toBe(first.metadata);
-
-      runtimeConfig = { ...runtimeConfig, logging: { level: "debug" } };
-      const staleCatalog = await requestStartup();
-      expect(staleCatalog.metadata).toBeUndefined();
-
-      catalogConfig = runtimeConfig;
-      const afterReload = await requestStartup();
-      expect(afterReload.agentsList).not.toBe(first.agentsList);
-      expect(afterReload.agentsList).not.toBe(staleCatalog.agentsList);
-      expect(afterReload.metadata).not.toBe(first.metadata);
-
-      catalog = [{ id: "memo-model", name: "Refreshed Memo Model", provider: "test-provider" }];
-      const afterCatalogRefresh = await requestStartup();
-      expect(afterCatalogRefresh.agentsList).not.toBe(afterReload.agentsList);
-      expect(afterCatalogRefresh.metadata).not.toBe(afterReload.metadata);
-    } finally {
-      testState.agentConfig = undefined;
-      testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
-      clearConfigCache();
-    }
   });
 
   test("chat.startup omits model metadata from a fallback owner", async () => {
@@ -1020,138 +961,22 @@ describe("gateway server chat", () => {
       expect(
         (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
       ).toBe(undefined);
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
+      expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
     } finally {
       testState.sessionStorePath = undefined;
     }
   });
 
-  test("chat.startup omits model metadata when config advances after catalog load", async () => {
-    const initialConfig = {
-      agents: { defaults: {}, list: [{ id: "main", default: true }] },
-    } as OpenClawConfig;
-    const replacementConfig = {
-      agents: {
-        defaults: { models: { "test/*": {} } },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
-    let currentConfig = initialConfig;
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => currentConfig,
-      loadGatewayModelCatalogSnapshot: vi.fn(async () => {
-        currentConfig = replacementConfig;
-        return {
-          agentId: "main",
-          agentDir: "/tmp/chat-main-agent",
-          workspaceDir: "/tmp/chat-main-workspace",
-          config: initialConfig,
-          entries: [{ id: "initial", name: "Initial", provider: "test" }],
-          routeVariants: [],
-        };
-      }),
-    });
-    openDirectChatSession();
-    try {
-      await writeSessionStore({
-        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
-      });
-      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      await callDirectChat("chat.startup", {
-        id: "startup-config-advanced",
-        params: { sessionKey: "main" },
-        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
-        context,
-      });
-
-      expect(responses[0]?.ok).toBe(true);
-      expect(
-        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
-      ).toBe(undefined);
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
-    } finally {
-      testState.sessionStorePath = undefined;
-    }
-  });
-
-  test("chat.startup keeps model metadata for an equivalent config replacement", async () => {
-    const initialConfig = {
-      agents: {
-        defaults: { models: { "test/initial": {} } },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
-    const equivalentConfig = structuredClone(initialConfig);
-    let currentConfig = initialConfig;
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => currentConfig,
-      loadGatewayModelCatalogSnapshot: vi.fn(async () => {
-        currentConfig = equivalentConfig;
-        return {
-          agentId: "main",
-          agentDir: "/tmp/chat-main-agent",
-          workspaceDir: "/tmp/chat-main-workspace",
-          config: initialConfig,
-          entries: [
-            {
-              id: "initial",
-              name: "Catalog Initial",
-              provider: "test",
-              contextWindow: 123_456,
-            },
-          ],
-          routeVariants: [],
-        };
-      }),
-    });
-    openDirectChatSession();
-    try {
-      await writeSessionStore({
-        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
-      });
-      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      await callDirectChat("chat.startup", {
-        id: "startup-config-equivalent",
-        params: { sessionKey: "main" },
-        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
-        context,
-      });
-
-      expect(responses[0]?.ok).toBe(true);
-      expect(
-        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
-      ).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "initial",
-            provider: "test",
-            name: "Catalog Initial",
-            contextWindow: 123_456,
-          }),
-        ]),
-      );
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
-    } finally {
-      testState.sessionStorePath = undefined;
-    }
-  });
-
-  test("chat.startup does not wait for slow optional model catalog metadata", async () => {
+  test("chat.startup does not start optional model catalog discovery", async () => {
     openDirectChatSession();
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
         model: "slow-catalog-model",
       });
-      const catalog =
-        createDeferred<
-          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
-        >();
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
-        loadGatewayModelCatalogSnapshot: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-          .mockReturnValue(catalog.promise),
+        loadGatewayModelCatalogSnapshot: vi.fn(),
         getRuntimeConfig: () => ({}),
       });
       await callDirectChat("chat.startup", {
@@ -1163,7 +988,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -1349,7 +1174,84 @@ describe("gateway server chat", () => {
             entries: [subscriptionRoute],
             routeVariants: [subscriptionRoute, platformRoute],
           };
+          const { loadAuthProfileStoreForRuntime } = await import("../agents/auth-profiles.js");
+          const { resolveAgentDir } = await import("../agents/agent-scope.js");
+          const preparedAuthStoreByAgentId = new Map([
+            [
+              "main",
+              loadAuthProfileStoreForRuntime(resolveAgentDir(config, "main"), {
+                readOnly: true,
+              }),
+            ],
+            [
+              "work",
+              loadAuthProfileStoreForRuntime(resolveAgentDir(config, "work"), {
+                inheritedAuthDir: resolveAgentDir(config, "main"),
+                readOnly: true,
+              }),
+            ],
+          ]);
           const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+          const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
+            await import("./server-methods/models-list-result.js");
+          const { listAgentsForGateway } = await import("./session-utils.js");
+          const projectionByKey = new Map<
+            string,
+            Promise<{
+              modelCatalog: ModelCatalogEntry[];
+              metadata: { models: unknown[]; swarmEnabled: boolean };
+            }>
+          >();
+          const projectAgent = (
+            context: GatewayRequestContext,
+            agentId: string,
+            sessionEntry?: Parameters<GatewayRequestContext["readChatMetadata"]>[0]["sessionEntry"],
+          ) => {
+            const profileId = sessionEntry?.authProfileOverride?.trim();
+            const profileSource = sessionEntry?.authProfileOverrideSource;
+            const legacyUserProfile =
+              profileSource === undefined &&
+              sessionEntry?.authProfileOverrideCompactionCount === undefined;
+            const key = [
+              agentId,
+              profileId ?? "",
+              profileId && (profileSource === "user" || legacyUserProfile) ? profileId : "",
+            ].join("\0");
+            const existing = projectionByKey.get(key);
+            if (existing) {
+              return existing;
+            }
+            const projector = createGatewayAgentModelCatalogProjector({
+              cfg: config,
+              agentId,
+              snapshot: catalogSnapshot,
+              preparedAuthStore: preparedAuthStoreByAgentId.get(agentId),
+              ...(profileId ? { preferredProfileId: profileId } : {}),
+              ...(profileId && (profileSource === "user" || legacyUserProfile)
+                ? { lockedProfileId: profileId }
+                : {}),
+            });
+            const projection = Promise.all([
+              projector.projectCatalog(),
+              buildModelsListResult({
+                context,
+                agentId,
+                params: { view: "configured" },
+                preloadedCatalog: {
+                  agentId,
+                  config,
+                  snapshot: catalogSnapshot,
+                },
+                preloadedOnly: true,
+                catalogProjector: projector,
+              }),
+            ]).then(([modelCatalog, metadata]) => ({
+              modelCatalog,
+              metadata: { ...metadata, swarmEnabled: false },
+            }));
+            projectionByKey.set(key, projection);
+            return projection;
+          };
           const context = createDirectChatContext({
             loadGatewayModelCatalogSnapshot: vi
               .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
@@ -1361,9 +1263,26 @@ describe("gateway server chat", () => {
                 ...catalogSnapshot,
               }),
             getRuntimeConfig: () => config,
+            readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry, includeSystem }) => {
+              const [mainProjection, workProjection, sessionProjection] = await Promise.all([
+                projectAgent(context, "main"),
+                projectAgent(context, "work"),
+                projectAgent(context, agentId, sessionEntry),
+              ]);
+              return {
+                metadata: sessionProjection.metadata,
+                sessionModelCatalog: sessionProjection.modelCatalog,
+                defaultModelCatalog: mainProjection.modelCatalog,
+                agentsList: listAgentsForGateway(config, mainProjection.modelCatalog, {
+                  modelCatalogByAgentId: new Map([
+                    ["main", mainProjection.modelCatalog],
+                    ["work", workProjection.modelCatalog],
+                  ]),
+                  includeSystem,
+                }),
+              };
+            }),
           });
-          const { createGatewayAgentModelCatalogProjector } =
-            await import("./server-methods/models-list-result.js");
           const persistedConfig = getRuntimeConfig();
           // Direct handlers bypass Gateway startup, so publish its process-lifecycle handoff once.
           // Otherwise every route projector rediscovers the full plugin metadata graph.
@@ -1398,10 +1317,7 @@ describe("gateway server chat", () => {
             context,
           });
 
-          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
-            agentId: "work",
-          });
+          expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
           expect(responses).toHaveLength(1);
           expect(responses[0]?.ok).toBe(true);
           const payload = responses[0]?.payload as
@@ -1454,7 +1370,7 @@ describe("gateway server chat", () => {
               context,
             });
 
-            expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(index + 2);
+            expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
             expect(responses).toHaveLength(1);
             expect(responses[0]?.ok).toBe(true);
             const preferredPayload = responses[0]?.payload as
@@ -1483,7 +1399,7 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.startup omits metadata when configured model visibility needs full discovery", async () => {
+  test("chat.startup serves prepared metadata when configured visibility needs full discovery", async () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await writeGatewayConfig({
         agents: {
@@ -1506,12 +1422,19 @@ describe("gateway server chat", () => {
       });
       await connectOk(ws);
 
-      const startup = await rpcReq<{ metadata?: unknown }>(ws, "chat.startup", {
-        sessionKey: "main",
-      });
+      const startup = await rpcReq<{
+        metadata?: { models?: Array<{ id?: string; provider?: string }> };
+      }>(ws, "chat.startup", { sessionKey: "main" });
 
       expect(startup.ok).toBe(true);
-      expect(startup.payload?.metadata).toBeUndefined();
+      expect(startup.payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "gpt-main",
+            provider: "openai",
+          }),
+        ]),
+      );
     });
   });
 
@@ -1563,6 +1486,16 @@ describe("gateway server chat", () => {
       } as unknown as OpenClawConfig;
       await writeGatewayConfig(config);
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const readChatMetadata = vi.fn(async () => ({
+        models: [
+          {
+            id: "MiniMax-M2.7-highspeed",
+            name: "MiniMax M2.7 Highspeed",
+            provider: "minimax",
+          },
+        ],
+        swarmEnabled: false,
+      }));
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
@@ -1591,6 +1524,7 @@ describe("gateway server chat", () => {
             };
           }),
         getRuntimeConfig: () => config,
+        readChatMetadata,
       });
       await callDirectChat("chat.startup", {
         id: "startup-agent-scoped-metadata",
@@ -1601,7 +1535,13 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+      expect(readChatMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "work",
+          sessionEntry: expect.objectContaining({ sessionId: "sess-work" }),
+        }),
+      );
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -1757,7 +1697,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await connectOk(ws);
       const modelsListResult = await import("./server-methods/models-list-result.js");
-      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValueOnce(
+      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValue(
         new Error("configured model catalog unavailable"),
       );
 
@@ -3963,7 +3903,7 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send terminalizes the client run when a followup is queued", async () => {
-    await withDirectChatSession(async () => {
+    await withDirectChatSession(async (_sessionDir, storePath) => {
       await writeStoredMainSession({});
 
       const broadcast = vi.fn((_event: string, _payload: unknown) => undefined);
@@ -3974,10 +3914,12 @@ describe("gateway server chat", () => {
         getRuntimeConfig: () => ({}),
       });
       let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
+      let onQueueDisposition: InternalGetReplyOptions["onFollowupQueueDisposition"];
       const dispatchRelease = createDeferred();
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        turnAdoptionLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.turnAdoptionLifecycle;
+        const replyOptions = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+        turnAdoptionLifecycle = replyOptions?.turnAdoptionLifecycle;
+        onQueueDisposition = replyOptions?.onFollowupQueueDisposition;
         turnAdoptionLifecycle?.onDeferred?.();
         await dispatchRelease.promise;
         return {};
@@ -4032,6 +3974,18 @@ describe("gateway server chat", () => {
       );
       expect(finalEvents).toHaveLength(1);
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
+      expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(true);
+
+      onQueueDisposition?.("queue-cap-old");
+      expect(context.logGateway.info).toHaveBeenCalledWith(
+        "chat queue turn intentionally skipped",
+        {
+          runId: "idem-queued-followup",
+          sessionKey: "agent:main:main",
+          outcome: "skipped",
+          reason: "queue-cap-old",
+        },
+      );
 
       context.dedupe.delete("chat:idem-queued-followup");
       const replayRespond = vi.fn() as RespondFn;
@@ -4068,6 +4022,7 @@ describe("gateway server chat", () => {
 
       turnAdoptionLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
+      expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(false);
       await waitForFast(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,

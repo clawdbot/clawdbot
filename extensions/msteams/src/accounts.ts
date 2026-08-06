@@ -146,6 +146,23 @@ export function resolveMSTeamsAccountConfig(
   return clearNamedAccountInheritedIdentity(merged, account);
 }
 
+export function resolveMSTeamsRuntimeAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  msteamsCfg?: MSTeamsConfig;
+}) {
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const config = params.msteamsCfg ?? resolveMSTeamsAccountConfig(params.cfg, accountId);
+  const credentials = resolveMSTeamsCredentials(config, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix:
+      accountId === DEFAULT_ACCOUNT_ID
+        ? "channels.msteams"
+        : `channels.msteams.accounts.${accountId}`,
+  });
+  return { accountId, config, credentials };
+}
+
 export function resolveMSTeamsAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;

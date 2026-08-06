@@ -89,6 +89,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
   runId: string;
   entry: SubagentRunRecord;
   runs: Map<string, SubagentRunRecord>;
+  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   loadKillRuntime: () => Promise<typeof import("./subagent-control.runtime.js")>;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
@@ -104,13 +105,14 @@ export async function reconcileDurableSubagentKillIntent(params: {
   if (params.runs.get(params.runId) !== params.entry) {
     return false;
   }
+  const childRuns = () => params.getRunsForChildSession(params.entry.childSessionKey);
   const latest = getLatestSubagentRunByChildSessionKeyFromRuns(
-    params.runs,
+    childRuns(),
     params.entry.childSessionKey,
   );
   if (latest !== params.entry) {
     try {
-      const taskResolution = resolveSubagentTaskForRun(params.runs.values(), params.entry);
+      const taskResolution = resolveSubagentTaskForRun(childRuns(), params.entry);
       const task = taskResolution.task;
       if (taskResolution.lookup === "unavailable" || isUnstableTask(task)) {
         const finalized = finalizeTaskRunByRunId({
@@ -133,7 +135,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
       }
       if (
         params.runs.get(params.runId) !== params.entry ||
-        getLatestSubagentRunByChildSessionKeyFromRuns(params.runs, params.entry.childSessionKey) ===
+        getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
           params.entry
       ) {
         return false;
@@ -154,7 +156,7 @@ export async function reconcileDurableSubagentKillIntent(params: {
     params.entry.killIntent === killIntent &&
     killIntent.lifecycleGeneration !== undefined &&
     isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration) &&
-    getLatestSubagentRunByChildSessionKeyFromRuns(params.runs, params.entry.childSessionKey) ===
+    getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
       params.entry;
   const cfg = getRuntimeConfig();
   const storePath = resolveStorePath(cfg.session?.store, {

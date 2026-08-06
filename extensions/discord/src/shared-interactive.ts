@@ -229,8 +229,6 @@ export function buildDiscordPresentationComponents(
       blocks.push({ type: "separator" });
       continue;
     }
-  }
-  for (const block of presentation.blocks) {
     if (block.type === "buttons") {
       appendDiscordButtonBlocks(blocks, block.buttons);
       continue;

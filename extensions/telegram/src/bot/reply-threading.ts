@@ -42,6 +42,8 @@ export async function sendChunkedTelegramReplyText<
   quoteOnlyOnFirstChunk?: boolean;
   invalidate: () => void;
   onRejected: (error: unknown) => void;
+  isSilentSkip?: (error: unknown) => boolean;
+  onSilentSkip?: (error: unknown) => void;
   markDelivered?: (progress: TProgress) => void;
   sendChunk: (opts: {
     chunk: TChunk;
@@ -57,6 +59,8 @@ export async function sendChunkedTelegramReplyText<
   const tracker = createTelegramChunkDeliveryTracker({
     invalidate: params.invalidate,
     onRejected: params.onRejected,
+    isSilentSkip: params.isSilentSkip,
+    onSilentSkip: params.onSilentSkip,
     partialDeliveryResult: () => ({ messageIds: [...messageIds], visibleReplySent: true }),
   });
   const suppressSingleUseReply =
@@ -97,7 +101,7 @@ export async function sendChunkedTelegramReplyText<
         return params.recordChunk(result, chunk);
       },
     );
-    if (!accepted) {
+    if (accepted !== "accepted") {
       continue;
     }
     hasAcceptedChunk = true;

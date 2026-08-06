@@ -87,6 +87,20 @@ describe("reply turn admission", () => {
     recoveryOwnerReleaseMocks.schedulePendingTarget.mockClear();
   });
 
+  it("binds the originating transcript leaf to the admitted operation", async () => {
+    const admission = await admitTestReplyTurn({
+      sessionKey: "agent:main:main",
+      sessionId: "session-originating-leaf",
+      originatingLeafEntryId: "leaf-before-run",
+    });
+
+    expect(admission.status).toBe("owned");
+    if (admission.status === "owned") {
+      expect(admission.operation.originatingLeafEntryId).toBe("leaf-before-run");
+      admission.operation.complete();
+    }
+  });
+
   it("rejects a reply when an archive commits before admission", async () => {
     const sessionKey = "agent:main:telegram:topic:archived";
     const sessionId = "session-before-archive";

@@ -457,6 +457,7 @@ const telegramBotRuntimeForTest = {
       setMyCommands: grammySpies.setMyCommandsSpy,
       getMe: grammySpies.getMeSpy,
       getChat: grammySpies.getChatSpy,
+      getChatMember: grammySpies.getChatSpy,
       sendMessage: grammySpies.sendMessageSpy,
       sendAnimation: grammySpies.sendAnimationSpy,
       sendPhoto: grammySpies.sendPhotoSpy,
