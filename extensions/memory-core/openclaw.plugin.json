@@ -6,7 +6,11 @@
   },
   "kind": "memory",
   "contracts": {
-    "tools": ["intent", "memory_get", "memory_search"]
+    "tools": [
+      "intent",
+      "memory_get",
+      "memory_search"
+    ]
   },
   "toolMetadata": {
     "memory_get": {
@@ -38,6 +42,10 @@
     "dreaming.phases.deep.maxPriorEntryLossFraction": {
       "label": "Maximum Prior Entry Loss",
       "help": "Maximum fraction of prior MEMORY.md entries an accepted consolidation rewrite may remove."
+    },
+    "dreaming.language": {
+      "label": "Dreaming Language",
+      "help": "Optional locale for Dream Diary headings and narrative output. Built-ins: en, zh-CN, zh-TW, ja, ko."
     }
   },
   "configSchema": {
@@ -70,7 +78,11 @@
             "properties": {
               "mode": {
                 "type": "string",
-                "enum": ["inline", "separate", "both"]
+                "enum": [
+                  "inline",
+                  "separate",
+                  "both"
+                ]
               },
               "separateReports": {
                 "type": "boolean"
@@ -216,6 +228,16 @@
                 }
               }
             }
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "en",
+              "zh-CN",
+              "zh-TW",
+              "ja",
+              "ko"
+            ]
           }
         }
       }

@@ -5,6 +5,7 @@ import {
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { resolveMemoryDreamingConfig } from "../../../src/memory-host-sdk/dreaming.ts";
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
@@ -31,6 +32,20 @@ describe("memory-core manifest config schema", () => {
         },
       },
     });
+  });
+
+  it("accepts dreaming language in the manifest schema", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-language",
+      value: {
+        dreaming: {
+          language: "zh-CN",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it("accepts dreaming phase thresholds used by QA and runtime", () => {
@@ -75,5 +90,20 @@ describe("memory-core manifest config schema", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("resolves dreaming language at runtime", () => {
+    expect(
+      resolveMemoryDreamingConfig({
+        pluginConfig: {
+          dreaming: {
+            language: "zh-CN",
+          },
+        },
+      }).language,
+    ).toBe("zh-CN");
+    expect(
+      resolveMemoryDreamingConfig({ pluginConfig: { dreaming: {} } }).language,
+    ).toBeUndefined();
   });
 });
