@@ -73,9 +73,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     ownsAuditTerminal && hasTrustedMessageAuditListeners()
       ? ([] as OutboundPayloadDeliveryOutcome[])
       : undefined;
-  // Recipient custody must observe ambiguous adapter outcomes even when no
-  // audit listener is installed; audit subscriptions are not delivery proof.
-  const stablePayloadOutcomes = producerClaimId
+  const reusableProducerClaimId = params.reusePendingDeliveryIntent ? producerClaimId : undefined;
+  // Reusable producer custody must observe ambiguous adapter outcomes even when
+  // no audit listener is installed; audit subscriptions are not delivery proof.
+  const stablePayloadOutcomes = reusableProducerClaimId
     ? ([] as OutboundPayloadDeliveryOutcome[])
     : undefined;
   const queuePolicy = params.queuePolicy ?? "best_effort";
@@ -150,7 +151,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     return persistQueuedPostSendState({
       queueId,
       queuePolicy,
-      ...(producerClaimId ? { producerClaimId } : {}),
+      ...(reusableProducerClaimId ? { producerClaimId: reusableProducerClaimId } : {}),
+      ...(producerClaimId ? { expectedPlatformSendAttemptId: producerClaimId } : {}),
     });
   };
   const emitTerminals = (
@@ -226,7 +228,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
-          if (exactReconciliationRequired || producerClaimId) {
+          if (exactReconciliationRequired || reusableProducerClaimId) {
             throw dispatchMarkError;
           }
           log.warn(
