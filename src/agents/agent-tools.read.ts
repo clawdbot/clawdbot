@@ -73,6 +73,8 @@ const MAX_ADAPTIVE_READ_PAGES = 4;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Root the read resolves relative paths against; enables the leading-`@` disambiguation. */
+  cwd?: string;
 };
 
 type SkillReadContent = {
@@ -874,7 +876,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = normalizeFileToolPathParam(rawFilePath);
+        const filePath = normalizeFileToolPathParam(rawFilePath, root);
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
@@ -955,6 +957,7 @@ export function createSandboxedReadTool(
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
+    cwd: params.root,
   });
 }
 
@@ -967,7 +970,7 @@ export function createSandboxedWriteTool(
       operations: createSandboxWriteOperations(params),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, params.root);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -979,7 +982,7 @@ export function createSandboxedEditTool(
       operations: createSandboxEditOperations(params),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, params.root);
 }
 
 /** Create a host workspace write tool using guarded filesystem operations. */
@@ -997,7 +1000,7 @@ export function createHostWorkspaceWriteTool(
       operations: createHostWriteOperations(options?.containmentRoot ?? root, options),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
@@ -1015,7 +1018,7 @@ export function createHostWorkspaceEditTool(
       operations: createHostEditOperations(options?.containmentRoot ?? root, options),
     }),
   );
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, root);
 }
 
 /** Wrap the base read tool with OpenClaw paging, MIME, and image handling. */
@@ -1028,7 +1031,7 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+        ? normalizeFileToolPathParamsFromKeys(record, ["path"], options?.cwd)
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const filePath =

@@ -4,6 +4,7 @@
  * Converts validated absolute or relative inputs into root-relative paths without allowing boundary escapes.
  */
 import path from "node:path";
+import { pathExistsSync } from "../infra/fs-safe.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 
@@ -161,4 +162,35 @@ export function toRelativeSandboxPath(
 /** Resolve a user-supplied path against `cwd` using the sandbox input rules. */
 export function resolvePathFromInput(filePath: string, cwd: string): string {
   return path.normalize(resolveSandboxInputPath(filePath, cwd));
+}
+
+/**
+ * Mark an `@`-prefixed path as explicitly relative when that literal file exists.
+ *
+ * Resolvers strip a leading `@`; 9ef0fc2ff8f made the strip uniform to close a
+ * workspace-root guard bypass, so the absolute shorthands must keep stripping.
+ * On a relative path the `@` is a filename character and the strip retargets the
+ * sibling. An existing literal is the only signal separating the two: the TUI
+ * autocomplete emits `@src/foo.ts` for a file stored without the `@`.
+ *
+ * Call where a model-supplied path enters, before the workspace guard, so the
+ * guard and the resolver see one path.
+ */
+export function preserveAtPrefixedRelativePath(filePath: string, cwd: string): string {
+  if (!filePath.startsWith("@")) {
+    return filePath;
+  }
+  const sigilStripped = filePath.slice(1);
+  const isMentionShorthand =
+    sigilStripped === "" ||
+    sigilStripped === "~" ||
+    sigilStripped.startsWith("~/") ||
+    sigilStripped.startsWith("~\\") ||
+    /^file:\/\//i.test(sigilStripped) ||
+    path.posix.isAbsolute(sigilStripped) ||
+    path.win32.isAbsolute(sigilStripped);
+  if (isMentionShorthand) {
+    return filePath;
+  }
+  return pathExistsSync(path.resolve(cwd, filePath)) ? `./${filePath}` : filePath;
 }
