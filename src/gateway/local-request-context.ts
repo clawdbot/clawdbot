@@ -2,10 +2,7 @@ import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import {
-  getPreparedModelCatalogSnapshot,
-  loadResolvedPublishedModelCatalogOwner,
-} from "../agents/prepared-model-catalog.js";
+import { loadResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
@@ -22,6 +19,7 @@ import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { readPreparedGatewayModelCatalogSnapshot } from "./server-model-catalog.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
 // methods without starting the full gateway. Unsupported subsystems fail loudly
@@ -131,12 +129,11 @@ function createLocalGatewayRequestContext(
         config: owner.config,
       };
     },
-    readPreparedGatewayModelCatalog: async (loadParams) =>
-      getPreparedModelCatalogSnapshot({
+    readPreparedGatewayModelCatalogSnapshot: async (loadParams) =>
+      await readPreparedGatewayModelCatalogSnapshot({
         ...loadParams,
-        config: params.getRuntimeConfig(),
-        readOnly: true,
-      })?.entries,
+        getConfig: params.getRuntimeConfig,
+      }),
     readChatMetadata: async () => {
       throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
     },

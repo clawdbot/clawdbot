@@ -86,6 +86,11 @@ export type ProviderUsageSnapshot = {
 export type UsageSummary = {
   updatedAt: number;
   providers: ProviderUsageSnapshot[];
+  /**
+   * Set when a background refresh owns the real values, so an empty `providers`
+   * reads as "not loaded yet" instead of "this account has no provider usage".
+   */
+  refreshing?: boolean;
 };
 
 /** Normalized provider id. Usage providers are discovered from plugin hooks at runtime. */

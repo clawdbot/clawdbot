@@ -56,6 +56,32 @@ describe("UsageRefreshPolicy", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it("refetches a payload the Gateway marked as still refreshing", () => {
+    const { policy, reload } = createPolicy();
+    policy.markLoaded({ pendingRefresh: true });
+
+    // The incomplete payload must not start the TTL, or every automatic refresh skips.
+    policy.request("focus");
+    expect(reload).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(5_000);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops retrying once a complete payload lands and after disposal", () => {
+    const { policy, reload } = createPolicy();
+    policy.markLoaded({ pendingRefresh: true });
+    policy.markLoaded();
+
+    vi.advanceTimersByTime(5_000);
+    expect(reload).not.toHaveBeenCalled();
+
+    policy.markLoaded({ pendingRefresh: true });
+    policy.dispose();
+    vi.advanceTimersByTime(5_000);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it("retries interrupted work once active despite a fresh payload", () => {
     let loading = true;
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");

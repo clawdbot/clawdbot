@@ -80,6 +80,14 @@ export function createDirectChatContext(
       entries: [],
       routeVariants: [],
     }),
+    // Optional request metadata reads published startup facts, never the full loader.
+    readPreparedGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
+      agentId: "main",
+      agentDir: "/tmp/chat-model-catalog-agent",
+      config,
+      entries: [],
+      routeVariants: [],
+    }),
     logGateway: {
       info: vi.fn(),
       warn: vi.fn(),

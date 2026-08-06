@@ -332,12 +332,12 @@ describe("session sharing handlers", () => {
           client,
           context: {
             ...context(vi.fn()),
-            readPreparedGatewayModelCatalog: async () => {
+            readPreparedGatewayModelCatalogSnapshot: async () => {
               await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
                 visibility: "draft",
               }));
               invalidateSessionSharingSnapshot(sessionKey);
-              return [];
+              return { entries: [] };
             },
           } as unknown as GatewayRequestContext,
           respond: (...response: Parameters<RespondFn>) => responses.push(response),
@@ -408,12 +408,12 @@ describe("session sharing handlers", () => {
         client: identifiedClient("outsider@example.com"),
         context: {
           ...context(vi.fn()),
-          readPreparedGatewayModelCatalog: async () => {
+          readPreparedGatewayModelCatalogSnapshot: async () => {
             await patchSessionEntry({ agentId: "main", sessionKey: hiddenKey }, () => ({
               visibility: "draft",
             }));
             invalidateSessionSharingSnapshot(hiddenKey);
-            return [];
+            return { entries: [] };
           },
         } as unknown as GatewayRequestContext,
         respond: (...response: Parameters<RespondFn>) => responses.push(response),

@@ -688,7 +688,7 @@ export async function directSessionReq<TPayload = unknown>(
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const loadGatewayModelCatalog =
+  const loadCatalog =
     (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
     (async () => agentDiscoveryMock.models);
   let result:
@@ -719,8 +719,9 @@ export async function directSessionReq<TPayload = unknown>(
       chatQueuedTurns: new Map(),
       dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog,
-      readPreparedGatewayModelCatalog: loadGatewayModelCatalog,
+      loadGatewayModelCatalog: loadCatalog,
+      // Handler tests stand in for a gateway that already published its startup catalog.
+      readPreparedGatewayModelCatalogSnapshot: async () => ({ entries: await loadCatalog() }),
       getRuntimeConfig,
       ...opts?.context,
     } as never,

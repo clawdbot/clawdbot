@@ -718,8 +718,8 @@ describe("gateway server chat", () => {
         },
       ];
       const context = createDirectChatContext({
-        loadGatewayModelCatalogSnapshot: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+        readPreparedGatewayModelCatalogSnapshot: vi
+          .fn<NonNullable<GatewayRequestContext["readPreparedGatewayModelCatalogSnapshot"]>>()
           .mockResolvedValue({
             agentId: "main",
             agentDir: "/tmp/chat-history-agent",
@@ -738,7 +738,8 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+      expect(context.readPreparedGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -899,7 +900,22 @@ describe("gateway server chat", () => {
         key: "agent:main:main",
         sessionId: "sess-main",
       });
-      expect(startup.payload?.metadata).toBeUndefined();
+      expect(startup.payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "gpt-main",
+            provider: "openai",
+          }),
+        ]),
+      );
+      expect(startup.payload?.metadata?.commands).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "model",
+            textAliases: expect.arrayContaining(["/model"]),
+          }),
+        ]),
+      );
       expect(startup.payload?.messages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1004,8 +1020,8 @@ describe("gateway server chat", () => {
         >();
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
-        loadGatewayModelCatalogSnapshot: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+        readPreparedGatewayModelCatalogSnapshot: vi
+          .fn<NonNullable<GatewayRequestContext["readPreparedGatewayModelCatalogSnapshot"]>>()
           .mockReturnValue(catalog.promise),
         getRuntimeConfig: () => ({}),
       });
@@ -1016,7 +1032,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+      expect(context.readPreparedGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       expect(
@@ -1384,7 +1400,7 @@ describe("gateway server chat", () => {
     );
   });
 
-  test("chat.startup omits metadata instead of starting configured full discovery", async () => {
+  test("chat.startup serves prepared metadata when configured visibility needs full discovery", async () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await writeGatewayConfig({
         agents: {
@@ -1412,7 +1428,14 @@ describe("gateway server chat", () => {
       }>(ws, "chat.startup", { sessionKey: "main" });
 
       expect(startup.ok).toBe(true);
-      expect(startup.payload?.metadata?.models).toBeUndefined();
+      expect(startup.payload?.metadata?.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "gpt-main",
+            provider: "openai",
+          }),
+        ]),
+      );
     });
   });
 

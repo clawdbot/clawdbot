@@ -91,7 +91,7 @@ async function listMainSessionWithThinking(params: {
   primaryModel: string;
   sessionModelProvider: string;
   sessionModel: string;
-  readPreparedGatewayModelCatalog?: () => Promise<
+  preparedModelCatalogEntries?: () => Promise<
     Array<{
       provider: string;
       id: string;
@@ -128,7 +128,11 @@ async function listMainSessionWithThinking(params: {
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig,
-      readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog ?? (async () => []),
+      readPreparedGatewayModelCatalogSnapshot: async () => ({
+        entries: params.preparedModelCatalogEntries
+          ? await params.preparedModelCatalogEntries()
+          : [],
+      }),
     } as never,
   });
 
@@ -145,7 +149,7 @@ test("e2e #76482: session with different model gets its own thinking levels thro
     primaryModel: "openai/gpt-5.5",
     sessionModelProvider: "test-extended",
     sessionModel: "extended-reasoner",
-    readPreparedGatewayModelCatalog: async () => [
+    preparedModelCatalogEntries: async () => [
       // Provide a catalog with xhigh support — simulates what a real gateway
       // resolves for models like DeepSeek V4 Pro
       {

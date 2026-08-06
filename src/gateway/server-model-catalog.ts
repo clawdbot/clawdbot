@@ -64,10 +64,9 @@ async function loadGatewayModelCatalogOwnerSnapshot(
   );
 }
 
-export async function loadGatewayModelCatalogSnapshot(
-  params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelCatalogSnapshot> {
-  const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
+function flattenGatewayModelCatalogOwner(
+  owner: GatewayModelCatalogOwnerSnapshot,
+): GatewayModelCatalogSnapshot {
   return {
     ...owner.modelCatalog,
     agentId: owner.agentId,
@@ -77,23 +76,40 @@ export async function loadGatewayModelCatalogSnapshot(
   };
 }
 
+export async function loadGatewayModelCatalogSnapshot(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelCatalogSnapshot> {
+  return flattenGatewayModelCatalogOwner(await loadGatewayModelCatalogOwnerSnapshot(params));
+}
+
 export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {
   return (await loadGatewayModelCatalogSnapshot(params)).entries;
 }
 
-/** Reads the already-published startup catalog without starting provider discovery. */
-export async function readPreparedGatewayModelCatalog(
+/** Reads the already-published startup catalog snapshot without starting provider discovery. */
+export async function readPreparedGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelChoice[] | undefined> {
-  const { getPreparedModelCatalogSnapshot } = await import("../agents/prepared-model-catalog.js");
-  const config = (params?.getConfig ?? getRuntimeConfig)();
-  return getPreparedModelCatalogSnapshot({
+): Promise<GatewayModelCatalogSnapshot | undefined> {
+  const { getPreparedModelCatalogOwnerSnapshot } =
+    await import("../agents/prepared-model-catalog.js");
+  const prepared = getPreparedModelCatalogOwnerSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
-    config,
+    config: (params?.getConfig ?? getRuntimeConfig)(),
     readOnly: true,
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  })?.entries;
+  });
+  if (!prepared) {
+    return undefined;
+  }
+  try {
+    return flattenGatewayModelCatalogOwner(resolvePublishedModelCatalogOwner(prepared));
+  } catch {
+    // A published generation whose owner no longer resolves to one configured agent
+    // is not usable metadata. Callers treat it as "not prepared yet" rather than
+    // failing the request they decorate.
+    return undefined;
+  }
 }

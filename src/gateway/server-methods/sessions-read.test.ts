@@ -59,7 +59,7 @@ async function listAgentIdsViaRpc(
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: async () => [],
-      readPreparedGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalogSnapshot: async () => ({ entries: [] }),
       ...catalogContext,
     } as unknown as GatewayRequestContext,
     client: includeSystem
@@ -86,16 +86,16 @@ test("agents.list includes system rows only when negotiated", async () => {
 
 test("agents.list reads published model facts without starting provider discovery", async () => {
   const loadGatewayModelCatalog = vi.fn(async () => []);
-  const readPreparedGatewayModelCatalog = vi.fn(async () => []);
+  const readPreparedGatewayModelCatalogSnapshot = vi.fn(async () => ({ entries: [] }));
 
   await expect(
     listAgentIdsViaRpc(false, {
       loadGatewayModelCatalog,
-      readPreparedGatewayModelCatalog,
+      readPreparedGatewayModelCatalogSnapshot,
     }),
   ).resolves.toEqual(["main"]);
 
-  expect(readPreparedGatewayModelCatalog).toHaveBeenCalledWith(undefined);
+  expect(readPreparedGatewayModelCatalogSnapshot).toHaveBeenCalledWith(undefined);
   expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
 });
 

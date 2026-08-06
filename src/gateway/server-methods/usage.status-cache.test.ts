@@ -114,7 +114,7 @@ describe("usage.status provider usage cache", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns a cold usage snapshot without waiting for provider HTTP", async () => {
+  it("marks the cold snapshot as refreshing instead of waiting for provider HTTP", async () => {
     let resolveProviderUsage:
       | ((value: { updatedAt: number; providers: never[] }) => void)
       | undefined;
@@ -135,18 +135,21 @@ describe("usage.status provider usage cache", () => {
     ]);
 
     resolveProviderUsage?.({ updatedAt: now, providers: [] });
-    expect(result).toEqual({ updatedAt: now, providers: [] });
+    expect(result).toEqual({ updatedAt: now, providers: [], refreshing: true });
   });
 
   it("reuses byte-identical results within 60s and refreshes stale data in the background", async () => {
-    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [] });
+    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [], refreshing: true });
     const first = await vi.waitFor(async () => {
       const result = (await runUsageStatus()) as {
         providers: Array<{ windows: Array<{ usedPercent: number }> }>;
+        refreshing?: boolean;
       };
       expect(result.providers[0]?.windows[0]?.usedPercent).toBe(10);
       return result;
     });
+    // Loaded usage must not carry the refreshing marker, or clients keep retrying.
+    expect(first.refreshing).toBeUndefined();
 
     expect(JSON.stringify(await runUsageStatus())).toBe(JSON.stringify(first));
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
@@ -166,7 +169,7 @@ describe("usage.status provider usage cache", () => {
   });
 
   it("shares the raw snapshot with models.authStatus and invalidates on credential rotation", async () => {
-    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [] });
+    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [], refreshing: true });
     const agentId = resolveDefaultAgentId(config);
     const agentDir = resolveAgentDir(config, agentId);
     const readUsage = () =>
@@ -188,7 +191,7 @@ describe("usage.status provider usage cache", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
 
     store.profiles["openai:default"].access = "access-two";
-    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [] });
+    expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [], refreshing: true });
     await vi.waitFor(async () => {
       const rotated = (await runUsageStatus()) as {
         providers: Array<{ windows: Array<{ usedPercent: number }> }>;

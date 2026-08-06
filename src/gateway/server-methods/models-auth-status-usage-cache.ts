@@ -290,12 +290,13 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
     providerIds,
     providerKey,
   });
+  void refresh.catch(() => {});
   if (matching) {
-    void refresh.catch(() => {});
     return matching.summary;
   }
-  void refresh.catch(() => {});
-  return { updatedAt: params.now, providers: [] };
+  // Cold read: the refresh owns the real values, so say so instead of letting an
+  // empty list read as "no provider usage" for the client's whole cache window.
+  return { updatedAt: params.now, providers: [], refreshing: true };
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */

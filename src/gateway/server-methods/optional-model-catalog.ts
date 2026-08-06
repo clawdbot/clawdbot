@@ -21,9 +21,7 @@ export async function readPreparedServerMethodModelCatalog(
   context: GatewayRequestContext,
   options?: { agentId?: string },
 ): Promise<ModelCatalogEntry[] | undefined> {
-  return context.readPreparedGatewayModelCatalog
-    ? await context.readPreparedGatewayModelCatalog(options)
-    : undefined;
+  return (await context.readPreparedGatewayModelCatalogSnapshot?.(options))?.entries;
 }
 
 type LoadOptionalServerMethodModelCatalogOptions<T> = {
@@ -68,17 +66,10 @@ export function startOptionalServerMethodModelCatalogSnapshotLoad(
   loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
 ): OptionalServerMethodModelCatalogLoad<GatewayModelCatalogSnapshot> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    load: async () => {
-      // Optional request metadata may consume a published catalog, but it must
-      // never trigger provider discovery while the gateway request loop waits.
-      if (
-        context.readPreparedGatewayModelCatalog &&
-        (await context.readPreparedGatewayModelCatalog(loadParams)) === undefined
-      ) {
-        return undefined;
-      }
-      return await context.loadGatewayModelCatalogSnapshot(loadParams);
-    },
+    // Published startup facts only. Optional metadata decorates a response the
+    // caller already owes the client, so it must never start provider discovery
+    // while the gateway request loop waits on it.
+    load: async () => await context.readPreparedGatewayModelCatalogSnapshot?.(loadParams),
     normalize: normalizeOptionalModelCatalogSnapshot,
   });
 }

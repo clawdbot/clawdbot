@@ -219,11 +219,11 @@ export type GatewayRequestContext = {
     readOnly?: boolean;
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
-  readPreparedGatewayModelCatalog?: (params?: {
+  readPreparedGatewayModelCatalogSnapshot?: (params?: {
     agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
-  }) => Promise<ModelCatalogEntry[] | undefined>;
+  }) => Promise<GatewayModelCatalogSnapshot | undefined>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readChatStartupProjection?: (
     params: ChatStartupProjectionReadParams,
