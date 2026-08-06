@@ -538,6 +538,8 @@ function operatorApprovalPolicyRefs(record: OperatorApprovalRecord): string[] {
     case "storage-corrupt":
       refs.push("operator-approval:fail-closed-storage");
       break;
+    case null:
+      break;
   }
   return refs.toSorted();
 }
@@ -721,7 +723,7 @@ export function countOperatorApprovalReceiptsForRun(params: {
           .clearSelect()
           .select((eb) => eb.fn.countAll<number>().as("count")),
       );
-      return typeof row?.count === "number" ? row.count : Number(row?.count ?? 0);
+      return row?.count ?? 0;
     }, params.databaseOptions) ?? 0
   );
 }
