@@ -1056,6 +1056,56 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("runs one targeted hook wake for an agent without a heartbeat schedule", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:123e4567-e89b-12d3-a456-426614174000",
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:123e4567-e89b-12d3-a456-426614174000",
+        sessionKey: "agent:ops:main",
+      },
+    });
+    runner.stop();
+  });
+
+  it("rejects targeted hook wakes for unconfigured agents", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: { agents: { list: [{ id: "main", heartbeat: { every: "30m" } }] } } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "hook",
+      intent: "immediate",
+      reason: "hook:123e4567-e89b-12d3-a456-426614174000",
+      agentId: "bogus",
+      sessionKey: "agent:bogus:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
   it("preserves immediate delivery for repeated background-task wakes", async () => {
     // Task-registry terminal updates wake the heartbeat with reason
     // 'background-task'. Documented as immediate so users don't wait for the
