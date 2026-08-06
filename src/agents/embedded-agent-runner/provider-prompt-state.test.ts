@@ -459,13 +459,14 @@ describe("provider prompt state", () => {
     clearProviderPromptState(runId);
   });
 
-  it("runs the installed dispatch hook only after every pre-dispatch check passes", async () => {
+  it("runs the installed dispatch hook only after the provider responds", async () => {
     const runId = "dispatch-hook-boundary";
     const state = getProviderPromptState(runId);
     const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const dispatch = vi.fn();
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      await options?.onResponse?.({ status: 200, headers: {} }, model);
       return createResultStream("stop");
     });
     const wrapped = wrapStreamFnWithProviderPromptState({
@@ -491,6 +492,33 @@ describe("provider prompt state", () => {
       }),
     ).rejects.toThrow("payload hook failed");
     expect(dispatch).toHaveBeenCalledTimes(1);
+
+    removeHooks();
+    clearProviderPromptState(runId);
+  });
+
+  it("does not run the dispatch hook when request setup fails after the payload hook", async () => {
+    const runId = "dispatch-hook-setup-failure";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const dispatch = vi.fn();
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      throw new Error("connection refused");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 128_000,
+    });
+    const removeHooks = installProviderPromptContextAdmission(
+      state,
+      (_model, providerContext) => providerContext,
+      dispatch,
+    );
+
+    await expect(wrapped(model, context)).rejects.toThrow("connection refused");
+    expect(dispatch).not.toHaveBeenCalled();
 
     removeHooks();
     clearProviderPromptState(runId);

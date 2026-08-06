@@ -118,8 +118,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
         }
         const providerMessages = admission.context.messages as AgentMessage[];
         const admittedProjectionState = admission.projectionState;
-        // Adopt the admitted candidate only once the final payload actually reaches transport,
-        // so a pre-dispatch failure cannot record an unsent prompt as sent.
+        // Adopt the admitted candidate only once the provider response arrives,
+        // so a failed request cannot record an unsent prompt as sent.
         pendingDispatchCommit = () => {
           replaceToolResultPromptProjectionState(
             input.toolResultPromptProjectionState,

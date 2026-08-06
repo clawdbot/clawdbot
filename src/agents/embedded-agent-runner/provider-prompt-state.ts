@@ -179,6 +179,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         ? params.state.contextAdmission(model, context, accountingContext)
         : context;
     const originalOnPayload = options?.onPayload;
+    const originalOnResponse = options?.onResponse;
     const observedOptions = withoutProviderPromptAccountingContext({
       ...options,
       onPayload: async (payload, payloadModel) => {
@@ -197,10 +198,13 @@ export function wrapStreamFnWithProviderPromptState(params: {
           effectiveContextTokenBudget: params.effectiveContextTokenBudget,
           reserveTokens: params.reserveTokens,
         });
-        // Every pre-dispatch check passed and the transport sends next; admitted
+        return finalPayload;
+      },
+      onResponse: async (response, responseModel) => {
+        await originalOnResponse?.(response, responseModel);
+        // The provider answered, so the request provably left the process. Admitted
         // candidates may only be adopted from this point on.
         params.state.promptDispatch?.();
-        return finalPayload;
       },
     });
     if (params.recordEvent) {

@@ -250,9 +250,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     const providerDispatch = vi.fn(async (_model: unknown, _context: unknown, options: unknown) => {
-      await (
-        options as { onPayload?: (payload: unknown, model: unknown) => Promise<unknown> }
-      ).onPayload?.({ input: "raw" }, {});
+      const hooks = options as {
+        onPayload?: (payload: unknown, model: unknown) => Promise<unknown>;
+        onResponse?: (response: unknown, model: unknown) => Promise<unknown>;
+      };
+      await hooks.onPayload?.({ input: "raw" }, {});
+      await hooks.onResponse?.({ status: 200, headers: {} }, {});
       return undefined as never;
     });
     activeSession.agent.streamFn = wrapProviderBoundary(providerDispatch as unknown as StreamFn);
@@ -358,7 +361,47 @@ describe("submitEmbeddedAttemptPrompt", () => {
     });
   });
 
-  it("records the prompt as sent only after the payload reaches transport", async () => {
+  it("records the prompt as sent only after the provider responds", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    activeSession.agent.state.messages = [
+      {
+        role: "user",
+        content: "first turn",
+        idempotencyKey: "turn-1",
+        timestamp: 1,
+      } as AgentMessage,
+    ] as AgentMessage[];
+    activeSession.agent.streamFn = wrapProviderBoundary((async (
+      _model: unknown,
+      _context: unknown,
+      options: unknown,
+    ) => {
+      const hooks = options as {
+        onPayload?: (payload: unknown, model: unknown) => Promise<unknown>;
+        onResponse?: (response: unknown, model: unknown) => Promise<unknown>;
+      };
+      await hooks.onPayload?.({ input: "raw" }, {});
+      await hooks.onResponse?.({ status: 200, headers: {} }, {});
+      return undefined as never;
+    }) as unknown as StreamFn);
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      promptActiveSession: async () => {
+        await activeSession.agent.streamFn(
+          {} as never,
+          { messages: activeSession.messages } as never,
+          {} as never,
+        );
+      },
+    });
+
+    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(true);
+  });
+
+  it("does not record the prompt as sent when request setup fails after the payload is accepted", async () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     activeSession.agent.state.messages = [
@@ -377,22 +420,26 @@ describe("submitEmbeddedAttemptPrompt", () => {
       await (
         options as { onPayload?: (payload: unknown, model: unknown) => Promise<unknown> }
       ).onPayload?.({ input: "raw" }, {});
-      return undefined as never;
+      throw new Error("connection refused");
     }) as unknown as StreamFn);
 
     await submitEmbeddedAttemptPrompt({
       ...input,
       activeSession,
       promptActiveSession: async () => {
-        await activeSession.agent.streamFn(
-          {} as never,
-          { messages: activeSession.messages } as never,
-          {} as never,
-        );
+        await expect(
+          activeSession.agent.streamFn(
+            {} as never,
+            { messages: activeSession.messages } as never,
+            {
+              onPayload: (payload: unknown) => payload,
+            } as never,
+          ),
+        ).rejects.toThrow("connection refused");
       },
     });
 
-    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(true);
+    expect(input.sessionPromptState.sentUserTurnIds.has("turn-1")).toBe(false);
   });
 
   it("does not record an unsent prompt as sent when a payload hook fails before dispatch", async () => {
