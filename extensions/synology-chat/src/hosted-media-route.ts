@@ -6,6 +6,26 @@ function normalizeExactPath(path: string): string {
   return withLeadingSlash.length > 1 ? withLeadingSlash.replace(/\/+$/u, "") : "/";
 }
 
+export function resolveSynologyPublicWebhookRouteKey(webhookUrlValue: string): string | undefined {
+  try {
+    const webhookUrl = new URL(webhookUrlValue);
+    if (
+      webhookUrl.protocol !== "https:" ||
+      !webhookUrl.hostname ||
+      webhookUrl.username ||
+      webhookUrl.password ||
+      webhookUrl.hash
+    ) {
+      return undefined;
+    }
+    webhookUrl.pathname = normalizeExactPath(webhookUrl.pathname);
+    webhookUrl.searchParams.sort();
+    return webhookUrl.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 export function toSynologyHostedMediaStoreRoutePath(path: string): string {
   const normalized = normalizeExactPath(path);
   return normalized === "/" ? normalized : `${normalized}/`;
@@ -25,18 +45,13 @@ export function resolveSynologyHostedMediaRoute(params: {
       "Synology Chat attachments require webhookUrl. Set the account's exact externally reachable HTTPS callback URL.",
     );
   }
-  const webhookUrl = new URL(params.webhookUrl);
-  if (
-    webhookUrl.protocol !== "https:" ||
-    !webhookUrl.hostname ||
-    webhookUrl.username ||
-    webhookUrl.password ||
-    webhookUrl.hash
-  ) {
+  const routeKey = resolveSynologyPublicWebhookRouteKey(params.webhookUrl);
+  if (!routeKey) {
     throw new Error(
       "Synology Chat webhookUrl must be an absolute HTTPS URL with a hostname and no credentials or fragment.",
     );
   }
+  const webhookUrl = new URL(params.webhookUrl);
   return {
     localRoutePath: toSynologyHostedMediaStoreRoutePath(params.webhookPath),
     publicBaseUrl: webhookUrl.origin,

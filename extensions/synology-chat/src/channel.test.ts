@@ -372,6 +372,7 @@ describe("createSynologyChatPlugin", () => {
           "synology-chat": {
             token: "base-token",
             webhookPath: "/webhook/shared",
+            webhookUrl: "https://gateway.example.com/webhook/shared",
             accounts: {
               alerts: {
                 token: "alerts-token",
@@ -465,6 +466,18 @@ describe("createSynologyChatPlugin", () => {
       const account = plugin.config.resolveAccount(cfg, "alerts");
       const warnings = plugin.security.collectWarnings({ cfg, account });
       expectIncludesSubstring(warnings, "conflicts on webhookPath");
+    });
+
+    it("warns when enabled accounts share the same public webhookUrl", () => {
+      const plugin = synologyChatPlugin;
+      const cfg = makeSharedWebhookConfig({
+        webhookPath: "/webhook/alerts",
+        webhookUrl: "https://gateway.example.com/synology?a=1&b=2",
+      });
+      cfg.channels["synology-chat"].webhookUrl = "https://gateway.example.com/synology?b=2&a=1";
+      const account = plugin.config.resolveAccount(cfg, "alerts");
+      const warnings = plugin.security.collectWarnings({ cfg, account });
+      expectIncludesSubstring(warnings, "conflicts on webhookUrl");
     });
 
     it("returns no warnings for fully configured account", () => {
@@ -769,6 +782,7 @@ describe("createSynologyChatPlugin", () => {
                 token: "default-token",
                 incomingUrl: "https://nas/default",
                 webhookPath: "/webhook/synology-shared",
+                webhookUrl: "https://gateway.example.com/webhook/synology-default",
                 dmPolicy: "allowlist",
                 allowedUserIds: ["123"],
                 accounts: {
@@ -934,6 +948,23 @@ describe("createSynologyChatPlugin", () => {
       const result = plugin.gateway.startAccount(ctx);
       await expectPendingStartAccountPromise(result, abortController);
       expectIncludesSubstring(mockStringMessages(ctx.log.warn), "conflicts on webhookPath");
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
+    it("startAccount refuses duplicate public webhook URLs across accounts", async () => {
+      const registerMock = registerSynologyWebhookRouteMock;
+      const plugin = synologyChatPlugin;
+      const { ctx, abortController } = makeNamedStartAccountCtx({
+        webhookPath: "/webhook/synology-alerts",
+        webhookUrl: "https://gateway.example.com/synology",
+        dmPolicy: "open",
+        allowedUserIds: ["*"],
+      });
+      ctx.cfg.channels["synology-chat"].webhookUrl = "https://gateway.example.com/synology";
+
+      const result = plugin.gateway.startAccount(ctx);
+      await expectPendingStartAccountPromise(result, abortController);
+      expectIncludesSubstring(mockStringMessages(ctx.log.warn), "conflicts on webhookUrl");
       expect(registerMock).not.toHaveBeenCalled();
     });
 
