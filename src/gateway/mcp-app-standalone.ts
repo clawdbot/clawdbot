@@ -224,6 +224,7 @@ function sendText(res: ServerResponse, statusCode: number, body: string): void {
 function runStandaloneMcpAppHost(config: {
   protocolVersion: string;
   viewPath: string;
+  initialLoadTimeoutMs: number;
   defaultRequestTimeoutMs: number;
   requestTimeoutGraceMs: number;
 }): void {
@@ -509,7 +510,7 @@ function runStandaloneMcpAppHost(config: {
     headers: { Authorization: `MCP-App ${ticket}` },
     cache: "no-store",
     credentials: "omit",
-    signal: AbortSignal.timeout(MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS),
+    signal: AbortSignal.timeout(config.initialLoadTimeoutMs),
   })
     .then(async (response) => {
       if (!response.ok) {
@@ -533,6 +534,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
   const clientSource = `(${runStandaloneMcpAppHost.toString()})(${JSON.stringify({
     protocolVersion: MCP_APP_STABLE_PROTOCOL_VERSION,
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
+    initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
     defaultRequestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
     requestTimeoutGraceMs: MCP_APP_STANDALONE_REQUEST_GRACE_MS,
   })});`;

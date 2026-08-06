@@ -222,9 +222,10 @@ describe("MCP App standalone host", () => {
     expect(body).toContain("location.hash");
     expect(body).toContain("event.origin");
     expect(body).toContain("if (!initializeAccepted)");
-    // Initial view load keeps a short bounded timeout; operation fetches honor
-    // the configured MCP request deadline plus a bounded gateway grace.
-    expect(body).toContain("AbortSignal.timeout(MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS)");
+    // Initial view load keeps a bounded timeout passed through serialized config;
+    // operation fetches honor the configured MCP request deadline plus a bounded
+    // gateway grace.
+    expect(body).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
     expect(body).toContain(
       "(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) + config.requestTimeoutGraceMs",
     );
@@ -292,7 +293,7 @@ describe("MCP App standalone host", () => {
     expect(body).toContain(
       "(payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) + config.requestTimeoutGraceMs",
     );
-    expect(body).toContain("AbortSignal.timeout(MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS)");
+    expect(body).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
   });
 
   it("preserves the configured timeout in the view payload even when the cached catalog is invalidated", async () => {
