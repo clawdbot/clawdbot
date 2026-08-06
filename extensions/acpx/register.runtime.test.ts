@@ -61,6 +61,14 @@ function restoreEnv(): void {
   }
 }
 
+function createDeferred() {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function createServiceContext() {
   return {
     workspaceDir: "/tmp/openclaw-acpx-register-test",
@@ -150,6 +158,55 @@ describe("acpx register runtime service", () => {
 
     expect(realServiceStopMock).toHaveBeenCalledWith(ctx);
     expect(runtimeRegistry.get("acpx")).toBeUndefined();
+  });
+
+  it("waits for in-flight activation before completing shutdown", async () => {
+    delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
+    const startEntered = createDeferred();
+    const releaseStart = createDeferred();
+    realServiceStartMock.mockImplementationOnce(async () => {
+      startEntered.resolve();
+      await releaseStart.promise;
+      runtimeRegistry.set("acpx", { runtime: realRuntime });
+    });
+    const ctx = createServiceContext();
+    const service = createAcpxRuntimeService();
+
+    await service.start(ctx as never);
+    const deferredRuntime = runtimeRegistry.get("acpx")?.runtime as {
+      ensureSession(input: { sessionKey: string; agent: string; mode: string }): Promise<unknown>;
+    };
+    const activation = deferredRuntime.ensureSession({
+      sessionKey: "agent:codex:acp:shutdown-race",
+      agent: "codex",
+      mode: "oneshot",
+    });
+    const activationResult = activation.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await startEntered.promise;
+
+    const stopping = service.stop?.(ctx as never);
+    await Promise.resolve();
+    expect(realServiceStopMock).not.toHaveBeenCalled();
+
+    releaseStart.resolve();
+    await stopping;
+
+    expect(await activationResult).toEqual(
+      expect.objectContaining({ message: "ACPX runtime service stopped during activation" }),
+    );
+    expect(realServiceStopMock).toHaveBeenCalledOnce();
+    expect(realServiceStopMock).toHaveBeenCalledWith(ctx);
+    expect(runtimeRegistry.get("acpx")).toBeUndefined();
+    await expect(
+      deferredRuntime.ensureSession({
+        sessionKey: "agent:codex:acp:stale-proxy",
+        agent: "codex",
+        mode: "oneshot",
+      }),
+    ).rejects.toThrow("ACPX runtime service is not started");
   });
 
   it("keeps the explicit runtime skip env as the only outer startup skip", async () => {
