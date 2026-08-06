@@ -230,8 +230,15 @@ export async function startTranscripts(params: {
   const sourceForResolution = trustedAccountId
     ? { ...boundSource.source, accountId: trustedAccountId }
     : boundSource.source;
-  const resolvedAccountId = provider.resolveAccountId
-    ? provider.resolveAccountId({ cfg: params.ctx.config, source: sourceForResolution })?.trim()
+  const accountResolution = provider.resolveAccountId?.({
+    cfg: params.ctx.config,
+    source: sourceForResolution,
+  });
+  if (accountResolution && !accountResolution.ok) {
+    throw new Error(accountResolution.error);
+  }
+  const resolvedAccountId = accountResolution
+    ? accountResolution.value?.trim()
     : sourceForResolution.accountId?.trim();
   if (trustedAccountId && resolvedAccountId !== trustedAccountId) {
     throw new Error(

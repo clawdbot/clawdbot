@@ -57,9 +57,10 @@ describe("transcripts tool account ownership", () => {
     const stateDir = await makeStateDir();
     const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "account-bound" }));
-    const resolveAccountId = vi.fn(
-      ({ source }: { source: { accountId?: string } }) => source.accountId,
-    );
+    const resolveAccountId = vi.fn(({ source }: { source: { accountId?: string } }) => ({
+      ok: true as const,
+      value: source.accountId,
+    }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       aliases: ["discord"],
@@ -184,14 +185,15 @@ describe("transcripts tool account ownership", () => {
   it.each([
     {
       name: "rejects a trusted account that the provider cannot use",
-      resolve: () => {
-        throw new Error('Discord account "account-a" is not enabled for voice.');
-      },
+      resolve: () => ({
+        ok: false as const,
+        error: 'Discord account "account-a" is not enabled for voice.',
+      }),
       error: 'Discord account "account-a" is not enabled for voice.',
     },
     {
       name: "rejects provider redirection away from the trusted account",
-      resolve: () => "account-b",
+      resolve: () => ({ ok: true as const, value: "account-b" }),
       error: "transcripts provider discord-voice could not use trusted account account-a",
     },
   ])("$name before persistence", async ({ resolve, error }) => {

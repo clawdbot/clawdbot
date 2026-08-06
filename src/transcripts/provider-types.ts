@@ -1,4 +1,5 @@
 // Transcript provider contracts for external and manual transcript sources.
+import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /**
@@ -123,11 +124,11 @@ export type TranscriptSourceProvider = {
   aliases?: readonly string[];
   /** Ingress channel ids whose trusted account owns this provider's account namespace. */
   accountBindingChannels?: readonly string[];
-  /** Resolve and validate the canonical account before persistence; throw when ambiguous/unusable. */
+  /** Resolve and validate the canonical account before persistence. */
   resolveAccountId?: (params: {
     cfg?: OpenClawConfig;
     source: TranscriptSourceLocator;
-  }) => string | undefined;
+  }) => Result<string | undefined, string>;
   name: string;
   sourceKinds: readonly TranscriptSourceKind[];
   start?: (request: TranscriptStartRequest) => Promise<TranscriptsStartResult>;

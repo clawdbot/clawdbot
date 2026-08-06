@@ -124,8 +124,8 @@ inbound account, and records it as the session owner for later lifecycle
 actions. Providers that support an omitted account implement `resolveAccountId`
 so OpenClaw records the canonical account before starting or persisting live
 capture. The resolver validates an already-bound trusted account without
-redirecting it and throws an actionable error when no unique capable account
-exists. For configured auto-start, an account-bound provider must declare
+redirecting it and returns an actionable typed error when no unique capable
+account exists. For configured auto-start, an account-bound provider must declare
 exactly one binding channel and supply a nonempty source account or resolve one
 with this hook. OpenClaw rejects ambiguous or unresolved ownership before it
 persists the start or invokes the provider. Provider aliases are lookup names

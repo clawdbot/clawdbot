@@ -71,14 +71,20 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       },
     };
 
-    const accountId = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
-    expect(accountId).toBe("work");
+    const accountResolution = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+      cfg,
+      source,
+    });
+    expect(accountResolution).toEqual({ ok: true, value: "work" });
     const result = await discordVoiceTranscriptsSourceProvider.start?.({
       cfg,
       session: {
         sessionId: "notes-default",
         startedAt: new Date().toISOString(),
-        source: { ...source, accountId },
+        source: {
+          ...source,
+          accountId: accountResolution?.ok ? accountResolution.value : undefined,
+        },
       },
       onUtterance: vi.fn(),
     });
@@ -110,15 +116,17 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
       },
     };
 
-    expect(() => discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toThrow(
-      "Multiple Discord accounts are enabled for voice (primary, work); specify accountId.",
-    );
+    expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
+      ok: false,
+      error:
+        'Multiple Discord accounts are enabled for voice ("primary", "work"); specify accountId.',
+    });
     expect(
       discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
         cfg,
         source: { ...source, accountId: "work" },
       }),
-    ).toBe("work");
+    ).toEqual({ ok: true, value: "work" });
     expect(primaryJoin).not.toHaveBeenCalled();
   });
 
@@ -134,15 +142,45 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
     };
     const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
 
-    expect(() => discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toThrow(
-      "No Discord account is enabled for voice; enable voice or specify an account.",
-    );
-    expect(() =>
+    expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
+      ok: false,
+      error: "No Discord account is enabled for voice; enable voice or specify an account.",
+    });
+    expect(
       discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
         cfg,
         source: { ...source, accountId: "primary" },
       }),
-    ).toThrow('Discord account "primary" is not enabled for voice.');
+    ).toEqual({ ok: false, error: 'Discord account "primary" is not enabled for voice.' });
+  });
+
+  it("bounds account identifiers in resolution errors", () => {
+    const accounts = Object.fromEntries(
+      ["alpha", "bravo", "charlie", "delta", "echo"].map((accountId) => [
+        accountId,
+        { token: `token-${accountId}`, voice: { enabled: true } },
+      ]),
+    );
+    const cfg = { channels: { discord: { accounts } } };
+    const source = { providerId: "discord-voice", guildId: "g1", channelId: "c1" };
+
+    const ambiguous = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source });
+    expect(ambiguous).toMatchObject({ ok: false });
+    if (!ambiguous || ambiguous.ok) {
+      throw new Error("expected ambiguous account resolution");
+    }
+    expect(ambiguous.error).toContain("(+1)");
+
+    const rejected = discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
+      cfg,
+      source: { ...source, accountId: `${"z".repeat(200)}\nspoofed` },
+    });
+    expect(rejected).toMatchObject({ ok: false });
+    if (!rejected || rejected.ok) {
+      throw new Error("expected rejected account resolution");
+    }
+    expect(rejected.error).not.toContain("z".repeat(65));
+    expect(rejected.error).not.toContain("\nspoofed");
   });
 
   it("waits for the sole configured voice account's manager during startup", async () => {
