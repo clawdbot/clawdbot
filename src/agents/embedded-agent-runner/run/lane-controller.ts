@@ -187,13 +187,20 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
               params = { ...params, attribution };
               options.setParams(params);
             }
+            const admittedAt = Date.now();
             claimAgentRunContext(params.runId, {
               ...existingContext,
               ...(attribution ? { attribution } : {}),
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,
-              lastActiveAt: Date.now(),
+              // A lifecycle rebound starts a new admission window; retaining the
+              // prior timestamp can make stale verbosity changes govern this run.
+              registeredAt:
+                existingContext?.lifecycleGeneration === lifecycleGeneration
+                  ? existingContext.registeredAt
+                  : admittedAt,
+              lastActiveAt: admittedAt,
             });
           },
         ),
