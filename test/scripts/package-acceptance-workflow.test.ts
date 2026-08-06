@@ -3235,6 +3235,7 @@ describe("package artifact reuse", () => {
     const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
     const credentialStep = workflowStep(job, "Validate required QA credential env");
     const runStep = workflowStep(job, "Run pinned GPT-5.4 gateway restart runtime pair");
+    const stepNames = job.steps?.map((step) => step.name) ?? [];
 
     expect(credentialStep.run).toContain('if [[ -z "${OPENAI_API_KEY:-}" ]]');
     expect(credentialStep.run).toContain("exit 1");
@@ -3247,6 +3248,9 @@ describe("package artifact reuse", () => {
       "steps.run_lane.outputs.output_dir }}/gateway-restart-gpt-5.4-runtime-pair",
     );
     expect(runStep.run).not.toContain("--allow-failures");
+    expect(stepNames.indexOf("Run pinned GPT-5.4 gateway restart runtime pair")).toBeLessThan(
+      stepNames.indexOf("Generate live runtime token-efficiency report"),
+    );
   });
 
   it("requires release-check QA evidence artifacts when lanes run", () => {

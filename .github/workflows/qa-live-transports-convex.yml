@@ -373,19 +373,6 @@ jobs:
             --allow-failures \
             --output-dir "${output_dir}/runtime-suite"
 
-      - name: Generate live runtime token-efficiency report
-        if: steps.run_lane.outcome == 'success'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          pnpm openclaw qa parity-report \
-            --repo-root . \
-            --runtime-axis \
-            --token-efficiency \
-            --summary "${{ steps.run_lane.outputs.output_dir }}/runtime-suite/qa-suite-summary.json" \
-            --output-dir "${{ steps.run_lane.outputs.output_dir }}/runtime-report"
-
       - name: Run pinned GPT-5.4 gateway restart runtime pair
         shell: bash
         env:
@@ -404,6 +391,19 @@ jobs:
             --runtime-pair openclaw,codex \
             --fast \
             --output-dir "${{ steps.run_lane.outputs.output_dir }}/gateway-restart-gpt-5.4-runtime-pair"
+
+      - name: Generate live runtime token-efficiency report
+        if: steps.run_lane.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --token-efficiency \
+            --summary "${{ steps.run_lane.outputs.output_dir }}/runtime-suite/qa-suite-summary.json" \
+            --output-dir "${{ steps.run_lane.outputs.output_dir }}/runtime-report"
 
       - name: Upload live runtime token-efficiency artifacts
         if: always() && steps.run_lane.outputs.output_dir != ''
