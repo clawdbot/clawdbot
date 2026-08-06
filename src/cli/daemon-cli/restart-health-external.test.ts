@@ -106,7 +106,7 @@ describe("restart health", () => {
       listeners: [],
       hints: [],
     });
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => undefined);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     const { waitForGatewayHealthyListener } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyListener({

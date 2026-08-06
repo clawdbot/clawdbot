@@ -1,7 +1,9 @@
 import { formatPortDiagnostics } from "../../infra/ports.js";
 import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.types.js";
 
-function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+function renderPortUsageDiagnostics(
+  snapshot: Pick<GatewayPortHealthSnapshot, "portUsage">,
+): string[] {
   const lines: string[] = [];
   if (snapshot.portUsage.status === "busy") {
     lines.push(...formatPortDiagnostics(snapshot.portUsage));
