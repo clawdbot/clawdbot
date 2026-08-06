@@ -80,10 +80,17 @@ vi.mock("./embeddings.js", () => ({
 type RecoveryHarness = {
   activeManagerOperations: number;
   managerIdleWaiters: Set<() => void>;
+  managerExclusivePromise: Promise<void> | null;
   closing: boolean;
   closed: boolean;
   fallbackFrom?: string;
+  fallbackReason?: string;
   lastPrimaryRecoveryAttemptMs: number;
+  primaryProviderRecoveryPromise: Promise<boolean> | null;
+  primaryProviderRecoveryBackgroundPromise: Promise<void> | null;
+  primaryProviderRecoveryFallbackState: unknown;
+  providerInitialized: boolean;
+  providerLifecycle: unknown;
   provider: EmbeddingProvider | null;
   providerRuntime?: unknown;
   providerKey: string;
@@ -98,6 +105,7 @@ type RecoveryHarness = {
   awaitManagerIdle: () => Promise<void>;
   refreshIndexIdentityDirty: () => { status: string };
   reindexAfterPrimaryProviderRecovery: () => Promise<{ status: string }>;
+  schedulePrimaryProviderRecovery: () => void;
   syncAdmitted: () => Promise<void>;
 };
 
@@ -135,11 +143,22 @@ function createRecoveryHarness(): RecoveryHarness {
     acquireLocalService: undefined,
     activeManagerOperations: 0,
     managerIdleWaiters: new Set<() => void>(),
+    managerExclusivePromise: null,
     closing: false,
     closed: false,
     fallbackFrom: "mock",
     fallbackReason: "primary provider failed",
     lastPrimaryRecoveryAttemptMs: 0,
+    primaryProviderRecoveryPromise: null,
+    primaryProviderRecoveryBackgroundPromise: null,
+    primaryProviderRecoveryFallbackState: null,
+    providerInitialized: true,
+    providerLifecycle: {
+      mode: "fallback-active",
+      providerId: "fallback-provider",
+      fallbackFrom: "mock",
+      reason: "primary provider failed",
+    },
     provider: fallbackProvider,
     providerRuntime: undefined,
     providerKey: "fallback-provider-key",
@@ -203,6 +222,61 @@ describe("memory manager primary provider recovery", () => {
     expect(manager.syncAdmitted).toHaveBeenCalledTimes(2);
     expect(manager.syncAdmitted).toHaveBeenNthCalledWith(1, { reason: "search", force: true });
     expect(manager.syncAdmitted).toHaveBeenNthCalledWith(2, { reason: "search", force: true });
+  });
+
+  it("keeps searches out of an exclusive primary recovery reindex", async () => {
+    const manager = createRecoveryHarness();
+    const runtimeManager = manager as unknown as {
+      withManagerOperation<T>(run: () => Promise<T>): Promise<T>;
+      withManagerExclusiveOperation<T>(run: () => Promise<T>): Promise<T>;
+    };
+    let releaseSearch: () => void = () => {};
+    let searchEntered = false;
+    let exclusiveEntered = false;
+    let lateSearchEntered = false;
+    const searchGate = new Promise<void>((resolve) => {
+      releaseSearch = resolve;
+    });
+
+    const activeSearch = runtimeManager.withManagerOperation(async () => {
+      searchEntered = true;
+      await searchGate;
+    });
+    await vi.waitFor(() => expect(searchEntered).toBe(true));
+
+    const reindex = runtimeManager.withManagerExclusiveOperation(async () => {
+      exclusiveEntered = true;
+    });
+    const lateSearch = runtimeManager.withManagerOperation(async () => {
+      lateSearchEntered = true;
+    });
+    await Promise.resolve();
+    expect(exclusiveEntered).toBe(false);
+    expect(lateSearchEntered).toBe(false);
+
+    releaseSearch();
+    await activeSearch;
+    await reindex;
+    await lateSearch;
+    expect(exclusiveEntered).toBe(true);
+    expect(lateSearchEntered).toBe(true);
+  });
+
+  it("keeps the fallback active when the primary recovery index is unusable", async () => {
+    const manager = createRecoveryHarness();
+    const fallbackProvider = manager.provider;
+    manager.refreshIndexIdentityDirty = vi.fn(() => ({ status: "mismatched" }));
+
+    manager.schedulePrimaryProviderRecovery();
+    const backgroundRecovery = manager.primaryProviderRecoveryBackgroundPromise;
+    expect(backgroundRecovery).toBeDefined();
+    await backgroundRecovery;
+
+    expect(manager.provider).toBe(fallbackProvider);
+    expect(manager.provider?.id).toBe("fallback-provider");
+    expect(manager.fallbackFrom).toBe("mock");
+    expect(manager.retireProvider).toHaveBeenCalledWith(expect.objectContaining({ id: "mock" }));
+    expect(manager.retireProvider).not.toHaveBeenCalledWith(fallbackProvider);
   });
 
   it("serializes overlapping primary recovery probes", async () => {

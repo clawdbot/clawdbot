@@ -4244,7 +4244,10 @@ describe("memory index", () => {
     expect(providerCalls.slice(callsBeforeRecovery).map((call) => call.provider)).toContain(
       "openai",
     );
-    expect(fields.provider?.id).toBe("mock");
+    await vi.waitFor(() => {
+      expect(fields.provider?.id).toBe("mock");
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    });
   });
 
   it("returns fallback results before a stalled primary recovery finishes", async () => {
