@@ -405,6 +405,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
 }
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export { resolveSandboxSkillPromptForHarness } from "../agents/embedded-agent-runner/sandbox-skills.js";
 export {
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,

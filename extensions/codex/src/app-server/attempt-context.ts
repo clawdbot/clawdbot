@@ -9,10 +9,12 @@ import {
   buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
   resolveBootstrapFilesForRun,
+  resolveSandboxSkillPromptForHarness,
   type AgentMessage,
   type ContextEngineProjection,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParams,
+  type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -571,6 +573,21 @@ export function renderCodexSkillsCollaborationInstructions(params: {
   return params.skillsPrompt?.trim()
     ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
     : undefined;
+}
+
+export function resolveCodexSkillsPrompt(params: {
+  attempt: EmbeddedRunAttemptParams;
+  sandbox?: SandboxContext | null;
+  effectiveWorkspace: string;
+  sessionAgentId: string;
+}): string {
+  return resolveSandboxSkillPromptForHarness({
+    sandbox: params.sandbox,
+    effectiveWorkspace: params.effectiveWorkspace,
+    skillsSnapshot: params.attempt.skillsSnapshot,
+    config: params.attempt.config,
+    agentId: params.sessionAgentId,
+  });
 }
 
 /**

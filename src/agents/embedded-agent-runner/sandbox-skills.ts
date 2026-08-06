@@ -5,6 +5,9 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { SkillEntry } from "../../skills/types.js";
 import type { SandboxContext } from "../sandbox/types.js";
@@ -161,4 +164,50 @@ export function resolveSandboxSkillRuntimeInputs(params: {
     skillsWorkspaceDir: params.effectiveWorkspace,
     workspaceOnly: false,
   };
+}
+
+/**
+ * Resolves the prompt-facing skill catalog for a harness that owns its prompt.
+ * Sandboxed runs must rebuild it from materialized entries so host snapshots
+ * cannot leak paths that are not readable inside the container.
+ */
+export function resolveSandboxSkillPromptForHarness(params: {
+  sandbox?: SandboxContext | null;
+  effectiveWorkspace: string;
+  skillsSnapshot?: SkillSnapshot;
+  config?: OpenClawConfig;
+  agentId?: string;
+}): string {
+  const {
+    skillsEligibility,
+    skillsPromptWorkspaceDir,
+    skillsSnapshot,
+    skillsWorkspaceDir,
+    workspaceOnly,
+  } = resolveSandboxSkillRuntimeInputs({
+    sandbox: params.sandbox,
+    effectiveWorkspace: params.effectiveWorkspace,
+    skillsSnapshot: params.skillsSnapshot,
+  });
+  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
+    workspaceDir: skillsWorkspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    eligibility: skillsEligibility,
+    skillsSnapshot,
+    workspaceOnly,
+  });
+  const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+    entries: shouldLoadSkillEntries ? skillEntries : undefined,
+    skillsWorkspaceDir,
+    skillsPromptWorkspaceDir,
+  });
+  return resolveSkillsPromptForRun({
+    skillsSnapshot,
+    entries: promptSkillEntries,
+    config: params.config,
+    workspaceDir: skillsPromptWorkspaceDir,
+    agentId: params.agentId,
+    eligibility: skillsEligibility,
+  });
 }

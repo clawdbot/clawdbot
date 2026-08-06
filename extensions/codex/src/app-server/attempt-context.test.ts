@@ -10,12 +10,15 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
+import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexOpenClawPromptContext,
   buildCodexWatchedSessionsContext,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
+  renderCodexSkillsCollaborationInstructions,
+  resolveCodexSkillsPrompt,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   resolveContextEngineBootstrapProjectionDecision,
@@ -29,6 +32,74 @@ afterEach(() => {
 });
 
 describe("Codex app-server attempt context", () => {
+  it("maps sandboxed skill locations for Codex while preserving unsandboxed snapshots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-sandbox-skills-"));
+    try {
+      const materializedWorkspace = path.join(root, "materialized-skills");
+      const skillDir = path.join(materializedWorkspace, "skills", "demo");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        ["---", "name: demo", "description: Demo skill", "---", "# Demo", ""].join("\n"),
+        "utf8",
+      );
+      const hostSkillPath = "/host/node_modules/openclaw/skills/demo/SKILL.md";
+      const snapshot = {
+        prompt: `<available_skills><skill><name>demo</name><location>${hostSkillPath}</location></skill></available_skills>`,
+        skills: [{ name: "demo" }],
+        resolvedSkills: [
+          {
+            name: "demo",
+            description: "Demo skill",
+            filePath: hostSkillPath,
+            baseDir: "/host/node_modules/openclaw/skills/demo",
+            source: "openclaw-bundled",
+            sourceInfo: {
+              path: hostSkillPath,
+              baseDir: "/host/node_modules/openclaw/skills/demo",
+            },
+            disableModelInvocation: false,
+          },
+        ],
+      } as NonNullable<EmbeddedRunAttemptParams["skillsSnapshot"]>;
+      const attempt = {
+        config: {},
+        skillsSnapshot: snapshot,
+      } as EmbeddedRunAttemptParams;
+      const sandbox = {
+        enabled: true,
+        workspaceAccess: "rw",
+        skillsWorkspaceDir: materializedWorkspace,
+        containerWorkdir: "/workspace",
+      } as SandboxContext;
+
+      const sandboxPrompt = resolveCodexSkillsPrompt({
+        attempt,
+        sandbox,
+        effectiveWorkspace: path.join(root, "workspace"),
+        sessionAgentId: "main",
+      });
+      const collaborationInstructions = renderCodexSkillsCollaborationInstructions({
+        attempt,
+        skillsPrompt: sandboxPrompt,
+      });
+      expect(collaborationInstructions).toContain(
+        "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+      );
+      expect(collaborationInstructions).not.toContain(hostSkillPath);
+
+      const unsandboxedPrompt = resolveCodexSkillsPrompt({
+        attempt,
+        effectiveWorkspace: path.join(root, "workspace"),
+        sessionAgentId: "main",
+      });
+      expect(unsandboxedPrompt).toContain(hostSkillPath);
+      expect(unsandboxedPrompt).not.toContain("/workspace/.openclaw/sandbox-skills");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("treats missing mirrored session history as empty without hook warning", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-attempt-context-history-"));

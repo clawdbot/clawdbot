@@ -14,6 +14,7 @@ import {
   getCodexWorkspaceMemoryToolNames,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsCollaborationInstructions,
+  resolveCodexSkillsPrompt,
 } from "./attempt-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
@@ -158,7 +159,12 @@ export async function prepareCodexAttemptContext(
   });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
     attempt: runtimeParams,
-    skillsPrompt: params.skillsSnapshot?.prompt,
+    skillsPrompt: resolveCodexSkillsPrompt({
+      attempt: runtimeParams,
+      sandbox,
+      effectiveWorkspace,
+      sessionAgentId,
+    }),
   });
   const promptState = {
     promptText: params.prompt,
