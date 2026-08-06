@@ -261,6 +261,27 @@ describe("execCommand", () => {
     await expect(resultPromise).rejects.toThrow("Operation aborted");
   });
 
+  it("rejects on abort even if the child never reports completion", async () => {
+    // The caller must not wait on child exit to see the rejection: killing
+    // a stuck process (or one still inside killProcessTree's grace period)
+    // can take arbitrarily long, and the promise must settle at abort
+    // time, not at eventual-exit time. Deliberately never resolves the
+    // deferred child completion, unlike the sibling test above. A short
+    // explicit timeout makes a regression fail fast instead of consuming
+    // vitest's full default budget.
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const controller = new AbortController();
+    const resultPromise = execCommand("cmd", [], "/tmp", { signal: controller.signal });
+    controller.abort();
+
+    await expect(resultPromise).rejects.toThrow("Operation aborted");
+  }, 2_000);
+
   it("rejects immediately without spawning when the signal is already aborted", async () => {
     // Sibling session tools (find/grep) never spawn work for a signal that was
     // already aborted before the call; execCommand must match that contract
