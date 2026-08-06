@@ -551,6 +551,7 @@ describe("exportTrajectoryBundle", () => {
         reason: "trajectory-event-size-limit",
         usage,
         promptCache,
+        stopReason: "stop_sequence",
         droppedFields: ["messagesSnapshot"],
       },
     };
@@ -566,9 +567,10 @@ describe("exportTrajectoryBundle", () => {
 
     const artifacts = JSON.parse(
       fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8"),
-    ) as { usage?: unknown; promptCache?: unknown };
+    ) as { usage?: unknown; promptCache?: unknown; stopReason?: unknown };
     expect(artifacts.usage).toEqual(usage);
     expect(artifacts.promptCache).toEqual(promptCache);
+    expect(artifacts.stopReason).toBe("stop_sequence");
   });
 
   it("preserves numeric transcript timestamps", async () => {
@@ -1907,6 +1909,7 @@ describe("exportTrajectoryBundle", () => {
           finalStatus: "success",
           terminalError: "non_deliverable_terminal_turn",
           assistantTexts: ["done"],
+          stopReason: "stop_sequence",
           finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}`,
           finalPromptTextOriginalLength: 12_345,
           itemLifecycle: {
@@ -1991,6 +1994,7 @@ describe("exportTrajectoryBundle", () => {
     expect(prompts).toContain("$WORKSPACE_DIR/AGENTS.md");
     expect(artifacts).toContain("$WORKSPACE_DIR/prompt.txt");
     expect(JSON.parse(artifacts).finalPromptTextOriginalLength).toBe(12_345);
+    expect(JSON.parse(artifacts).stopReason).toBe("stop_sequence");
     expect(artifacts).toContain("non_deliverable_terminal_turn");
     expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
     expect(tools).toContain("$WORKSPACE_DIR/docs");

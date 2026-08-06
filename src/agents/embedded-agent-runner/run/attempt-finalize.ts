@@ -91,6 +91,7 @@ export function finalizeEmbeddedAttempt(
       promptCache: result.promptCache,
       compactionCount: result.compactionCount ?? 0,
       assistantTexts: result.assistantTexts,
+      stopReason: result.lastAssistant?.stopReason,
       finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
       toolMetas: result.toolMetas,

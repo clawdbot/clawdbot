@@ -41,8 +41,12 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     )?.[1] as
       | { messagesSnapshot?: Array<Record<string, unknown>>; stopReason?: string }
       | undefined;
+    const artifacts = recordEvent.mock.calls.find(([type]) => type === "trace.artifacts")?.[1] as
+      | { stopReason?: string }
+      | undefined;
     const captured = modelCompleted?.messagesSnapshot?.[0];
     expect(modelCompleted?.stopReason).toBe("length");
+    expect(artifacts?.stopReason).toBe("length");
     expect(captured).not.toHaveProperty("MediaPath");
     expect(captured).not.toHaveProperty("MediaType");
     expect(captured?.["__openclaw"]).toMatchObject({
