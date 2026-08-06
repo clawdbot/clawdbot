@@ -1011,6 +1011,32 @@ async function prepareOpenClawPackage(baseEnv, logDir) {
   console.log(`==> OpenClaw package: ${baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ}`);
 }
 
+const CODEX_LANE = /^(published-upgrade-survivor|update-migration)-.+-configured-plugin-installs$/u;
+export function lanesNeedCodexPluginPackage(lanes) {
+  return lanes.some(({ name }) => CODEX_LANE.test(String(name ?? "")));
+}
+
+async function prepareCodexPluginPackage(baseEnv, logDir) {
+  const packDir = path.join(logDir, "codex-plugin-package");
+  const packageJson = JSON.parse(
+    await readFile(path.join(ROOT_DIR, "extensions/codex/package.json"), "utf8"),
+  );
+  const packageTgz = path.join(packDir, `openclaw-codex-${packageJson.version}.tgz`);
+  await mkdir(packDir, { recursive: true });
+  await runForeground(
+    "Build Codex plugin runtime once",
+    "node scripts/lib/plugin-npm-runtime-build.mjs extensions/codex",
+    baseEnv,
+  );
+  await runForeground(
+    "Prepare Codex plugin package once",
+    `node scripts/lib/plugin-npm-package-manifest.mjs --run extensions/codex -- npm pack --json --ignore-scripts --pack-destination ${shellQuote(packDir)}`,
+    baseEnv,
+  );
+  await fs.promises.access(packageTgz);
+  baseEnv.OPENCLAW_UPGRADE_SURVIVOR_CODEX_PLUGIN_TGZ = packageTgz;
+}
+
 function e2eImageForLane(poolLane, baseEnv) {
   if (poolLane.e2eImageKind === "bare") {
     return baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE;
@@ -1654,6 +1680,11 @@ async function main() {
     });
   } else {
     console.log("==> OpenClaw package: not needed for selected lanes");
+  }
+  if (lanesNeedCodexPluginPackage(scheduledLanes)) {
+    await runPhase(phases, "prepare-codex-plugin-package", {}, () =>
+      prepareCodexPluginPackage(baseEnv, logDir),
+    );
   }
 
   if (buildEnabled) {

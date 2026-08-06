@@ -1963,6 +1963,22 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     }
   });
 
+  it("mounts and serves the exact Codex candidate for configured plugin convergence", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      "OPENCLAW_UPGRADE_SURVIVOR_CODEX_PLUGIN_TGZ",
+      "/tmp/openclaw-codex-plugin-current.tgz:ro",
+    ]);
+    expectTextToIncludeAll(publishedRunner, [
+      '"${OPENCLAW_UPGRADE_SURVIVOR_CODEX_PLUGIN_TGZ:?',
+      '"@openclaw/codex"',
+      '"$candidate_version"',
+      'export OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_VERSION="$candidate_version"',
+    ]);
+  });
+
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
     const paths = [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,

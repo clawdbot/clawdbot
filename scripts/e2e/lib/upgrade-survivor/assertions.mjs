@@ -929,7 +929,7 @@ function readInstalledPluginIndex() {
   return index;
 }
 
-function assertExternalPluginInstall(records, pluginId, packageName) {
+function assertExternalPluginInstall(records, pluginId, packageName, expectedVersion) {
   const record = records[pluginId];
   assert(record, `configured external ${pluginId} plugin install record missing`);
   const installedFromNpm = record.source === "npm";
@@ -958,6 +958,13 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
   assert(
     packageJson.name === packageName,
     `configured external ${pluginId} package name changed: ${packageJson.name}`,
+  );
+  assert(
+    !expectedVersion ||
+      [record.version, record.resolvedVersion, packageJson.version].every(
+        (version) => version === expectedVersion,
+      ),
+    `configured external ${pluginId} version mismatch: expected ${expectedVersion}`,
   );
   if (installedFromNpm) {
     const stateDir = requireEnv("OPENCLAW_STATE_DIR");
@@ -993,6 +1000,8 @@ function assertConfiguredPluginInstalls() {
   }
   const index = readInstalledPluginIndex();
   const records = index.installRecords ?? {};
+  const candidateVersion = requireEnv("OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_VERSION");
+  assertExternalPluginInstall(records, "codex", "@openclaw/codex", candidateVersion);
   assertOptionalConfiguredPluginIndex(records, index.plugins ?? [], {
     bundled: true,
     packageName: "@openclaw/matrix",

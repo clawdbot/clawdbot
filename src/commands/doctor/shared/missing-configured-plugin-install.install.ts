@@ -121,6 +121,8 @@ export async function installCandidate(params: {
   updateChannel?: UpdateChannel;
   mode?: "install" | "update";
   preferNpm?: boolean;
+  npmInstallSpecOverride?: string;
+  validateNpmRecord?: (record: PluginInstallRecord) => Promise<string | undefined>;
   repairReason?: InstallCandidateRepairReason;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
@@ -152,7 +154,8 @@ export async function installCandidate(params: {
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
-  const npmInstallSpec = npmSpecs?.installSpec ?? candidate.npmSpec;
+  const npmInstallSpec =
+    params.npmInstallSpecOverride ?? npmSpecs?.installSpec ?? candidate.npmSpec;
   const npmDir = resolveDefaultPluginNpmDir(params.env);
   const existingClawHubPackagePath = clawhubInstallSpec
     ? resolveExistingCandidateClawHubPackagePath({
@@ -303,21 +306,32 @@ export async function installCandidate(params: {
     };
   }
   const pluginId = result.pluginId;
+  const record: PluginInstallRecord = {
+    source: "npm",
+    spec: resolveNpmInstallRecordSpec({
+      requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+      resolution: result.npmResolution,
+      pinResolvedRegistrySpec: false,
+    }),
+    installPath: result.targetDir,
+    version: result.version,
+    installedAt: new Date().toISOString(),
+    ...buildNpmResolutionInstallFields(result.npmResolution),
+  };
+  const validationFailure = await params.validateNpmRecord?.(record);
+  if (validationFailure) {
+    return {
+      records: params.records,
+      changes: [],
+      notices: [],
+      warnings: [validationFailure],
+      failedPluginId: pluginId,
+    };
+  }
   return {
     records: {
       ...params.records,
-      [pluginId]: {
-        source: "npm",
-        spec: resolveNpmInstallRecordSpec({
-          requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
-          resolution: result.npmResolution,
-          pinResolvedRegistrySpec: false,
-        }),
-        installPath: result.targetDir,
-        version: result.version,
-        installedAt: new Date().toISOString(),
-        ...buildNpmResolutionInstallFields(result.npmResolution),
-      },
+      [pluginId]: record,
     },
     changes: [
       ...changes,
@@ -372,7 +386,7 @@ function resolveExistingCandidateClawHubPackagePath(params: {
   }
 }
 
-async function readNpmPackageVersion(packagePath: string): Promise<string | undefined> {
+export async function readNpmPackageVersion(packagePath: string): Promise<string | undefined> {
   try {
     const parsed = JSON.parse(await readFile(path.join(packagePath, "package.json"), "utf-8")) as {
       version?: unknown;

@@ -90,15 +90,32 @@ function writeMigratedSessionState(stateDir: string): void {
   }
 }
 
-function assertConfiguredPluginState(params: { installPath?: string } = {}): void {
+function assertConfiguredPluginState(
+  params: {
+    installPath?: string;
+    codexPayloadVersion?: string;
+    codexRecordVersion?: string;
+  } = {},
+): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-"));
   try {
     const stateDir = join(root, "state");
     const workspace = join(root, "workspace");
     const matrixInstallDir = params.installPath ?? join(stateDir, "extensions", "matrix");
+    const codexVersion = "2026.7.2";
+    const codexInstallDir = join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
     mkdirSync(join(stateDir, "agents", "main", "sessions"), { recursive: true });
     mkdirSync(join(stateDir, "plugins"), { recursive: true });
     mkdirSync(matrixInstallDir, { recursive: true });
+    mkdirSync(codexInstallDir, { recursive: true });
     mkdirSync(workspace, { recursive: true });
     writeFileSync(join(workspace, "IDENTITY.md"), "# survivor\n");
     writeJson(join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
@@ -108,8 +125,21 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     writeJson(join(matrixInstallDir, "package.json"), {
       name: "@openclaw/matrix",
     });
+    writeJson(join(codexInstallDir, "package.json"), {
+      name: "@openclaw/codex",
+      version: params.codexPayloadVersion ?? codexVersion,
+    });
     writeJson(join(stateDir, "plugins", "installs.json"), {
       installRecords: {
+        codex: {
+          source: "npm",
+          spec: "@openclaw/codex",
+          resolvedName: "@openclaw/codex",
+          resolvedSpec: `@openclaw/codex@${params.codexRecordVersion ?? codexVersion}`,
+          version: params.codexRecordVersion ?? codexVersion,
+          resolvedVersion: params.codexRecordVersion ?? codexVersion,
+          installPath: codexInstallDir,
+        },
         matrix: {
           source: "clawhub",
           spec: "clawhub:@openclaw/matrix",
@@ -119,7 +149,10 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
           artifactKind: "npm-pack",
         },
       },
-      plugins: [{ pluginId: "matrix", enabled: true }],
+      plugins: [
+        { pluginId: "codex", enabled: true },
+        { pluginId: "matrix", enabled: true },
+      ],
     });
     const coveragePath = join(root, "coverage.json");
     writeJson(coveragePath, {
@@ -132,6 +165,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_VERSION: codexVersion,
         OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
       },
@@ -320,6 +354,18 @@ describe("upgrade survivor assertions", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it("rejects a configured Codex install record outside the candidate cohort", () => {
+    expect(() => assertConfiguredPluginState({ codexRecordVersion: "2026.7.1" })).toThrow(
+      /codex version mismatch/,
+    );
+  });
+
+  it("rejects a configured Codex payload outside the candidate cohort", () => {
+    expect(() => assertConfiguredPluginState({ codexPayloadVersion: "2026.7.1" })).toThrow(
+      /codex version mismatch/,
+    );
   });
 
   it("accepts executed update.run package transition and post-restart health evidence", () => {

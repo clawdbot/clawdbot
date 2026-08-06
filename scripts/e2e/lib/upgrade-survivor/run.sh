@@ -428,6 +428,9 @@ NODE
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
+    "@openclaw/codex" \
+    "$candidate_version" \
+    "${OPENCLAW_UPGRADE_SURVIVOR_CODEX_PLUGIN_TGZ:?Configured plugin install validation requires a Codex candidate tarball.}" \
     "@openclaw/brave-plugin" \
     "2026.5.2" \
     "$tarball" \
@@ -1058,6 +1061,7 @@ resolve_candidate_version() {
   OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
     node scripts/e2e/lib/package-compat.mjs "$candidate_version"
   )"
+  export OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_VERSION="$candidate_version"
   export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 }
 

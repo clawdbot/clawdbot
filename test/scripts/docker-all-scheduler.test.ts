@@ -23,6 +23,7 @@ import {
   dockerPreflightContainerNames,
   dockerPreflightSmokeCommand,
   githubWorkflowRerunCommand,
+  lanesNeedCodexPluginPackage,
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
   resolveDockerPreflightPlatform,
@@ -136,6 +137,23 @@ describe("scripts/test-docker-all scheduler", () => {
       help: true,
       planJson: false,
     });
+  });
+
+  it("packs the Codex candidate only for configured-plugin survivor lanes", () => {
+    expect(
+      lanesNeedCodexPluginPackage([
+        {
+          name: "published-upgrade-survivor-2026-7-1-configured-plugin-installs",
+        },
+        { name: "update-migration-2026-7-1-configured-plugin-installs" },
+      ]),
+    ).toBe(true);
+    expect(
+      lanesNeedCodexPluginPackage([
+        { name: "published-upgrade-survivor-2026-7-1" },
+        { name: "unrelated-configured-plugin-installs" },
+      ]),
+    ).toBe(false);
   });
 
   it("prints CLI help without a stack trace", () => {

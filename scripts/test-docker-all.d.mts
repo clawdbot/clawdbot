@@ -9,6 +9,7 @@ export function canStartSchedulerLane(
   parallelism: unknown,
   options: unknown,
 ): boolean;
+export function lanesNeedCodexPluginPackage(lanes: unknown): boolean;
 export function githubWorkflowRerunCommand(
   laneNames: unknown,
   ref: unknown,

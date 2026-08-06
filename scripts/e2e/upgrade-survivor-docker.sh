@@ -142,6 +142,10 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
+  CODEX_PLUGIN_ARGS=()
+  if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "configured-plugin-installs" ]; then
+    CODEX_PLUGIN_ARGS=(-e OPENCLAW_UPGRADE_SURVIVOR_CODEX_PLUGIN_TGZ=/tmp/openclaw-codex-plugin-current.tgz -v "$OPENCLAW_UPGRADE_SURVIVOR_CODEX_PLUGIN_TGZ:/tmp/openclaw-codex-plugin-current.tgz:ro")
+  fi
 
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
@@ -165,6 +169,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+    "${CODEX_PLUGIN_ARGS[@]}" \
     "${DOCKER_RUN_USER_ARGS[@]}" \
     "$IMAGE_NAME" \
     timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh

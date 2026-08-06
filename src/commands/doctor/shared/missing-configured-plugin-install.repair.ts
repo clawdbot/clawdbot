@@ -8,6 +8,10 @@ import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
 import {
+  resolveConfiguredRuntimePluginInstallCandidate,
+  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
+} from "./configured-runtime-plugin-installs.js";
+import {
   collectDownloadableInstallCandidates,
   collectUpdateDeferredPluginIds,
   resolveConfiguredPluginInstallContext,
@@ -22,6 +26,7 @@ import {
   installCandidate,
   isActionableClawHubSkippedOutcome,
   isClawHubReviewNotice,
+  readNpmPackageVersion,
   recordClawHubInstallSpec,
 } from "./missing-configured-plugin-install.install.js";
 import {
@@ -63,6 +68,20 @@ type RepairMissingPluginInstallsResult = {
    */
   records: Record<string, PluginInstallRecord>;
 };
+
+async function installRecordSatisfiesHostCohort(
+  record: PluginInstallRecord | undefined,
+  env: NodeJS.ProcessEnv,
+  acceptsVersion: (version: string) => boolean,
+): Promise<boolean> {
+  const payloadVersion =
+    record?.source === "npm" && record.installPath?.trim()
+      ? await readNpmPackageVersion(resolveUserPath(record.installPath, env))
+      : undefined;
+  return [record?.version, record?.resolvedVersion, payloadVersion].every(
+    (version) => typeof version === "string" && acceptsVersion(version.trim()),
+  );
+}
 
 /** Repair missing installs inferred from the current OpenClaw config. */
 export async function repairMissingConfiguredPluginInstalls(params: {
@@ -162,6 +181,18 @@ async function repairMissingPluginInstalls(params: {
   const repairedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
+  const hostVersion = resolveCompatibilityHostVersion(env);
+  const satisfiesHostCohort = (version: string) =>
+    updateChannel === "beta"
+      ? version.replace(/-beta\.[1-9]\d*$/u, "") === hostVersion.replace(/-beta\.[1-9]\d*$/u, "")
+      : version === hostVersion;
+  const cohortFailure = (pluginId: string) =>
+    `Failed to converge version-bound configured plugin "${pluginId}" to the ${hostVersion} host cohort. Prior install records were retained; inspect the record and payload before retrying.`;
+  const targetsHostCohort = (pluginId: string, record: PluginInstallRecord | undefined) =>
+    VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId) &&
+    (installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
+      !record ||
+      isInstalledRecordMissingOnDisk(record, env));
   let nextRecords = records;
 
   for (const [pluginId, record] of Object.entries(records)) {
@@ -210,6 +241,12 @@ async function repairMissingPluginInstalls(params: {
   );
 
   if (missingRecordedPluginIds.length > 0) {
+    const authoritativeRecords = nextRecords;
+    const versionBoundConvergencePluginIds = new Set(
+      missingRecordedPluginIds.filter((pluginId) =>
+        targetsHostCohort(pluginId, nextRecords[pluginId]),
+      ),
+    );
     for (const pluginId of missingRecordedPluginIds) {
       const record = nextRecords[pluginId];
       if (!record) {
@@ -223,6 +260,12 @@ async function repairMissingPluginInstalls(params: {
         nextRecords[pluginId] = forced;
       }
     }
+    const specOverrides = Object.fromEntries(
+      [...versionBoundConvergencePluginIds].flatMap((pluginId) => {
+        const spec = resolveConfiguredRuntimePluginInstallCandidate(pluginId)?.npmSpec;
+        return updateChannel !== "beta" && spec ? [[pluginId, `${spec}@${hostVersion}`]] : [];
+      }),
+    );
     const updateResult = await updateNpmInstalledPlugins({
       config: {
         ...params.cfg,
@@ -233,7 +276,8 @@ async function repairMissingPluginInstalls(params: {
       },
       pluginIds: missingRecordedPluginIds,
       updateChannel,
-      coreVersion: resolveCompatibilityHostVersion(env),
+      coreVersion: hostVersion,
+      ...(Object.keys(specOverrides).length > 0 ? { specOverrides } : {}),
       logger: {
         terminalLinks: false,
         warn: (message) => {
@@ -248,8 +292,29 @@ async function repairMissingPluginInstalls(params: {
       ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
     });
+    const acceptedRecords = { ...(updateResult.config.plugins?.installs ?? nextRecords) };
+    let acceptedRepair = false;
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
+        const convergenceFailure =
+          versionBoundConvergencePluginIds.has(outcome.pluginId) &&
+          !(await installRecordSatisfiesHostCohort(
+            acceptedRecords[outcome.pluginId],
+            env,
+            satisfiesHostCohort,
+          ))
+            ? cohortFailure(outcome.pluginId)
+            : undefined;
+        if (convergenceFailure) {
+          // Npm installs land in a non-authoritative managed generation. The install record
+          // activates it, so retaining the prior record leaves the rejected generation for
+          // normal managed cleanup while the prior generation remains authoritative.
+          warnings.push(convergenceFailure);
+          failedPluginIds.add(outcome.pluginId);
+          acceptedRecords[outcome.pluginId] = authoritativeRecords[outcome.pluginId];
+          continue;
+        }
+        acceptedRepair = true;
         repairedPluginIds.add(outcome.pluginId);
         changes.push(
           installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
@@ -265,13 +330,13 @@ async function repairMissingPluginInstalls(params: {
         warnings.push(
           appendClawHubRiskAcknowledgementGuidance({
             message: outcome.message,
-            spec: recordClawHubInstallSpec(nextRecords[outcome.pluginId]),
+            spec: recordClawHubInstallSpec(authoritativeRecords[outcome.pluginId]),
           }),
         );
         failedPluginIds.add(outcome.pluginId);
       }
     }
-    nextRecords = updateResult.config.plugins?.installs ?? nextRecords;
+    nextRecords = acceptedRepair ? acceptedRecords : authoritativeRecords;
   }
 
   const missingPluginIds = new Set(
@@ -301,7 +366,7 @@ async function repairMissingPluginInstalls(params: {
         ? new Set([...(params.blockedPluginIds ?? []), ...deferredPluginIds])
         : params.blockedPluginIds,
   })) {
-    if (bundledPluginsById.has(candidate.pluginId)) {
+    if (failedPluginIds.has(candidate.pluginId) || bundledPluginsById.has(candidate.pluginId)) {
       continue;
     }
     const shouldReplaceBrokenOfficialInstall = officialReplacementPluginIds.has(candidate.pluginId);
@@ -333,20 +398,34 @@ async function repairMissingPluginInstalls(params: {
         })
       : null;
     const previousRecords = nextRecords;
+    const enforceVersionBoundCohort = targetsHostCohort(candidate.pluginId, record);
     const installed = await installCandidate({
       candidate,
       config: params.cfg,
       records: nextRecords,
       env,
       updateChannel,
-      mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
+      mode: shouldReplaceBrokenOfficialInstall || enforceVersionBoundCohort ? "update" : "install",
       preferNpm: preferNpmInstalls,
+      npmInstallSpecOverride:
+        enforceVersionBoundCohort && updateChannel !== "beta" && candidate.npmSpec
+          ? `${candidate.npmSpec}@${hostVersion}`
+          : undefined,
+      validateNpmRecord: enforceVersionBoundCohort
+        ? async (record) =>
+            (await installRecordSatisfiesHostCohort(record, env, satisfiesHostCohort))
+              ? undefined
+              : cohortFailure(candidate.pluginId)
+        : undefined,
       ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
       ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
     });
+    nextRecords = installed.records;
+    notices.push(...installed.notices);
+    warnings.push(...installed.warnings);
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
       const replacementSucceeded = installed.records !== previousRecords;
@@ -365,10 +444,7 @@ async function repairMissingPluginInstalls(params: {
         }
       }
     }
-    nextRecords = installed.records;
     changes.push(...installed.changes);
-    notices.push(...installed.notices);
-    warnings.push(...installed.warnings);
     if (!installed.failedPluginId && installed.records[candidate.pluginId]) {
       repairedPluginIds.add(candidate.pluginId);
     }
