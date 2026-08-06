@@ -186,6 +186,7 @@ describe("experience review auto apply", () => {
         autonomousCapture: params.skillWorkshopAutonomousCapture,
         proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
       });
+      await tool.execute("review-read", { action: "read", skill_name: "deployment-preflight" });
       await tool.execute("review-patch", {
         action: "patch",
         skill_name: "deployment-preflight",

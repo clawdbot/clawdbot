@@ -75,6 +75,8 @@ export type SkillWorkshopProposalMutationBudget = {
   mutatedProposalIds?: Set<string>;
   /** Proposals composed mechanically by patching the live body with a reviewer edit. */
   patchProposalIds?: Set<string>;
+  /** Content hash per live skill read this run; patches require a matching receipt. */
+  readSkillHashes?: Map<string, string>;
 };
 
 export type SkillWorkshopProposalReviewProgress = {

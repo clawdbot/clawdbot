@@ -6,6 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
  */
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
 import {
   applySkillProposal,
@@ -291,6 +292,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
+        if (options.proposalMutationBudget) {
+          const readSkillHashes =
+            options.proposalMutationBudget.readSkillHashes ?? new Map<string, string>();
+          readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));
+          options.proposalMutationBudget.readSkillHashes = readSkillHashes;
+        }
         const truncated = skill.content.length > REVIEWER_SKILL_READ_MAX_CHARS;
         const text = truncated
           ? `${truncateUtf16Safe(skill.content, REVIEWER_SKILL_READ_MAX_CHARS)}\n[truncated: skill exceeds the reviewer read budget]`
@@ -430,14 +437,28 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         if (options.updateProposals !== true) {
           throw new ToolInputError("this Skill Workshop session cannot patch live skills");
         }
-        // Pre-validate the quoted span before spending the mutation budget so a
-        // mismatched quote costs a retry, not the whole review. The service still
-        // composes authoritatively from its own hash-binding read.
+        // Pre-validate before spending the mutation budget so a mismatched quote or a
+        // stale read costs a retry, not the whole review. The read receipt proves the
+        // reviewer itself saw the current body — a quoted span alone could have been
+        // injected through the untrusted trajectory. The service still composes
+        // authoritatively from its own hash-binding read.
         const target = await readWritableWorkspaceSkill(
           options.workspaceDir,
           readStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId },
         );
+        const readHash = options.proposalMutationBudget?.readSkillHashes?.get(target.skillKey);
+        if (!readHash) {
+          throw new ToolInputError(
+            `read the live skill first: call action=read with skill_name "${target.skillKey}", then quote its current text in the patch`,
+          );
+        }
+        if (readHash !== sha256Hex(target.content)) {
+          options.proposalMutationBudget?.readSkillHashes?.delete(target.skillKey);
+          throw new ToolInputError(
+            `skill "${target.skillKey}" changed since it was read: call action=read again and redraft the patch from the current content`,
+          );
+        }
         try {
           composeSkillBodyPatch(stripProposalFrontmatterForSkill(target.content), {
             oldString:
@@ -596,6 +617,12 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         return proposalResult(proposal, { contentText });
       } catch (error) {
         if (reservesMutation && options.proposalMutationBudget) {
+          // A service-side patch composition failure means the target changed in the
+          // instant between prevalidation and the service read — not a model error.
+          // Refund so the reviewer can re-read and retry within its budget.
+          if (action === "patch" && error instanceof Error && error.message.startsWith("Patch ")) {
+            options.proposalMutationBudget.remaining += 1;
+          }
           options.proposalMutationBudget.failedMutations =
             (options.proposalMutationBudget.failedMutations ?? 0) + 1;
         }

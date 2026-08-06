@@ -23,6 +23,7 @@ function completedRun(
     modelIterations?: number;
     userText?: string;
     senderId?: string;
+    senderName?: string;
   } = {},
 ): SkillExperienceReviewParams {
   const iterations = options.iterations ?? 10;
@@ -63,6 +64,7 @@ function completedRun(
         : { modelIterations: options.modelIterations }),
       compacted: options.compacted,
       ...(options.senderId === undefined ? {} : { senderId: options.senderId }),
+      ...(options.senderName === undefined ? {} : { senderName: options.senderName }),
       trigger: "user",
     },
     config: {
@@ -182,6 +184,21 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ modelIterations: 6, senderId: "bob" }));
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 12 }));
+    scheduler.clear();
+  });
+
+  it("restarts shallow accumulation when only the sender name distinguishes participants", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ modelIterations: 6, senderName: "Alice" }));
+    scheduler.schedule(completedRun({ modelIterations: 6, senderName: "Bob" }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).not.toHaveBeenCalled();
     scheduler.clear();
   });
 

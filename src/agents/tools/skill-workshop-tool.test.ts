@@ -32,6 +32,29 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
+async function seedLiveSkill(
+  workspaceDir: string,
+  name: string,
+  description: string,
+  content: string,
+): Promise<void> {
+  const fullTool = createSkillWorkshopTool({
+    workspaceDir,
+    config: { skills: { workshop: { approvalPolicy: "auto" } } },
+  });
+  const created = await fullTool.execute("seed-create", {
+    action: "create",
+    name,
+    description,
+    proposal_content: content,
+  });
+  await fullTool.execute("seed-apply", {
+    action: "apply",
+    proposal_id: (created.details as { id: string }).id,
+    reason: "seed live skill",
+  });
+}
+
 describe("skill_workshop tool", () => {
   it("describes action selection and pending-proposal discovery in its schema", () => {
     const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
@@ -234,21 +257,12 @@ describe("skill_workshop tool", () => {
 
   it("lets internal review runs draft update proposals for existing skills", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-update-");
-    const fullTool = createSkillWorkshopTool({
+    await seedLiveSkill(
       workspaceDir,
-      config: { skills: { workshop: { approvalPolicy: "auto" } } },
-    });
-    const created = await fullTool.execute("seed-create", {
-      action: "create",
-      name: "weather-planner",
-      description: "Plan around the weather forecast",
-      proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
-    });
-    await fullTool.execute("seed-apply", {
-      action: "apply",
-      proposal_id: (created.details as { id: string }).id,
-      reason: "seed live skill",
-    });
+      "weather-planner",
+      "Plan around the weather forecast",
+      "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    );
 
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
     const reviewTool = createSkillWorkshopTool({
@@ -274,21 +288,12 @@ describe("skill_workshop tool", () => {
 
   it("composes patch proposals by replacing the quoted span of the live body", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-extend-");
-    const fullTool = createSkillWorkshopTool({
+    await seedLiveSkill(
       workspaceDir,
-      config: { skills: { workshop: { approvalPolicy: "auto" } } },
-    });
-    const created = await fullTool.execute("seed-create", {
-      action: "create",
-      name: "weather-planner",
-      description: "Plan around the weather forecast",
-      proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
-    });
-    await fullTool.execute("seed-apply", {
-      action: "apply",
-      proposal_id: (created.details as { id: string }).id,
-      reason: "seed live skill",
-    });
+      "weather-planner",
+      "Plan around the weather forecast",
+      "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    );
 
     const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
     const reviewTool = createSkillWorkshopTool({
@@ -302,6 +307,16 @@ describe("skill_workshop tool", () => {
         .enum,
     ).toEqual(["create", "patch", "update", "read", "revise", "list", "inspect"]);
 
+    await expect(
+      reviewTool.execute("patch-without-read", {
+        action: "patch",
+        skill_name: "weather-planner",
+        old_string: "Check weather before outdoor recommendations.",
+        new_string: "Replacement.",
+      }),
+    ).rejects.toThrow("read the live skill first");
+
+    await reviewTool.execute("review-read", { action: "read", skill_name: "weather-planner" });
     await expect(
       reviewTool.execute("patch-no-match", {
         action: "patch",
@@ -336,24 +351,50 @@ describe("skill_workshop tool", () => {
     expect(proposalBody).toContain("Check alerts and timing before recommending.");
   });
 
+  it("refuses a patch when the skill changed after the read", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-stale-patch-");
+    await seedLiveSkill(
+      workspaceDir,
+      "weather-planner",
+      "Plan around the weather forecast",
+      "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+    );
+
+    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget,
+    });
+    await reviewTool.execute("review-read", { action: "read", skill_name: "weather-planner" });
+    const liveSkillFile = path.join(workspaceDir, "skills", "weather-planner", "SKILL.md");
+    await fs.writeFile(
+      liveSkillFile,
+      (await fs.readFile(liveSkillFile, "utf8")).replace(
+        "Check weather before outdoor recommendations.",
+        "Operator-edited steps after the read.",
+      ),
+    );
+    await expect(
+      reviewTool.execute("stale-patch", {
+        action: "patch",
+        skill_name: "weather-planner",
+        old_string: "Check weather before outdoor recommendations.",
+        new_string: "Replacement.",
+      }),
+    ).rejects.toThrow("changed since it was read");
+    expect(proposalMutationBudget.remaining).toBe(1);
+  });
+
   it("caps reviewer live-skill reads at the read budget", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-read-cap-");
-    const fullTool = createSkillWorkshopTool({
+    await seedLiveSkill(
       workspaceDir,
-      config: { skills: { workshop: { approvalPolicy: "auto" } } },
-    });
-    const bigBody = `# Big Skill\n\n${"A detailed operational line.\n".repeat(1200)}`;
-    const created = await fullTool.execute("seed-create", {
-      action: "create",
-      name: "big-skill",
-      description: "A very large operator skill",
-      proposal_content: bigBody,
-    });
-    await fullTool.execute("seed-apply", {
-      action: "apply",
-      proposal_id: (created.details as { id: string }).id,
-      reason: "seed live skill",
-    });
+      "big-skill",
+      "A very large operator skill",
+      `# Big Skill\n\n${"A detailed operational line.\n".repeat(1200)}`,
+    );
 
     const reviewTool = createSkillWorkshopTool({
       workspaceDir,

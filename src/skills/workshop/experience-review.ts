@@ -354,6 +354,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         const senderScope = [
           params.ctx.senderId ?? "",
           params.ctx.senderUsername ?? "",
+          params.ctx.senderName ?? "",
           params.ctx.senderE164 ?? "",
           params.ctx.modelProviderId ?? "",
           params.ctx.modelId ?? "",
@@ -486,6 +487,7 @@ async function runSkillExperienceReviewInner(
   const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
     remaining: 1,
     patchProposalIds: new Set(),
+    readSkillHashes: new Map(),
   };
   const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
