@@ -3616,14 +3616,26 @@ describe("diagnostics-otel service", () => {
     expect(JSON.stringify(failoverOptions?.attributes)).not.toContain("Agent:qa:otel-trace-smoke");
   });
 
-  test("maps model call APIs to GenAI operation names and error type", async () => {
+  test("maps model call APIs and preserves zero usage on terminal spans", async () => {
     await startOtelService({ traces: true, metrics: true });
+    const zeroUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      total: 0,
+    };
 
     emitDiagnosticEvent({
       type: "model.call.completed",
       ...MODEL_CALL_FIXTURE,
       api: "openai-completions",
       durationMs: 80,
+      requestPayloadBytes: 0,
+      responseStreamBytes: 0,
+      timeToFirstByteMs: 0,
+      usage: zeroUsage,
     });
     emitDiagnosticEvent({
       type: "model.call.completed",
@@ -3634,7 +3646,7 @@ describe("diagnostics-otel service", () => {
       api: "google-generative-ai",
       durationMs: 90,
     });
-    await emitAndFlush({
+    emitDiagnosticEvent({
       type: "model.call.error",
       runId: "run-1",
       callId: "call-3",
@@ -3642,12 +3654,20 @@ describe("diagnostics-otel service", () => {
       api: "openai-responses",
       durationMs: 40,
       errorCategory: "TimeoutError",
+      usage: zeroUsage,
+    });
+    await emitAndFlush({
+      type: "model.call.completed",
+      ...MODEL_CALL_FIXTURE,
+      callId: "call-cache-only",
+      durationMs: 30,
+      usage: { cacheWrite: 7 },
     });
 
     const modelCallAttrs = telemetryState.tracer.startSpan.mock.calls
       .filter((call) => call[0] === "openclaw.model.call")
       .map((call) => (call[1] as { attributes?: Record<string, unknown> }).attributes);
-    expect(modelCallAttrs).toHaveLength(3);
+    expect(modelCallAttrs).toHaveLength(4);
     expect(modelCallAttrs[0]?.["gen_ai.system"]).toBe("openai");
     expect(modelCallAttrs[0]?.["gen_ai.request.model"]).toBe("gpt-5.4");
     expect(modelCallAttrs[0]?.["gen_ai.operation.name"]).toBe("text_completion");
@@ -3658,6 +3678,40 @@ describe("diagnostics-otel service", () => {
     expect(modelCallAttrs[2]?.["gen_ai.request.model"]).toBe("gpt-5.4");
     expect(modelCallAttrs[2]?.["gen_ai.operation.name"]).toBe("chat");
     expect(modelCallAttrs[2]?.["error.type"]).toBe("TimeoutError");
+    for (const attrs of [modelCallAttrs[0], modelCallAttrs[2]]) {
+      expect(attrs).toMatchObject({
+        "openclaw.model_call.usage.input_tokens": 0,
+        "openclaw.model_call.usage.output_tokens": 0,
+        "openclaw.model_call.usage.cache_read_input_tokens": 0,
+        "openclaw.model_call.usage.cache_creation_input_tokens": 0,
+        "openclaw.model_call.usage.reasoning_output_tokens": 0,
+        "openclaw.model_call.usage.prompt_tokens": 0,
+        "openclaw.model_call.usage.total_tokens": 0,
+        "gen_ai.usage.input_tokens": 0,
+        "gen_ai.usage.output_tokens": 0,
+        "gen_ai.usage.cache_read.input_tokens": 0,
+        "gen_ai.usage.cache_creation.input_tokens": 0,
+      });
+    }
+    for (const key of [
+      "openclaw.model_call.request_bytes",
+      "openclaw.model_call.response_bytes",
+      "openclaw.model_call.time_to_first_byte_ms",
+    ]) {
+      expect(modelCallAttrs[0]).not.toHaveProperty(key);
+    }
+    expect(
+      Object.keys(modelCallAttrs[1] ?? {}).filter(
+        (key) => key.startsWith("openclaw.model_call.usage.") || key.startsWith("gen_ai.usage."),
+      ),
+    ).toEqual([]);
+    expect(modelCallAttrs[3]).toMatchObject({
+      "openclaw.model_call.usage.cache_creation_input_tokens": 7,
+      "openclaw.model_call.usage.prompt_tokens": 7,
+      "gen_ai.usage.input_tokens": 7,
+      "gen_ai.usage.cache_creation.input_tokens": 7,
+    });
+    expect(modelCallAttrs[3]).not.toHaveProperty("openclaw.model_call.usage.input_tokens");
   });
 
   test("uses latest GenAI request and agent span shapes only when semconv opt-in is set", async () => {
