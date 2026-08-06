@@ -14,6 +14,7 @@ import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 export type ClawHubSkillUninstallPlan = {
   workspaceDir: string;
+  requestedRef: string;
   slug: string;
   version: string;
   installedAt: number;
@@ -121,6 +122,7 @@ export async function planClawHubSkillUninstall(params: {
     ok: true,
     plan: {
       workspaceDir: params.workspaceDir,
+      requestedRef: ownerHandle ? `@${ownerHandle}/${slug}` : slug,
       slug,
       version: link.installedVersion,
       installedAt: link.installedAt,
@@ -143,7 +145,7 @@ export async function applyClawHubSkillUninstall(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const current = await planClawHubSkillUninstall({
     workspaceDir: plan.workspaceDir,
-    slug: plan.slug,
+    slug: plan.requestedRef,
     expectedVersion: plan.version,
   });
   if (!current.ok) {
