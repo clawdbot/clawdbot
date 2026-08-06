@@ -61,7 +61,7 @@ function validation(profile: string | undefined, conformant: boolean, ready: boo
         subjects: [],
       },
       ready,
-      conditions: [],
+      conditions: [] as Array<Record<string, unknown>>,
       failures: [],
       advisories: [],
     },

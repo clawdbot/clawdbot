@@ -76,6 +76,8 @@ const JSON_NOT_APPLICABLE = {
       "pairing",
       "plugins",
       "plugins marketplace",
+      "hosting",
+      "hosting profiles",
       "channels",
       "channels dead-letters",
       "directory",
