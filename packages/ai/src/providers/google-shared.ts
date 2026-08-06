@@ -436,6 +436,8 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       requestParams = nextParams as GenerateContentParameters;
     }
     const googleStream = await client.models.generateContentStream(requestParams);
+    // Reaching this point means the server accepted the request; error statuses throw before it.
+    await options?.onResponse?.({ status: 200, headers: {} }, model);
     await consumeGoogleGenerateContentStream({
       chunks: googleStream,
       model,

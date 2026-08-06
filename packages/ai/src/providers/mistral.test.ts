@@ -216,6 +216,23 @@ describe("Mistral provider", () => {
     configureAiTransportHost({});
   });
 
+  it("invokes onResponse after the server accepts the request", async () => {
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: {
+            id: "resp-ack",
+            model: "mistral-large-latest",
+            choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+          },
+        };
+      },
+    };
+    const onResponse = vi.fn();
+    await runSimpleMistralFixture(context, { onResponse });
+    expect(onResponse).toHaveBeenCalledWith({ status: 200, headers: {} }, expect.anything());
+  });
+
   it("forwards simple stop sequences to Mistral stop", async () => {
     const result = await runSimpleMistralFixture(context, {
       stop: ["STOP"],

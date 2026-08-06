@@ -178,6 +178,8 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         headers,
         signal: options?.signal,
       });
+      // Reaching this point means the server accepted the request; error statuses throw before it.
+      await options?.onResponse?.({ status: 200, headers: {} }, model);
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream);
 

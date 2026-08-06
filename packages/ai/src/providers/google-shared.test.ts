@@ -570,6 +570,14 @@ describe("consumeGoogleGenerateContentStream", () => {
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
+  it("invokes onResponse after the server accepts the request", async () => {
+    const onResponse = vi.fn();
+    await runGoogleFixture([googleResponse({ parts: [{ text: "ok" }] })], {
+      options: { onResponse },
+    });
+    expect(onResponse).toHaveBeenCalledWith({ status: 200, headers: {} }, expect.anything());
+  });
+
   it.each(["google-generative-ai", "google-vertex"] as const)(
     "rejects an unfinished %s stream instead of silently completing partial output",
     async (api) => {
