@@ -29,14 +29,14 @@ Produce and review technical documentation that is clear, actionable, and mainta
 1. Classify task: `build` or `review`; context: `brownfield` or `evergreen`.
 2. Inventory full documentation scope early (governance + product docs): AGENTS/CONTRIBUTING/aliases plus docs directories, framework sources, and root/module READMEs.
 3. Detect multilingual scope (README/docs in multiple languages) and define required parity level.
-4. Read `{baseDir}/references/agent-and-contributing.md` for agent instruction and `CONTRIBUTING.md` workflow rules (inventory, canonical/alias mapping, dual-mode balance, deliverable standards, and precedence/conflict handling).
-5. Read `{baseDir}/references/principles.md` for the governing ruleset (Matt Palmer & OpenAI).
-6. For OpenClaw docs work, read `{baseDir}/references/openclaw.md` before the build/review playbook.
-7. For build tasks, follow `{baseDir}/references/build.md`.
-8. For review tasks, follow `{baseDir}/references/review.md` and proactively detect issues without waiting for repeated prompts.
+4. Read `references/agent-and-contributing.md` for agent instruction and `CONTRIBUTING.md` workflow rules (inventory, canonical/alias mapping, dual-mode balance, deliverable standards, and precedence/conflict handling).
+5. Read `references/principles.md` for the governing ruleset (Matt Palmer & OpenAI).
+6. For OpenClaw docs work, read `references/openclaw.md` before the build/review playbook.
+7. For build tasks, follow `references/build.md`.
+8. For review tasks, follow `references/review.md` and proactively detect issues without waiting for repeated prompts.
 9. For complex or high-risk tasks (build or review), it is acceptable to run longer, deeper, and more exhaustive investigations when needed for confidence.
 10. When available, use sub-agents for bounded parallel discovery/review work, then merge outputs into one coherent final deliverable.
-11. Use `{baseDir}/references/tooling.md` when platform/tooling choices affect recommendations.
+11. Use `references/tooling.md` when platform/tooling choices affect recommendations.
 12. Run a proactive issue sweep for both governance and docs-content surfaces, and fix high-confidence defects in the same pass unless explicitly asked for report-only mode.
 13. In brownfield mode, prioritize compatibility with current docs IA, tooling, and release state.
 14. In evergreen mode, prioritize timeless wording, update strategy, and durable structure.
@@ -46,10 +46,10 @@ Produce and review technical documentation that is clear, actionable, and mainta
 
 Prefer sub-agents when the repo is large or the requested change set is broad; use them by default for repo-wide, multi-framework, or high-conflict work.
 
-- `inventory-agent` -> `{baseDir}/agents/inventory-agent.md` (`fast` / Claude `haiku`): file/config discovery, coverage map, and missing-path checks.
-- `governance-agent` -> `{baseDir}/agents/governance-agent.md` (`thinking` / Claude `sonnet`): AGENTS/CONTRIBUTING/alias precedence, conflicts, and policy drift.
-- `docs-framework-agent` -> `{baseDir}/agents/docs-framework-agent.md` (`thinking` / Claude `sonnet`): framework config, relative path base, and file-path vs URL-path mapping checks.
-- `synthesis-agent` -> `{baseDir}/agents/synthesis-agent.md` (`long` / Claude `opus`): merge sub-agent outputs into one prioritized fix plan and unified precedence model.
+- `inventory-agent` -> `agents/inventory-agent.md` (`fast` / Claude `haiku`): file/config discovery, coverage map, and missing-path checks.
+- `governance-agent` -> `agents/governance-agent.md` (`thinking` / Claude `sonnet`): AGENTS/CONTRIBUTING/alias precedence, conflicts, and policy drift.
+- `docs-framework-agent` -> `agents/docs-framework-agent.md` (`thinking` / Claude `sonnet`): framework config, relative path base, and file-path vs URL-path mapping checks.
+- `synthesis-agent` -> `agents/synthesis-agent.md` (`long` / Claude `opus`): merge sub-agent outputs into one prioritized fix plan and unified precedence model.
 
 ## Inputs
 
