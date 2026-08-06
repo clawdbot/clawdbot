@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.6.34",
+  "version": "2026.6.35",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/msteams",
-      "version": "2026.6.34",
+      "version": "2026.6.35",
       "dependencies": {
         "@azure/identity": "4.13.1",
         "@microsoft/teams.api": "2.0.12",
@@ -15,7 +15,7 @@
         "typebox": "1.1.39"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.34"
+        "openclaw": ">=2026.6.35"
       },
       "peerDependenciesMeta": {
         "openclaw": {
