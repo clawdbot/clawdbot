@@ -628,7 +628,7 @@ describe("diagnostic stability recorder", () => {
       type: "telemetry.exporter",
       exporter: "custom-exporter",
       signal: "logs",
-      transport: "https://private.example/transport",
+      transport: "collector.internal:4318",
       status: "failure",
       reason: "queue_full",
     });
@@ -658,6 +658,7 @@ describe("diagnostic stability recorder", () => {
       }),
     ]);
     expect(snapshot.events[1]).not.toHaveProperty("transport");
+    expect(JSON.stringify(snapshot)).not.toContain("collector.internal");
     expect(JSON.stringify(snapshot)).not.toContain("private.example");
   });
 

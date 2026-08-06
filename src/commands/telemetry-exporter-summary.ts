@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const SIGNALS = ["traces", "metrics", "logs"] as const;
 const STATUSES = ["started", "failure", "recovered", "dropped"] as const;
-const SAFE_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
 const REASON_LABELS = {
   unsupported_protocol: "unsupported protocol",
   start_failed: "start failed",
@@ -42,7 +42,7 @@ function parseExporterHealthRecord(value: unknown): ExporterHealthRecord | undef
     !isRecord(value) ||
     value.type !== "telemetry.exporter" ||
     typeof value.source !== "string" ||
-    !SAFE_CODE.test(value.source) ||
+    !SAFE_EXPORTER_CODE.test(value.source) ||
     !oneOf(value.target, SIGNALS) ||
     !oneOf(value.outcome, STATUSES)
   ) {
@@ -50,7 +50,7 @@ function parseExporterHealthRecord(value: unknown): ExporterHealthRecord | undef
   }
   const seq = typeof value.seq === "number" && Number.isFinite(value.seq) ? value.seq : 0;
   const transport =
-    typeof value.transport === "string" && SAFE_CODE.test(value.transport)
+    typeof value.transport === "string" && SAFE_EXPORTER_CODE.test(value.transport)
       ? value.transport
       : undefined;
   const reason =

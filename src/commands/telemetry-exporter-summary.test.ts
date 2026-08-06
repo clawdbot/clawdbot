@@ -174,7 +174,7 @@ describe("formatTelemetryExporterSummary", () => {
           type: "telemetry.exporter",
           source: "second_exporter",
           target: "metrics",
-          transport: "https://private.example/transport",
+          transport: "collector.internal:4318",
           outcome: "failure",
           reason: "queue_full",
         },
@@ -189,6 +189,6 @@ describe("formatTelemetryExporterSummary", () => {
         "second_exporter · metrics · failed · exporter · queue full",
       ],
     });
-    expect(JSON.stringify(summary)).not.toContain("private.example");
+    expect(JSON.stringify(summary)).not.toContain("collector.internal");
   });
 });

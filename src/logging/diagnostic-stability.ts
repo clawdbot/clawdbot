@@ -13,6 +13,7 @@ const MAX_DIAGNOSTIC_EXPORTER_STATES = 16;
 const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
 
 /** Sanitized diagnostic event record retained in the stability ring buffer. */
 export type DiagnosticStabilityEventRecord = {
@@ -176,6 +177,10 @@ function copyReasonCode(reason: string | undefined): string | undefined {
     return undefined;
   }
   return reason;
+}
+
+function copyExporterCode(value: string | undefined): string | undefined {
+  return value && SAFE_EXPORTER_CODE.test(value) ? value : undefined;
 }
 
 function assignReasonCode(
@@ -547,10 +552,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       break;
     case "telemetry.exporter":
-      record.source = copyReasonCode(event.exporter);
+      record.source = copyExporterCode(event.exporter);
       record.target = event.signal;
       record.outcome = event.status;
-      const transport = copyReasonCode(event.transport);
+      const transport = copyExporterCode(event.transport);
       if (transport) {
         record.transport = transport;
       }
