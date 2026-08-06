@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { ensureDirectoryWithinRoot } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { ensureAbsoluteDirectory, isPathInside, root } from "../../../infra/fs-safe.js";
@@ -341,8 +342,16 @@ export async function materializeSubagentAttachments(params: {
     // would trust a pre-existing attachments symlink before fs-safe can reject the hop.
     const workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o600 });
     workspaceRootDir = workspaceRoot.rootReal;
-    absDir = path.join(workspaceRootDir, ...relDir.split(path.posix.sep));
-    await workspaceRoot.mkdir(relDir);
+    const ensuredAttachmentDir = await ensureDirectoryWithinRoot({
+      rootDir: workspaceRootDir,
+      requestedPath: relDir,
+      scopeLabel: "child workspace",
+      mode: 0o700,
+    });
+    if (!ensuredAttachmentDir.ok) {
+      throw new Error(ensuredAttachmentDir.error);
+    }
+    absDir = ensuredAttachmentDir.path;
 
     const files: SubagentAttachmentReceiptFile[] = [];
     const writeJobs: Array<{ outPath: string; buf: Buffer }> = [];

@@ -176,6 +176,16 @@ describe("spawnSubagentDirect filename validation", () => {
       const targetAttachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
       expect(fs.existsSync(explicitAttachmentsRoot)).toBe(true);
       expect(fs.existsSync(targetAttachmentsRoot)).toBe(false);
+      if (process.platform !== "win32") {
+        const [receiptDir] = fs.readdirSync(explicitAttachmentsRoot);
+        expect(receiptDir).toBeTypeOf("string");
+        if (!receiptDir) {
+          throw new Error("missing attachment receipt directory");
+        }
+        expect(fs.statSync(path.join(explicitAttachmentsRoot, receiptDir)).mode & 0o777).toBe(
+          0o700,
+        );
+      }
     } finally {
       fs.rmSync(explicitWorkspaceDir, { recursive: true, force: true });
     }
