@@ -697,6 +697,13 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
         ? sanitizeAgentRunTerminalReplyText(sanitizePendingFinalDeliveryText(event.result))
         : "";
     if (result && result !== "(no output)") {
+      if (
+        /^\s*##\s+Result:\s*(?:blocked|failed|error)\b[\s\S]{0,4000}^\s*(?:\*\*)?(?:Blocker|Needed from (?:the )?main agent|Not completed)(?:\*\*)?:/im.test(
+          result,
+        )
+      ) {
+        return "The background task finished, but I couldn't prepare a safe final reply. Please try again.";
+      }
       return result;
     }
   }

@@ -1287,6 +1287,32 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(content.length).toBeLessThanOrEqual(4_096);
   });
 
+  it("does not mirror a structured internal failure report as direct completion text", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+
+    await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: [
+          "## Result: blocked — could not finish",
+          "",
+          "**Blocker:** The source handoff was unavailable.",
+          "**Needed from main agent:** Retry the parent workflow.",
+        ].join("\n"),
+      }),
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "The background task finished, but I couldn't prepare a safe final reply. Please try again.",
+      }),
+    );
+  });
+
   it("reports direct completion delivery before post-send transcript mirroring settles", async () => {
     const callGateway = createPayloadGatewayMock();
     let releaseMirror!: () => void;
