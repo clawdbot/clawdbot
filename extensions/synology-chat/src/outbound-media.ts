@@ -15,6 +15,7 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { createWebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   resolveSynologyHostedMediaRoute,
+  SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX,
   toSynologyHostedMediaStoreRoutePath,
 } from "./hosted-media-route.js";
 import { getSynologyRuntime } from "./runtime.js";
@@ -25,7 +26,6 @@ const SYNOLOGY_OUTBOUND_MEDIA_MAX_BYTES = 32 * 1024 * 1024;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_ENTRIES = 16;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_CHUNK_ROWS = 4_096;
-const SYNOLOGY_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX = "__openclaw_synology_media_token";
 const SYNOLOGY_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 const SYNOLOGY_OUTBOUND_MEDIA_PREPARE_TIMEOUT_MS = 60_000;
 const SYNOLOGY_OUTBOUND_MEDIA_MAX_PREPARATIONS = 2;
@@ -252,7 +252,7 @@ export async function prepareSynologyHostedMedia(params: {
       );
     }
 
-    const tokenParam = `${SYNOLOGY_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX}_${id}`;
+    const tokenParam = `${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_${id}`;
     const querySeparator = route.publicSearch ? "&" : "?";
     return {
       url: `${route.publicBaseUrl}${route.publicRoutePath}${route.publicSearch}${querySeparator}${tokenParam}=${encodeURIComponent(token)}` as SynologyHostedMediaUrl,
@@ -274,9 +274,9 @@ export async function tryHandleSynologyHostedMediaRequest(
     return false;
   }
   const tokenCandidates = [...url.searchParams.entries()]
-    .filter(([key]) => key.startsWith(`${SYNOLOGY_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX}_`))
+    .filter(([key]) => key.startsWith(`${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_`))
     .map(([key, token]) => ({
-      id: key.slice(SYNOLOGY_OUTBOUND_MEDIA_TOKEN_PARAM_PREFIX.length + 1),
+      id: key.slice(SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX.length + 1),
       token,
     }))
     .filter((candidate) => SYNOLOGY_OUTBOUND_MEDIA_ID_RE.test(candidate.id));

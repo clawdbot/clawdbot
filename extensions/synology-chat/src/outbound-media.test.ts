@@ -94,6 +94,14 @@ describe("Synology Chat hosted outbound media", () => {
     expect(() =>
       resolveSynologyHostedMediaRoute(createAccount({ webhookUrl: credentialedUrl.toString() })),
     ).toThrow("must be an absolute HTTPS URL");
+    expect(() =>
+      resolveSynologyHostedMediaRoute(
+        createAccount({
+          webhookUrl:
+            "https://gateway.example.com/webhook?__openclaw_synology_media_token_existing=value",
+        }),
+      ),
+    ).toThrow("must not contain query parameters starting with");
   });
 
   it("preserves an exact public callback path with a trailing slash", async () => {

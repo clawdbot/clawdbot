@@ -1,5 +1,7 @@
 // Synology Chat plugin module maps one public callback URL to its internal Gateway route.
 
+export const SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX = "__openclaw_synology_media_token";
+
 function normalizeExactPath(path: string): string {
   const trimmed = path.trim();
   const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
@@ -51,6 +53,15 @@ export function resolveSynologyHostedMediaRoute(params: {
     );
   }
   const webhookUrl = new URL(params.webhookUrl);
+  if (
+    [...webhookUrl.searchParams.keys()].some((key) =>
+      key.startsWith(`${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_`),
+    )
+  ) {
+    throw new Error(
+      `Synology Chat webhookUrl must not contain query parameters starting with ${SYNOLOGY_HOSTED_MEDIA_TOKEN_PARAM_PREFIX}_.`,
+    );
+  }
   return {
     localRoutePath: toSynologyHostedMediaStoreRoutePath(params.webhookPath),
     publicBaseUrl: webhookUrl.origin,

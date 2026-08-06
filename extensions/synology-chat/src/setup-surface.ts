@@ -21,6 +21,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
+import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
 const t = createSetupTranslator();
@@ -136,18 +137,9 @@ function validatePublicWebhookUrl(value: string): string | undefined {
     return undefined;
   }
   try {
-    const parsed = new URL(trimmed);
-    if (
-      parsed.protocol !== "https:" ||
-      !parsed.hostname ||
-      parsed.username ||
-      parsed.password ||
-      parsed.hash
-    ) {
-      return "Attachment webhook URL must use HTTPS with a hostname and no credentials or fragment.";
-    }
-  } catch {
-    return "Attachment webhook URL must be a valid absolute HTTPS URL.";
+    resolveSynologyHostedMediaRoute({ webhookUrl: trimmed, webhookPath: DEFAULT_WEBHOOK_PATH });
+  } catch (error) {
+    return error instanceof Error ? error.message : "Attachment webhook URL is invalid.";
   }
   return undefined;
 }
