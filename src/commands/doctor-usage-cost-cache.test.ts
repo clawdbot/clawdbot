@@ -120,7 +120,6 @@ describe("legacy usage-cost cache cleanup", () => {
         database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
       ).toEqual([
         { key: "keep", scope: "other" },
-        { key: "refresh-lock", scope: "session-cost-usage" },
         { key: "current", scope: "session-cost-usage-rollup-v2" },
       ]);
     }
