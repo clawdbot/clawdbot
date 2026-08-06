@@ -2398,6 +2398,34 @@ describe("sendMessageTelegram", () => {
     ]);
   });
 
+  it("sends oversized voice captions as a voice note followed by text", async () => {
+    const chatId = "123";
+    const longText = "A".repeat(1100);
+    botApi.sendVoice.mockResolvedValue({ message_id: 70, chat: { id: chatId } });
+    botApi.sendMessage.mockResolvedValue({ message_id: 71, chat: { id: chatId } });
+    mockLoadedMedia({
+      buffer: Buffer.from("voice"),
+      contentType: "audio/ogg",
+      fileName: "voice.ogg",
+    });
+
+    const result = await sendMessageTelegram(chatId, longText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      mediaUrl: "https://example.com/voice.ogg",
+      asVoice: true,
+    });
+
+    expectMediaSendCall(
+      firstMockCall(botApi.sendVoice, "send voice call"),
+      "send voice call",
+      chatId,
+      { caption: undefined },
+    );
+    expect(botApi.sendMessage).toHaveBeenCalledWith(chatId, longText, { parse_mode: "HTML" });
+    expect(result.receipt?.platformMessageIds).toEqual(["70", "71"]);
+  });
+
   it("finalizes media when its separate text renders empty", async () => {
     const storePath = `/tmp/openclaw-telegram-empty-media-follow-up-${process.pid}-${Date.now()}.json`;
     const cursor = createTelegramPromptContextProjectionCursor({
