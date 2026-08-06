@@ -51,4 +51,26 @@ describe("synologyChatDoctor", () => {
     });
     expect(invalid.join("\n")).toContain("must be an absolute HTTPS URL");
   });
+
+  it("requires a named route to configure its own exact public callback", async () => {
+    const warnings = await collectWarnings({
+      channels: {
+        "synology-chat": {
+          token: "base-token",
+          incomingUrl: "https://nas.example.com/incoming",
+          webhookUrl: "https://gateway.example.com/webhook/synology",
+          accounts: {
+            work: {
+              token: "work-token",
+              webhookPath: "/webhook/synology-work",
+            },
+          },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.synology-chat.accounts.work.webhookUrl: attachments are unavailable",
+    );
+  });
 });

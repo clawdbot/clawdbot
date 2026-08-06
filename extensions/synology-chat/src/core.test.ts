@@ -407,6 +407,27 @@ describe("synology-chat account resolution", () => {
     expect(optedIn.dangerouslyAllowInheritedWebhookPath).toBe(true);
   });
 
+  it("does not inherit the base public webhook URL into a named route", () => {
+    const account = resolveAccount(
+      {
+        channels: {
+          "synology-chat": {
+            webhookUrl: "https://gateway.example.com/webhook/synology",
+            accounts: {
+              work: {
+                token: "work-tok",
+                webhookPath: "/webhook/synology-work",
+              },
+            },
+          },
+        },
+      },
+      "work",
+    );
+
+    expect(account.webhookUrl).toBe("");
+  });
+
   it("parses allowedUserIds strings, arrays, and rate limits", () => {
     const parsedString = resolveAccount({
       channels: {
