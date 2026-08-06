@@ -57,7 +57,7 @@ async function executeTestTurn(
 }
 
 describe("executeAgentTurn: lifecycle progress", () => {
-  it("records assistant events as semantic run progress", async () => {
+  it("keeps operational agent events from resetting repeated request evidence", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       const sessionId = params.sessionId ?? "session";
       const sessionKey = params.sessionKey ?? "main";
@@ -77,14 +77,23 @@ describe("executeAgentTurn: lifecycle progress", () => {
           .repeatedRequestNoProgressAgeMs,
       ).toBe(0);
 
-      await params.onAgentEvent?.({
-        stream: "assistant",
-        data: { phase: "commentary", text: "Working" },
-      });
+      for (const event of [
+        { stream: "assistant", data: { phase: "commentary", text: "Working" } },
+        { stream: "tool", data: { phase: "start", name: "read", toolCallId: "call-1" } },
+        {
+          stream: "tool",
+          data: { phase: "result", name: "read", toolCallId: "call-1", isError: false },
+        },
+        { stream: "item", data: { phase: "end", status: "completed", itemId: "item-1" } },
+        { stream: "thinking", data: { delta: "internal" } },
+        { stream: "custom.runtime", data: { status: "ready" } },
+      ]) {
+        await params.onAgentEvent?.(event);
+      }
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
           .repeatedRequestNoProgressAgeMs,
-      ).toBeUndefined();
+      ).toBeGreaterThanOrEqual(0);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 

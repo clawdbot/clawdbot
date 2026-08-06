@@ -97,12 +97,14 @@ type ModelCallObservationState = {
   usage?: ModelCallUsage;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
+  semanticProgressEmitted?: boolean;
   terminalEventEmitted?: boolean;
   suppressPluginHooks?: boolean;
 };
 
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
 const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
+const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
 const TIMELINE_ATTRIBUTE_MAX_LENGTH = 256;
@@ -295,6 +297,66 @@ function observeResultMessageContent(
       state.responseStreamBytes = bytes;
     }
   }
+}
+
+function isNormalizedToolCall(value: unknown): boolean {
+  if (!isRecord(value) || value.type !== "toolCall") {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    value.id.trim().length > 0 &&
+    typeof value.name === "string" &&
+    value.name.trim().length > 0 &&
+    isRecord(value.arguments)
+  );
+}
+
+function isSemanticModelCallResult(result: unknown): boolean {
+  try {
+    if (
+      !isRecord(result) ||
+      result.role !== "assistant" ||
+      result.stopReason === "error" ||
+      result.stopReason === "aborted" ||
+      !Array.isArray(result.content)
+    ) {
+      return false;
+    }
+    const hasExecutableToolCall =
+      result.stopReason === "toolUse" && result.content.some(isNormalizedToolCall);
+    return (
+      hasExecutableToolCall ||
+      result.content.some(
+        (item) =>
+          isRecord(item) &&
+          item.type === "text" &&
+          typeof item.text === "string" &&
+          item.text.trim().length > 0,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function maybeEmitModelCallSemanticProgress(
+  eventBase: ModelCallEventBase,
+  state: ModelCallObservationState,
+  result: unknown,
+): void {
+  if (state.semanticProgressEmitted || !isSemanticModelCallResult(result)) {
+    return;
+  }
+  state.semanticProgressEmitted = true;
+  emitTrustedDiagnosticEvent({
+    type: "run.progress",
+    runId: eventBase.runId,
+    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+    reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
+    progressKind: "semantic",
+  });
 }
 
 function observeResponseChunk(
@@ -771,6 +833,9 @@ function observeModelCallFinalResult<T>(
   state: ModelCallObservationState,
 ): T {
   observeResultMessageContent(state, startedAt, result);
+  // Queue semantic progress beside model lifecycle events so request starts,
+  // progress, and the next request retain their authoritative FIFO ordering.
+  maybeEmitModelCallSemanticProgress(eventBase, state, result);
   emitModelCallCompleted(eventBase, startedAt, state);
   return result;
 }

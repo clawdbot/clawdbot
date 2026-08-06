@@ -3,7 +3,6 @@ import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
-import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -85,17 +84,6 @@ export function createAgentRunEventHandler(params: {
 
   return async (evt) => {
     params.turn.replyOperation?.recordActivity();
-    // Agent outputs are portable forward-progress facts. Usage and lifecycle
-    // bookkeeping stay mechanical so repeated model attempts cannot self-refresh.
-    if (evt.stream !== "usage" && evt.stream !== "lifecycle") {
-      markDiagnosticRunProgress({
-        runId: params.runId,
-        sessionId: params.effectiveSessionId,
-        sessionKey: params.turn.sessionKey,
-        reason: `agent_event:${evt.stream}`,
-        progressKind: "semantic",
-      });
-    }
     params.lifecycleBackstop.note(evt);
     const hasLifecyclePhase = evt.stream === "lifecycle" && typeof evt.data.phase === "string";
     if (evt.stream !== "lifecycle" || hasLifecyclePhase) {

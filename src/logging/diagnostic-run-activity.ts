@@ -278,10 +278,7 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
     startedAt: now,
     lastProgressAt: now,
   });
-  touchSemanticSessionActivity(activity, `tool:${event.toolName}:started`, {
-    runId: event.runId,
-    now,
-  });
+  touchSessionActivity(activity, `tool:${event.toolName}:started`, now);
 }
 
 function recordToolEnded(
@@ -295,7 +292,7 @@ function recordToolEnded(
     return;
   }
   activity.activeTools.delete(toolKey(event));
-  touchSemanticSessionActivity(activity, `tool:${event.toolName}:ended`, { runId: event.runId });
+  touchSessionActivity(activity, `tool:${event.toolName}:ended`);
 }
 
 function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {

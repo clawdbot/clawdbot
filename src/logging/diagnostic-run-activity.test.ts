@@ -425,6 +425,64 @@ describe("repeated request liveness", () => {
     ).toBeUndefined();
   });
 
+  it("keeps model endings and tool lifecycle mechanical", async () => {
+    const ref = { sessionId: "mechanical-session", sessionKey: "agent:main:mechanical" };
+    const runId = "mechanical-run";
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        runId,
+        provider: "mock",
+        model: "request-model",
+        observationUnit: "request",
+      });
+    }
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      ...ref,
+      runId,
+      callId: "completed-call",
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+      durationMs: 1,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.error",
+      ...ref,
+      runId,
+      callId: "error-call",
+      provider: "mock",
+      model: "request-model",
+      observationUnit: "request",
+      durationMs: 1,
+      errorCategory: "test",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      ...ref,
+      runId,
+      toolName: "read",
+      toolCallId: "tool-call",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.completed",
+      ...ref,
+      runId,
+      toolName: "read",
+      toolCallId: "tool-call",
+      durationMs: 1,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
+    ).toBeGreaterThanOrEqual(0);
+  });
+
   it("ignores turn observations and clears request evidence across owner lifecycle", () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-08-04T01:00:00Z");

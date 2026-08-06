@@ -18,6 +18,7 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import { registerDiagnosticTracePropagationBridge } from "../../../infra/diagnostic-trace-propagation.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
@@ -75,6 +76,30 @@ async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
   } finally {
     stop();
   }
+}
+
+async function collectSemanticProgressEvents(run: () => Promise<void>) {
+  const events: DiagnosticEventPayload[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (
+      metadata.trusted &&
+      event.type === "run.progress" &&
+      event.reason === "model_call:semantic_result"
+    ) {
+      events.push(event);
+    }
+  });
+  try {
+    await run();
+    await waitForDiagnosticEventsDrained();
+    return events;
+  } finally {
+    stop();
+  }
+}
+
+function assistantResult(stopReason: string, content: unknown[]) {
+  return { role: "assistant", stopReason, content };
 }
 
 async function drain(stream: AsyncIterable<unknown>): Promise<void> {
@@ -226,6 +251,123 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it.each([
+    {
+      name: "visible text",
+      result: assistantResult("stop", [{ type: "text", text: "done" }]),
+      expected: 1,
+    },
+    {
+      name: "tool-use call",
+      result: assistantResult("toolUse", [
+        { type: "toolCall", id: "call-1", name: "read", arguments: { path: "README.md" } },
+      ]),
+      expected: 1,
+    },
+    {
+      name: "error text",
+      result: assistantResult("error", [{ type: "text", text: "provider failed" }]),
+      expected: 0,
+    },
+    {
+      name: "aborted text",
+      result: assistantResult("aborted", [{ type: "text", text: "partial" }]),
+      expected: 0,
+    },
+    {
+      name: "reasoning only",
+      result: assistantResult("stop", [{ type: "thinking", thinking: "working" }]),
+      expected: 0,
+    },
+    {
+      name: "blank text",
+      result: assistantResult("stop", [{ type: "text", text: "  \n" }]),
+      expected: 0,
+    },
+    {
+      name: "non-executable tool block",
+      result: assistantResult("stop", [
+        { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+      ]),
+      expected: 0,
+    },
+    {
+      name: "malformed tool-use call",
+      result: assistantResult("toolUse", [{ type: "toolCall", id: "", name: "read" }]),
+      expected: 0,
+    },
+  ])("emits semantic progress once for $name final results", async ({ result, expected }) => {
+    const stream = {
+      async *[Symbol.asyncIterator]() {},
+      result: async () => result,
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream) as unknown as StreamFn,
+      {
+        runId: "run-semantic-result",
+        sessionId: "session-semantic-result",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-semantic-result",
+      },
+    );
+
+    const events = await collectSemanticProgressEvents(async () => {
+      const observed = wrapped({} as never, {} as never, {} as never) as unknown as typeof stream;
+      await observed.result();
+      await observed.result();
+    });
+
+    expect(events).toHaveLength(expected);
+  });
+
+  it("orders semantic results between repeated request observations", async () => {
+    const ref = {
+      sessionId: "session-semantic-order",
+      sessionKey: "agent:main:semantic-order",
+    };
+    const runId = "run-semantic-order";
+    const results = [
+      assistantResult("error", [{ type: "text", text: "retry one" }]),
+      assistantResult("error", [{ type: "text", text: "retry two" }]),
+      assistantResult("stop", [{ type: "text", text: "made progress" }]),
+      assistantResult("error", [{ type: "text", text: "retry after progress" }]),
+    ];
+    let callSequence = 0;
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => {
+        const result = results.shift();
+        return {
+          async *[Symbol.asyncIterator]() {},
+          result: async () => result,
+        };
+      }) as unknown as StreamFn,
+      {
+        ...ref,
+        runId,
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => `${runId}:${(callSequence += 1)}`,
+      },
+    );
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId });
+
+    for (let index = 0; index < 4; index += 1) {
+      const observed = wrapped({} as never, {} as never, {} as never) as unknown as {
+        result: () => Promise<unknown>;
+      };
+      await observed.result();
+    }
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      hasActiveEmbeddedRun: true,
+      repeatedRequestNoProgressAgeMs: undefined,
+    });
   });
 
   it("emits one successful provider timeline event for result and iterator completion", async () => {
