@@ -189,6 +189,83 @@ describe("Matrix durable ingress", () => {
     });
   });
 
+  it("delivers to an unrelated room while another room's turn is still running", async () => {
+    await withQueue(async (queue) => {
+      let releaseRoomA: (() => void) | undefined;
+      const roomATurn = new Promise<void>((resolve) => {
+        releaseRoomA = resolve;
+      });
+      const dispatched: string[] = [];
+      const dispatch = vi.fn(
+        async (roomId: string, event: MatrixRawEvent, lifecycle: MatrixIngressLifecycle) => {
+          dispatched.push(event.event_id ?? "");
+          if (roomId === "!room-a:example.org") {
+            await roomATurn;
+          }
+          await lifecycle.onAdopted();
+        },
+      );
+      const monitor = createMonitor({ queue, dispatch });
+      try {
+        monitor.start();
+        await monitor.accept("!room-a:example.org", createRawEvent("$evt-a"));
+        await vi.waitFor(() => expect(dispatched).toEqual(["$evt-a"]));
+
+        // Room A's lane is occupied by a long turn; room B's event must still
+        // dispatch — the pump waits on a per-idle wake, not on drain-wide idle.
+        await monitor.accept("!room-b:example.org", createRawEvent("$evt-b"));
+        await vi.waitFor(() => expect(dispatched).toEqual(["$evt-a", "$evt-b"]));
+
+        releaseRoomA?.();
+        await monitor.waitForIdle();
+      } finally {
+        releaseRoomA?.();
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("drains a same-room backlog event once the active turn settles", async () => {
+    await withQueue(async (queue) => {
+      let releaseFirst: (() => void) | undefined;
+      const firstTurn = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const dispatched: string[] = [];
+      const dispatch = vi.fn(
+        async (_roomId: string, event: MatrixRawEvent, lifecycle: MatrixIngressLifecycle) => {
+          dispatched.push(event.event_id ?? "");
+          if (event.event_id === "$evt-first") {
+            await firstTurn;
+          }
+          await lifecycle.onAdopted();
+        },
+      );
+      const monitor = createMonitor({ queue, dispatch });
+      try {
+        monitor.start();
+        await monitor.accept("!room:example.org", createRawEvent("$evt-first"));
+        await vi.waitFor(() => expect(dispatched).toEqual(["$evt-first"]));
+
+        // Same-lane backlog waits for the active claim (serialization), then
+        // the idle wake re-pumps it without waiting for the 1 s poll tick.
+        await monitor.accept("!room:example.org", createRawEvent("$evt-second"));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
+        expect(dispatched).toEqual(["$evt-first"]);
+
+        releaseFirst?.();
+        await vi.waitFor(() => expect(dispatched).toEqual(["$evt-first", "$evt-second"]));
+        await monitor.waitForIdle();
+        await expect(queue.listPending({ limit: 10 })).resolves.toHaveLength(0);
+      } finally {
+        releaseFirst?.();
+        await monitor.stop();
+      }
+    });
+  });
+
   it("does not redispatch completed events across a restart", async () => {
     await withQueue(async (queue) => {
       const firstDispatch = vi.fn(

@@ -220,6 +220,47 @@ export function createMatrixIngressMonitor(options: {
     lastPrunedAt = now;
   };
 
+  // Single-slot idle wake, mirroring the shared core ingress monitor: the
+  // pump must not await drain-wide idle, because that serializes unrelated
+  // room lanes behind one long turn. Instead the wake re-pumps once the
+  // current in-flight claims settle, so same-lane backlog is picked up while
+  // other rooms keep dispatching.
+  let drainIdleWake: Promise<void> | undefined;
+  let drainIdleWakeRequested = false;
+
+  const scheduleDrainIdleWake = (activeDrain: ChannelIngressDrain): void => {
+    if (drainIdleWake) {
+      drainIdleWakeRequested = true;
+      return;
+    }
+    drainIdleWakeRequested = false;
+    const wake = activeDrain.waitForIdle();
+    drainIdleWake = wake;
+    void wake.then(
+      () => {
+        if (drainIdleWake !== wake) {
+          return;
+        }
+        const shouldRearm = drainIdleWakeRequested && running;
+        drainIdleWake = undefined;
+        drainIdleWakeRequested = false;
+        if (shouldRearm) {
+          scheduleDrainIdleWake(activeDrain);
+        }
+        if (running) {
+          requestDrain();
+        }
+      },
+      (error: unknown) => {
+        if (drainIdleWake === wake) {
+          drainIdleWake = undefined;
+          drainIdleWakeRequested = false;
+        }
+        options.runtime.error?.(`matrix ingress idle wake failed: ${formatErrorMessage(error)}`);
+      },
+    );
+  };
+
   const runPump = async (): Promise<void> => {
     try {
       for (;;) {
@@ -232,7 +273,9 @@ export function createMatrixIngressMonitor(options: {
         }
         const activeDrain = getDrain();
         const { started } = await activeDrain.drainOnce();
-        await activeDrain.waitForIdle();
+        if (started > 0) {
+          scheduleDrainIdleWake(activeDrain);
+        }
         if (!running || (!requested && started === 0)) {
           break;
         }
@@ -346,21 +389,31 @@ export function createMatrixIngressMonitor(options: {
       // durably committed; an in-flight admission racing process exit would
       // otherwise lose the message.
       await admissionTail;
+      // Snapshot in-flight dispatch tasks before dispose() clears the drain's
+      // registry: the abort settles them through the normal task path, and
+      // stop() must not return while an aborted turn is still unwinding.
+      const inFlight = drain?.waitForIdle();
       drain?.dispose();
       await pumping;
       // The pump may have lazily created the drain after the first dispose.
       drain?.dispose();
+      await inFlight;
       await drain?.waitForIdle();
     },
     waitForIdle: async () => {
       for (;;) {
         const activePump = pumping;
-        if (!activePump) {
-          break;
+        if (activePump) {
+          await activePump;
+          continue;
         }
-        await activePump;
+        await drain?.waitForIdle();
+        // An idle wake can re-arm the pump right as deliveries settle; loop
+        // once more so callers observe a truly quiescent monitor.
+        if (!pumping) {
+          return;
+        }
       }
-      await drain?.waitForIdle();
     },
   };
 }
