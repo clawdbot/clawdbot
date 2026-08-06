@@ -18,7 +18,13 @@ type PageCaptureResult = {
   url: string;
 };
 
-async function loadBackground({ deferSocketClose = false }: { deferSocketClose?: boolean } = {}) {
+async function loadBackground({
+  deferSocketClose = false,
+  onConsentChanged,
+}: {
+  deferSocketClose?: boolean;
+  onConsentChanged?: () => Promise<void>;
+} = {}) {
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
   let messageListener: RuntimeMessageListener | undefined;
@@ -130,13 +136,13 @@ async function loadBackground({ deferSocketClose = false }: { deferSocketClose?:
       executeScript: vi.fn(async (): Promise<Array<{ result: PageCaptureResult }>> => []),
     },
     tabGroups: {
-      query: vi.fn(async () => []),
+      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
       update: vi.fn(async () => undefined),
       onUpdated: { addListener },
       onRemoved: { addListener },
     },
     tabs: {
-      query: vi.fn(async () => []),
+      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
       get: vi.fn(async () => ({ id: 1, windowId: 1 })),
       group: vi.fn(async () => 1),
       ungroup: vi.fn(async () => undefined),
@@ -152,6 +158,15 @@ async function loadBackground({ deferSocketClose = false }: { deferSocketClose?:
   vi.stubGlobal("chrome", chromeMock);
   vi.stubGlobal("navigator", { userAgent: "Chromium/125.0.0.0" });
   vi.stubGlobal("WebSocket", FakeWebSocket);
+
+  if (onConsentChanged) {
+    const copilotModule = await import("./modules/copilot-background.js");
+    const createCopilotController = copilotModule.createCopilotController;
+    vi.spyOn(copilotModule, "createCopilotController").mockImplementation((options) => ({
+      ...createCopilotController(options),
+      onConsentChanged,
+    }));
+  }
 
   // The shipped MV3 worker is plain JS, so keep this a runtime-resolved import.
   const backgroundModulePath = "./background.js";
@@ -173,7 +188,13 @@ async function loadBackground({ deferSocketClose = false }: { deferSocketClose?:
     messageListener,
     setBadgeText,
     sockets,
+    storageRemove: chromeMock.storage.local.remove,
+    storageSet: chromeMock.storage.local.set,
+    tabGroupsQuery: chromeMock.tabGroups.query,
     tabsGet: chromeMock.tabs.get,
+    tabsGroup: chromeMock.tabs.group,
+    tabsQuery: chromeMock.tabs.query,
+    tabsUngroup: chromeMock.tabs.ungroup,
   };
 }
 
@@ -307,6 +328,99 @@ describe("copilot panel messaging", () => {
       path: expect.stringMatching(/^sidepanel\.html\?binding=/),
     });
   });
+});
+
+describe("popup message failure responses", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("responds exactly once when a shared tab closes before it can be grouped", async () => {
+    const harness = await loadBackground();
+    harness.tabsGet.mockRejectedValueOnce(new Error("No tab with id: 44."));
+    const sendResponse = vi.fn();
+
+    expect(harness.messageListener({ type: "toggleShareTab", tabId: 44 }, {}, sendResponse)).toBe(
+      true,
+    );
+
+    await vi.waitFor(() => {
+      expect(sendResponse).toHaveBeenCalledExactlyOnceWith({
+        ok: false,
+        error: "No tab with id: 44.",
+      });
+    });
+    expect(harness.tabsGet).toHaveBeenCalledWith(44);
+  });
+
+  it.each([
+    { action: "share", initiallyShared: false },
+    { action: "unshare", initiallyShared: true },
+  ])(
+    "responds exactly once when $action consent reconciliation rejects",
+    async ({ initiallyShared }) => {
+      const error = "Could not reconcile browser tab consent.";
+      const onConsentChanged = vi.fn(async () => {
+        throw new Error(error);
+      });
+      const harness = await loadBackground({ onConsentChanged });
+      if (initiallyShared) {
+        harness.tabGroupsQuery.mockResolvedValueOnce([{ id: 7, windowId: 1 }]);
+        harness.tabsQuery.mockResolvedValueOnce([{ id: 44, windowId: 1 }]);
+      }
+      const sendResponse = vi.fn();
+
+      expect(harness.messageListener({ type: "toggleShareTab", tabId: 44 }, {}, sendResponse)).toBe(
+        true,
+      );
+
+      await vi.waitFor(() => {
+        expect(onConsentChanged).toHaveBeenCalledOnce();
+      });
+      if (initiallyShared) {
+        expect(harness.tabsUngroup).toHaveBeenCalledWith([44]);
+      } else {
+        expect(harness.tabsGroup).toHaveBeenCalledWith({ tabIds: [44] });
+      }
+      expect(sendResponse).toHaveBeenCalledExactlyOnceWith({ ok: false, error });
+      expect(sendResponse).not.toHaveBeenCalledWith({ ok: true, shared: !initiallyShared });
+    },
+  );
+
+  it.each([
+    {
+      message: {
+        type: "pair" as const,
+        pairingString: "ws://127.0.0.1:18798/extension#replacement-token-placeholder",
+      },
+      operation: "set" as const,
+      error: "Could not save browser pairing.",
+    },
+    {
+      message: { type: "unpair" as const },
+      operation: "remove" as const,
+      error: "Could not remove browser pairing.",
+    },
+  ])(
+    "responds exactly once when $message.type storage rejects",
+    async ({ message, operation, error }) => {
+      const harness = await loadBackground();
+      const storageOperation = operation === "set" ? harness.storageSet : harness.storageRemove;
+      storageOperation.mockRejectedValueOnce(new Error(error));
+      const sendResponse = vi.fn();
+
+      expect(harness.messageListener(message, {}, sendResponse)).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(sendResponse).toHaveBeenCalledExactlyOnceWith({ ok: false, error });
+      });
+    },
+  );
 });
 
 describe("page-share relay request lifecycle", () => {

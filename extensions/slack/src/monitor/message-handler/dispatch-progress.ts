@@ -324,9 +324,9 @@ export function createSlackProgressRuntime(runtimeParams: {
     seed: progressSeed,
     formatLine: formatSlackProgressDraftLine,
     reasoningLinePrefix: "🧠 ",
-    commentaryLinePrefix: "💬 ",
+    commentaryLinePrefix: "",
     reasoningGate: previewToolProgressEnabled,
-    commentaryItalics: false,
+    commentaryItalics: true,
     buildProgressEventLine: (input, options) =>
       input.event === "tool" || input.event === "item"
         ? buildChannelProgressDraftLineForEntry(account.config, input, options)
@@ -658,5 +658,29 @@ export function createSlackProgressRuntime(runtimeParams: {
 }
 
 function formatSlackProgressDraftLine(line: string): string {
-  return /^(?:🧠|💬)\s/u.test(line) ? line : escapeSlackMrkdwn(line);
+  if (/^(?:🧠|💬)\s/u.test(line)) {
+    return line;
+  }
+
+  const italicCommentary = /^_(.*)_$/su.exec(line);
+  if (!italicCommentary) {
+    return escapeSlackMrkdwn(line);
+  }
+
+  const content = italicCommentary[1]!
+    .split(/(`[^`\n]+`)/u)
+    .map((segment, index) => {
+      if (index % 2 === 0) {
+        return escapeSlackMrkdwn(segment);
+      }
+      const code = segment
+        .slice(1, -1)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+      return `\`${code}\``;
+    })
+    .join("");
+
+  return `_${content}_`;
 }

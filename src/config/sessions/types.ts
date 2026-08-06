@@ -597,6 +597,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Run that owns the current non-terminal Gateway lifecycle projection. */
+  lifecycleRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

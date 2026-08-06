@@ -32,6 +32,7 @@ import {
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
 import type {
+  DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
@@ -184,7 +185,12 @@ export function resolveFinalDoctorHealthContributions(params: {
             cfg: ctx.cfg,
             options: { nonInteractive: true, allowExec: ctx.allowExecSecretRefs === true },
           });
-          return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
+          const runWithPluginMetadataSnapshot = (ctx as DoctorHealthCheckContext)
+            .runWithPluginMetadataSnapshot;
+          return collectWorkspaceStatusHealthFindings(ctx.cfg, {
+            pluginVersionDrift,
+            ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
+          });
         },
       },
       run: runWorkspaceStatusHealth,

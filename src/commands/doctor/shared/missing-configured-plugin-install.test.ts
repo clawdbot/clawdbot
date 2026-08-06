@@ -1290,6 +1290,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({
       changes: ['Removed stale managed install record for bundled plugin "matrix".'],
       warnings: [],
+      pluginInventoryChanged: true,
       records: {},
     });
   });
@@ -1361,6 +1362,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({
       changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
       warnings: [],
+      pluginInventoryChanged: true,
       records: {},
     });
   });
@@ -1409,6 +1411,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({
       changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
       warnings: [],
+      pluginInventoryChanged: true,
       records: {},
     });
   });
@@ -3519,6 +3522,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       changes: ['Repaired missing configured plugin "discord".'],
       warnings: [],
       repairedPluginIds: ["discord"],
+      pluginInventoryChanged: true,
       records: installedRecords("discord", {
         spec: "@openclaw/discord",
         installPath: process.cwd(),
@@ -3661,6 +3665,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       ],
       warnings: [],
       repairedPluginIds: [pluginId],
+      pluginInventoryChanged: true,
       records: persistedRecords,
     });
   });

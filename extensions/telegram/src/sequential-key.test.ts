@@ -83,6 +83,7 @@ describe("getTelegramSequentialKey", () => {
       "telegram:123:topic:1",
     ],
     [{ update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) } }, "telegram:555"],
+    [{ update: { poll_answer: { poll_id: "poll-123" } } }, "telegram:poll:poll-123"],
     [
       {
         channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),

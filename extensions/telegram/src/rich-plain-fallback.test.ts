@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildTelegramPlainFallbackPlan } from "./rich-plain-fallback.js";
+import {
+  buildTelegramPlainFallbackPlan,
+  isTelegramEmptyContentError,
+} from "./rich-plain-fallback.js";
 
 function planFor(message: string) {
   return buildTelegramPlainFallbackPlan({
@@ -32,5 +35,19 @@ describe("buildTelegramPlainFallbackPlan", () => {
 
   it("rethrows unrelated errors", () => {
     expect(planFor("Bad Request: chat not found")).toBeUndefined();
+  });
+});
+
+describe("isTelegramEmptyContentError", () => {
+  it.each([
+    "Bad Request: message text is empty",
+    "Bad Request: text must be non-empty",
+    "Bad Request: RICH_MESSAGE_CONTENT_REQUIRED",
+  ])("recognizes %s", (message) => {
+    expect(isTelegramEmptyContentError(new Error(message))).toBe(true);
+  });
+
+  it("does not hide unrelated bad requests", () => {
+    expect(isTelegramEmptyContentError(new Error("Bad Request: content rejected"))).toBe(false);
   });
 });

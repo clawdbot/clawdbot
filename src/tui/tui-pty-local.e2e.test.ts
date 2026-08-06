@@ -18,7 +18,11 @@ import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { runExec } from "../process/exec.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { GatewayChatClient } from "./gateway-chat.js";
-import { synchronizedFrameRows } from "./tui-pty-harness-assertion-test-support.js";
+import { extractTextFromMessage } from "./tui-formatters.js";
+import {
+  synchronizedFrameRows,
+  waitForSynchronizedFrameRows,
+} from "./tui-pty-harness-assertion-test-support.js";
 import {
   cleanupStartedFixture,
   createChatTerminalObserver,
@@ -89,6 +93,13 @@ const GATEWAY_SCENARIOS = {
     modelId: "tui-pty-history",
     toolsProfile: "minimal",
     replyText: "T02_HISTORY_ASSISTANT",
+  },
+  resume: {
+    agentId: "tui-pty-validation",
+    modelId: "tui-pty-resume",
+    toolsProfile: "minimal",
+    replyText: "T03_RESUME_ASSISTANT",
+    followupReplyText: "T03_RESUME_FOLLOWUP",
   },
   followup: {
     agentId: SHARED_GATEWAY_AGENT_ID,
@@ -916,15 +927,22 @@ async function startGatewayModeTui(
 async function startIsolatedGatewayPty(params: {
   gateway: OpenClawTestInstance;
   registerCleanup: CleanupRegistrar;
-  sessionKey: string;
+  sessionKey?: string;
   token?: string;
+  clientStateDir?: string;
 }) {
   const { gateway, registerCleanup, sessionKey, token = gateway.gatewayToken } = params;
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-client-"));
+  const ownsClientStateDir = !params.clientStateDir;
+  const tempDir =
+    params.clientStateDir ??
+    (await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-client-")));
   let run: PtyRun;
   try {
     await writeFile(path.join(tempDir, "openclaw.json"), "{}\n", "utf8");
-    const cliArgs = ["tui", "--url", gateway.url, "--token", token, "--session", sessionKey];
+    const cliArgs = ["tui", "--url", gateway.url, "--token", token];
+    if (sessionKey) {
+      cliArgs.push("--session", sessionKey);
+    }
     run = startPty(process.execPath, buildTuiProcessArgs(cliArgs), {
       cwd: process.cwd(),
       env: {
@@ -943,29 +961,32 @@ async function startIsolatedGatewayPty(params: {
       outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     });
   } catch (error) {
-    await rm(tempDir, { recursive: true, force: true });
+    if (ownsClientStateDir) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
     throw error;
   }
   const cleanup = createIdempotentCleanup(async () => {
     try {
       await run.dispose();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      if (ownsClientStateDir) {
+        await rm(tempDir, { recursive: true, force: true });
+      }
     }
   });
   registerCleanup(cleanup);
   return { run, cleanup };
 }
 type GatewayHistory = { messages: unknown[]; sessionInfo?: Record<string, unknown> };
-function hasOrderedTurn(messages: unknown[], userMarker: string, assistantMarker: string) {
-  const matches = (message: unknown, role: "assistant" | "user", marker: string) =>
+function findOrderedTurn(messages: unknown[], userText: string, assistantText: string, after = -1) {
+  const exact = (message: unknown, role: "assistant" | "user", text: string) =>
     (message as { role?: unknown } | null)?.role === role &&
-    JSON.stringify(message).includes(marker);
-  const userIndex = messages.findIndex((message) => matches(message, "user", userMarker));
-  return (
-    userIndex >= 0 &&
-    messages.slice(userIndex + 1).some((message) => matches(message, "assistant", assistantMarker))
-  );
+    extractTextFromMessage(message).trim() === text;
+  const user = messages.findIndex((m, i) => i > after && exact(m, "user", userText));
+  return user < 0
+    ? -1
+    : messages.findIndex((m, i) => i > user && exact(m, "assistant", assistantText));
 }
 async function waitForHistoryMessages(
   client: GatewayChatClient,
@@ -1163,6 +1184,86 @@ describe("TUI PTY real backends", () => {
         const freshResponseOffset = fixture.run.visibleOutput().lastIndexOf("LOCAL_STEER_COMPLETE");
         await waitForOutputAfter(fixture.run, "| idle", freshResponseOffset);
 
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "creates and adopts a fresh local session through a real PTY",
+    async ({ onTestFinished }) => {
+      const reply = "T03_LIFECYCLE_REPLY";
+      const fixture = await startLocalModeTui(onTestFinished, { replyText: reply });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("T03_LIFECYCLE_BEFORE\r");
+        await fixture.run.waitForOutput(reply, LOCAL_OUTPUT_TIMEOUT_MS);
+        expect(fixture.mockModel.requests()).toHaveLength(1);
+        const firstReplyOffset = lastOutputIndexAfter(fixture.run, reply, 0);
+        await waitForOutputAfter(fixture.run, "| idle", firstReplyOffset);
+        const newOffset = fixture.run.visibleOutput().length;
+        await createFreshSession(fixture.run, "new session: agent:main:tui-");
+        const newOutput = fixture.run.visibleOutput().slice(newOffset);
+        const createdKey = newOutput.match(/new session: (agent:main:tui-\S+)/)?.[1];
+        expect(createdKey).toBeDefined();
+        const screen =
+          synchronizedFrameRows(fixture.run.output(), fixture.run)[0]?.join("\n") ?? "";
+        expect(screen).toContain(`session ${createdKey!.split(":").at(-1)}`);
+        const afterOffset = fixture.run.visibleOutput().length;
+        await fixture.run.write("T03_LIFECYCLE_AFTER\r");
+        await waitForOutputAfter(fixture.run, reply, afterOffset);
+        const secondReplyOffset = lastOutputIndexAfter(fixture.run, reply, afterOffset);
+        await waitForOutputAfter(fixture.run, "| idle", secondReplyOffset);
+        expect(fixture.mockModel.requests()).toHaveLength(2);
+        const freshRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
+        expect(freshRequest).toContain("T03_LIFECYCLE_AFTER");
+        expect(freshRequest).not.toContain("T03_LIFECYCLE_BEFORE");
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "lists local session history through a real PTY",
+    async ({ onTestFinished }) => {
+      const [first, second] = ["T03_HISTORY_FIRST_REPLY", "T03_HISTORY_SECOND_REPLY"];
+      const pickerClosed = (rows: string[]) =>
+        !rows.some((row) => row.includes("Filter:")) &&
+        rows.some((row) => row.includes("local ready") && row.includes("| idle"));
+      const fixture = await startLocalModeTui(onTestFinished, {
+        replyText: first,
+        followupReplyText: second,
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("T03_HISTORY_FIRST_PROMPT\r");
+        await fixture.run.waitForOutput(first, LOCAL_OUTPUT_TIMEOUT_MS);
+        const firstReplyOffset = fixture.run.visibleOutput().lastIndexOf(first);
+        await waitForOutputAfter(fixture.run, "| idle", firstReplyOffset);
+        await createFreshSession(fixture.run, "new session: agent:main:tui-");
+        await fixture.run.write("T03_HISTORY_SECOND_PROMPT\r");
+        await fixture.run.waitForOutput(second, LOCAL_OUTPUT_TIMEOUT_MS);
+        const secondReplyOffset = fixture.run.visibleOutput().lastIndexOf(second);
+        await waitForOutputAfter(fixture.run, "| idle", secondReplyOffset);
+        await fixture.run.write("/sessions\r", { delay: false });
+        const pickerRows = await waitForSynchronizedFrameRows(
+          fixture.run,
+          (rows) => [first, second].every((reply) => rows.some((row) => row.includes(reply))),
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
+        const picker = pickerRows.join("\n");
+        expect(picker.indexOf(second)).toBeLessThan(picker.indexOf(first));
+        expect(fixture.mockModel.requests()).toHaveLength(2);
+        await fixture.run.write("\u001b", { delay: false });
+        await waitForSynchronizedFrameRows(fixture.run, pickerClosed, LOCAL_EXIT_TIMEOUT_MS);
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
@@ -1654,8 +1755,10 @@ export default {
           sessionKey,
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
         });
-        await waitForHistoryMessages(historyClient, sessionKey, ({ messages }) =>
-          hasOrderedTurn(messages, userMarker, assistantMarker),
+        await waitForHistoryMessages(
+          historyClient,
+          sessionKey,
+          ({ messages }) => findOrderedTurn(messages, userMarker, assistantMarker) >= 0,
         );
         attached = await startIsolatedGatewayPty({
           gateway: shared.gateway,
@@ -1682,6 +1785,126 @@ export default {
         } finally {
           await cleanup();
         }
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+  registerGatewayTest(
+    "restores the remembered Gateway session and history after a real TUI relaunch",
+    async ({ onTestFinished }) => {
+      const shared = await requireSharedGatewayFixture();
+      const scenario = GATEWAY_SCENARIOS.resume;
+      const { agentId } = scenario;
+      const sessionKey = `agent:${agentId}:tui-pty-resume-${++gatewaySessionSequence}`;
+      const sessionLabel = sessionKey.split(":").at(-1)!;
+      const initial: [string, string] = ["T03_RESUME_FIRST_PROMPT", scenario.replyText];
+      const next: [string, string] = ["T03_RESUME_FOLLOWUP_PROMPT", scenario.followupReplyText!];
+      const restoredMarkers = [`session ${sessionLabel}`, initial[0], scenario.replyText];
+      const requestOffset = shared.mockModel.requests(scenario.modelId).length;
+      const clientStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-resume-client-"));
+      onTestFinished(() => rm(clientStateDir, { recursive: true, force: true }));
+      const controlClient = new GatewayChatClient({
+        url: shared.gateway.url,
+        token: shared.gateway.gatewayToken,
+        allowInsecureLocalOperatorUi: false,
+      });
+      let controlClientConnected = false;
+      controlClient.onConnected = () => {
+        controlClientConnected = true;
+      };
+      controlClient.onDisconnected = () => {
+        controlClientConnected = false;
+      };
+      const cleanup = registerIdempotentCleanup(onTestFinished, async () => {
+        try {
+          if (controlClientConnected) {
+            await controlClient.abortChat({ sessionKey });
+          }
+        } finally {
+          await controlClient.stop();
+        }
+      });
+      controlClient.start();
+      await waitFor({
+        timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+        read: () => (controlClientConnected ? true : null),
+        onTimeout: () => new Error("resume Gateway control client did not connect"),
+      });
+      await controlClient.createSession({ key: sessionKey, agentId });
+      const model = `tui-pty-mock/${scenario.modelId}`;
+      let terminalUpdatedAt = (
+        await controlClient.patchSession({ key: sessionKey, agentId, model })
+      ).entry.updatedAt as number;
+      expect(terminalUpdatedAt).toEqual(expect.any(Number));
+      const listParams = { agentId, search: sessionKey, limit: 5, activeMinutes: 60 };
+      const historyParams = { sessionKey, limit: 100 };
+      const waitForCheckpoint = async (after: number, turns: Array<[string, string]>) => {
+        const deadline = Date.now() + LOCAL_OUTPUT_TIMEOUT_MS;
+        for (; Date.now() < deadline; await sleep(250)) {
+          const row = (await controlClient.listSessions(listParams)).sessions.find(
+            ({ key }) => key === sessionKey,
+          ) as { status?: unknown; hasActiveRun?: unknown; updatedAt?: unknown } | undefined;
+          const updatedAt = row?.updatedAt;
+          if (
+            row?.status !== "done" ||
+            row.hasActiveRun !== false ||
+            typeof updatedAt !== "number" ||
+            updatedAt <= after
+          ) {
+            continue;
+          }
+          const history = (await controlClient.loadHistory(historyParams)) as GatewayHistory;
+          const { messages, sessionInfo } = history;
+          expect(sessionInfo).toMatchObject({ status: "done", hasActiveRun: false });
+          expect(typeof sessionInfo?.updatedAt).toBe("number");
+          expect(sessionInfo?.updatedAt as number).toBeGreaterThanOrEqual(updatedAt);
+          let cursor = -1;
+          for (const [u, a] of turns) {
+            expect((cursor = findOrderedTurn(messages, u, a, cursor))).toBeGreaterThanOrEqual(0);
+          }
+          return updatedAt;
+        }
+        throw new Error(`session ${sessionKey} did not reach a newer terminal state`);
+      };
+      const registerCleanup = onTestFinished;
+      const ptyParams = { gateway: shared.gateway, registerCleanup, clientStateDir };
+      const first = await startIsolatedGatewayPty({ ...ptyParams, sessionKey });
+      try {
+        await first.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await first.run.waitForOutput(`session ${sessionLabel}`, LOCAL_STARTUP_TIMEOUT_MS);
+        await first.run.write(`${initial[0]}\r`);
+        await first.run.waitForOutput(scenario.replyText, LOCAL_OUTPUT_TIMEOUT_MS);
+        terminalUpdatedAt = await waitForCheckpoint(terminalUpdatedAt, [initial]);
+        await first.run.write("/exit\r", { delay: false });
+        expect((await first.run.waitForExit()).exitCode).toBe(0);
+      } catch (error) {
+        await cleanup();
+        throw error;
+      } finally {
+        await first.cleanup();
+      }
+      const resumed = await startIsolatedGatewayPty(ptyParams);
+      try {
+        await resumed.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await waitForSynchronizedFrameRows(
+          resumed.run,
+          (rows) => restoredMarkers.every((marker) => rows.some((row) => row.includes(marker))),
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
+        await resumed.run.write(`${next[0]}\r`);
+        await resumed.run.waitForOutput(scenario.followupReplyText, LOCAL_OUTPUT_TIMEOUT_MS);
+        await waitForCheckpoint(terminalUpdatedAt, [initial, next]);
+        const requests = shared.mockModel.requests(scenario.modelId).slice(requestOffset);
+        expect(requests).toHaveLength(2);
+        const secondRequestBody = JSON.stringify(requests[1]?.body);
+        expect(secondRequestBody).toContain(initial[0]);
+        expect(secondRequestBody).toContain(scenario.replyText);
+        expect(secondRequestBody).toContain(next[0]);
+        await resumed.run.write("/exit\r", { delay: false });
+        expect((await resumed.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await cleanup();
+        await resumed.cleanup();
       }
     },
     LOCAL_TEST_TIMEOUT_MS,
@@ -1731,7 +1954,7 @@ export default {
               sessionInfo?.sessionId === created.sessionInfo?.sessionId &&
               typeof sessionInfo?.updatedAt === "number" &&
               [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === commandModel &&
-              hasOrderedTurn(messages, resetMarker, seedReply),
+              findOrderedTurn(messages, resetMarker, seedReply) >= 0,
             ),
         );
         const seededInfo = seeded.sessionInfo!;
@@ -1762,7 +1985,7 @@ export default {
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.activeLeafEntryId !== selectedInfo.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            hasOrderedTurn(messages, resetMarker, seedReply),
+            findOrderedTurn(messages, resetMarker, seedReply) >= 0,
         );
         const postMarker = "T02_POST_RESET";
         const postOffset = fixture.run.visibleOutput().length;
@@ -1777,9 +2000,9 @@ export default {
             (sessionInfo?.updatedAt as number) >= (reset.sessionInfo?.updatedAt as number) &&
             sessionInfo?.activeLeafEntryId !== reset.sessionInfo?.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            hasOrderedTurn(messages, resetMarker, seedReply) &&
+            findOrderedTurn(messages, resetMarker, seedReply) >= 0 &&
             serialized.indexOf(postMarker) > serialized.indexOf(seedReply) &&
-            hasOrderedTurn(messages, postMarker, GATEWAY_SCENARIOS.reconnect.replyText)
+            findOrderedTurn(messages, postMarker, GATEWAY_SCENARIOS.reconnect.replyText) >= 0
           );
         });
       } finally {

@@ -478,6 +478,7 @@ export const SkillsSecurityVerdictsResultSchema = closedObject({
       decision: NonEmptyString,
       reasons: Type.Array(Type.String()),
       requestedSlug: NonEmptyString,
+      requestedOwnerHandle: Type.Optional(NonEmptyString),
       requestedVersion: NonEmptyString,
       slug: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
       version: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

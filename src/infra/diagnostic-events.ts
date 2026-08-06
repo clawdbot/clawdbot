@@ -5,10 +5,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
 import {
-  formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
+import {
+  formatPropagatedDiagnosticTraceparent,
+  prepareDiagnosticTracePropagation,
+  resetDiagnosticTracePropagationForTest,
+  shouldPrepareDiagnosticTracePropagation,
+} from "./diagnostic-trace-propagation.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
@@ -953,9 +958,15 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "log.record",
 ]);
 const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  // Trusted lifecycle terminals must displace best-effort diagnostics; dropping one
+  // can strand the recorder's active span after its producer already finished.
   "tool.execution.completed",
   "tool.execution.error",
   "tool.execution.blocked",
+  "model.call.completed",
+  "model.call.error",
+  "harness.run.completed",
+  "harness.run.error",
 ]);
 
 function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
@@ -1216,10 +1227,15 @@ function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState):
   dispatchDiagnosticEvent(state, event, createInternalDiagnosticMetadata(false));
 }
 
-/** Waits until queued async diagnostic events have been delivered to listeners. */
+/** Waits until async diagnostic events queued when called are no longer pending. */
 export async function waitForDiagnosticEventsDrained(): Promise<void> {
   const state = getDiagnosticEventsState();
-  while (state.asyncDrainScheduled || state.asyncQueue.length > 0) {
+  const targetSeq = state.asyncQueue.at(-1)?.event.seq;
+  if (targetSeq === undefined) {
+    return;
+  }
+  // The queue is append-ordered by seq, so a newer head means this snapshot drained or dropped.
+  while ((state.asyncQueue[0]?.event.seq ?? Number.POSITIVE_INFINITY) <= targetSeq) {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -1278,6 +1294,7 @@ function emitDiagnosticEventWithTrust(
     ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
   };
+  const prepareTracePropagation = trusted && shouldPrepareDiagnosticTracePropagation(enriched);
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
@@ -1291,10 +1308,22 @@ function emitDiagnosticEventWithTrust(
       }
     }
     state.asyncQueue.push({ event: enriched, metadata, privateData });
+    if (prepareTracePropagation) {
+      prepareDiagnosticTracePropagation(
+        cloneDiagnosticEventForListener(enriched),
+        createDiagnosticMetadataForListener(metadata),
+      );
+    }
     scheduleAsyncDiagnosticDrain(state);
     return;
   }
 
+  if (prepareTracePropagation) {
+    prepareDiagnosticTracePropagation(
+      cloneDiagnosticEventForListener(enriched),
+      createDiagnosticMetadataForListener(metadata),
+    );
+  }
   dispatchDiagnosticEvent(state, enriched, metadata, privateData);
 }
 
@@ -1486,7 +1515,7 @@ export function formatDiagnosticTraceparentForPropagation(
   if (!metadata.trusted || !dispatchedTrustedDiagnosticMetadata.has(metadata)) {
     return undefined;
   }
-  return formatDiagnosticTraceparent(event.trace);
+  return formatPropagatedDiagnosticTraceparent(event.trace);
 }
 
 /** Returns whether listener metadata marks dispatcher-internal provenance. */
@@ -1511,5 +1540,6 @@ export function resetDiagnosticEventsForTest(): void {
   state.asyncDroppedTrustedEvents = 0;
   state.asyncDroppedUntrustedEvents = 0;
   state.asyncDroppedPriorityEvents = 0;
+  resetDiagnosticTracePropagationForTest();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

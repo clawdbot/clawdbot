@@ -33,6 +33,7 @@ import {
   abortRelayAgentRuns,
   cancelTalkRealtimeRelayProviderToolCall,
   closeRelaySession,
+  closeTalkRealtimeRelaySessionsForConnection,
   enforceRelaySessionLimits,
   pruneInactiveRelayAgentRuns,
   registerTalkRealtimeRelayAgentRun,
@@ -61,7 +62,10 @@ import {
   closeRelayVoiceSession,
   enqueueRelayVoiceTranscript,
 } from "./talk-realtime-relay-voice.js";
-import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
+import {
+  forgetUnifiedTalkSession,
+  registerTalkConnectionCleanup,
+} from "./talk-session-registry.js";
 
 function isRelayAssistantEchoTranscript(session: RelaySession | undefined, text: string): boolean {
   return session?.harness.isLikelyAssistantEchoTranscript(text) ?? false;
@@ -602,6 +606,9 @@ export function createTalkRealtimeRelaySession(
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
+  registerTalkConnectionCleanup(params.connId, "realtime-relay", () => {
+    closeTalkRealtimeRelaySessionsForConnection(params.connId);
+  });
   bridge.connect().catch((error: unknown) => {
     const active = relaySessions.get(relaySessionId);
     if (active !== relay) {

@@ -25,9 +25,9 @@ import {
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
-  formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -646,7 +646,7 @@ function withDiagnosticRequestContext(
   state: ModelCallObservationState,
   callId: string,
 ): ModelCallStreamOptions {
-  const traceparent = formatDiagnosticTraceparent(trace);
+  const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
   const originalOnResponse = options?.onResponse;
   const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
@@ -671,15 +671,6 @@ function withDiagnosticRequestContext(
     return originalOnResponse?.(response, model);
   };
 
-  if (!traceparent) {
-    return {
-      ...options,
-      requestId: callId,
-      onPayload,
-      onResponse,
-    };
-  }
-
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(options?.headers ?? {})) {
     if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
@@ -687,11 +678,13 @@ function withDiagnosticRequestContext(
     }
     headers[key] = value;
   }
-  headers[TRACEPARENT_HEADER_NAME] = traceparent;
+  if (traceparent) {
+    headers[TRACEPARENT_HEADER_NAME] = traceparent;
+  }
   return {
     ...options,
     requestId: callId,
-    headers,
+    ...((options?.headers || traceparent) && { headers }),
     onPayload,
     onResponse,
   };

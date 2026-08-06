@@ -1,6 +1,13 @@
 import "./runs.js";
 
 type EmbeddedRunsTestApi = {
+  persistForceClearedEmbeddedRunTerminalState(params: {
+    sessionId: string;
+    sessionKey: string;
+    startedAt?: number;
+    storePath: string;
+    updatedAt: number;
+  }): Promise<void>;
   resetActiveEmbeddedRuns(): void;
 };
 

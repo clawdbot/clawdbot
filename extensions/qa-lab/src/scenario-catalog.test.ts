@@ -792,6 +792,24 @@ describe("qa scenario catalog", () => {
     expect(heartbeatFlow).not.toContain("waitForNoOutbound");
   });
 
+  it.each([
+    "inbound-media-store-audio-transcription",
+    "active-memory-cold-first-turn-trigger-recall",
+    "compaction-empty-response-recovery",
+    "compaction-reasoning-only-recovery",
+    "compaction-retry-mutating-tool",
+    "empty-response-recovery-replay-safe-read",
+    "empty-response-retry-budget-exhausted",
+    "reasoning-only-no-auto-retry-after-write",
+    "reasoning-only-recovery-replay-safe-read",
+  ])("keeps strict mock-only scenario %s on the mock-openai lane", (scenarioId) => {
+    const config = readQaScenarioExecutionConfig(scenarioId) as
+      | { requiredProviderMode?: string }
+      | undefined;
+
+    expect(config?.requiredProviderMode).toBe("mock-openai");
+  });
+
   it("includes the thinking slash model remap scenario", () => {
     const scenario = readQaScenarioById("thinking-slash-model-remap");
     const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as

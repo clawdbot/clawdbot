@@ -146,6 +146,12 @@ function createHarness(params?: {
       listeners.set(eventName, listener);
       return client;
     }),
+    off: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+      if (listeners.get(eventName) === listener) {
+        listeners.delete(eventName);
+      }
+      return client;
+    }),
     sendMessage,
     getUserId: vi.fn(async () => {
       if (params?.selfUserIdError) {
@@ -186,7 +192,7 @@ function createHarness(params?: {
   const dmPolicy = params?.dmPolicy ?? "open";
   const allowFrom = params?.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
 
-  registerMatrixMonitorEvents({
+  const dispose = registerMatrixMonitorEvents({
     cfg: params?.cfg ?? { channels: { matrix: {} } },
     client,
     auth: {
@@ -222,6 +228,7 @@ function createHarness(params?: {
   }
 
   return {
+    dispose,
     onRoomMessage,
     sendMessage,
     invalidateRoom,
@@ -247,10 +254,29 @@ function createHarness(params?: {
       | undefined,
     roomInviteListener: listeners.get("room.invite") as RoomEventListener | undefined,
     roomJoinListener: listeners.get("room.join") as RoomEventListener | undefined,
+    listenerCount: () => listeners.size,
+    off: (client as unknown as { off: ReturnType<typeof vi.fn> }).off,
+    on: (client as unknown as { on: ReturnType<typeof vi.fn> }).on,
   };
 }
 
 describe("registerMatrixMonitorEvents verification routing", () => {
+  it("removes every exact monitor listener on disposal", () => {
+    const { dispose, listenerCount, off, on } = createHarness();
+    const registeredListeners = on.mock.calls.map(
+      ([eventName, listener]) => [eventName, listener] as const,
+    );
+
+    expect(listenerCount()).toBe(8);
+    dispose();
+
+    expect(listenerCount()).toBe(0);
+    expect(off).toHaveBeenCalledTimes(8);
+    for (const [eventName, listener] of registeredListeners) {
+      expect(off).toHaveBeenCalledWith(eventName, listener);
+    }
+  });
+
   it("does not repost historical verification completions during startup catch-up", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-14T13:10:00.000Z"));

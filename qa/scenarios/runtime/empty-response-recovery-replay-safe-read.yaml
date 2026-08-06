@@ -26,6 +26,7 @@ scenario:
     kind: flow
     summary: Verify empty OpenAI turns recover after a replay-safe read.
     config:
+      requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       promptSnippet: Empty response continuation QA check
       prompt: "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK."
