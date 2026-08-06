@@ -977,7 +977,7 @@ describe("buildEmbeddedRunPayloads", () => {
       toolResultFormat: "markdown",
       expected: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)` (exit 1)",
     },
-  ])("$title", ({ meta, toolResultFormat, expected }) => {
+  ] as const)("$title", ({ meta, toolResultFormat, expected }) => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",

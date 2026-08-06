@@ -341,7 +341,7 @@ describe("runDoctorLintCli", () => {
       description: "reserved core-kind lint check",
       expectedError: "health check already registered: core/doctor/not-yet-owned",
     },
-  ])("$title", async ({ checkId, kind, description, expectedError }) => {
+  ] as const)("$title", async ({ checkId, kind, description, expectedError }) => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,

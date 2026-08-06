@@ -173,7 +173,7 @@ describe("renderGatewayServiceCleanupHints", () => {
       stopCommand: "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
       removeCommand: "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
     },
-  ])("$title", ({ platform, serviceName, source, scope, stopCommand, removeCommand }) => {
+  ] as const)("$title", ({ platform, serviceName, source, scope, stopCommand, removeCommand }) => {
     expect(
       renderGatewayServiceCleanupHints([
         {
