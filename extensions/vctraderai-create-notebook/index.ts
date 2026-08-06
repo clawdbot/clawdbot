@@ -157,7 +157,7 @@ export default defineToolPlugin({
                       id: "load",
                       cell_type: "code",
                       source:
-                        "import vctrader as vc\nimport pandas as pd\nraw = vc.get_multi_timeframe_candles(instrument='XAU_USD', timeframes=['M15'])\n",
+                        "import vctrader as vc\nimport pandas as pd\n# Signatures come from the seam catalogue: symbol= (not instrument=),\n# timeframes= is a CSV STRING (not a list).\nraw = vc.get_multi_timeframe_candles(symbol='XAUUSD', timeframes='H1')\ndf = pd.DataFrame(raw.get('H1', []))\n",
                       metadata: {},
                     },
                   ],
