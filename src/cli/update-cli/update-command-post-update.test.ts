@@ -1077,9 +1077,9 @@ describe("failed Git update recovery restart", () => {
   it("does not claim a verified package replacement on Git failures", async () => {
     await finishFailedUpdate(failedResult({ serviceRestartSafe: true }));
 
-    expect(mocks.restart.mock.calls[0]?.[0]).toMatchObject({
-      packageReplacementVerified: false,
-    });
+    expect(mocks.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ packageReplacementVerified: false }),
+    );
   });
 });
 

@@ -42,8 +42,11 @@ const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
  * tree. Used by failed-update recovery to decide whether the future-config
  * start exception is allowed — Git rollbacks and pre-swap failures must not
  * infer that fact from config metadata alone.
+ *
+ * Module-private: producers call it when building UpdateRunResult; exporting
+ * it trips the unused-exports deadcode gate.
  */
-export function didCompletePackageReplacement(
+function didCompletePackageReplacement(
   steps: ReadonlyArray<{ name: string; exitCode: number | null }>,
 ): boolean {
   if (steps.some((step) => step.name === "global install swap" && step.exitCode === 0)) {
