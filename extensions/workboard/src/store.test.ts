@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { toBoundedWorkboardCard, WORKBOARD_MODEL_OUTPUT_BYTES } from "./card-output.js";
+import { toBoundedWorkboardCard } from "./card-output.js";
 import {
   WorkboardStaleSnapshotError,
   type PersistedWorkboardAttachment,
@@ -18,6 +18,8 @@ import {
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { normalizeExecution } from "./store-normalizers.js";
 import { WorkboardStore } from "./store.js";
+
+const WORKBOARD_MODEL_OUTPUT_BYTES = 24 * 1024;
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
   beforeRegister?: (key: string, value: T) => Promise<void> | void;

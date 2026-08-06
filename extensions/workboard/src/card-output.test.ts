@@ -4,10 +4,10 @@ import {
   paginateWorkboardProof,
   readWorkboardProofPageRequest,
   toBoundedWorkboardCard,
-  WORKBOARD_MODEL_OUTPUT_BYTES,
 } from "./card-output.js";
 
 const CARD_ID = "card-1";
+const WORKBOARD_MODEL_OUTPUT_BYTES = 24 * 1024;
 
 function createProof(count: number, note?: string): WorkboardProof[] {
   return Array.from({ length: count }, (_, index) => ({

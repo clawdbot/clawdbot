@@ -9,7 +9,7 @@ import { redactClaimToken } from "./card-redaction.js";
 import { removeUndefinedMetadataFields } from "./store-normalizers.js";
 
 export const WORKBOARD_PROOF_VIEW_LIMIT = 40;
-export const WORKBOARD_MODEL_OUTPUT_BYTES = 24 * 1024;
+const WORKBOARD_MODEL_OUTPUT_BYTES = 24 * 1024;
 
 const WORKBOARD_PROOF_CURSOR_PREFIX = "proof-v2.";
 
