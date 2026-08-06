@@ -130,6 +130,7 @@ describe("qa suite", () => {
         { name: "fail", status: "fail", steps: [] },
         { name: "skip", status: "skip", steps: [] },
       ],
+      startedScenarioIds: ["pass", "fail", "skip"],
       watchUrl: "http://127.0.0.1:43123",
     } satisfies QaSuiteResult;
 
@@ -207,7 +208,7 @@ describe("qa suite", () => {
         state: {} as QaLabServerHandle["state"],
         transportId: "qa-channel",
       }),
-    ).resolves.toMatchObject({ adapter: { id: "qa-channel" } });
+    ).resolves.toMatchObject({ adapter: { id: "qa-channel" }, driver: "qa-channel" });
 
     expect(create).not.toHaveBeenCalled();
   });
@@ -267,7 +268,7 @@ describe("qa suite", () => {
         state: {} as QaLabServerHandle["state"],
         transportId: "qa-channel",
       }),
-    ).resolves.toMatchObject({ adapter });
+    ).resolves.toMatchObject({ adapter, driver: "live" });
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(create).toHaveBeenCalledWith(
@@ -690,6 +691,8 @@ describe("qa suite", () => {
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         fastMode: true,
         concurrency: 1,
+        channel: "telegram",
+        channelDriver: "crabline",
         channelDriverSelection: {
           capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
           channel: "telegram",

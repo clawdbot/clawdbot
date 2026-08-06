@@ -25,6 +25,7 @@ import {
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -958,7 +959,8 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
   try {
     await updateSessionEntry(
       { sessionKey: params.sessionKey, storePath: params.storePath },
-      (entry) => {
+      (storedEntry) => {
+        const entry = storedEntry as InternalSessionEntry;
         // A replacement can reuse the session id; bind this patch to both owners' exact snapshot.
         if (
           ACTIVE_EMBEDDED_RUNS.has(params.sessionId) ||
@@ -976,6 +978,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         return {
           status: "killed",
           abortedLastRun: true,
+          lifecycleRunId: undefined,
           endedAt,
           updatedAt: endedAt,
         };
@@ -1130,6 +1133,7 @@ function forceClearEmbeddedAgentRun(
 }
 
 const testing = {
+  persistForceClearedEmbeddedRunTerminalState,
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
       for (const waiter of waiters) {

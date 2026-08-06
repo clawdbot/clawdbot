@@ -45,6 +45,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -1993,6 +1994,77 @@ describe("subagent registry seam flow", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(mocks.dispatchRecoveryAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reserved recovery receipt reusable when its lifecycle retires", () => {
+    const runId = "run-recovery-lifecycle-fence";
+    const entry = createSubagentRunRecord({
+      runId,
+      task: "resume only in the owning Gateway lifecycle",
+      execution: { status: "interrupted", startedAt: Date.now() - 25_000 },
+    });
+    const runs = new Map([[runId, entry]]);
+    const persistOrThrow = vi.fn();
+    const manager = createSubagentRunManager({
+      runs,
+      getRunsForChildSession: () => runs.values(),
+      resumedRuns: new Set(),
+      persist: vi.fn(),
+      persistOrThrow,
+      callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      ensureListener: noop,
+      startSweeper: noop,
+      stopSweeper: noop,
+      resumeSubagentRun: noop,
+      clearPendingLifecycleError: noop,
+      clearPendingLifecycleTimeout: noop,
+      resolveSubagentWaitTimeoutMs: () => 1_000,
+      scheduleSweep: noop,
+      resolveSubagentSessionCompletion: () => null,
+      resolveSubagentSessionStartedAt: () => undefined,
+      notifyContextEngineSubagentEnded: async () => {},
+      completeCleanupBookkeeping: noop,
+      completeSubagentRun: async () => {},
+      resolveSubagentTask: () => ({ lookup: "unavailable" }),
+    });
+    const idempotencyKey = "subagent-recovery:lifecycle-fence";
+    expect(
+      manager.reserveSubagentRestartRecoveryLaunch({
+        runId,
+        expected: entry,
+        sessionId: "session-id",
+        sessionMarker: "session-id:333",
+        idempotencyKey,
+      }),
+    ).toBe(idempotencyKey);
+    const reserved = entry.execution.restartRecovery;
+    expect(reserved).toMatchObject({ phase: "reserved" });
+    expect(reserved).not.toHaveProperty("lifecycleGeneration");
+
+    mocks.lifecycleGeneration = "retired-generation";
+    expect(
+      manager.markSubagentRestartRecoveryLaunchAttempted({
+        runId,
+        expected: entry,
+        sessionMarker: "session-id:333",
+        idempotencyKey,
+        lifecycleGeneration: "test-generation",
+      }),
+    ).toBeUndefined();
+    expect(entry.execution.restartRecovery).toBe(reserved);
+    expect(persistOrThrow).toHaveBeenCalledOnce();
+
+    expect(
+      manager.markSubagentRestartRecoveryLaunchAttempted({
+        runId,
+        expected: entry,
+        sessionMarker: "session-id:333",
+        idempotencyKey,
+        lifecycleGeneration: "retired-generation",
+      }),
+    ).toMatchObject({ phase: "attempted", idempotencyKey });
+    expect(persistOrThrow).toHaveBeenCalledTimes(2);
   });
 
   it("keeps parent run active when agent.wait times out before child session settles", async () => {

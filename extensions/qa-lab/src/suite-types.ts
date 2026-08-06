@@ -75,6 +75,7 @@ export type QaSuiteResult = {
   summaryPath: string;
   report: string;
   scenarios: QaSuiteScenarioResult[];
+  startedScenarioIds: string[];
   watchUrl: string;
   runtimeParityCell?: RuntimeParityCell;
 };

@@ -24,6 +24,7 @@ import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const logErrorMock = vi.fn();
 const normalizeLiveAssistantBufferedTextMock = vi.hoisted(() => vi.fn());
+const loadGatewaySessionRow = vi.hoisted(() => vi.fn());
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
@@ -58,7 +59,7 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
 }));
 
 vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
-  loadGatewaySessionRow: vi.fn(),
+  loadGatewaySessionLifecycleSnapshot: vi.fn(),
 }));
 
 vi.mock("./session-utils.js", () => {
@@ -96,7 +97,7 @@ import {
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
-import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -127,6 +128,13 @@ describe("agent event handler", () => {
         legacyKey: undefined,
       });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
+    vi.mocked(loadGatewaySessionLifecycleSnapshot)
+      .mockReset()
+      .mockImplementation((sessionKey, options) => ({
+        row: options
+          ? loadGatewaySessionRow(sessionKey, options)
+          : loadGatewaySessionRow(sessionKey),
+      }));
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     logErrorMock.mockReset();
     normalizeLiveAssistantBufferedTextMock.mockReset();
@@ -174,7 +182,7 @@ describe("agent event handler", () => {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
+      loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshot,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
@@ -2211,6 +2219,52 @@ describe("agent event handler", () => {
       });
     }
   });
+
+  it.each([
+    { eventRunId: "run-current", expectedStartedAt: 1_900 },
+    { eventRunId: "run-older", expectedStartedAt: 2_000 },
+  ])(
+    "projects older lifecycle timestamps only for the owning run ($eventRunId)",
+    async ({ eventRunId, expectedStartedAt }) => {
+      vi.mocked(loadGatewaySessionLifecycleSnapshot).mockReturnValue({
+        lifecycleRunId: "run-current",
+        row: {
+          key: "session-owned",
+          kind: "direct",
+          sessionId: "session-id",
+          updatedAt: 2_000,
+          status: "running",
+          startedAt: 2_000,
+        },
+      });
+      const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+        lifecycleErrorRetryGraceMs: 0,
+      });
+      sessionEventSubscribers.subscribe("conn-session");
+
+      emitAgentEvent(
+        handler,
+        eventRunId,
+        "lifecycle",
+        { phase: "start", startedAt: 1_900 },
+        { sessionKey: "session-owned", sessionId: "session-id", ts: 2_200 },
+      );
+
+      await waitForFast(() => {
+        expect(
+          broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
+        ).toHaveLength(1);
+      });
+      const payload = broadcastToConnIds.mock.calls.find(
+        ([event]) => event === "sessions.changed",
+      )?.[1];
+      expectPayloadFields(payload, {
+        sessionKey: "session-owned",
+        status: "running",
+        startedAt: expectedStartedAt,
+      });
+    },
+  );
 
   it("suppresses late interrupted pre-restart lifecycle events from live projections", () => {
     mockSessionEntry(

@@ -183,6 +183,7 @@ describe("runtime parity suite transport cleanup", () => {
       summaryPath: "/qa-child/qa-suite-summary.json",
       report: "",
       scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
+      startedScenarioIds: ["runtime-cleanup"],
       watchUrl: lab.baseUrl,
       runtimeParityCell: {
         runtime: params?.forcedRuntime ?? "openclaw",
@@ -224,6 +225,36 @@ describe("runtime parity suite transport cleanup", () => {
     } finally {
       stderrWrite.mockRestore();
     }
+  });
+
+  it("reports a parity scenario only after a nested producer starts it", async () => {
+    const lab = createCleanupTestLab();
+    const cleanup = vi.fn(async () => {});
+    const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
+    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
+      outputDir: "/qa-child",
+      evidencePath: "/qa-child/qa-evidence.json",
+      reportPath: "/qa-child/qa-suite-report.md",
+      summaryPath: "/qa-child/qa-suite-summary.json",
+      report: "",
+      scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
+      startedScenarioIds: [],
+      watchUrl: lab.baseUrl,
+      runtimeParityCell: {
+        runtime: params?.forcedRuntime ?? "openclaw",
+        transcriptBytes: "",
+        toolCalls: [],
+        finalText: "ok",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        wallClockMs: 1,
+        bootStateLines: [],
+      },
+    }));
+
+    const result = await runCleanupTestSuite({ factory, lab, runChild });
+
+    expect(result.startedScenarioIds).toEqual([]);
+    expect(runChild).toHaveBeenCalledTimes(2);
   });
 
   it("prints one generic completion after real nested standard cells and parent cleanup", async () => {

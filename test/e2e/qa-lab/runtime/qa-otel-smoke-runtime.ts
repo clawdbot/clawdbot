@@ -20,6 +20,7 @@ import {
   type OpenClawPluginServiceContext,
 } from "../../../../extensions/diagnostics-otel/runtime-api.js";
 import { onTrustedInternalDiagnosticEvent } from "../../../../src/infra/diagnostic-events.js";
+import { registerDiagnosticTracePropagationBridge } from "../../../../src/infra/diagnostic-trace-propagation.js";
 import {
   appendCapturedBodyText,
   type CapturedLogRecord,
@@ -569,6 +570,7 @@ function createDirectProducerContext(params: {
     internalDiagnostics: {
       emit: emitTrustedDiagnosticEventWithPrivateData,
       onEvent: onTrustedInternalDiagnosticEvent,
+      registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
     },
     logger: {
       debug: (...args) => params.writeLog(`${args.map(String).join(" ")}\n`),

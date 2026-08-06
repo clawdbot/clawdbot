@@ -380,7 +380,15 @@ describe("runMessageAction plugin dispatch", () => {
       },
       actions: {
         describeMessageTool: () => ({
-          actions: ["pin", "list-pins", "member-info", "channel-info", "edit"],
+          actions: [
+            "pin",
+            "list-pins",
+            "member-info",
+            "channel-info",
+            "edit",
+            "thread-create",
+            "thread-reply",
+          ],
         }),
         messageActionTargetAliases: {
           edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
@@ -390,7 +398,9 @@ describe("runMessageAction plugin dispatch", () => {
           action === "list-pins" ||
           action === "member-info" ||
           action === "channel-info" ||
-          action === "edit",
+          action === "edit" ||
+          action === "thread-create" ||
+          action === "thread-reply",
         handleAction,
       },
     };
@@ -466,6 +476,78 @@ describe("runMessageAction plugin dispatch", () => {
         "list pins call params",
       );
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    });
+
+    it("preserves canonical thread and edit fields through plugin dispatch", async () => {
+      const cfg = {
+        channels: {
+          actionhub: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      await runMessageAction({
+        cfg,
+        action: "thread-create",
+        params: {
+          channel: "actionhub",
+          target: "actionhub:room",
+          threadName: "Canonical thread",
+        },
+        dryRun: false,
+      });
+      await runMessageAction({
+        cfg,
+        action: "thread-reply",
+        params: {
+          channel: "actionhub",
+          target: "actionhub:room/thread-1",
+          message: "Canonical reply",
+        },
+        dryRun: false,
+      });
+      await runMessageAction({
+        cfg,
+        action: "edit",
+        params: {
+          channel: "actionhub",
+          target: "actionhub:room/thread-1",
+          messageId: "om_123",
+          message: "Canonical edit",
+        },
+        conversationReadOrigin: "direct-operator",
+        dryRun: false,
+      });
+
+      expectRecordFields(
+        readRecordField(readPluginCall(handleAction, 0), "params", "thread-create params"),
+        {
+          target: "actionhub:room",
+          to: "actionhub:room",
+          threadName: "Canonical thread",
+        },
+        "thread-create params",
+      );
+      expectRecordFields(
+        readRecordField(readPluginCall(handleAction, 1), "params", "thread-reply params"),
+        {
+          target: "actionhub:room/thread-1",
+          to: "actionhub:room/thread-1",
+          message: "Canonical reply",
+        },
+        "thread-reply params",
+      );
+      expectRecordFields(
+        readRecordField(readPluginCall(handleAction, 2), "params", "edit params"),
+        {
+          target: "actionhub:room/thread-1",
+          to: "actionhub:room/thread-1",
+          messageId: "om_123",
+          message: "Canonical edit",
+        },
+        "edit params",
+      );
     });
 
     it("infers the trusted current target for resource-referenced edits", async () => {

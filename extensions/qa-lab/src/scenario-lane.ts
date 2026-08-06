@@ -6,6 +6,12 @@ import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
+export type QaScenarioExecutionCell = {
+  scenarioId: string;
+  executionKind: QaSeedScenario["execution"]["kind"];
+  channel: string | null;
+};
+
 function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -26,7 +32,7 @@ export function resolveQaScenarioRequiredProviderMode(scenario: QaSeedScenario) 
   return providerMode;
 }
 
-export function resolveQaScenarioLaneChannels(params: {
+function resolveQaScenarioLaneChannels(params: {
   scenario: QaSeedScenario;
   channelDriver: QaScorecardChannelDriver;
   channel?: string | null;
@@ -66,6 +72,27 @@ export function resolveQaScenarioLaneChannel(
   params: Parameters<typeof resolveQaScenarioLaneChannels>[0],
 ): string | undefined {
   return resolveQaScenarioLaneChannels(params)[0];
+}
+
+export function expandQaScenarioExecutionCells(
+  params: {
+    scenarios: readonly QaSeedScenario[];
+    expandChannels: boolean;
+  } & Omit<Parameters<typeof resolveQaScenarioLaneChannels>[0], "scenario">,
+): QaScenarioExecutionCell[] {
+  return params.scenarios.flatMap((scenario) => {
+    const channels =
+      scenario.execution.kind === "flow"
+        ? params.expandChannels
+          ? resolveQaScenarioLaneChannels({ ...params, scenario })
+          : [resolveQaScenarioLaneChannel({ ...params, scenario })]
+        : [undefined];
+    return channels.map((channel) => ({
+      scenarioId: scenario.id,
+      executionKind: scenario.execution.kind,
+      channel: channel ?? null,
+    }));
+  });
 }
 
 export function describeQaProviderLaneMismatches(params: {

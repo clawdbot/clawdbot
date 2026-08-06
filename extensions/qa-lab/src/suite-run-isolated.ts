@@ -80,6 +80,7 @@ export async function runQaFlowSuiteIsolated(
   const completedScenarioResults: Array<QaSuiteScenarioResult | undefined> = Array.from({
     length: selectedScenarios.length,
   });
+  const startedScenarioIds = new Set<string>();
   let artifactWriteQueue = Promise.resolve();
   const writePartialArtifacts = () => {
     const partialScenarios = completedScenarioResults.filter(
@@ -110,7 +111,8 @@ export async function runQaFlowSuiteIsolated(
           alternateModel,
           fastMode,
           concurrency,
-          channelDriver: params?.channelDriver,
+          channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
+          channelDriver: transportFactoryResult.driver,
           channelDriverSelection: params?.channelDriverSelection,
           isolatedWorkers: true,
           writeEvidenceFile: params?.writeEvidenceFile,
@@ -186,6 +188,9 @@ export async function runQaFlowSuiteIsolated(
               }),
             ),
           );
+          for (const scenarioId of childSuiteResult.startedScenarioIds) {
+            startedScenarioIds.add(scenarioId);
+          }
           const scenarioResult: QaSuiteScenarioResult =
             childSuiteResult.scenarios[0] ??
             ({
@@ -280,7 +285,8 @@ export async function runQaFlowSuiteIsolated(
         alternateModel,
         fastMode,
         concurrency,
-        channelDriver: params?.channelDriver,
+        channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
+        channelDriver: transportFactoryResult.driver,
         channelDriverSelection: params?.channelDriverSelection,
         isolatedWorkers: true,
         writeEvidenceFile: params?.writeEvidenceFile,
@@ -311,6 +317,7 @@ export async function runQaFlowSuiteIsolated(
       summaryPath,
       report,
       scenarios,
+      startedScenarioIds: [...startedScenarioIds],
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
   } catch (error) {

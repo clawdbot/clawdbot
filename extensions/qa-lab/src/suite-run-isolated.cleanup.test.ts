@@ -135,6 +135,7 @@ describe("isolated QA suite transport cleanup", () => {
       summaryPath: "/qa-child/qa-suite-summary.json",
       report: "",
       scenarios: [{ name: "leased-channel-scenario", status: "pass", steps: [] }],
+      startedScenarioIds: ["leased-channel-scenario"],
       watchUrl: lab.baseUrl,
     });
     const context = createCleanupTestContext();
