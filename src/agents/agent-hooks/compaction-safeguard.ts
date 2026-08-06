@@ -561,8 +561,14 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
     formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
     formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
   ].filter(Boolean);
+  // Suffix content, so it names context loss. capCompactionSummary would stamp
+  // this with the summary marker and misreport which half was cut.
   return sections.length > 0
-    ? capCompactionSummary(`\n\n${sections.join("\n\n")}`, MAX_FILE_OPS_SECTION_CHARS)
+    ? capWithMarker(
+        `\n\n${sections.join("\n\n")}`,
+        MAX_FILE_OPS_SECTION_CHARS,
+        SUFFIX_TRUNCATED_MARKER,
+      )
     : "";
 }
 
@@ -629,7 +635,11 @@ function capCompactionSummaryPreservingSuffix(
     return cappedBody;
   }
   if (suffixBudget <= SUFFIX_TRUNCATED_MARKER.length) {
-    // Marker cannot fit; keep suffix tail instead of a partial marker fragment.
+    // Marker cannot fit; keep the suffix tail rather than a partial marker
+    // fragment, mirroring capCompactionSummary's tiny-budget behavior. No
+    // boundary realignment here: this budget is smaller than the marker, so it
+    // is unreachable in production (the body's reserve leaves at least half the
+    // cap for the suffix) and dropping the partial line would empty it.
     return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
   }
   // Suffix keeps its tail (workspace rules, diagnostics) over its head.
