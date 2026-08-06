@@ -3527,6 +3527,83 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("cancels a deferred restart when a hot-only apply lands between the deferral and the revert", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = {
+      gateway: { reload: {}, port: 18793 },
+      agents: { defaults: { temperature: 0.1 } },
+    } satisfies OpenClawConfig;
+    const configD = {
+      gateway: { reload: {}, port: 18793 },
+      agents: { defaults: { temperature: 0.3 } },
+    } satisfies OpenClawConfig;
+    const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+    });
+    // Production hot reload (server-reload-managed-secrets.ts) activates the
+    // prepared runtime snapshot and advances the runtime-applied baseline via
+    // transactionOwnership.markRuntimeCommitted. Simulate that real commit so
+    // this test exercises the same baseline-advance edge the managed gateway
+    // has while a restart is still deferred.
+    const onHotReload = vi.fn(
+      async (
+        plan: GatewayReloadPlan,
+        nextConfig: OpenClawConfig,
+        ownership: GatewayConfigReloadTransactionOwnership,
+      ) => {
+        ownership.markRuntimeCommitted(nextConfig, plan);
+      },
+    );
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+        onHotReload,
+      },
+    );
+
+    // Restart-required edit A -> B plans a (deferred) restart.
+    harness.emitWrite(makeWrite(configB, "hash-b"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart.mock.calls[0]?.[1]).toEqual(configB);
+
+    // Intervening hot-only apply B -> D: agents.defaults.temperature is a
+    // hot-reload path, so the runtime commits the hot candidate and advances
+    // the runtime-applied baseline while the A -> B restart stays deferred.
+    harness.emitWrite(makeWrite(configD, "hash-d"));
+    await vi.runAllTimersAsync();
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    // Exact revert D -> A must still cancel the deferred restart: the settled
+    // candidate equals the config the runtime was running when the debt was
+    // armed, not the hot candidate the baseline advanced to.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+
+    // The revert still advanced the reload baseline, so a later genuine edit
+    // A -> B plans the restart again.
+    harness.emitWrite(makeWrite(configB, "hash-b2"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+
+    await harness.reloader.stop();
+  });
+
   it("preserves an earlier explicit restart across an ordinary exact revert", async () => {
     const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
     const configB = { gateway: { reload: {}, port: 18792 } } satisfies OpenClawConfig;
