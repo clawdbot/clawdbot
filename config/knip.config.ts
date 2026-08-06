@@ -398,7 +398,11 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
-    // Exported for direct unit tests; production usage is internal to the same module.
+    // runNativeHookRelayCli is imported statically by hooks-cli.ts and
+    // imported directly by focused unit tests; runNativeHookRelayCliFromArgv
+    // is only reached via dynamic import() in src/entry.ts, which Knip
+    // cannot statically resolve — the exemption avoids false-positive
+    // unused-export reports on the argv adapter.
     "src/cli/native-hook-relay-cli.ts": ["exports"],
   },
   workspaces: {
