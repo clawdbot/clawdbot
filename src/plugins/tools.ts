@@ -53,6 +53,7 @@ export type PluginToolMcpMeta = {
   safeServerName: string;
   toolName: string;
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  excludedByConfiguredFilter?: true;
   deniedBySession?: true;
   node?: {
     id: string;

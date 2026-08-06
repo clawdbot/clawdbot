@@ -90,11 +90,29 @@ function normalizeGeminiServerConfig(
       ]),
     );
   }
-  if (deniedTools?.length) {
+  const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
+  const included = Array.isArray(toolFilter.include)
+    ? toolFilter.include.filter((name): name is string => typeof name === "string")
+    : [];
+  if (included.length > 0) {
+    const existing = Array.isArray(server.includeTools)
+      ? server.includeTools.filter((name): name is string => typeof name === "string")
+      : [];
+    next.includeTools =
+      existing.length > 0
+        ? included.filter((name) => existing.includes(name)).toSorted()
+        : [...new Set(included)].toSorted();
+  }
+  const filteredDenied = Array.isArray(toolFilter.exclude)
+    ? toolFilter.exclude.filter((name): name is string => typeof name === "string")
+    : [];
+  if (deniedTools?.length || filteredDenied.length > 0) {
     const existing = Array.isArray(server.excludeTools)
       ? server.excludeTools.filter((name): name is string => typeof name === "string")
       : [];
-    next.excludeTools = [...new Set([...existing, ...deniedTools])].toSorted();
+    next.excludeTools = [
+      ...new Set([...existing, ...filteredDenied, ...(deniedTools ?? [])]),
+    ].toSorted();
   }
   return next;
 }

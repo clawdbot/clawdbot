@@ -238,6 +238,32 @@ The filtering order is:
 
 Tool policies support `group:*` shorthands that expand to multiple tools. See [Tool groups](/gateway/sandbox-vs-tool-policy-vs-elevated#tool-groups-shorthands) for the full list.
 
+Configured MCP tools use the same policy surface. Their canonical names are
+`<safe-server>__<safe-tool>`; globs can target a server namespace. For example:
+
+```json5
+{
+  agents: {
+    entries: {
+      research: {
+        tools: {
+          allow: ["docs__read_docs"],
+          deny: ["docs__delete_*"],
+        },
+      },
+    },
+  },
+}
+```
+
+Every restrictive layer intersects with the earlier layers, and deny always
+wins. OpenClaw projects the resulting raw tool set into native Claude, Codex,
+and Gemini MCP filters before their first model turn. Backend-native names and
+settings are implementation details, not a second operator policy surface. If
+the intersection removes every callable MCP tool, OpenClaw omits that server;
+if no callable tool remains, the run stops with a policy diagnostic before the
+prompt is submitted.
+
 Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further restrict elevated exec for specific agents. See [Elevated mode](/tools/elevated) for details.
 
 ---
@@ -385,6 +411,7 @@ After configuring multi-agent sandbox and tools:
     - Check the [full filtering order](#tool-restrictions): profile → provider profile → global policy → provider policy → agent policy → agent provider policy → sandbox → subagent.
     - Each level can only further restrict, not grant back.
     - See [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for step-by-step debugging.
+    - For MCP tools, use the provider-safe name shown by OpenClaw, such as `docs__read_docs` or `docs__*`; do not use a backend's raw config field name.
 
   </Accordion>
   <Accordion title="Container not isolated per agent">

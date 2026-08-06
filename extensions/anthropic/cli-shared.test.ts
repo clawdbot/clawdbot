@@ -282,6 +282,8 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "",
       "--allowedTools",
       "mcp__openclaw__openclaw",
+      "--disallowedTools",
+      "ScheduleWakeup,mcp__other__*",
     ]);
   });
 
@@ -356,6 +358,8 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "",
       "--allowedTools",
       "mcp__openclaw__message",
+      "--disallowedTools",
+      "ScheduleWakeup,mcp__other__*",
     ]);
   });
 
@@ -414,7 +418,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "--tools",
       "",
       "--disallowedTools",
-      "mcp__*",
+      "mcp__*,mcp__other__*",
     ]);
   });
 

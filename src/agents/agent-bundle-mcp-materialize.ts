@@ -343,6 +343,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(tool.excludedByConfiguredFilter ? { excludedByConfiguredFilter: true } : {}),
         ...(tool.deniedBySession ? { deniedBySession: true } : {}),
       },
     });

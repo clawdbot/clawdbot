@@ -103,6 +103,27 @@ function createParams(
   } as unknown as EmbeddedRunAttemptParams;
 }
 
+async function writePolicyProbeServer(dir: string): Promise<string> {
+  const filePath = path.join(dir, "policy-probe.mjs");
+  await fs.writeFile(
+    filePath,
+    `import readline from "node:readline";
+const lines = readline.createInterface({ input: process.stdin });
+const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send(message.id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "policy-probe", version: "1" } });
+  if (message.method === "tools/list") send(message.id, { tools: [
+    { name: "read_docs", description: "read", inputSchema: { type: "object" } },
+    { name: "delete_docs", description: "delete", inputSchema: { type: "object" } }
+  ] });
+});
+`,
+    "utf-8",
+  );
+  return filePath;
+}
+
 describe("startOrResumeThread — user mcp.servers projection (regression: #80814)", () => {
   let tempDir = "";
 
@@ -152,6 +173,99 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams?.config?.mcp_servers).toBeDefined();
     expect(startParams.config!.mcp_servers).toMatchObject({
       outlook: { command: "node", args: ["/opt/outlook-mcp/dist/index.js"] },
+    });
+  });
+
+  it("projects durable allow and deny policy into thread/start and thread/resume before the turn", async () => {
+    const sessionFile = path.join(tempDir, "policy-session.jsonl");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const serverPath = await writePolicyProbeServer(tempDir);
+    const config = {
+      tools: { allow: ["docs__read_docs"], deny: ["docs__delete_docs"] },
+      mcp: {
+        servers: {
+          docs: { transport: "stdio", command: process.execPath, args: [serverPath] },
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams["config"];
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-policy");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-policy");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const run = async () =>
+      await startOrResumeThread({
+        client: { request } as never,
+        params: createParams(sessionFile, workspaceDir, config),
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createAppServerOptions(),
+      });
+
+    await run();
+    await run();
+
+    for (const method of ["thread/start", "thread/resume"]) {
+      const call = request.mock.calls.find(([candidate]) => candidate === method);
+      const callParams = call?.[1] as {
+        config?: {
+          mcp_servers?: { docs?: { enabled_tools?: string[]; disabled_tools?: string[] } };
+        };
+      };
+      expect(callParams?.config?.mcp_servers?.docs).toMatchObject({
+        enabled_tools: ["read_docs"],
+        disabled_tools: ["delete_docs"],
+      });
+    }
+  });
+
+  it("keeps session MCP denials additive in thread/start before the turn", async () => {
+    const sessionFile = path.join(tempDir, "policy-session-override.jsonl");
+    registerCodexTestSessionIdentity(
+      sessionFile,
+      "session-override",
+      "agent:main:session-override",
+    );
+    const workspaceDir = path.join(tempDir, "workspace-override");
+    const serverPath = await writePolicyProbeServer(tempDir);
+    const config = {
+      tools: { allow: ["docs__*"] },
+      mcp: {
+        servers: {
+          docs: { transport: "stdio", command: process.execPath, args: [serverPath] },
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams["config"];
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-session-override");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const run = {
+      ...createParams(sessionFile, workspaceDir, config),
+      toolOverrides: { mcpToolsDeny: { docs: ["delete_docs"] } },
+    } as EmbeddedRunAttemptParams;
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: run,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    const callParams = request.mock.calls[0]?.[1] as {
+      config?: { mcp_servers?: { docs?: { enabled_tools?: string[]; disabled_tools?: string[] } } };
+    };
+    expect(callParams.config?.mcp_servers?.docs).toMatchObject({
+      enabled_tools: ["read_docs"],
+      disabled_tools: ["delete_docs"],
     });
   });
 

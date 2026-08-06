@@ -56,6 +56,8 @@ export type McpCatalogTool = {
   fallbackDescription: string;
   uiResourceUri?: string;
   uiVisibility?: Array<"app" | "model">;
+  /** Listed by the server but excluded by its configured include/exclude filter. */
+  excludedByConfiguredFilter?: true;
   deniedBySession?: true;
 };
 
@@ -65,9 +67,32 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  /** Complete raw catalog used to project policy into native MCP clients. */
+  policyTools?: McpCatalogTool[];
   /** Listed tools hidden only by the session override, retained for read-only inventory. */
   sessionDeniedTools?: McpCatalogTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
+};
+
+type PreparedNativeMcpToolPolicy = {
+  rawName: string;
+  safeName: string;
+  allowed: boolean;
+  excludedBy: Array<"configured-filter" | "session-override" | "effective-policy">;
+};
+
+type PreparedNativeMcpServerPolicy = {
+  serverName: string;
+  safeServerName: string;
+  allowedTools: string[];
+  deniedTools: string[];
+  tools: PreparedNativeMcpToolPolicy[];
+};
+
+/** Concrete raw/safe policy fact prepared once for native MCP adapters. */
+export type PreparedNativeMcpPolicy = {
+  servers: Record<string, PreparedNativeMcpServerPolicy>;
+  diagnostics: readonly McpToolCatalogDiagnostic[];
 };
 
 export type McpToolCatalogDiagnostic = {

@@ -1,6 +1,15 @@
 /** Tests Codex CLI bundle-MCP config override generation. */
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import {
+  cliBundleMcpHarness,
+  cliNativeMcpPolicyContext,
+  setupCliBundleMcpTestHarness,
+  writeCliMcpPolicyProbeServer,
+} from "./bundle-mcp.test-support.js";
+
+setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig codex", () => {
   it("disables Codex native web search without bundle MCP", async () => {
@@ -37,6 +46,26 @@ describe("prepareCliBundleMcpConfig codex", () => {
       'disabled_tools = ["delete_docs"]',
     );
     expect(prepared.backend.args).toContain('web_search="disabled"');
+  });
+
+  it("projects canonical allow and deny sets into Codex CLI overrides", async () => {
+    const serverPath = await writeCliMcpPolicyProbeServer();
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { allow: ["docs__read_docs"], deny: ["docs__delete_docs"] },
+      mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } },
+    };
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "codex-config-overrides",
+      backend: { command: "codex", args: ["exec"] },
+      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, "codex-cli-policy"),
+    });
+    const override = prepared.backend.args?.find((arg) => arg.startsWith("mcp_servers="));
+    expect(override).toContain('enabled_tools = ["read_docs"]');
+    expect(override).toContain('disabled_tools = ["delete_docs"]');
   });
 
   it("injects codex MCP config overrides with env-backed loopback headers", async () => {
