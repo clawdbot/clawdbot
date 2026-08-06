@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-notebook-runs",
+  "name": "VC Trader AI List Notebook Runs",
+  "description": "Read-only workspace-scoped tool: List notebook runs including interactive kernel sessions, newest first. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_notebook_runs"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

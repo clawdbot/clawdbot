@@ -2201,6 +2201,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/vctraderai-get-notebook-run:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/vctraderai-get-order-outcome:
     dependencies:
       typebox:
@@ -2540,6 +2553,45 @@ importers:
         version: link:../..
 
   extensions/vctraderai-list-my-accounts:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/vctraderai-list-notebook-artifacts:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/vctraderai-list-notebook-runs:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/vctraderai-list-notebooks:
     dependencies:
       typebox:
         specifier: 1.1.38
@@ -5860,6 +5912,7 @@ packages:
 
   audio-decode@2.2.3:
     resolution: {integrity: sha512-Z0lHvMayR/Pad9+O9ddzaBJE0DrhZkQlStrC1RwcAHF3AhQAsdwKHeLGK8fYKyp2DDU6xHxzGb4CLMui12yVrg==}
+    deprecated: Renamed to @audio/decode — same API; this name remains a thin alias. npm i @audio/decode
 
   audio-type@2.4.1:
     resolution: {integrity: sha512-dK9Z/P83C/rBfTrXXgPD3jZ+aXxx2o/P4rq8+H1JqxbXklitEeJw4CrcwMC5CkON3CX3yy2gaWnIEVYejYh0zQ==}

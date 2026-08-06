@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-notebook-artifacts",
+  "name": "VC Trader AI List Notebook Artifacts",
+  "description": "Read-only workspace-scoped tool: List a notebook run's stored outputs, each addressable by artifact id. Calls the propfirm_manager BFF as the workspace owner (PFM_AGENT_TOKEN). READ_ONLY per ADR 0078.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_notebook_artifacts"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
