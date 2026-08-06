@@ -243,6 +243,7 @@ export const synologyChatSetupContract = defineChannelSetupContract({
     },
     webhookUrl: {
       kind: "string",
+      sensitive: true,
       cli: {
         flags: "--webhook-url <url>",
         description: "Public HTTPS Synology Chat callback URL used for attachments",
@@ -350,6 +351,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
       placeholder: "https://gateway.example.com/webhook/synology",
       required: false,
       applyEmptyValue: true,
+      sensitive: true,
       helpTitle: t("wizard.synologyChat.publicWebhookUrlTitle"),
       helpLines: [
         t("wizard.synologyChat.publicWebhookUrlHelp"),

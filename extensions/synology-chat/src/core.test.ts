@@ -17,7 +17,7 @@ import {
   validateToken,
 } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
-import { synologyChatSetupWizard } from "./setup-surface.js";
+import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
 
 const synologyChatSetupPlugin = {
   id: "synology-chat",
@@ -106,6 +106,15 @@ describe("synology-chat core", () => {
 
   it("keeps the schema open for plugin-specific passthrough fields", () => {
     expect(SynologyChatChannelConfigSchema.schema.additionalProperties).toEqual({});
+  });
+
+  it("masks public callback URLs that may contain proxy credentials", () => {
+    expect(
+      synologyChatSetupContract.metadata.fields.find((field) => field.key === "webhookUrl"),
+    ).toMatchObject({ sensitive: true });
+    expect(
+      synologyChatSetupWizard.textInputs?.find((input) => input.inputKey === "webhookUrl"),
+    ).toMatchObject({ sensitive: true });
   });
 
   it("isolates direct-message sessions by account and user", () => {
