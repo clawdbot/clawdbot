@@ -169,6 +169,7 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   try {
     return JSON5.parse(trimmed);
   } catch {
+    console.warn(`JSON5 parse failed for value '${raw}'; using as raw string`);
     return raw;
   }
 }
