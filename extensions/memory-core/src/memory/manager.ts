@@ -2191,9 +2191,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       vector: {
         enabled: this.vector.enabled,
         // When lazy vector init has not run (fast status path), fall back to a
-        // cheap chunks-presence check instead of reporting "unknown" for an
-        // index that is actually built (#92102).
-        storeAvailable: this.vector.available ?? (this.hasIndexedChunks() ? true : undefined),
+        // probe-backed fact instead of reporting "unknown" for an index that is
+        // actually built (#92102). Chunk presence alone is NOT sufficient: an
+        // FTS-only or stale row would claim "ready" even when sqlite-vec cannot
+        // load in this process. Require semantic chunks (rows written by the
+        // vector pipeline) AND the vector table to exist — the only synchronous
+        // evidence that a real vector index was built.
+        storeAvailable:
+          this.vector.available ??
+          (this.hasSemanticChunks() && memoryTableExists(this.db, VECTOR_TABLE) ? true : undefined),
         semanticAvailable: this.vector.semanticAvailable,
         available: this.vector.semanticAvailable,
         extensionPath: this.vector.extensionPath,
@@ -2461,6 +2467,12 @@ function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boo
   return Boolean(
     params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
     params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+  );
+}
+
+function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
   );
 }
 

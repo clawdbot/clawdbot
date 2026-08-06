@@ -34,6 +34,7 @@ describe("memory manager fast-path vector store availability (#92102)", () => {
   let caseId = 0;
   let workspaceDir = "";
   let indexPath = "";
+  let previousStateDir: string | undefined;
   let managers: MemoryIndexManager[] = [];
 
   beforeAll(async () => {
@@ -45,11 +46,17 @@ describe("memory manager fast-path vector store availability (#92102)", () => {
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     Reflect.set(process.env, "OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
 
   afterEach(async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      Reflect.set(process.env, "OPENCLAW_STATE_DIR", previousStateDir);
+    }
     for (const activeManager of managers.toReversed()) {
       await activeManager.close();
     }
@@ -95,7 +102,7 @@ describe("memory manager fast-path vector store availability (#92102)", () => {
     return activeManager;
   }
 
-  async function seedChunk(id: string): Promise<void> {
+  async function seedChunk(id: string, opts: { model?: string } = {}): Promise<void> {
     await fs.mkdir(path.dirname(indexPath), { recursive: true });
     const db = new DatabaseSync(indexPath);
     db.exec(`
@@ -112,17 +119,31 @@ describe("memory manager fast-path vector store availability (#92102)", () => {
         updated_at INTEGER NOT NULL
       );
       INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES ('${id}', 'MEMORY.md', 'memory', 1, 3, 'hash-1', 'fts-only', 'Alpha topic', '[]', ${Date.now()});
+        VALUES ('${id}', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${opts.model ?? "local"}', 'Alpha topic', '[0.1,0.2,0.3]', ${Date.now()});
+      CREATE TABLE IF NOT EXISTS memory_index_chunks_vec (
+        id TEXT PRIMARY KEY,
+        embedding FLOAT32[3]
+      );
     `);
     db.close();
   }
 
-  it("reports vector store available from indexed chunks on the fast status path", async () => {
+  it("reports vector store available from a real vector index on the fast status path", async () => {
     await seedChunk("chunk-1");
     const memoryManager = await createManager({ vectorEnabled: true, purpose: "status" });
 
     const status = memoryManager.status();
     expect(status.vector?.storeAvailable).toBe(true);
+  });
+
+  it("does not claim vector store ready from FTS-only rows", async () => {
+    // FTS-only rows have no semantic embedding; presence of any chunk row must
+    // not be treated as evidence that sqlite-vec is loadable (#92102, review P1).
+    await seedChunk("chunk-1", { model: "fts-only" });
+    const memoryManager = await createManager({ vectorEnabled: true, purpose: "status" });
+
+    const status = memoryManager.status();
+    expect(status.vector?.storeAvailable).toBeUndefined();
   });
 
   it("reports unknown when no indexed chunks exist", async () => {
