@@ -35,6 +35,14 @@ function isBelowDurationFloorConfigValue(value: unknown): boolean {
   );
 }
 
+// A persisted positive integer below the floor (e.g. windowMs: 500) is a
+// currently-accepted setting the runtime would only floor to 1000ms anyway --
+// raise it in place instead of discarding the operator's shorter-duration
+// intent for the much larger documented default.
+function isPositiveIntegerConfigValue(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
 const GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "auth", "rateLimit", "maxAttempts"],
   message:
@@ -45,14 +53,14 @@ const GATEWAY_AUTH_RATE_LIMIT_MAX_ATTEMPTS_OOB_RULE: LegacyConfigRule = {
 const GATEWAY_AUTH_RATE_LIMIT_WINDOW_MS_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "auth", "rateLimit", "windowMs"],
   message:
-    'gateway.auth.rateLimit.windowMs must be an integer of at least 1000ms and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+    'gateway.auth.rateLimit.windowMs must be an integer of at least 1000ms; a smaller positive integer will be raised to 1000ms, other invalid values will be removed. Run "openclaw doctor --fix".',
   match: isBelowDurationFloorConfigValue,
 };
 
 const GATEWAY_AUTH_RATE_LIMIT_LOCKOUT_MS_OOB_RULE: LegacyConfigRule = {
   path: ["gateway", "auth", "rateLimit", "lockoutMs"],
   message:
-    'gateway.auth.rateLimit.lockoutMs must be an integer of at least 1000ms and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+    'gateway.auth.rateLimit.lockoutMs must be an integer of at least 1000ms; a smaller positive integer will be raised to 1000ms, other invalid values will be removed. Run "openclaw doctor --fix".',
   match: isBelowDurationFloorConfigValue,
 };
 
@@ -246,6 +254,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         fallback: number;
         isInvalid: (value: unknown) => boolean;
         requirement: string;
+        // Duration fields only: a positive integer below this floor is
+        // raised in place instead of deleted+defaulted (see
+        // isPositiveIntegerConfigValue above).
+        floorMs?: number;
       }> = [
         {
           key: "maxAttempts",
@@ -258,16 +270,26 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
           fallback: DEFAULT_WINDOW_MS,
           isInvalid: isBelowDurationFloorConfigValue,
           requirement: `an integer of at least ${GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS}ms`,
+          floorMs: GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS,
         },
         {
           key: "lockoutMs",
           fallback: DEFAULT_LOCKOUT_MS,
           isInvalid: isBelowDurationFloorConfigValue,
           requirement: `an integer of at least ${GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS}ms`,
+          floorMs: GATEWAY_AUTH_RATE_LIMIT_DURATION_FLOOR_MS,
         },
       ];
-      for (const { key, fallback, isInvalid, requirement } of repairs) {
+      for (const { key, fallback, isInvalid, requirement, floorMs } of repairs) {
         const value = rateLimit[key];
+        if (floorMs !== undefined && isPositiveIntegerConfigValue(value) && value < floorMs) {
+          rateLimit[key] = floorMs;
+          changes.push(
+            `Raised gateway.auth.rateLimit.${key} (${String(value)}) to ${floorMs}. ` +
+              `It must be ${requirement}.`,
+          );
+          continue;
+        }
         if (!isInvalid(value)) {
           continue;
         }
