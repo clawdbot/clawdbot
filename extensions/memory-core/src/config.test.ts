@@ -4,8 +4,8 @@ import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it } from "vitest";
-import { resolveMemoryDreamingConfig } from "../../../src/memory-host-sdk/dreaming.ts";
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
