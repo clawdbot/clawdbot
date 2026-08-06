@@ -911,4 +911,55 @@ describe("dispatchAgentHook trust handling", () => {
     });
     expect(requestHeartbeatMock.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
   });
+
+  it("carries the fresh default agent on the global-scope announce wake", async () => {
+    // Global session scope resolves the event key to the unscoped "global"
+    // sentinel, which carries no agent identity; the scheduler cannot resolve
+    // a target from it, so the wake must carry the fresh default agent or the
+    // announced event sits unread.
+    loadConfigMock.mockImplementation(() => ({
+      agents: { entries: { main: { default: true } } },
+      session: { scope: "global" },
+    }));
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: false,
+      deliveryAttempted: false,
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Email"),
+      deliver: true,
+    });
+
+    await waitForFast(() => expect(enqueueSystemEventMock).toHaveBeenCalled());
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
+      agentId: "main",
+      sessionKey: "global",
+    });
+  });
+
+  it("carries the fresh default agent on the global-scope failure wake", async () => {
+    loadConfigMock.mockImplementation(() => ({
+      agents: { entries: { main: { default: true } } },
+      session: { scope: "global" },
+    }));
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    dispatchAgentHook(buildAgentPayload("Email"));
+
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      agentId: "main",
+      sessionKey: "global",
+    });
+  });
 });
