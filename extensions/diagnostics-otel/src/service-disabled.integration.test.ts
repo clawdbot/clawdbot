@@ -207,6 +207,7 @@ test("preserves externally owned context and propagation globals while disabled"
 test("does not remove context and propagation globals installed after startup", async () => {
   process.env.OTEL_SDK_DISABLED = "true";
   const { service, ctx } = await startOtelService();
+  const capturedContext = context.active();
 
   context.disable();
   propagation.disable();
@@ -218,7 +219,7 @@ test("does not remove context and propagation globals installed after startup", 
   };
   const extracted = propagation.extract(ROOT_CONTEXT, incoming);
 
-  await service.stop?.(ctx);
+  await context.with(capturedContext, () => service.stop?.(ctx));
 
   expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
   await context.with(extracted, async () => {

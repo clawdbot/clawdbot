@@ -27,8 +27,17 @@ class OwnedContextManager extends AsyncLocalStorageContextManager {
     super();
   }
 
-  override active(): Context {
-    return super.active().setValue(CONTEXT_OWNER_KEY, this.owner);
+  override with<A extends unknown[], F extends (...args: A) => ReturnType<F>>(
+    activeContext: Context,
+    fn: F,
+    thisArg?: ThisParameterType<F>,
+    ...args: A
+  ): ReturnType<F> {
+    const probe = activeContext.getValue(CONTEXT_OWNER_KEY);
+    if (probe && typeof probe === "object") {
+      (probe as { owner?: object }).owner = this.owner;
+    }
+    return super.with(activeContext, fn, thisArg, ...args);
   }
 }
 
@@ -59,6 +68,12 @@ class OwnedPropagator implements TextMapPropagator {
 function ownsGlobalPropagator(owner: object): boolean {
   const probe: { owner?: object } = {};
   propagation.inject(ROOT_CONTEXT.setValue(PROPAGATOR_OWNER_KEY, probe), {}, { set() {} });
+  return probe.owner === owner;
+}
+
+function ownsGlobalContextManager(owner: object): boolean {
+  const probe: { owner?: object } = {};
+  context.with(ROOT_CONTEXT.setValue(CONTEXT_OWNER_KEY, probe), () => {});
   return probe.owner === owner;
 }
 
@@ -115,7 +130,7 @@ export function registerDisabledSdkRuntime(warn: (message: string) => void): (()
     if (ownsPropagation && ownsGlobalPropagator(owner)) {
       propagation.disable();
     }
-    if (ownsContext && context.active().getValue(CONTEXT_OWNER_KEY) === owner) {
+    if (ownsContext && ownsGlobalContextManager(owner)) {
       context.disable();
     } else if (ownsContext) {
       contextManager.disable();
