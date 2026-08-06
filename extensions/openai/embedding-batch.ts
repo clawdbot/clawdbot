@@ -125,11 +125,14 @@ async function readOpenAiBatchOutputLines(
   },
 ): Promise<void> {
   let lineCount = 0;
-  const emitOutputLine = (line: OpenAiBatchOutputLine): boolean => {
+  const ensureLineLimit = () => {
     lineCount += 1;
     if (lineCount > params.maxLines) {
       throw new Error(`openai.batch-file-content: JSONL output exceeds ${params.maxLines} records`);
     }
+  };
+  const emitOutputLine = (line: OpenAiBatchOutputLine): boolean => {
+    ensureLineLimit();
     return params.onLine(line);
   };
   const emitParsedLine = (line: string): boolean =>
@@ -169,8 +172,11 @@ async function readOpenAiBatchOutputLines(
     const trimmed = line.trim();
     line = "";
     lineBytes = 0;
+    // Count blank records too. Otherwise an endless newline-only response
+    // resets the per-line byte counter without ever hitting the record cap.
+    ensureLineLimit();
     if (trimmed) {
-      return emitParsedLine(trimmed);
+      return params.onLine(parseOpenAiBatchOutputLine(trimmed));
     }
     return true;
   };
