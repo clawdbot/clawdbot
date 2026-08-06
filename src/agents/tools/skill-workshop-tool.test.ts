@@ -195,12 +195,19 @@ describe("skill_workshop tool", () => {
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "update", "revise", "list", "inspect"]);
+    ).toEqual(["create", "revise", "list", "inspect"]);
     await expect(
       tool.execute("call-apply", { action: "apply", proposal_id: "proposal-1" }),
     ).rejects.toThrow("only inspect or draft proposals");
     await expect(
       tool.execute("call-evaluate", { action: "evaluate", proposal_id: "proposal-1" }),
+    ).rejects.toThrow("only inspect or draft proposals");
+    await expect(
+      tool.execute("call-update", {
+        action: "update",
+        skill_name: "existing-skill",
+        proposal_content: "# Replacement\n",
+      }),
     ).rejects.toThrow("only inspect or draft proposals");
 
     await tool.execute("call-create", {
@@ -247,6 +254,7 @@ describe("skill_workshop tool", () => {
     const reviewTool = createSkillWorkshopTool({
       workspaceDir,
       proposalOnly: true,
+      updateProposals: true,
       proposalMutationBudget,
     });
     const update = await reviewTool.execute("review-update", {
@@ -325,7 +333,7 @@ describe("skill_workshop tool", () => {
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "update", "revise", "list", "inspect", "complete"]);
+    ).toEqual(["create", "revise", "list", "inspect", "complete"]);
     const create = tool.execute("call-create-before-complete", {
       action: "create",
       name: "Checkpointed Learning",

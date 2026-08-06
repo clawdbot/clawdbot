@@ -471,6 +471,7 @@ async function runSkillExperienceReviewInner(
     disableMessageTool: true,
     disableTrajectory: true,
     skillWorkshopProposalOnly: true,
+    skillWorkshopUpdateProposals: true,
     skillWorkshopAutonomousCapture: true,
     skillWorkshopProposalMutationBudget: proposalMutationBudget,
     skillWorkshopOrigin: {

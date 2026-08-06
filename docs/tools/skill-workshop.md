@@ -305,8 +305,9 @@ In `propose` and `auto` modes, OpenClaw can also perform a conservative review a
 substantial work and after the whole agent system becomes idle. That isolated review can draft at
 most one pending proposal — a new skill, an update to an existing workspace skill, or a revision
 of a pending proposal. It never writes a live skill directly and cannot apply, reject, or
-quarantine a proposal. In `auto` mode, the orchestrating capture pipeline applies the result
-afterward through the normal scanner-gated service.
+quarantine a proposal. In `auto` mode, the orchestrating capture pipeline applies a new-skill
+result afterward through the normal scanner-gated service; update proposals always stay pending
+for operator review.
 
 See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
 the proposal threshold, and troubleshooting.

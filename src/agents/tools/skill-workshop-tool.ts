@@ -61,11 +61,16 @@ const SKILL_WORKSHOP_ACTIONS = [
   "reject",
   "quarantine",
 ] as const;
-const SKILL_WORKSHOP_PROPOSAL_ACTIONS = ["create", "update", "revise", "list", "inspect"] as const;
-const SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS = [
-  ...SKILL_WORKSHOP_PROPOSAL_ACTIONS,
-  "complete",
-] as const;
+function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion: boolean) {
+  return [
+    "create",
+    ...(updateProposals ? ["update"] : []),
+    "revise",
+    "list",
+    "inspect",
+    ...(supportsCompletion ? ["complete"] : []),
+  ];
+}
 const SKILL_WORKSHOP_MUTATION_ACTIONS = new Set(["create", "update", "revise"]);
 const SKILL_PROPOSAL_STATUSES = [
   "pending",
@@ -89,15 +94,17 @@ function requireProposalContent(content: string | undefined): string {
   return content;
 }
 
-function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion: boolean) {
-  const proposalActions = supportsCompletion
-    ? SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS
-    : SKILL_WORKSHOP_PROPOSAL_ACTIONS;
+function buildSkillWorkshopToolSchema(
+  proposalOnly: boolean,
+  supportsCompletion: boolean,
+  updateProposals: boolean,
+) {
+  const proposalActions = resolveProposalOnlyActions(updateProposals, supportsCompletion);
   return Type.Object(
     {
-      action: stringEnum(proposalOnly ? proposalActions : SKILL_WORKSHOP_ACTIONS, {
+      action: stringEnum(proposalOnly ? proposalActions : [...SKILL_WORKSHOP_ACTIONS], {
         description: proposalOnly
-          ? `create = new skill; update = pending update proposal targeting an existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
+          ? `create = new skill;${updateProposals ? " update = pending update proposal targeting an existing live skill;" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
           : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
@@ -188,6 +195,8 @@ type SkillWorkshopToolOptions = {
   origin?: SkillProposalOrigin;
   /** Internal reviewers may inspect and draft bounded pending proposals, never change lifecycle state. */
   proposalOnly?: boolean;
+  /** Allows proposal-only sessions to draft update proposals for existing live skills. */
+  updateProposals?: boolean;
   /** Marks proposals created by an autonomous capture pipeline. */
   autonomousCapture?: boolean;
   /** Run-scoped budget shared by every tool instance created across retries. */
@@ -199,12 +208,14 @@ type SkillWorkshopToolOptions = {
 function buildSkillWorkshopToolDescription(
   proposalOnly: boolean,
   supportsCompletion: boolean,
+  updateProposals: boolean,
 ): string {
   if (!proposalOnly) {
     return `Create/update/revise/list/inspect/evaluate/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
-  return `Inspect reusable-procedure skill proposals and draft pending create, update, or revise proposals.${completion} Nothing writes a live skill directly; lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+  const draftKinds = updateProposals ? "create, update, or revise" : "create or revise";
+  return `Inspect reusable-procedure skill proposals and draft pending ${draftKinds} proposals.${completion} Nothing writes a live skill directly; lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
@@ -216,22 +227,22 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     description: buildSkillWorkshopToolDescription(
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,
+      options.updateProposals === true,
     ),
     parameters: buildSkillWorkshopToolSchema(
       options.proposalOnly === true,
       options.proposalReviewCompletion !== undefined,
+      options.updateProposals === true,
     ),
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
       const action = readStringParam(params, "action", { required: true });
-      const proposalActions = options.proposalReviewCompletion
-        ? SKILL_WORKSHOP_PROPOSAL_COMPLETION_ACTIONS
-        : SKILL_WORKSHOP_PROPOSAL_ACTIONS;
+      const proposalActions = resolveProposalOnlyActions(
+        options.updateProposals === true,
+        options.proposalReviewCompletion !== undefined,
+      );
 
-      if (
-        options.proposalOnly === true &&
-        !(proposalActions as readonly string[]).includes(action)
-      ) {
+      if (options.proposalOnly === true && !proposalActions.includes(action)) {
         throw new ToolInputError("this Skill Workshop session can only inspect or draft proposals");
       }
 

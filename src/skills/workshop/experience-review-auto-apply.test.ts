@@ -110,12 +110,14 @@ describe("experience review auto apply", () => {
     });
 
     runEmbeddedAgent.mockImplementation(async (params) => {
+      expect(params.skillWorkshopUpdateProposals).toBe(true);
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
         config: params.config,
         agentId: params.agentId,
         origin: params.skillWorkshopOrigin,
         proposalOnly: params.skillWorkshopProposalOnly,
+        updateProposals: params.skillWorkshopUpdateProposals,
         autonomousCapture: params.skillWorkshopAutonomousCapture,
         proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
       });
