@@ -161,11 +161,10 @@ function buildIdentityLine(label: string, value: string): string {
 }
 
 function matchesIdentityLabel(line: string, label: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("-")) {
-    return false;
-  }
-  const cleaned = trimmed.replace(/^\s*-\s*/, "");
+  // Match the reader: optional leading bullet, then Label: value.
+  // Clearing must remove unbulleted `Emoji:` / `Avatar:` lines too, or a
+  // config tombstone can leave a file-backed identity value active.
+  const cleaned = line.trim().replace(/^\s*-\s*/, "");
   const colonIndex = cleaned.indexOf(":");
   if (colonIndex === -1) {
     return false;

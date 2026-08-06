@@ -55,6 +55,7 @@ export function renderAgentOverview(params: {
   onConfigSave: () => void;
   onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
   onIdentityAvatarSelect: (file: File) => void;
+  onIdentityAvatarClear: () => void;
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
@@ -111,9 +112,9 @@ export function renderAgentOverview(params: {
     (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
-  const identityInvalid =
-    (identityDraft.name !== null && !identityDraft.name.trim()) ||
-    (identityDraft.emoji !== null && !identityDraft.emoji.trim());
+  // Blank emoji/avatar drafts are clear intents (null tombstone). Only blank
+  // name edits stay invalid / unsaved.
+  const identityInvalid = identityDraft.name !== null && !identityDraft.name.trim();
   const identityBusy = params.identitySaving || !params.canUpdateIdentity;
 
   const handleAvatarFileSelect = (e: Event) => {
@@ -200,6 +201,16 @@ export function renderAgentOverview(params: {
                 @change=${handleAvatarFileSelect}
               />
             </label>
+            ${identityAvatarUrl
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm"
+                  ?disabled=${identityBusy}
+                  @click=${() => params.onIdentityAvatarClear()}
+                >
+                  ${t("common.remove")}
+                </button>`
+              : nothing}
             <button
               type="button"
               class="btn btn--sm primary"

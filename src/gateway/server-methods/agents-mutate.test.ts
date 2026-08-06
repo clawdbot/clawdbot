@@ -1080,6 +1080,40 @@ describe("agents.update", () => {
     expect(agent.identity).not.toHaveProperty("avatar");
   });
 
+  it("clears parser-accepted unbulleted emoji/avatar lines from IDENTITY.md", async () => {
+    const identityMarkdown = [
+      "# IDENTITY.md - Agent Identity",
+      "",
+      "Name: Current Agent",
+      "Emoji: 🐢",
+      "Avatar: https://example.com/avatar.png",
+      "Creature: Familiar",
+      "",
+    ].join("\n");
+    mocks.rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from(identityMarkdown),
+      realPath: "/workspace/test-agent/IDENTITY.md",
+      stat: { size: identityMarkdown.length, mtimeMs: 1 },
+    });
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: null,
+      avatar: null,
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "IDENTITY.md",
+    });
+    expect(String(write.data)).toContain("Name: Current Agent");
+    expect(String(write.data)).toContain("Creature: Familiar");
+    expect(String(write.data)).not.toMatch(/Emoji\s*:/);
+    expect(String(write.data)).not.toMatch(/Avatar\s*:/);
+  });
+
   it("ensures workspace when workspace changes", async () => {
     const { promise } = makeCall("agents.update", {
       agentId: "test-agent",

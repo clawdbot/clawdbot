@@ -54,6 +54,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
 import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
+  clearIdentityAvatar,
   resetIdentityDraft,
   saveIdentityDraft,
   selectIdentityAvatar,
@@ -1085,6 +1086,11 @@ class AgentsPage
           onIdentityAvatarSelect: (file) => {
             if (this.canCall("agents.update", "operator.admin")) {
               selectIdentityAvatar(this, file);
+            }
+          },
+          onIdentityAvatarClear: () => {
+            if (this.canCall("agents.update", "operator.admin")) {
+              clearIdentityAvatar(this);
             }
           },
           onIdentitySave: () => this.saveIdentityDraft(),
