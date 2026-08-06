@@ -19,8 +19,8 @@ import {
 } from "./installs.js";
 import type { PackageManifest } from "./manifest.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubInstall,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall as resolveOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall as resolveOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import {
@@ -170,11 +170,9 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const trustedOfficialNpmSpec = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
-    const trustedOfficialClawHubInstall = resolveTrustedSourceLinkedOfficialClawHubInstall({
-      pluginId,
-      record,
-    });
+    const trustedOfficialNpmInstall = resolveOfficialNpmInstall({ pluginId, record });
+    const trustedOfficialNpmSpec = trustedOfficialNpmInstall?.npmSpec;
+    const trustedOfficialClawHubInstall = resolveOfficialClawHubInstall({ pluginId, record });
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
       ? trustedOfficialClawHubInstall?.clawhubSpec
@@ -526,6 +524,7 @@ export async function updateNpmInstalledPlugins(params: {
         clawhubSpecs,
         officialNpmFallbackSpecs,
         trustedSourceLinkedOfficialInstall,
+        expectedReplacementPluginId: trustedOfficialNpmInstall?.replacementPluginId,
         getFallbackExpectedIntegrity,
         installNpmSpecForUpdate,
         logger,

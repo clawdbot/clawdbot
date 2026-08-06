@@ -88,6 +88,7 @@ export async function installPluginFromManagedNpmRoot(
     mode?: "install" | "update";
     dryRun?: boolean;
     expectedPluginId?: string;
+    expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
   },
 ): Promise<InstallPluginResult> {
@@ -563,8 +564,12 @@ export async function installPluginFromManagedNpmRoot(
       dependencyScanRootDir: npmRoot,
       logger,
       expectedPluginId,
+      expectedReplacementPluginId: params.expectedReplacementPluginId,
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       mode: policyMode,
+      // A new managed generation is scanned as an install, but an ID replacement
+      // remains valid only when the operator entered through the update flow.
+      requestedMode: mode,
       installPolicyRequest: params.installPolicyRequest,
       emitSuccessSecurityEvent: false,
     });

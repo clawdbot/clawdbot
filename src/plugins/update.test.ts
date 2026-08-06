@@ -4355,6 +4355,55 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.["voice-call"]).toBeUndefined();
   });
 
+  it("migrates a manifest-declared legacy plugin id after update", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "fish-audio-speech",
+      targetDir: "/tmp/fish-audio-speech",
+      version: "2026.8.1",
+      extensions: ["index.js"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          allow: ["fish-audio"],
+          entries: {
+            "fish-audio": {
+              enabled: true,
+            },
+          },
+          installs: {
+            "fish-audio": {
+              source: "npm",
+              spec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
+              resolvedName: "@openclaw/fish-audio-speech",
+              resolvedSpec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
+              installPath: "/tmp/fish-audio",
+            },
+          },
+        },
+      },
+      pluginIds: ["fish-audio"],
+    });
+
+    expect(npmInstallCall()?.expectedPluginId).toBe("fish-audio");
+    expect(npmInstallCall()?.expectedReplacementPluginId).toBe("fish-audio-speech");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["fish-audio-speech"]);
+    expect(result.config.plugins?.entries?.["fish-audio-speech"]).toEqual({
+      enabled: true,
+    });
+    expect(result.config.plugins?.entries?.["fish-audio"]).toBeUndefined();
+    expectRecordFields(result.config.plugins?.installs?.["fish-audio-speech"], {
+      source: "npm",
+      spec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
+      installPath: "/tmp/fish-audio-speech",
+      version: "2026.8.1",
+    });
+    expect(result.config.plugins?.installs?.["fish-audio"]).toBeUndefined();
+  });
+
   it("keeps authored plugin config shape when only the install key migrates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,

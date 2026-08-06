@@ -12,6 +12,7 @@ import {
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalChannelEnvVars,
@@ -23,6 +24,7 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLegacyIds,
 } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
@@ -266,6 +268,20 @@ describe("official external plugin catalog", () => {
       npmSpec: "@openclaw/codex",
       defaultChoice: "npm",
     });
+  });
+
+  it("keeps Fish Audio's legacy plugin id migration-only", () => {
+    const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
+    expect(entry).toBeDefined();
+    expect(resolveOfficialExternalPluginId(entry!)).toBe("fish-audio-speech");
+    expect(resolveOfficialExternalPluginLegacyIds(entry!)).toEqual(["fish-audio"]);
+    expect(resolveOfficialExternalPluginInstall(entry!)).toEqual({
+      npmSpec: "@openclaw/fish-audio-speech",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio-speech")).toBe(entry);
+    expect(getOfficialExternalPluginCatalogEntry("fish-audio")).toBeUndefined();
   });
 
   it("curates featured external plugins with ClawHub install alternatives", () => {
