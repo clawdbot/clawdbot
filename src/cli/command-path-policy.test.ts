@@ -305,6 +305,19 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("loads plugins for sandbox so plugin-provided backends are registered", () => {
+    // sandbox reports live runtime state and removes runtimes through the backend
+    // registry, which only plugins populate (src/agents/sandbox/backend.ts).
+    for (const commandPath of [
+      ["sandbox"],
+      ["sandbox", "list"],
+      ["sandbox", "recreate"],
+      ["sandbox", "explain"],
+    ]) {
+      expect(resolveCliCommandPathPolicy(commandPath).loadPlugins).toBe("always");
+    }
+  });
+
   it("resolves mixed startup-only rules", () => {
     expectResolvedPolicy(["qa", "suite"], {
       configGuard: "skip",

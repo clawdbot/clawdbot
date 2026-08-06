@@ -127,6 +127,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
+  // Sandbox backends live in plugins and register into the process-wide registry
+  // (src/agents/sandbox/backend.ts). Without them sandbox reports every non-docker
+  // runtime as stopped and removes registry entries without stopping the runtime.
+  { commandPath: ["sandbox"], policy: { loadPlugins: "always" } },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
     commandPath: ["agents"],
