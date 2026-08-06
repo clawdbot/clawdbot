@@ -614,6 +614,34 @@ describe("compaction-safeguard summary budgets", () => {
     }
   });
 
+  it("resumes a trimmed suffix on a line boundary, never mid-turn", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body = "## Decisions\n".padEnd(max, "b");
+    // A suffix between half the cap and the cap: previously appended whole,
+    // now trimmed because the body holds its reserved share. Preserved turns
+    // render one per line, so the cut must not restart inside one.
+    const turns = Array.from(
+      { length: 30 },
+      (_, i) => `- Assistant: turn-${i} ${"y".repeat(280)}`,
+    ).join("\n");
+    const suffix = `\n\n## Recent turns preserved verbatim\n${turns}`;
+    expect(suffix.length).toBeGreaterThan(max / 2);
+    expect(suffix.length).toBeLessThan(max);
+
+    const out = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(out.length).toBeLessThanOrEqual(max);
+    expect(out).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // Every surviving turn line is whole: the first one after the marker starts
+    // at a real line start, not partway through a rendered message.
+    const afterMarker = out.slice(out.indexOf(SUFFIX_TRUNCATED_MARKER.trim()));
+    for (const line of afterMarker.split("\n").slice(1).filter(Boolean)) {
+      expect(line, `partial line: ${line.slice(0, 40)}`).toMatch(
+        /^(- Assistant: turn-\d+ y+|##|<|\s*$)/,
+      );
+    }
+  });
+
   it("never exceeds the cap, down to a one-character budget", () => {
     const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
     const suffix =

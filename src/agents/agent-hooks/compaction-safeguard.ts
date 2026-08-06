@@ -616,7 +616,13 @@ function capCompactionSummaryPreservingSuffix(
     return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
   }
   // Suffix keeps its tail (workspace rules, diagnostics) over its head.
-  const keptSuffix = sliceUtf16Safe(suffix, -(suffixBudget - SUFFIX_TRUNCATED_MARKER.length));
+  const rawKept = sliceUtf16Safe(suffix, -(suffixBudget - SUFFIX_TRUNCATED_MARKER.length));
+  // Resume on a line boundary. Preserved turns render one per line and carry a
+  // verbatim contract, so a character-boundary cut can restart mid-message and
+  // leave a fragment that reads as a whole turn. Dropping the partial line
+  // costs a little more budget and keeps every surviving turn intact.
+  const lineBreak = rawKept.indexOf("\n");
+  const keptSuffix = lineBreak >= 0 ? rawKept.slice(lineBreak + 1) : rawKept;
   return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${keptSuffix}`;
 }
 
