@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { EventType } from "@ag-ui/core";
 import {
   extractToolResultText,
@@ -9,9 +8,8 @@ import {
 import {
   getWriter,
   getMessageId,
-  pushToolCallId,
-  popToolCallId,
   isClientTool,
+  isStateWriterTool,
   setClientToolCalled,
 } from "./tool-store.js";
 
@@ -26,10 +24,14 @@ import {
 interface BeforeToolCallEvent {
   toolName: string;
   params?: Record<string, unknown>;
+  /** Host-authoritative id for this call. */
+  toolCallId?: string;
 }
 
 interface ToolCallContext {
   sessionKey?: string;
+  /** Host-authoritative id for the owning tool call. */
+  toolCallId?: string;
 }
 
 /**
@@ -53,16 +55,27 @@ export function handleBeforeToolCall(event: BeforeToolCallEvent, ctx: ToolCallCo
   // sequence for the same call.
   if (isClientTool(sk, event.toolName)) {
     // Client/frontend tool: the HTTP handler emits its TOOL_CALL_* events via
-    // the pendingToolCalls path. Record that a client tool fired so the handler
-    // suppresses any trailing assistant text and ends the run for the browser
-    // to execute the tool.
-    setClientToolCalled(sk);
+    // the pendingToolCalls path, so skip emitting them here either way.
+    //
+    // Only a REAL browser tool sets clientToolCalled — that flag suppresses
+    // trailing assistant text and ends the run so the browser can execute the
+    // call. A state writer is executed by the handler itself and is deliberately
+    // followed by a narration turn; setting the flag for it would suppress that
+    // narration, leaving the user with a silent state change and no confirmation.
+    if (!isStateWriterTool(sk, event.toolName)) {
+      setClientToolCalled(sk);
+    }
     return;
   }
-  // Server (backend) tool: emit START + ARGS and push the id so
-  // tool_result_persist can emit TOOL_CALL_RESULT + TOOL_CALL_END after
-  // execute() completes.
-  const toolCallId = `tool-${randomUUID()}`;
+  // Server (backend) tool: emit START + ARGS keyed on the HOST's tool call id.
+  // Never invent one and never track it on a stack: the host runs tools in
+  // parallel and persists their results in source order, so a LIFO stack
+  // attaches result A to call B's card. The id the host gives us is the only
+  // correlation that survives concurrency.
+  const toolCallId = event.toolCallId ?? ctx.toolCallId;
+  if (!toolCallId) {
+    return;
+  }
   writer({
     type: EventType.TOOL_CALL_START,
     toolCallId,
@@ -75,7 +88,6 @@ export function handleBeforeToolCall(event: BeforeToolCallEvent, ctx: ToolCallCo
       delta: JSON.stringify(event.params),
     });
   }
-  pushToolCallId(sk, toolCallId);
 }
 
 /**
@@ -91,8 +103,22 @@ export function handleToolResultPersist(
     return;
   }
   const writer = getWriter(sk);
-  const toolCallId = popToolCallId(sk);
+  const toolCallId = (event as { toolCallId?: string }).toolCallId ?? ctx.toolCallId;
   const messageId = getMessageId(sk);
+  // Mirror the skip in handleBeforeToolCall. Marked tools have their whole
+  // TOOL_CALL_* sequence emitted by the handler's pendingToolCalls path, so if a
+  // result is ever persisted for one, emitting RESULT/END here would duplicate
+  // events against a toolCallId the client already saw closed. Skipping in the
+  // before-hook but not here left the two halves of one contract disagreeing.
+  //
+  // `event.isSynthetic` results are NOT skipped on purpose. Core fabricates them
+  // for a call that never returned (session-tool-result-guard flushes pending
+  // results on an interrupted run), and we already emitted START/ARGS for it —
+  // so this RESULT/END is what closes a card that would otherwise spin forever.
+  const toolName = (event as { toolName?: string }).toolName;
+  if (toolName && isClientTool(sk, toolName)) {
+    return;
+  }
   if (writer && toolCallId && messageId) {
     // Extract actual tool result text from event.message.content
     const msg = (event as Record<string, unknown>).message as { content?: unknown } | undefined;
