@@ -505,6 +505,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     systemRunPlan?: SystemRunApprovalPlan | null;
     cwd?: string;
     agentId?: string;
+    contextSessionKey?: string;
     security?: "full" | "allowlist";
     ask?: "off" | "on-miss" | "always";
     approvalDecision?: "allow" | "allow-once" | "allow-always" | "deny" | null;
@@ -619,6 +620,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         needsScreenRecording: params.needsScreenRecording,
         suppressNotifyOnExit: params.suppressNotifyOnExit,
         sessionKey: "agent:main:main",
+        ...(params.contextSessionKey !== undefined
+          ? { contextSessionKey: params.contextSessionKey }
+          : {}),
       },
       skillBins: {
         current: params.skillBinsCurrent ?? (async () => []),
@@ -1917,6 +1921,24 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       LC_TIME: "C",
       OPENCLAW_AGENT_ID: "main",
       OPENCLAW_SESSION_KEY: "agent:main:main",
+    });
+    expectInvokeOk(sendInvokeResult);
+  });
+
+  it("injects the live context session key when it diverges from the policy session key", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "off",
+      contextSessionKey: "agent:main:live-run",
+      sanitizeEnv: () => undefined,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    const passedEnv = firstMockCallArg(runCommand, "runCommand", 2);
+    expect(passedEnv).toMatchObject({
+      OPENCLAW_AGENT_ID: "main",
+      OPENCLAW_SESSION_KEY: "agent:main:live-run",
     });
     expectInvokeOk(sendInvokeResult);
   });

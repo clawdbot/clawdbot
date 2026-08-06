@@ -212,6 +212,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "needsScreenRecording",
     "agentId",
     "sessionKey",
+    "contextSessionKey",
     "runId",
     "suppressNotifyOnExit",
   ]) {

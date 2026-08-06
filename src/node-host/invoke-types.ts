@@ -29,6 +29,10 @@ export type SystemRunParams = {
   needsScreenRecording?: boolean | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  /** Live session key for child-context correlation when it diverges from the
+   *  approval-bound `sessionKey` (for example sandbox policy scopes). Injected
+   *  into the child environment; never used for approval binding. */
+  contextSessionKey?: string | null;
   approved?: boolean | null;
   approvalDecision?: string | null;
   approvalSource?: string | null;

@@ -105,6 +105,7 @@ type SystemRunParsePhase = {
   approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null;
   agentId: string | undefined;
   sessionKey: string;
+  contextSessionKey: string | undefined;
   runId: string;
   execution: SystemRunExecutionContext;
   approvalDecision: ReturnType<typeof resolveExecApprovalDecision>;
@@ -396,6 +397,7 @@ async function parseSystemRunPhase(
   const agentId = normalizeOptionalString(opts.params.agentId);
   const requestedSessionKey = normalizeOptionalString(opts.params.sessionKey);
   const sessionKey = requestedSessionKey ?? "node";
+  const contextSessionKey = normalizeOptionalString(opts.params.contextSessionKey);
   const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
   const cwd = normalizeOptionalString(opts.params.cwd);
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
@@ -525,6 +527,7 @@ async function parseSystemRunPhase(
     approvalPlan,
     agentId,
     sessionKey,
+    contextSessionKey,
     runId,
     execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
     approvalDecision,
@@ -973,6 +976,7 @@ async function executeSystemRunPhase(
       needsScreenRecording: phase.needsScreenRecording,
       agentId: phase.agentId ?? null,
       sessionKey: phase.sessionKey ?? null,
+      contextSessionKey: phase.contextSessionKey ?? null,
       approvalDecision: macApprovalDecision,
       approvalSource: macApprovalSource,
       ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
@@ -1078,7 +1082,8 @@ async function executeSystemRunPhase(
   const execEnv: Record<string, string> = {
     ...(phase.env ?? process.env),
     OPENCLAW_AGENT_ID: phase.agentId ?? "",
-    OPENCLAW_SESSION_KEY: phase.sessionKey === "node" ? "" : phase.sessionKey,
+    OPENCLAW_SESSION_KEY:
+      phase.contextSessionKey ?? (phase.sessionKey === "node" ? "" : phase.sessionKey),
   };
   const result = await (opts.signal
     ? opts.runCommand(execArgv, phase.cwd, execEnv, phase.timeoutMs, opts.signal)

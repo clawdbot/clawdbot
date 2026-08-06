@@ -63,8 +63,7 @@ struct ExecApprovalPromptRequest: Codable {
         self.resolvedPath = try container.decodeIfPresent(String.self, forKey: .resolvedPath)
         self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
         let decodedDecisions = (try? container.decodeIfPresent(
-            [DecodedExecApprovalDecision].self,
-            forKey: .allowedDecisions)) ?? []
+            [DecodedExecApprovalDecision].self, forKey: .allowedDecisions)) ?? []
         self.allowedDecisions = decodedDecisions.compactMap(\.decision)
     }
 
@@ -126,6 +125,7 @@ struct ExecHostRequest: Codable {
     var needsScreenRecording: Bool?
     var agentId: String?
     var sessionKey: String?
+    var contextSessionKey: String?
     var approvalDecision: ExecApprovalDecision?
     var approvalSource: String?
     var policySnapshot: OpenClawSystemRunApprovalPolicySnapshot?
@@ -999,7 +999,8 @@ private enum ExecHostExecutor {
         let cwd = request.cwd
         var env = context.env
         env["OPENCLAW_AGENT_ID"] = request.agentId ?? ""
-        env["OPENCLAW_SESSION_KEY"] = request.sessionKey == "node" ? "" : (request.sessionKey ?? "")
+        env["OPENCLAW_SESSION_KEY"] = request.contextSessionKey
+            ?? (request.sessionKey == "node" ? "" : (request.sessionKey ?? ""))
         if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
             return self.approvalStoreErrorResponse()
         }

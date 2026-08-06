@@ -14,6 +14,7 @@ export type ExecHostRequest = {
   needsScreenRecording?: boolean | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  contextSessionKey?: string | null;
   approvalDecision?: "allow-once" | "allow-always" | null;
   approvalSource?: "ask-fallback" | "auto-review" | null;
   policySnapshot?: ExecApprovalPolicySnapshot | null;
