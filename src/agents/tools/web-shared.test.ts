@@ -23,6 +23,7 @@ function responseFromReader(params: {
   chunks: string[];
   cancel: () => Promise<void>;
   releaseLock: () => void;
+  readError?: Error;
 }): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = params.chunks.map((chunk) => ({
     done: false,
@@ -30,7 +31,16 @@ function responseFromReader(params: {
   }));
   chunks.push({ done: true, value: undefined });
   const reader = {
-    read: async () => chunks.shift() ?? { done: true, value: undefined },
+    read: async () => {
+      const chunk = chunks.shift();
+      if (chunk) {
+        return chunk;
+      }
+      if (params.readError) {
+        throw params.readError;
+      }
+      return { done: true, value: undefined };
+    },
     cancel: params.cancel,
     releaseLock: params.releaseLock,
   } as ReadableStreamDefaultReader<Uint8Array>;

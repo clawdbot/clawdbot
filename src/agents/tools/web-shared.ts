@@ -294,6 +294,15 @@ export async function readResponseText(
     return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
   }
 
+  if (maxBytes && body === undefined) {
+    // A Response-like object without a readable body cannot be bounded safely.
+    // Do not fall through to its whole-body convenience methods.
+    return { text: "", truncated: true, bytesRead: 0 };
+  }
+  if (maxBytes && body === null) {
+    return { text: "", truncated: false, bytesRead: 0 };
+  }
+
   const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
   if (typeof readBytes === "function") {
     try {
@@ -310,7 +319,7 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
-    return { text, truncated: false, bytesRead: text.length };
+    return { text, truncated: false, bytesRead: new TextEncoder().encode(text).byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }
