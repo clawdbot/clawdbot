@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { Insertable, Selectable } from "kysely";
-import { stableStringify } from "../agents/stable-stringify.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
