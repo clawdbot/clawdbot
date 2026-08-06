@@ -54,27 +54,24 @@ type SendTextOptions = {
 };
 
 function buildTelegramTextSendReceipt(params: {
-  messageIds: readonly string[];
-  chatId: string;
-  messageThreadId?: number;
+  results: readonly TelegramSendResult[];
   replyToMessageId?: number;
 }) {
-  if (params.messageIds.length <= 1) {
+  if (params.results.length === 0) {
     return undefined;
   }
-  return createMessageReceiptFromOutboundResults({
-    results: params.messageIds.map((messageId) => ({
-      messageId,
-      chatId: params.chatId,
-    })),
+  if (params.results.length === 1) {
+    return params.results[0]?.receipt;
+  }
+  const receipt = createMessageReceiptFromOutboundResults({
+    results: params.results,
     kind: "text",
-    ...(typeof params.messageThreadId === "number"
-      ? { threadId: String(params.messageThreadId) }
-      : {}),
     ...(typeof params.replyToMessageId === "number"
       ? { replyToId: String(params.replyToMessageId) }
       : {}),
   });
+  receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+  return receipt;
 }
 
 export function createTelegramTextSender(config: {
@@ -87,8 +84,11 @@ export function createTelegramTextSender(config: {
   reportDelivery: (
     messageId: string | number,
     deliveredChatId: string | number,
+    message: TelegramMessageLike,
     meta?: TelegramSendResult["meta"],
-  ) => Promise<void>;
+    kind?: "text" | "media",
+    onPrepared?: (delivery: TelegramSendResult) => void,
+  ) => Promise<TelegramSendResult>;
   recordDeliveredPromptContext: (
     params: Omit<
       Parameters<typeof recordOutboundMessageForPromptContext>[0],
@@ -250,6 +250,7 @@ export function createTelegramTextSender(config: {
       | undefined;
     let acceptedReplyToMessageId: number | undefined;
     const messageIds: string[] = [];
+    const deliveryResults: TelegramSendResult[] = [];
     let sentChunkCount = 0;
     let pendingChunk: PendingChunk | undefined;
 
@@ -267,10 +268,17 @@ export function createTelegramTextSender(config: {
         }
       }
       if (!chunk.reported) {
-        await reportDelivery(chunk.messageId, chunk.reportChatId, {
-          telegramDeliveredText: chunk.plainText,
-          telegramHasInlineKeyboard: hasInlineKeyboard,
-        });
+        await reportDelivery(
+          chunk.messageId,
+          chunk.reportChatId,
+          chunk.result,
+          {
+            telegramDeliveredText: chunk.plainText,
+            telegramHasInlineKeyboard: hasInlineKeyboard,
+          },
+          "text",
+          (delivery) => deliveryResults.push(delivery),
+        );
       }
       await recordDeliveredPromptContext(
         {
@@ -322,10 +330,17 @@ export function createTelegramTextSender(config: {
       recordSentMessage(chatId, messageId, cfg);
       const reported = !replyMarkup;
       if (reported) {
-        await reportDelivery(messageId, params.result?.chat?.id ?? chatId, {
-          telegramDeliveredText: params.plainText,
-          telegramHasInlineKeyboard: params.hasInlineKeyboard,
-        });
+        await reportDelivery(
+          messageId,
+          params.result?.chat?.id ?? chatId,
+          params.result,
+          {
+            telegramDeliveredText: params.plainText,
+            telegramHasInlineKeyboard: params.hasInlineKeyboard,
+          },
+          "text",
+          (delivery) => deliveryResults.push(delivery),
+        );
       }
       const previousChunk = pendingChunk;
       pendingChunk = {
@@ -358,9 +373,7 @@ export function createTelegramTextSender(config: {
         });
       }
       const receipt = buildTelegramTextSendReceipt({
-        messageIds,
-        chatId: lastChatId,
-        messageThreadId: lastAcceptedParams?.message_thread_id,
+        results: deliveryResults,
         replyToMessageId: acceptedReplyToMessageId,
       });
       return {
@@ -372,9 +385,7 @@ export function createTelegramTextSender(config: {
 
     const partialDeliveryResult = () => {
       const receipt = buildTelegramTextSendReceipt({
-        messageIds,
-        chatId: lastChatId,
-        messageThreadId: lastAcceptedParams?.message_thread_id,
+        results: deliveryResults,
         replyToMessageId: acceptedReplyToMessageId,
       });
       return {
