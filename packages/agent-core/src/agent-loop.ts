@@ -990,6 +990,8 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  toolCanYield?: boolean;
+  toolExecutionMode?: AgentTool["executionMode"];
   errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
   resultContentSource?: ToolResultContentSource;
@@ -1310,6 +1312,7 @@ async function finalizeExecutedToolCall(
           content: afterResult.content ?? result.content,
           details: afterResult.details ?? result.details,
           terminate: afterResult.terminate ?? result.terminate,
+          control: afterResult.control ?? result.control,
         };
         isError = afterResult.isError ?? isError;
       }
@@ -1327,6 +1330,8 @@ async function finalizeExecutedToolCall(
       result,
       isError,
       executionStarted: executed.executionStarted,
+      toolCanYield: prepared.tool.canYield,
+      toolExecutionMode: prepared.tool.executionMode,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       ...(executed.executionStarted &&
       !executed.callerCancelled &&
@@ -1348,48 +1353,90 @@ async function finalizeToolCallOutcome(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
 ): Promise<FinalizedToolCallOutcome> {
-  if (!config.afterToolOutcome) {
-    return finalized;
+  let outcome = finalized;
+  if (config.afterToolOutcome) {
+    try {
+      const afterResult = await config.afterToolOutcome(
+        {
+          assistantMessage,
+          toolCall: finalized.toolCall,
+          args,
+          result: finalized.result,
+          isError: finalized.isError,
+          executionStarted: finalized.executionStarted,
+          ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+          context: currentContext,
+        },
+        signal,
+      );
+      if (afterResult) {
+        outcome = {
+          ...finalized,
+          result: {
+            ...finalized.result,
+            content: afterResult.content ?? finalized.result.content,
+            details: afterResult.details ?? finalized.result.details,
+            terminate: afterResult.terminate ?? finalized.result.terminate,
+            control: afterResult.control ?? finalized.result.control,
+          },
+          isError: afterResult.isError ?? finalized.isError,
+        };
+      }
+    } catch (error) {
+      const errorResult = createErrorToolResult(
+        error instanceof Error ? error.message : String(error),
+      );
+      outcome = {
+        ...finalized,
+        result: {
+          ...errorResult,
+          ...(finalized.result.terminate === undefined
+            ? {}
+            : { terminate: finalized.result.terminate }),
+        },
+        isError: true,
+      };
+    }
+  }
+
+  const control = outcome.result.control;
+  if (!control) {
+    return outcome;
+  }
+  if (!config.onToolResultControl) {
+    return {
+      ...outcome,
+      result: createErrorToolResult(
+        `Tool requested ${control.type}, but ${control.type} is not supported in this runtime`,
+      ),
+      isError: true,
+    };
+  }
+  if (outcome.toolCanYield !== true) {
+    return {
+      ...outcome,
+      result: createErrorToolResult(
+        `Tool ${outcome.toolCall.name} requested ${control.type}, but yielding tools must declare canYield: true`,
+      ),
+      isError: true,
+    };
+  }
+  if (outcome.toolExecutionMode !== "sequential") {
+    return {
+      ...outcome,
+      result: createErrorToolResult(
+        `Tool ${outcome.toolCall.name} requested ${control.type}, but yielding tools must declare executionMode: "sequential"`,
+      ),
+      isError: true,
+    };
   }
   try {
-    const afterResult = await config.afterToolOutcome(
-      {
-        assistantMessage,
-        toolCall: finalized.toolCall,
-        args,
-        result: finalized.result,
-        isError: finalized.isError,
-        executionStarted: finalized.executionStarted,
-        ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
-        context: currentContext,
-      },
-      signal,
-    );
-    if (!afterResult) {
-      return finalized;
-    }
-    return {
-      ...finalized,
-      result: {
-        ...finalized.result,
-        content: afterResult.content ?? finalized.result.content,
-        details: afterResult.details ?? finalized.result.details,
-        terminate: afterResult.terminate ?? finalized.result.terminate,
-      },
-      isError: afterResult.isError ?? finalized.isError,
-    };
+    await config.onToolResultControl(control);
+    return outcome;
   } catch (error) {
-    const errorResult = createErrorToolResult(
-      error instanceof Error ? error.message : String(error),
-    );
     return {
-      ...finalized,
-      result: {
-        ...errorResult,
-        ...(finalized.result.terminate === undefined
-          ? {}
-          : { terminate: finalized.result.terminate }),
-      },
+      ...outcome,
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
     };
   }

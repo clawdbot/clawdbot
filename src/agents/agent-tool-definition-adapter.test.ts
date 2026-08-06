@@ -319,6 +319,41 @@ describe("agent tool definition adapter", () => {
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
   });
 
+  it("preserves yield control for the finalized result handler", async () => {
+    const tool = {
+      name: "ask_user",
+      label: "Ask User",
+      description: "sends a native question card",
+      parameters: Type.Object({}),
+      canYield: true,
+      executionMode: "sequential",
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "Card sent." }],
+        details: { status: "pending" },
+        control: { type: "yield" as const, message: "Waiting for card response" },
+      }),
+    } satisfies AgentTool;
+
+    const [definition] = toToolDefinitions([tool], {
+      sessionId: "session-yield-tool-result",
+    });
+    if (!definition) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-yield-result",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toEqual({ status: "pending" });
+    expect(result.control).toEqual({ type: "yield", message: "Waiting for card response" });
+    expect(definition.canYield).toBe(true);
+  });
+
   it("does not re-run hook preparation for an already wrapped tool", async () => {
     const prepareBeforeToolCallParams = vi.fn((params: unknown) => params);
     const execute = vi.fn(async () => ({

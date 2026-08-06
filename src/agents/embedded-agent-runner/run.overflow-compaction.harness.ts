@@ -249,7 +249,7 @@ const mockedPrepareProviderRuntimeAuth = vi.fn<
 >(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
-const mockedBuildEmbeddedRunPayloads = vi.fn<
+export const mockedBuildEmbeddedRunPayloads = vi.fn<
   (
     ...args: Parameters<typeof buildEmbeddedRunPayloads>
   ) => ReturnType<typeof buildEmbeddedRunPayloads>

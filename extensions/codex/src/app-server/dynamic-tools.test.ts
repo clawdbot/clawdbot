@@ -405,6 +405,45 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("fails explicitly when a dynamic tool returns an unsupported result control", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Question sent." }],
+      details: { status: "pending" },
+      control: { type: "yield" as const, message: "Waiting for answer" },
+    }));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "ask_user",
+          canYield: true,
+          executionMode: "sequential",
+          execute,
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-yield",
+      namespace: null,
+      tool: "ask_user",
+      arguments: {},
+    });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "Tool requested yield, but yield is not supported in this runtime",
+        },
+      ],
+    });
+  });
+
   it("treats an accepted child session spawn result as a successful dynamic tool call", async () => {
     // An accepted sessions_spawn launch carries details.status "accepted" with a
     // runId + childSessionKey. The launch succeeded (the child session was

@@ -140,6 +140,10 @@ describe("plugin tool descriptor cache keys", () => {
         parameters: { type: "object", properties: {} },
         outputSchema,
         requiredClientCaps: ["inline-widgets"],
+        canYield: true,
+        executionMode: "sequential",
+        catalogMode: "direct-only",
+        hideFromChannelProgress: true,
         resultContentSource: "network",
         execute: async () => ({ content: [], details: {} }),
       },
@@ -147,7 +151,13 @@ describe("plugin tool descriptor cache keys", () => {
 
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
     expect(cached.descriptor.outputSchema).toBe(outputSchema);
-    expect(cached).toHaveProperty("resultContentSource", "network");
+    expect(cached.runtimeMetadata).toEqual({
+      canYield: true,
+      executionMode: "sequential",
+      catalogMode: "direct-only",
+      hideFromChannelProgress: true,
+      resultContentSource: "network",
+    });
   });
 
   it("does not add network provenance to descriptors for ordinary plugin tools", () => {
@@ -163,7 +173,7 @@ describe("plugin tool descriptor cache keys", () => {
       },
     });
 
-    expect(cached).not.toHaveProperty("resultContentSource");
+    expect(cached.runtimeMetadata).not.toHaveProperty("resultContentSource");
   });
 
   it("isolates descriptor caches by declared gateway client capabilities", () => {

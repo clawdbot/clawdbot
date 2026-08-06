@@ -311,6 +311,54 @@ registrations are skipped and reported the same way: a missing non-empty
 `name`, a non-function `execute`, or a tool descriptor without a `parameters`
 object.
 
+Tools that hand work to an external interaction surface can return
+`yieldToolResult(...)` from `openclaw/plugin-sdk/tool-results` after the external
+side effect succeeds. OpenClaw records the tool result, ends the current turn
+with the same runtime path as `sessions_yield`, and waits for a later inbound
+event to resume the session. Use this for flows such as native channel approval
+cards where continuing the model loop before the callback would create stale or
+duplicate work. OpenClaw applies the control only after host result-finalization
+hooks have finished. Current plugin result hooks can change content and details,
+but do not add, replace, or veto the control.
+
+The result-level control is the opt-in atomic handoff path for agent-core tools.
+Existing `sessions_yield`, media-generation, and CLI loopback yield adapters keep
+their imperative compatibility behavior; they are not aliases for this Plugin
+SDK contract. Native Codex and Copilot harnesses do not consume result controls,
+so they return an explicit unsupported-runtime tool error instead of silently
+continuing.
+
+A tool that can return a yield control must declare both `canYield: true` and
+`executionMode: "sequential"`. The scheduler reads the execution mode before the
+batch starts, so a successful yield aborts the turn before later sibling tools
+run. OpenClaw keeps only `canYield` tools model-visible instead of hiding them
+behind Tool Search or Code Mode, because those catalog bridges cannot preserve
+the target tool's pre-execution scheduling identity. Ordinary non-yielding
+sequential tools retain their existing catalog behavior. OpenClaw rejects yield
+controls from tools without both declarations. Runtimes that do not support the
+control also return an explicit tool error instead of silently continuing the
+turn.
+
+```typescript
+import { yieldToolResult } from "openclaw/plugin-sdk/tool-results";
+import { Type } from "typebox";
+
+api.registerTool({
+  name: "ask_user",
+  description: "Ask the user a question and wait for the answer",
+  parameters: Type.Object({ questionId: Type.String() }),
+  canYield: true,
+  executionMode: "sequential",
+  async execute(_id, { questionId }) {
+    return yieldToolResult({
+      text: "Question sent.",
+      details: { status: "pending", questionId },
+      message: `Waiting for answer to ${questionId}`,
+    });
+  },
+});
+```
+
 Tool factories receive a runtime-supplied context object. Use `ctx.activeModel`
 when a tool needs to log, display, or adapt to the active model for the current
 turn; it can include `provider`, `modelId`, and `modelRef`. Treat it as

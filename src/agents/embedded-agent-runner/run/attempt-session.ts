@@ -51,6 +51,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   initialSystemPrompt: string;
   markStage: (stage: string) => void;
   onSessionCreated: (session: AgentSession) => void;
+  onYield: (message: string) => Promise<void> | void;
   onSystemPromptChanged: (systemPrompt: string) => void;
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
@@ -181,6 +182,11 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
+  activeSession.agent.onToolResultControl = async (control) => {
+    if (control.type === "yield") {
+      await input.onYield(control.message?.trim() || "Turn yielded.");
+    }
+  };
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {

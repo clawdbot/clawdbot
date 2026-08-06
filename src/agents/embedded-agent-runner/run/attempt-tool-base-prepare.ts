@@ -338,6 +338,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
+    onYield: params.onYield,
     replaySafetyOptions,
     runtimeCapabilityProfile,
     toolSearchCatalogRef,

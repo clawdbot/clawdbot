@@ -8,7 +8,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metada
 import type { PluginRegistry } from "./registry-types.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 3;
+const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 4;
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 
 /** Cached display descriptor for one plugin-created tool. */
@@ -16,7 +16,10 @@ export type CachedPluginToolDescriptor = {
   descriptor: ToolDescriptor;
   displaySummary?: string;
   requiredClientCaps?: string[];
-  resultContentSource?: AnyAgentTool["resultContentSource"];
+  runtimeMetadata: Pick<
+    AnyAgentTool,
+    "canYield" | "executionMode" | "catalogMode" | "hideFromChannelProgress" | "resultContentSource"
+  >;
   optional: boolean;
 };
 
@@ -161,9 +164,15 @@ export function capturePluginToolDescriptor(params: {
     ...(params.tool.requiredClientCaps
       ? { requiredClientCaps: [...params.tool.requiredClientCaps] }
       : {}),
-    ...(params.tool.resultContentSource
-      ? { resultContentSource: params.tool.resultContentSource }
-      : {}),
+    runtimeMetadata: {
+      ...(params.tool.canYield === true ? { canYield: true } : {}),
+      ...(params.tool.executionMode ? { executionMode: params.tool.executionMode } : {}),
+      ...(params.tool.catalogMode ? { catalogMode: params.tool.catalogMode } : {}),
+      ...(params.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+      ...(params.tool.resultContentSource
+        ? { resultContentSource: params.tool.resultContentSource }
+        : {}),
+    },
     optional: params.optional,
     descriptor: {
       name: params.tool.name,

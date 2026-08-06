@@ -66,6 +66,23 @@ type ClientToolCallRecorder =
       discard?: (toolCallId: string, toolName: string) => void;
     };
 
+function normalizeToolControl(value: unknown): AgentToolResult<unknown>["control"] | undefined {
+  if (!isPlainObject(value) || value.type !== "yield") {
+    return undefined;
+  }
+  return typeof value.message === "string"
+    ? { type: "yield", message: value.message }
+    : { type: "yield" };
+}
+
+function withNormalizedToolControl<TDetails>(
+  result: AgentToolResult<TDetails>,
+  control: unknown,
+): AgentToolResult<TDetails> {
+  const normalizedControl = normalizeToolControl(control);
+  return normalizedControl ? { ...result, control: normalizedControl } : result;
+}
+
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
 }
@@ -234,12 +251,12 @@ function normalizeToolExecutionResult(params: {
   if (result && typeof result === "object") {
     const record = result as Record<string, unknown>;
     if (Array.isArray(record.content)) {
-      return result as AgentToolResult<unknown>;
+      return withNormalizedToolControl(result as AgentToolResult<unknown>, record.control);
     }
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
     const details = "details" in record ? record.details : record;
     const safeDetails = details ?? { status: "ok", tool: toolName };
-    return payloadTextResult(safeDetails);
+    return withNormalizedToolControl(payloadTextResult(safeDetails), record.control);
   }
   const safeDetails = result ?? { status: "ok", tool: toolName };
   return payloadTextResult(safeDetails);
@@ -341,6 +358,7 @@ export function toToolDefinitions(
       label: tool.label ?? name,
       ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
+      ...(tool.canYield === true ? { canYield: true } : {}),
       description: tool.description ?? "",
       parameters: tool.parameters,
       prepareArguments: tool.prepareArguments,
@@ -410,11 +428,10 @@ export function toToolDefinitions(
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
-          const result = normalizeToolExecutionResult({
+          return normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
           });
-          return result;
         } catch (err) {
           if (signal?.aborted) {
             throw err;

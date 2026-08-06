@@ -216,7 +216,16 @@ function toCatalogEntry(
 }
 
 function shouldCatalogTool(tool: AnyAgentTool): boolean {
-  return !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) && tool.catalogMode !== "direct-only";
+  if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
+    return false;
+  }
+  // Hidden catalog bridges execute through an outer control tool. Keeping only
+  // yield-capable tools direct preserves their pre-execution scheduling identity
+  // without changing catalog behavior for ordinary sequential tools.
+  if (tool.canYield === true) {
+    return false;
+  }
+  return tool.catalogMode !== "direct-only";
 }
 
 /**

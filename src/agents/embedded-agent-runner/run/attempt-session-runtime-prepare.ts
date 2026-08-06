@@ -57,6 +57,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     | "clientToolPreparation"
     | "getCurrentAttemptPluginMetadataSnapshot"
     | "markStage"
+    | "onYield"
     | "runAbortSignal"
   >;
   contextGuards: Pick<ContextGuardsInput, "computerContextEpoch">;
@@ -123,6 +124,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       input.agentSession.getCurrentAttemptPluginMetadataSnapshot,
     initialSystemPrompt: state.systemPromptText,
     markStage: input.agentSession.markStage,
+    onYield: input.agentSession.onYield,
     onSessionCreated: input.lifecycle.onSessionCreated,
     onSystemPromptChanged: (systemPromptText) => {
       state.systemPromptText = systemPromptText;
