@@ -270,7 +270,7 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
   }
 
   for (const [key, lineEntry] of Object.entries(lineParsed)) {
-    if (!(key in merged)) {
+    if (!Object.hasOwn(merged, key)) {
       merged[key] = lineEntry.value;
     }
   }
