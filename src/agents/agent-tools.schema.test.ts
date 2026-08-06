@@ -886,6 +886,25 @@ describe("normalizeToolParameters", () => {
     expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT]).toBe(hookContext);
   });
 
+  it("preserves accessor-backed schemas instead of snapshotting them", () => {
+    let currentParameters: TSchema = Type.Object({ stale: Type.String() });
+    const tool: AnyAgentTool = {
+      name: "dynamic_tool",
+      label: "Dynamic Tool",
+      description: "test",
+      get parameters() {
+        return currentParameters;
+      },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+    expect(normalized.parameters).toEqual(Type.Object({ stale: Type.String() }));
+
+    currentParameters = Type.Object({ fresh: Type.String() });
+    expect(normalized.parameters).toEqual(Type.Object({ fresh: Type.String() }));
+  });
+
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
     const tool: AnyAgentTool = {
       name: "get_flux_instance",

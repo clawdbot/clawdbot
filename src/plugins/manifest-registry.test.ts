@@ -2360,6 +2360,16 @@ describe("loadPluginManifestRegistry", () => {
           ],
         },
       },
+      webSearchProviderMetadata: {
+        search: {
+          configSignals: [
+            {
+              rootPath: "models.providers.acme",
+              required: ["apiKey"],
+            },
+          ],
+        },
+      },
       mediaUnderstandingProviderMetadata: {
         openai: {
           capabilities: ["image", "audio", "unknown"],
@@ -2441,6 +2451,16 @@ describe("loadPluginManifestRegistry", () => {
             },
             requiredAny: ["workflow", "workflowPath"],
             required: ["promptNodeId"],
+          },
+        ],
+      },
+    });
+    expect(registry.plugins[0]?.webSearchProviderMetadata).toEqual({
+      search: {
+        configSignals: [
+          {
+            rootPath: "models.providers.acme",
+            required: ["apiKey"],
           },
         ],
       },

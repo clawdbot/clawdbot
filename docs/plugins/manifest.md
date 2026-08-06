@@ -170,6 +170,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `imageGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                             |
 | `videoGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap video-generation auth metadata for provider ids declared in `contracts.videoGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                             |
 | `musicGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap music-generation auth metadata for provider ids declared in `contracts.musicGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                             |
+| `webSearchProviderMetadata`          | No       | `Record<string, object>`     | Cheap web-search auth/config metadata for provider ids declared in `contracts.webSearchProviders`. It can describe provider-owned credential fallbacks without importing provider runtime.                                                                                                     |
 | `toolMetadata`                       | No       | `Record<string, object>`     | Cheap availability metadata for plugin-owned tools declared in `contracts.tools`. Use it when a tool should not load runtime unless config, env, or auth evidence exists.                                                                                                                      |
 | `channelConfigs`                     | No       | `Record<string, object>`     | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                                                                                     |
 | `skills`                             | No       | `string[]`                   | Skill directories to load, relative to the plugin root.                                                                                                                                                                                                                                        |
@@ -250,11 +251,11 @@ The manifest ids are plugin-local. Widget grants use `<plugin-id>.<id>`, such as
 | `featured` | `boolean` | Whether catalog surfaces should feature this plugin.                       |
 | `order`    | `number`  | Ascending display hint among curated plugins; lower values appear earlier. |
 
-## Generation provider metadata reference
+## Capability provider metadata reference
 
-The generation provider metadata fields describe static auth signals for providers declared in the matching `contracts.*GenerationProviders` list. OpenClaw reads these fields before provider runtime loads so core tools can decide whether a generation provider is available without importing every provider plugin.
+The image, video, music, and web-search provider metadata fields describe static auth/config signals for providers declared in the matching `contracts.*Providers` list. OpenClaw reads these fields before provider runtime loads so core tools can decide whether a capability provider is available without importing every provider plugin.
 
-Use these fields only for cheap, declarative facts. Transport, request transforms, token refresh, credential validation, and actual generation behavior stay in the plugin runtime.
+Use these fields only for cheap, declarative facts. Transport, request transforms, token refresh, credential validation, and actual capability behavior stay in the plugin runtime. Metadata never bypasses the owning plugin's enablement, allowlist, denylist, or installed-plugin policy.
 
 ```json
 {
@@ -289,6 +290,28 @@ Use these fields only for cheap, declarative facts. Transport, request transform
             "defaultBaseUrl": "https://api.example.com/v1",
             "allowedBaseUrls": ["https://api.example.com/v1"]
           }
+        }
+      ]
+    }
+  }
+}
+```
+
+Web-search providers use the same `configSignals` shape. For example, a provider
+that can reuse a configured model-provider API key can declare that fallback
+without making core load or special-case its runtime:
+
+```json
+{
+  "contracts": {
+    "webSearchProviders": ["example-search"]
+  },
+  "webSearchProviderMetadata": {
+    "example-search": {
+      "configSignals": [
+        {
+          "rootPath": "models.providers.example",
+          "required": ["apiKey"]
         }
       ]
     }

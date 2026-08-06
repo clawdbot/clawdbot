@@ -15,6 +15,8 @@ type ExecuteWebSearchCandidatesParams = {
   allowFallback: boolean;
 };
 
+const CLI_FALLBACK_ARGUMENT_ALIASES = new Set(["limit"]);
+
 function isStructuredAvailabilityError(result: unknown): result is { error: string } {
   if (!result || typeof result !== "object" || !("error" in result)) {
     return false;
@@ -23,13 +25,57 @@ function isStructuredAvailabilityError(result: unknown): result is { error: stri
   return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
 }
 
+function asSchemaRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function resolveUnsupportedFallbackArguments(
+  parameters: unknown,
+  args: Record<string, unknown>,
+): string[] {
+  const schema = asSchemaRecord(parameters);
+  const properties = asSchemaRecord(schema?.properties);
+  if (schema?.type !== "object" || !properties) {
+    return [];
+  }
+  return Object.keys(args).filter((name) => !Object.hasOwn(properties, name));
+}
+
+function normalizeFallbackArguments(
+  parameters: unknown,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const schema = asSchemaRecord(parameters);
+  const properties = asSchemaRecord(schema?.properties);
+  if (schema?.type !== "object" || !properties) {
+    return args;
+  }
+  const hasOmittedOrUnsupportedCliArgument = Object.entries(args).some(
+    ([name, value]) =>
+      value === undefined ||
+      (CLI_FALLBACK_ARGUMENT_ALIASES.has(name) && !Object.hasOwn(properties, name)),
+  );
+  if (!hasOmittedOrUnsupportedCliArgument) {
+    return args;
+  }
+  return Object.fromEntries(
+    Object.entries(args).filter(
+      ([name, value]) =>
+        value !== undefined &&
+        (!CLI_FALLBACK_ARGUMENT_ALIASES.has(name) || Object.hasOwn(properties, name)),
+    ),
+  );
+}
+
 export async function executeWebSearchCandidates(
   params: ExecuteWebSearchCandidatesParams,
 ): Promise<RunWebSearchResult> {
   let lastError: unknown;
   let sawUnavailableProvider = false;
 
-  for (const candidate of params.candidates) {
+  for (const [candidateIndex, candidate] of params.candidates.entries()) {
     params.signal?.throwIfAborted();
     try {
       const definition = candidate.createTool({
@@ -45,7 +91,20 @@ export async function executeWebSearchCandidates(
         sawUnavailableProvider = true;
         continue;
       }
-      const executed = await definition.execute(params.args, { signal: params.signal });
+      let executionArgs = params.args;
+      if (params.allowFallback && candidateIndex > 0) {
+        executionArgs = normalizeFallbackArguments(definition.parameters, params.args);
+        const unsupportedArguments = resolveUnsupportedFallbackArguments(
+          definition.parameters,
+          executionArgs,
+        );
+        if (unsupportedArguments.length > 0) {
+          throw new Error(
+            `web_search fallback provider "${candidate.id}" does not accept provider-specific arguments: ${unsupportedArguments.join(", ")}. Retry without those arguments or explicitly select a compatible provider.`,
+          );
+        }
+      }
+      const executed = await definition.execute(executionArgs, { signal: params.signal });
       // Cancellation wins races with provider completion or cleanup failures. Otherwise an
       // ignored signal could return stale work or trigger another provider fallback.
       params.signal?.throwIfAborted();

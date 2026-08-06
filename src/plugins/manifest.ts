@@ -292,6 +292,9 @@ export function loadPluginManifest(
       musicGenerationProviderMetadata: capabilityNormalizers.normalizeCapabilityProviderMetadata(
         raw.musicGenerationProviderMetadata,
       ),
+      webSearchProviderMetadata: capabilityNormalizers.normalizeCapabilityProviderMetadata(
+        raw.webSearchProviderMetadata,
+      ),
       toolMetadata: capabilityNormalizers.normalizePluginToolMetadata(raw.toolMetadata),
       configContracts: capabilityNormalizers.normalizeManifestConfigContracts(raw.configContracts),
       channelConfigs: setupNormalizers.normalizeChannelConfigs(raw.channelConfigs),

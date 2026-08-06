@@ -27,8 +27,6 @@ const GEMINI_TOOL_PARAMETERS = {
       minimum: 1,
       maximum: 10,
     },
-    country: { type: "string", description: "Not supported by Gemini." },
-    language: { type: "string", description: "Not supported by Gemini." },
     freshness: {
       type: "string",
       description:

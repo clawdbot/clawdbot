@@ -73,6 +73,28 @@ export function normalizeToolParameters(
   if (!schema) {
     return tool;
   }
+  const parameterDescriptor = Object.getOwnPropertyDescriptor(tool, "parameters");
+  if (parameterDescriptor?.get || parameterDescriptor?.set) {
+    const readNormalizedParameters = () => {
+      const current = tool.parameters;
+      return current && typeof current === "object"
+        ? normalizeToolParameterSchema(current as Record<string, unknown>, options)
+        : current;
+    };
+    return copyAgentToolMetadata(tool, {
+      ...tool,
+      prepareArguments: (args: unknown) => {
+        const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        return isObjectSchemaWithNoRequiredParams(readNormalizedParameters()) &&
+          (prepared === null || prepared === undefined)
+          ? {}
+          : prepared;
+      },
+      get parameters() {
+        return readNormalizedParameters();
+      },
+    });
+  }
   const parameters = normalizeToolParameterSchema(schema, options);
   return copyAgentToolMetadata(tool, {
     ...tool,

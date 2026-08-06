@@ -1532,7 +1532,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
+        "description": "Search current web and return normalized provider results. Available filters depend on the active provider.",
         "inputSchema": {
           "properties": {
             "count": {

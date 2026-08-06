@@ -757,6 +757,16 @@
       "nativeDocumentInputs": ["pdf"]
     }
   },
+  "webSearchProviderMetadata": {
+    "gemini": {
+      "configSignals": [
+        {
+          "rootPath": "models.providers.google",
+          "required": ["apiKey"]
+        }
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
