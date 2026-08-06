@@ -46,6 +46,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     tailnetDns: tailnetHost,
                     gatewayTls: true,
                     stableID: "tailscale-serve|\(tailnetHost)"),
+                currentRouteIsDiscoveryOwned: false,
                 state: state)
 
             #expect(state.remoteTransport == .direct)
@@ -54,7 +55,7 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `selecting merged tailnet gateway still switches to direct transport`() async {
+    @Test func `selecting txt advertised tailnet gateway keeps ssh transport`() async {
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
@@ -68,14 +69,15 @@ struct GatewayDiscoverySelectionSupportTests {
                     tailnetDns: tailnetHost,
                     gatewayTls: true,
                     stableID: "wide-area|openclaw.internal.|gateway-host"),
+                currentRouteIsDiscoveryOwned: false,
                 state: state)
 
-            #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == "wss://\(tailnetHost)")
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
         }
     }
 
-    @Test func `tailnet discovery without reachability flags uses secure direct transport`() async {
+    @Test func `tailnet discovery without verified serve source keeps ssh transport`() async {
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
@@ -88,10 +90,11 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 18789,
                     tailnetDns: tailnetHost,
                     stableID: "wide-area|openclaw.internal.|gateway-host"),
+                currentRouteIsDiscoveryOwned: false,
                 state: state)
 
-            #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == "wss://\(tailnetHost):18789")
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
         }
     }
 
@@ -108,6 +111,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     serviceHost: "nearby-gateway.local",
                     servicePort: 18789,
                     stableID: "bonjour|nearby-gateway"),
+                currentRouteIsDiscoveryOwned: false,
                 state: state)
 
             #expect(state.remoteTransport == .ssh)
@@ -129,6 +133,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 19999,
                     gatewayDirectReachable: true,
                     stableID: "bonjour|nearby-gateway-custom"),
+                currentRouteIsDiscoveryOwned: false,
                 state: state)
 
             #expect(state.remoteTransport == .ssh)
@@ -149,6 +154,7 @@ struct GatewayDiscoverySelectionSupportTests {
                     servicePort: 443,
                     gatewayTls: true,
                     stableID: "bonjour|nearby-gateway-tls"),
+                currentRouteIsDiscoveryOwned: false,
                 state: state)
 
             #expect(state.remoteTransport == .ssh)
@@ -167,10 +173,52 @@ struct GatewayDiscoverySelectionSupportTests {
                     serviceHost: "nearby-gateway.local",
                     servicePort: 19999,
                     stableID: "bonjour|nearby-gateway-manual"),
+                currentRouteIsDiscoveryOwned: false,
                 state: state)
 
             #expect(state.remoteTransport == .direct)
             #expect(state.remoteUrl == "ws://nearby-gateway.local:19999")
+        }
+    }
+
+    @Test func `selecting raw tailnet gateway preserves explicit direct transport`() async {
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state.remoteTransport = .direct
+
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: self.makeGateway(
+                    serviceHost: tailnetHost,
+                    servicePort: 18789,
+                    stableID: "wide-area|openclaw.internal.|gateway-host"),
+                currentRouteIsDiscoveryOwned: false,
+                state: state)
+
+            #expect(state.remoteTransport == .direct)
+            #expect(state.remoteUrl == "ws://\(tailnetHost):18789")
+        }
+    }
+
+    @Test func `new lan selection retires prior discovery owned direct transport`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            let state = AppState(preview: true)
+            state.remoteTransport = .direct
+            state.remoteUrl = "wss://old-gateway.example.ts.net"
+
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: self.makeGateway(
+                    serviceHost: "nearby-gateway.local",
+                    servicePort: 18789,
+                    gatewayDirectReachable: true,
+                    stableID: "bonjour|nearby-gateway-new"),
+                currentRouteIsDiscoveryOwned: true,
+                state: state)
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
         }
     }
 }

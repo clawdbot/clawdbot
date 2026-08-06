@@ -33,6 +33,22 @@ enum GatewayDiscoveryPreferences {
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
+    @MainActor
+    static func currentRouteIsDiscoveryOwned(state: AppState) -> Bool {
+        guard self.preferredStableID() != nil,
+              let storedBinding = self.preferredRouteBinding()
+        else {
+            return false
+        }
+        // Match the bound route itself, not only the persisted discovery id. A manual route edit
+        // transfers authority immediately, before asynchronous preference cleanup catches up.
+        return storedBinding == self.routeBinding(
+            connectionMode: state.connectionMode,
+            remoteTransport: state.remoteTransport,
+            remoteURL: state.remoteUrl,
+            remoteTarget: state.remoteTarget)
+    }
+
     static func setPreferredStableID(_ stableID: String?, routeBinding: String?) {
         self.setPreferredStableID(stableID)
         guard self.preferredStableID() != nil,

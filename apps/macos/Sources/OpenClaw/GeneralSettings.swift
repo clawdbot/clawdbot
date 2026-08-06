@@ -888,7 +888,11 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        GatewayDiscoverySelectionSupport.applyRemoteSelection(
+            gateway: gateway,
+            currentRouteIsDiscoveryOwned: GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(
+                state: self.state),
+            state: self.state)
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
     }
 }

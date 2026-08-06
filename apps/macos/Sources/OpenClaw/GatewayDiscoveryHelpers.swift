@@ -50,9 +50,7 @@ enum GatewayDiscoveryHelpers {
             return nil
         }
         let scheme: String
-        // A discovered Tailnet route is selected automatically, so its transport must not be
-        // downgraded by unauthenticated discovery metadata. Explicit LAN routes may still use ws.
-        if gatewayTls || endpoint.host.lowercased().hasSuffix(".ts.net") {
+        if gatewayTls {
             scheme = "wss"
         } else if self.isLoopbackHost(endpoint.host)
             || GatewayRemoteConfig.isTrustedPlaintextRemoteHost(endpoint.host)

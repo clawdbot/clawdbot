@@ -129,6 +129,30 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `discovery ownership requires the bound route to remain current`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        state.remoteTransport = .direct
+        state.remoteUrl = "wss://gateway-a.example.test"
+
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "gateway-a",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: state.connectionMode,
+                remoteTransport: state.remoteTransport,
+                remoteURL: state.remoteUrl,
+                remoteTarget: state.remoteTarget))
+
+        #expect(GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(state: state))
+
+        state.remoteUrl = "ws://gateway-b.example.ts.net:18789"
+
+        #expect(!GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(state: state))
+    }
+
+    @Test
     func `invalid remote drafts cannot be persisted for a configured gateway probe`() {
         let base = AppState.GatewayConfigSyncDraft(
             connectionMode: .remote,

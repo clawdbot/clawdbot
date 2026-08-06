@@ -8,11 +8,13 @@ enum GatewayDiscoverySelectionSupport {
 
     static func applyRemoteSelection(
         gateway: GatewayDiscoveryModel.DiscoveredGateway,
+        currentRouteIsDiscoveryOwned: Bool,
         state: AppState)
     {
         let preferredTransport = self.preferredTransport(
             for: gateway,
-            current: state.remoteTransport)
+            current: state.remoteTransport,
+            currentRouteIsDiscoveryOwned: currentRouteIsDiscoveryOwned)
         if preferredTransport != state.remoteTransport {
             state.remoteTransport = preferredTransport
         }
@@ -41,10 +43,16 @@ enum GatewayDiscoverySelectionSupport {
 
     static func preferredTransport(
         for gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        current: AppState.RemoteTransport) -> AppState.RemoteTransport
+        current: AppState.RemoteTransport,
+        currentRouteIsDiscoveryOwned: Bool = false) -> AppState.RemoteTransport
     {
         if self.shouldPreferDirectTransport(for: gateway) {
             return .direct
+        }
+        // A discovery-owned route must be recomputed for every selected gateway. Otherwise a
+        // previous automatic Direct choice can leak into an unrelated plaintext LAN selection.
+        if currentRouteIsDiscoveryOwned {
+            return .ssh
         }
         return current
     }
@@ -53,12 +61,8 @@ enum GatewayDiscoverySelectionSupport {
         for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool
     {
         guard GatewayDiscoveryHelpers.directUrl(for: gateway) != nil else { return false }
-        guard let host = GatewayDiscoveryHelpers.resolvedServiceHost(for: gateway)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        else {
-            return false
-        }
-        return host.hasSuffix(".ts.net")
+        // Only the internal Tailscale Serve probe establishes direct-route authority. Bonjour
+        // stable ids cannot enter this namespace, so unauthenticated TXT flags remain hints.
+        return gateway.stableID.hasPrefix("tailscale-serve|")
     }
 }

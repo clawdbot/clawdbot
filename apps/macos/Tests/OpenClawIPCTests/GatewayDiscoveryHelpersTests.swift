@@ -79,7 +79,7 @@ struct GatewayDiscoveryHelpersTests {
         let wsGateway = self.makeGateway(
             serviceHost: "resolved.example.ts.net",
             servicePort: 18789)
-        #expect(GatewayDiscoveryHelpers.directUrl(for: wsGateway) == "wss://resolved.example.ts.net:18789")
+        #expect(GatewayDiscoveryHelpers.directUrl(for: wsGateway) == "ws://resolved.example.ts.net:18789")
 
         let lanGateway = self.makeGateway(
             serviceHost: "resolved.local",
