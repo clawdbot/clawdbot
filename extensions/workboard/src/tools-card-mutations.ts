@@ -48,9 +48,7 @@ export function createWorkboardMoveTool(params: {
     ),
     execute: async (_toolCallId, rawParams) => {
       const { record, id, scope } = await params.readScopedCardToolParams(rawParams);
-      return params.boundedCardResult(
-        await params.store.move(id, record.status, undefined, scope),
-      );
+      return params.boundedCardResult(await params.store.move(id, record.status, undefined, scope));
     },
   };
 }

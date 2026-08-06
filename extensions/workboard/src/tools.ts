@@ -796,9 +796,7 @@ export function createWorkboardTools(params: {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
         await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return boundedCardResult(
-          await store.specify(id, record, { ownerId, token: record.token }),
-        );
+        return boundedCardResult(await store.specify(id, record, { ownerId, token: record.token }));
       },
     },
     {
