@@ -80,9 +80,14 @@ const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",
   "USERPROFILE",
+  "PATH",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
+  // Startup rewrites these process-wide values. Restore them so a later test
+  // never targets a closed Gateway or inherits a stale PATH bootstrap.
+  "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_PATH_BOOTSTRAPPED",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
