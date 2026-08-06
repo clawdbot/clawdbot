@@ -556,7 +556,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           }) ?? null;
       }
 
-      if (hasOwnedOtlpSignal) {
+      // Preserve the shipped preloaded-SDK crash guard, but own no handler while disabled.
+      if (hasOwnedOtlpSignal || (sdkPreloaded && !sdkDisabled)) {
         unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
           const otlpError = findOtlpExporterError(reason);
           if (!otlpError) {

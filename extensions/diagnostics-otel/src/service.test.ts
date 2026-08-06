@@ -1493,6 +1493,7 @@ describe("diagnostics-otel service", () => {
 
     expect(sdkStart).not.toHaveBeenCalled();
     expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(unhandledRejectionHandlerState.register).toHaveBeenCalledTimes(1);
     expect(ctx.logger.info).toHaveBeenCalledWith(
       "diagnostics-otel: using preloaded OpenTelemetry SDK",
     );
@@ -1521,6 +1522,7 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
     expect(sdkShutdown).not.toHaveBeenCalled();
     expect(logShutdown).toHaveBeenCalledTimes(1);
+    expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
   });
 
   test("emits and records bounded telemetry exporter health events", async () => {
@@ -1768,6 +1770,7 @@ describe("diagnostics-otel service", () => {
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(metricExporterCtor).not.toHaveBeenCalled();
     expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(unhandledRejectionHandlerState.register).not.toHaveBeenCalled();
     expect(lastHistogramRecord("openclaw.run.duration_ms")?.[0]).toBe(100);
     expect(startedSpanOptions("openclaw.run")?.attributes?.["openclaw.outcome"]).toBe("completed");
     expect(logEmit).not.toHaveBeenCalled();
