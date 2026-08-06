@@ -270,7 +270,11 @@ export async function fetchMcpAppView(params: {
     // cached catalog can be invalidated later (e.g. tools/list_changed), but the
     // browser-side deadline must stay consistent with the runtime deadline that
     // will be used for operations initiated from this view.
+    // Read from the runtime session first — its timeout survives catalog
+    // invalidation, so a tools/list_changed right before view creation does not
+    // substitute the 60-second default for a configured 120-second MCP operation.
     const requestTimeoutMs =
+      params.runtime.getServerRequestTimeoutMs?.(params.serverName) ??
       params.runtime.peekCatalog()?.servers[params.serverName]?.requestTimeoutMs ??
       DEFAULT_REQUEST_TIMEOUT_MS;
     releaseRuntimeLease = params.runtime.acquireLease?.();

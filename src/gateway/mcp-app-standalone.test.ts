@@ -61,6 +61,9 @@ const runtime = {
   acquireLease: vi.fn(() => releaseRuntimeLease),
   getCatalog: vi.fn(async () => defaultCatalog),
   peekCatalog: vi.fn(() => defaultCatalog),
+  getServerRequestTimeoutMs: vi.fn((serverName: string) =>
+    serverName === "demo" ? 60_000 : undefined,
+  ),
   callTool: vi.fn(async (serverName: string, toolName: string) => ({
     content: [{ type: "text", text: `${serverName}:${toolName}` }],
   })),

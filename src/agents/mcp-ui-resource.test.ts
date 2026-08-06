@@ -295,6 +295,38 @@ describe("MCP App UI resources", () => {
     expect(getMcpAppViewLease(viewIds[31] ?? "", sessionRuntime)).toBeDefined();
   });
 
+  it("reads the request timeout from the runtime session when the cached catalog is null", async () => {
+    const sessionRuntime = runtime(async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>demo</html>",
+          _meta: { ui: { csp: { connectDomains: ["https://api.example.com"] } } },
+        },
+      ],
+    }));
+    // Simulate catalog invalidation (peekCatalog returns null) while the session
+    // still has the configured timeout.
+    sessionRuntime.peekCatalog = () => null;
+    sessionRuntime.getServerRequestTimeoutMs = (serverName) =>
+      serverName === "demo" ? 120_000 : undefined;
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+    expect(result).toBeDefined();
+
+    const lease = getMcpAppViewLease(result!.viewId, sessionRuntime);
+    expect(lease).toBeDefined();
+    expect(lease!.requestTimeoutMs).toBe(120_000);
+  });
+
   it("replaces a reconstructed view id without leaking the previous runtime lease", async () => {
     const releases = [vi.fn(), vi.fn()];
     const sessionRuntime = runtime(async () => ({
