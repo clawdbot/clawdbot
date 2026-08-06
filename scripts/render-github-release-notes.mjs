@@ -42,6 +42,9 @@ function validateTag(tag) {
 
 export function formatContributionRecordProvenance(provenance) {
   const { base, target, inRangePullRequests, retainedSeedOnlyPullRequests } = provenance;
+  if (inRangePullRequests === undefined || retainedSeedOnlyPullRequests === undefined) {
+    fail("canonical contribution record provenance requires split PR counts");
+  }
   const uniquePullRequests = inRangePullRequests + retainedSeedOnlyPullRequests;
   const count = (value) => value.toLocaleString("en-US");
   const prs = (value) => `PR${value === 1 ? "" : "s"}`;

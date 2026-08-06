@@ -70,11 +70,11 @@ describe("GitHub release-note rendering", () => {
       retainedSeedOnlyPullRequests: 56,
       uniquePullRequests: 1_290,
     });
-    expect(
-      parseContributionRecordProvenance(
-        `This audited record covers the complete v2026.7.2-beta.6..02d06caeb0febe7ec3c0df1454b85c38f3fb27d1 history: 5089 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
-      ),
-    ).toMatchObject({ uniquePullRequests: 5_089 });
+    const legacy = parseContributionRecordProvenance(
+      `This audited record covers the complete v2026.7.2-beta.6..02d06caeb0febe7ec3c0df1454b85c38f3fb27d1 history: 5089 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
+    );
+    expect(legacy).toMatchObject({ uniquePullRequests: 5_089 });
+    expect(() => formatContributionRecordProvenance(legacy!)).toThrow("requires split PR counts");
     expect(() =>
       parseContributionRecordProvenance(
         commaSeparated.replace("= 1,290 unique PRs", "= 1,291 unique PRs"),

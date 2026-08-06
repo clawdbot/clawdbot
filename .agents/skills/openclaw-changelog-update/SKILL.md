@@ -69,6 +69,8 @@ every human `Thanks @...` attribution.
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
      classification for PRs and direct commits
+   - schema version 3 is the required ephemeral manifest contract. Regenerate
+     older manifests; version 2 is not a supported downstream-reader boundary
    - for a historical backfill, add `--seed-ref <pre-backfill-ref>` once so
      contribution records from the prior changelog are retained even when an
      older merged commit omitted its PR number; the verifier excludes records
