@@ -7,7 +7,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveExtraBootstrapPatternPaths } from "./workspace-extra-bootstrap-walker.js";
 
 const realPlatform = process.platform;
@@ -294,6 +294,48 @@ describe("resolveExtraBootstrapPatternPaths symlink descent parity", () => {
       );
 
       expect(matches).toStrictEqual([]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refuses an initial walk root that is a directory symlink escaping the workspace",
+    async () => {
+      // Containment guard for the seed/initial root (P1-E): when a pattern's
+      // literal prefix is itself a directory symlink pointing outside the
+      // workspace, the seed frame never passes through resolveSymlinkDescent, so
+      // the walker must reject the external initial root before any readdir.
+      const rootDir = await createWorkspaceDir("escape-initial-root");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const outsideDir = path.join(rootDir, "outside");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "AGENTS.md"), "outside", "utf-8");
+      const linkPath = path.join(workspaceDir, "outside-link");
+      if (!(await trySymlink(path.join("..", "outside"), linkPath))) {
+        return;
+      }
+      const outsideRealpath = await fs.realpath(outsideDir);
+
+      const readdirSpy = vi.spyOn(fs, "readdir");
+      try {
+        const matches = await resolveExtraBootstrapPatternPaths(
+          workspaceDir,
+          "outside-link/**/AGENTS.md",
+          false,
+        );
+
+        expect(matches).toStrictEqual([]);
+        // The reject must happen before any readdir of the escaped root, not as a
+        // later per-file guard: prove readdir never touched the link or its target.
+        for (const call of readdirSpy.mock.calls) {
+          const readPath = call[0] as string;
+          expect(readPath).not.toBe(linkPath);
+          expect(readPath).not.toBe(outsideDir);
+          expect(readPath).not.toBe(outsideRealpath);
+        }
+      } finally {
+        readdirSpy.mockRestore();
+      }
     },
   );
 

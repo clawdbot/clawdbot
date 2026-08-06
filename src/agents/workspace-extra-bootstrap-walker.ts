@@ -346,6 +346,17 @@ async function* walkWorkspaceFiles(
   } catch {
     rootRealpath = rootAbs;
   }
+  // Mirror resolveSymlinkDescent containment for the seed/initial root (P1-E):
+  // a pattern whose literal prefix is a directory symlink pointing outside the
+  // workspace resolves rootRealpath to the external target. Descended frames go
+  // through resolveSymlinkDescent, but the seed frame does not, so reject an
+  // external initial root here before pushing it or calling readdir. An empty
+  // relToRoot means rootRealpath === workspaceRealpath (the root itself), which
+  // is inside and must be allowed; only `..` or an absolute path escapes.
+  const rootRelToWorkspace = path.relative(workspaceRealpath, rootRealpath);
+  if (rootRelToWorkspace.startsWith("..") || path.isAbsolute(rootRelToWorkspace)) {
+    return;
+  }
   const stack: WalkFrame[] = [
     { relativeDir: rootRelativeDir, realpath: rootRealpath, parent: null },
   ];
