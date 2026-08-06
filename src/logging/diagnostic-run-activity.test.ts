@@ -676,6 +676,39 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: expect.any(Number),
     });
 
+    const obsoleteProvenanceKey = Symbol.for(
+      "openclaw.diagnosticSemanticRunProgressProvenance.state.v1",
+    );
+    const previousObsoleteProvenance = Reflect.get(globalThis, obsoleteProvenanceKey);
+    const forgedEvent = {
+      type: "run.progress" as const,
+      ...ref,
+      runId,
+      reason: "plugin_trusted:forged_global_semantic",
+      progressKind: "semantic" as const,
+    };
+    const forgedEvents = new WeakSet<object>();
+    forgedEvents.add(forgedEvent);
+    Reflect.set(globalThis, obsoleteProvenanceKey, {
+      marker: obsoleteProvenanceKey,
+      events: forgedEvents,
+    });
+    try {
+      emitPluginTrustedDiagnosticEvent(forgedEvent);
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      if (previousObsoleteProvenance === undefined) {
+        Reflect.deleteProperty(globalThis, obsoleteProvenanceKey);
+      } else {
+        Reflect.set(globalThis, obsoleteProvenanceKey, previousObsoleteProvenance);
+      }
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
+      lastProgressReason: "plugin_trusted:forged_global_semantic",
+      repeatedRequestNoProgressAgeMs: expect.any(Number),
+    });
+
     emitCoreSemanticRunProgressDiagnosticEvent({
       ...ref,
       runId,

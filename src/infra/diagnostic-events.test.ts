@@ -374,23 +374,15 @@ describe("diagnostic-events", () => {
     });
 
     vi.resetModules();
-    const duplicateModule = (await import(
-      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
-    )) as typeof import("./diagnostic-events.js");
-    const duplicateProvenance = await import(
-      /* @vite-ignore */ new URL(
-        "./diagnostic-semantic-run-progress-provenance.ts?duplicate",
-        import.meta.url,
-      ).href
+    const duplicateSemanticProgress = await import(
+      /* @vite-ignore */ new URL("./diagnostic-semantic-run-progress.ts?duplicate", import.meta.url)
+        .href
     );
-    duplicateModule.emitTrustedDiagnosticEvent(
-      duplicateProvenance.markCoreSemanticRunProgressDiagnosticEvent({
-        type: "run.progress",
-        runId: "duplicate-semantic-run",
-        reason: "model_call:semantic_result",
-      }),
-    );
-    await duplicateModule.waitForDiagnosticEventsDrained();
+    duplicateSemanticProgress.emitCoreSemanticRunProgressDiagnosticEvent({
+      runId: "duplicate-semantic-run",
+      reason: "model_call:semantic_result",
+    });
+    await waitForDiagnosticEventsDrained();
 
     expect(events).toEqual([{ coreSemantic: true, type: "run.progress" }]);
   });
