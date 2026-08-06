@@ -414,7 +414,9 @@ describe("auth.test boot call", () => {
       );
       const requestsAtStop = server.requestCount;
       // The loop's next backoff step would be ~20s; no further attempts may land.
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       expect(server.requestCount).toBe(requestsAtStop);
     } finally {
       await stopSlackMonitor(monitor);
