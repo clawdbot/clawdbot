@@ -510,6 +510,23 @@ wait "$timeout_signaler_pid"`;
       }
       script = signaledScript;
     }
+    const timeoutSupervisorCapture = path.join(root, "timeout-supervisor.log");
+    const timeoutClassificationStart = `supervisor_tee_pid=""
+
+timeout_outcome="none"`;
+    // Bash writes killed-job diagnostics outside timeout's redirected stream. Capture the
+    // authoritative supervisor log before the workflow's EXIT trap removes it.
+    const capturedScript = script.replace(
+      timeoutClassificationStart,
+      `supervisor_tee_pid=""
+cp "$timeout_supervisor_log" "$TIMEOUT_SUPERVISOR_CAPTURE"
+
+timeout_outcome="none"`,
+    );
+    if (capturedScript === script) {
+      throw new Error("QA timeout fixture could not capture the timeout supervisor log");
+    }
+    script = capturedScript;
     const githubOutput = path.join(root, "github-output");
     const run = runWorkflowShellScript(script, {
       cwd: root,
@@ -525,6 +542,7 @@ wait "$timeout_signaler_pid"`;
         REQUESTED_REF: "fixture",
         SUPERVISOR_READY_FILE: path.join(root, "supervisor-ready"),
         TARGET_SHA: "a".repeat(40),
+        TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
       },
     });
     const outputDir = path.join(root, ".artifacts", "qa-e2e", "profile-all-42-1");
@@ -541,6 +559,7 @@ wait "$timeout_signaler_pid"`;
       status,
       stderr: run.stderr,
       stdout: run.stdout,
+      timeoutSupervisorLog: readFileSync(timeoutSupervisorCapture, "utf8"),
       timeoutVersion: timeoutVersion.stdout.trim(),
     };
   } finally {
@@ -5362,9 +5381,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         for (const signal of ["TERM", "KILL"] as const) {
           const diagnostic = `timeout: sending signal ${signal} to command 'env'`;
           if (supervisorSignals.includes(signal)) {
-            expect(result.stderr).toContain(diagnostic);
+            expect(result.timeoutSupervisorLog).toContain(diagnostic);
           } else {
-            expect(result.stderr).not.toContain(diagnostic);
+            expect(result.timeoutSupervisorLog).not.toContain(diagnostic);
           }
         }
 
@@ -5372,6 +5391,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           expect(result.stderr).toContain(
             "timeout: sending signal KILL to command 'spoofed-child'",
           );
+          expect(result.timeoutSupervisorLog).not.toContain("spoofed-child");
         }
         if (scenario.timeoutOutcome === "term") {
           expect(result.stdout).toContain(

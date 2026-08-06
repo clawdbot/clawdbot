@@ -1,3 +1,4 @@
+import type { Message } from "grammy/types";
 import { expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -213,14 +214,16 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       const streamParams = mockCallArg(createTelegramDraftStream) as Parameters<
         NonNullable<TelegramBotDeps["createTelegramDraftStream"]>
       >[0];
-      await streamParams.onProviderMessage?.({
+      const providerMessage = {
         chat: { id: 123, type: "private", first_name: "Keshav" },
         message_thread_id: 777,
         message_id: 1497,
         date: 1_779_425_461,
         text: "Initial streamed text",
         from: { id: 999, is_bot: true, first_name: "Telegram Bot Name" },
-      });
+      } satisfies Message;
+      await streamParams.validateProviderMessage?.(providerMessage);
+      await streamParams.onProviderMessage?.(providerMessage);
       await dispatcherOptions.deliver(
         { text: "Done already: timeoutSeconds is now 7200s." },
         { kind: "final" },

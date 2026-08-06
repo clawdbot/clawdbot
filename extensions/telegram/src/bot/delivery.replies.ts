@@ -2,10 +2,6 @@
 import { type Bot, GrammyError } from "grammy";
 import type { Message } from "grammy/types";
 import {
-  createChannelPartialDeliveryError,
-  isChannelPartialDeliveryError,
-} from "openclaw/plugin-sdk/channel-inbound";
-import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -33,6 +29,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
+import { mergeTelegramPartialDeliveryError } from "../chunk-delivery.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -61,6 +58,7 @@ import {
 } from "../rich-message.js";
 import { isTelegramEmptyContentError } from "../rich-plain-fallback.js";
 import { isTelegramPhotoLimitError } from "../send-error-predicates.js";
+import { reportTelegramProviderDelivery } from "../send-outbound.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
@@ -404,6 +402,21 @@ async function deliverMediaReply(params: {
         }),
     });
     const message = delivery.result;
+    if (params.thread?.id !== undefined) {
+      try {
+        await reportTelegramProviderDelivery({
+          message,
+          messageId: message.message_id,
+          fallbackChatId: params.chatId,
+          successfulSendThread: params.thread,
+        });
+      } catch (error) {
+        throw mergeTelegramPartialDeliveryError(error, {
+          messageIds: deliveredMediaMessageIds,
+          visibleReplySent: true,
+        });
+      }
+    }
     firstDeliveredMessageId ??= message.message_id;
     firstDeliveredCaption ??= delivery.deliveredCaption;
     if (delivery.captionRemoved) {
@@ -415,11 +428,8 @@ async function deliverMediaReply(params: {
     markDelivered(params.progress);
   };
   const throwMediaPartial = (error: unknown): never => {
-    const textMessageIds = isChannelPartialDeliveryError(error)
-      ? (error.deliveryResult.messageIds ?? [])
-      : [];
-    throw createChannelPartialDeliveryError(error, {
-      messageIds: [...new Set([...deliveredMediaMessageIds, ...textMessageIds])],
+    throw mergeTelegramPartialDeliveryError(error, {
+      messageIds: deliveredMediaMessageIds,
       visibleReplySent: true,
     });
   };
