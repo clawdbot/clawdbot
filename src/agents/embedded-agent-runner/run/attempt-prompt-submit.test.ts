@@ -508,9 +508,13 @@ describe("submitEmbeddedAttemptPrompt", () => {
       activeSession,
       promptActiveSession: async () => {
         // AgentCore turns executor failures into an assistant error and completes the turn.
-        await activeSession.agent
-          .streamFn({} as never, { messages: activeSession.messages } as never, {} as never)
-          .catch(() => undefined);
+        await Promise.resolve(
+          activeSession.agent.streamFn(
+            {} as never,
+            { messages: activeSession.messages } as never,
+            {} as never,
+          ),
+        ).catch(() => undefined);
       },
     });
 
