@@ -997,7 +997,9 @@ private enum ExecHostExecutor {
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
         let cwd = request.cwd
-        let env = context.env
+        var env = context.env
+        env["OPENCLAW_AGENT_ID"] = request.agentId ?? ""
+        env["OPENCLAW_SESSION_KEY"] = request.sessionKey == "node" ? "" : (request.sessionKey ?? "")
         if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
             return self.approvalStoreErrorResponse()
         }
