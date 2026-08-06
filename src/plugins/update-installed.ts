@@ -172,6 +172,9 @@ export async function updateNpmInstalledPlugins(params: {
 
     const trustedOfficialNpmInstall = resolveOfficialNpmInstall({ pluginId, record });
     const trustedOfficialNpmSpec = trustedOfficialNpmInstall?.npmSpec;
+    const npmSpecOverride =
+      params.specOverrides?.[pluginId] ??
+      (trustedOfficialNpmInstall?.replacementPluginId ? trustedOfficialNpmSpec : undefined);
     const trustedOfficialClawHubInstall = resolveOfficialClawHubInstall({ pluginId, record });
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
@@ -185,7 +188,6 @@ export async function updateNpmInstalledPlugins(params: {
         ? params.officialPluginUpdateChannel
         : undefined);
     const officialNpmPackageName = resolveNpmSpecPackageName(trustedOfficialNpmSpec);
-
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -216,7 +218,7 @@ export async function updateNpmInstalledPlugins(params: {
       record.source === "npm"
         ? resolveNpmUpdateSpecs({
             record,
-            specOverride: params.specOverrides?.[pluginId],
+            specOverride: npmSpecOverride,
             officialSpecOverride: officialNpmSpec,
             updateChannel,
             officialPackageName: officialNpmPackageName,
@@ -435,7 +437,7 @@ export async function updateNpmInstalledPlugins(params: {
           })
         ) {
           const newerExactPinnedDefaultLine =
-            !params.specOverrides?.[pluginId] && !officialNpmSpec
+            !npmSpecOverride && !officialNpmSpec
               ? await resolveNewerExactPinnedNpmDefaultLine({
                   currentVersion,
                   effectiveSpec,
@@ -631,7 +633,7 @@ export async function updateNpmInstalledPlugins(params: {
           officialNpmFallbackInstallSpec,
           usedNpmFallback,
           usedOfficialNpmFallback,
-          hasSpecOverride: Boolean(params.specOverrides?.[pluginId]),
+          hasSpecOverride: Boolean(npmSpecOverride),
           hasOfficialNpmSpec: Boolean(officialNpmSpec),
           updateChannel,
           timeoutMs: params.timeoutMs,
@@ -717,11 +719,8 @@ export async function updateNpmInstalledPlugins(params: {
   }
 
   if (ranNpmInstaller) {
-    changed =
-      (await repairOpenClawPeerLinksForNpmInstalls({
-        config: next,
-        logger,
-      })) || changed;
+    const repairedPeerLinks = await repairOpenClawPeerLinksForNpmInstalls({ config: next, logger });
+    changed = repairedPeerLinks || changed;
   }
 
   return { config: next, changed, outcomes };
