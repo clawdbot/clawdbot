@@ -28,6 +28,7 @@ import {
   ReplyRunAlreadyActiveError,
   replyRunRegistry,
   markReplyOperationGlobalLaneWaitProgress,
+  reserveReplyOperationAfterClear,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   resolveReplyRunPhaseForSessionId,
@@ -87,6 +88,177 @@ describe("reply run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("hands the cleared reply lane to one older turn before later admission", async () => {
+    const owner = createTestReplyOperation({ sessionId: "owner-session" });
+    const handoff = reserveReplyOperationAfterClear({
+      operation: owner,
+      resetTriggered: false,
+      routeThreadId: 42,
+    });
+    const claim = handoff.claim();
+
+    owner.complete();
+
+    const reservation = await claim;
+    expect(reservation).toBeDefined();
+    expect(replyRunRegistry.get("agent:main:main")).toBe(reservation);
+    expect(reservation?.sessionId).toBe("owner-session");
+    expect(reservation?.routeThreadId).toBe(42);
+    expect(() => createTestReplyOperation({ sessionId: "later-session" })).toThrow(
+      ReplyRunAlreadyActiveError,
+    );
+
+    reservation?.complete();
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("uses the owner's final session ID after compaction rotates it", async () => {
+    const owner = createTestReplyOperation({ sessionId: "session-before-compaction" });
+    const handoff = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+    const claim = handoff.claim();
+
+    owner.updateSessionId("session-after-compaction");
+    owner.complete();
+
+    const reservation = await claim;
+    expect(reservation?.sessionId).toBe("session-after-compaction");
+    reservation?.complete();
+  });
+
+  it("claims a handoff registered after its owner already cleared", async () => {
+    const owner = createTestReplyOperation({ sessionId: "cleared-session" });
+    owner.complete();
+
+    const handoff = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+    const reservation = await handoff.claim();
+
+    expect(reservation?.sessionId).toBe("cleared-session");
+    expect(replyRunRegistry.get("agent:main:main")).toBe(reservation);
+    reservation?.complete();
+  });
+
+  it("reacquires a live reservation after a claimed handoff is retried", async () => {
+    const owner = createTestReplyOperation({ sessionId: "owner-session" });
+    const handoff = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+    const firstClaim = handoff.claim();
+
+    owner.complete();
+    const firstReservation = await firstClaim;
+    expect(firstReservation).toBeDefined();
+
+    const retryHandoff = handoff.reacquireAfter(firstReservation!);
+    const retryClaim = retryHandoff.claim();
+    firstReservation?.complete();
+
+    const retryReservation = await retryClaim;
+    expect(retryReservation).toBeDefined();
+    expect(retryReservation).not.toBe(firstReservation);
+    expect(replyRunRegistry.get("agent:main:main")).toBe(retryReservation);
+    retryReservation?.complete();
+  });
+
+  it("releases an unclaimed reply lane handoff without leaving a reservation", async () => {
+    const owner = createTestReplyOperation({ sessionId: "owner-session" });
+    const handoff = reserveReplyOperationAfterClear({
+      operation: owner,
+      resetTriggered: false,
+    });
+
+    handoff.release();
+    owner.complete();
+
+    await expect(handoff.claim()).resolves.toBeUndefined();
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("serializes handoff claims from multiple steers on one owner", async () => {
+    const owner = createTestReplyOperation({ sessionId: "owner-session" });
+    const first = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+    const second = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+    const secondClaim = second.claim();
+    let secondSettled = false;
+    void secondClaim.then(() => {
+      secondSettled = true;
+    });
+
+    owner.complete();
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    first.release();
+    const reservation = await secondClaim;
+    expect(reservation).toBeDefined();
+    expect(replyRunRegistry.get("agent:main:main")).toBe(reservation);
+
+    reservation?.complete();
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("allows a cleared handoff to enter the fallback queue before claiming", async () => {
+    const owner = createTestReplyOperation({ sessionId: "owner-session" });
+    const handoff = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+
+    owner.complete();
+    await handoff.waitForFallbackTurn();
+    handoff.markFallbackQueued();
+
+    const reservation = await handoff.claim();
+    expect(reservation).toBeDefined();
+    reservation?.complete();
+  });
+
+  it("keeps later arrivals behind an unresolved older steer handoff", async () => {
+    const owner = createTestReplyOperation({ sessionId: "owner-session" });
+    const first = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+    const second = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+    const firstClaim = first.claim();
+
+    owner.complete();
+
+    const firstReservation = await firstClaim;
+    expect(replyRunRegistry.get("agent:main:main")).toBe(firstReservation);
+    firstReservation?.complete();
+
+    expect(() => createTestReplyOperation({ sessionId: "later-session" })).toThrow(
+      ReplyRunAlreadyActiveError,
+    );
+
+    const secondReservation = await second.claim();
+    expect(replyRunRegistry.get("agent:main:main")).toBe(secondReservation);
+    secondReservation?.complete();
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("keeps arrivals on an unclaimed reservation behind its older fallback", async () => {
+    const owner = createTestReplyOperation({ sessionId: "owner-session" });
+    const first = reserveReplyOperationAfterClear({ operation: owner, resetTriggered: false });
+
+    owner.complete();
+    const pendingReservation = replyRunRegistry.get("agent:main:main");
+    expect(pendingReservation).toBeDefined();
+
+    const second = reserveReplyOperationAfterClear({
+      operation: pendingReservation!,
+      resetTriggered: false,
+    });
+    let secondTurnReady = false;
+    const secondTurn = second.waitForFallbackTurn().then(() => {
+      secondTurnReady = true;
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(secondTurnReady).toBe(false);
+
+    first.markFallbackQueued();
+    await secondTurn;
+    expect(secondTurnReady).toBe(true);
+
+    second.release();
+    first.release();
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
   });
 
   it("treats queued reply operations as non-abortable for compaction", () => {

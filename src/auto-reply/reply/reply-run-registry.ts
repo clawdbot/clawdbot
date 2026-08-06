@@ -228,6 +228,33 @@ export type ReplyOperation = {
   abortForRestart(): boolean;
 };
 
+export type ReplyOperationHandoff = {
+  waitForFallbackTurn(): Promise<void>;
+  markFallbackQueued(): void;
+  claim(): Promise<ReplyOperation | undefined>;
+  reacquireAfter(operation: ReplyOperation): ReplyOperationHandoff;
+  release(): void;
+};
+
+type ReplyOperationHandoffWaiter = {
+  disposition: "pending" | "claim" | "released";
+  fallbackTurn: Promise<void>;
+  fallbackQueued: boolean;
+  resolveFallbackQueued: () => void;
+  resolve: (operation: ReplyOperation | undefined) => void;
+};
+
+type ReplyOperationHandoffState = {
+  active: boolean;
+  operations: Set<ReplyOperation>;
+  reservationParams: Omit<Parameters<typeof createReplyOperation>[0], "sessionId">;
+  reservation?: ReplyOperation;
+  tailFallbackQueued: Promise<void>;
+  waiters: ReplyOperationHandoffWaiter[];
+};
+
+const handoffStateByOperation = new WeakMap<ReplyOperation, ReplyOperationHandoffState>();
+
 type ReplyRunRegistry = {
   begin(params: {
     sessionKey: string;
@@ -442,6 +469,158 @@ export function runAfterReplyOperationClear(
     afterClearCallbacksByOperation.get(operation) ?? new Set<(sessionId: string) => void>();
   callbacks.add(afterClear);
   afterClearCallbacksByOperation.set(operation, callbacks);
+}
+
+/** Reserves the cleared lane for one older turn and transfers it to that turn's admission. */
+export function reserveReplyOperationAfterClear(params: {
+  operation: ReplyOperation;
+  sessionKey?: string;
+  resetTriggered: boolean;
+  routeThreadId?: string | number;
+  originatingLeafEntryId?: string | null;
+  upstreamAbortSignal?: AbortSignal;
+}): ReplyOperationHandoff {
+  let state = handoffStateByOperation.get(params.operation);
+  let observeOperationClear = false;
+  if (!state) {
+    state = {
+      active: true,
+      operations: new Set([params.operation]),
+      reservationParams: {
+        sessionKey: params.sessionKey ?? params.operation.key,
+        resetTriggered: params.resetTriggered,
+        routeThreadId: params.routeThreadId,
+        originatingLeafEntryId: params.originatingLeafEntryId,
+        upstreamAbortSignal: params.upstreamAbortSignal,
+      },
+      tailFallbackQueued: Promise.resolve(),
+      waiters: [],
+    };
+    handoffStateByOperation.set(params.operation, state);
+    observeOperationClear = true;
+  }
+  let resolveClaim: (operation: ReplyOperation | undefined) => void = () => {};
+  const claimResult = new Promise<ReplyOperation | undefined>((resolve) => {
+    resolveClaim = resolve;
+  });
+  let resolveFallbackQueued = () => {};
+  const fallbackQueued = new Promise<void>((resolve) => {
+    resolveFallbackQueued = resolve;
+  });
+  const waiter: ReplyOperationHandoffWaiter = {
+    disposition: "pending",
+    fallbackTurn: state.tailFallbackQueued,
+    fallbackQueued: false,
+    resolveFallbackQueued,
+    resolve: resolveClaim,
+  };
+  state.tailFallbackQueued = fallbackQueued;
+  state.waiters.push(waiter);
+  if (observeOperationClear) {
+    reserveNextReplyOperationAfterClear(state, params.operation);
+  }
+  return {
+    async waitForFallbackTurn() {
+      if (waiter.disposition === "pending") {
+        waiter.disposition = "claim";
+        settleReplyOperationHandoffState(state);
+      }
+      await waiter.fallbackTurn;
+    },
+    markFallbackQueued() {
+      if (waiter.fallbackQueued) {
+        return;
+      }
+      waiter.fallbackQueued = true;
+      waiter.resolveFallbackQueued();
+    },
+    async claim() {
+      if (waiter.disposition === "pending") {
+        waiter.disposition = "claim";
+        settleReplyOperationHandoffState(state);
+      }
+      return claimResult;
+    },
+    reacquireAfter(operation) {
+      return reserveReplyOperationAfterClear({
+        operation,
+        ...state.reservationParams,
+      });
+    },
+    release() {
+      if (waiter.disposition !== "pending") {
+        if (waiter.disposition === "claim") {
+          waiter.disposition = "released";
+        } else {
+          return;
+        }
+      } else {
+        waiter.disposition = "released";
+      }
+      if (!waiter.fallbackQueued) {
+        waiter.fallbackQueued = true;
+        waiter.resolveFallbackQueued();
+      }
+      settleReplyOperationHandoffState(state);
+    },
+  };
+}
+
+function reserveNextReplyOperationAfterClear(
+  state: ReplyOperationHandoffState,
+  operation: ReplyOperation,
+): void {
+  runAfterReplyOperationClear(operation, (sessionId) => {
+    if (!state.active) {
+      return;
+    }
+    handoffStateByOperation.delete(operation);
+    state.operations.delete(operation);
+    state.reservation = createReplyOperation({
+      ...state.reservationParams,
+      sessionId,
+    });
+    state.operations.add(state.reservation);
+    handoffStateByOperation.set(state.reservation, state);
+    settleReplyOperationHandoffState(state);
+  });
+}
+
+function clearReplyOperationHandoffMappings(state: ReplyOperationHandoffState): void {
+  for (const operation of state.operations) {
+    handoffStateByOperation.delete(operation);
+  }
+  state.operations.clear();
+}
+
+function settleReplyOperationHandoffState(state: ReplyOperationHandoffState): void {
+  if (!state.active) {
+    return;
+  }
+  while (state.waiters[0]?.disposition === "released") {
+    state.waiters.shift()?.resolve(undefined);
+  }
+  const head = state.waiters[0];
+  if (!head) {
+    state.active = false;
+    state.reservation?.complete();
+    clearReplyOperationHandoffMappings(state);
+    return;
+  }
+  if (head.disposition !== "claim" || !state.reservation) {
+    return;
+  }
+  state.waiters.shift();
+  const reservation = state.reservation;
+  state.reservation = undefined;
+  if (state.waiters.length > 0) {
+    reserveNextReplyOperationAfterClear(state, reservation);
+  } else {
+    state.active = false;
+    clearReplyOperationHandoffMappings(state);
+  }
+  head.resolve(reservation);
+  settleReplyOperationHandoffState(state);
 }
 
 function flushReplyOperationAfterClear(operation: ReplyOperation, sessionId: string): void {

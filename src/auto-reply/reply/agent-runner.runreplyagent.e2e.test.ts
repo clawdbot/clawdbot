@@ -39,7 +39,11 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
@@ -102,6 +106,14 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex =
     throw new Error(`expected ${label} mock call ${callIndex}`);
   }
   return call;
+}
+
+function createDeferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function requireStoredSessionEntry(storePath: string, sessionKey = "main"): SessionEntry {
@@ -261,6 +273,7 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
+  commandBody?: string;
   opts?: InternalGetReplyOptions;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
@@ -342,7 +355,7 @@ function createMinimalRun(params?: {
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
       return runReplyAgent({
-        commandBody: "hello",
+        commandBody: params?.commandBody ?? "hello",
         followupRun,
         queueKey: "main",
         resolvedQueue,
@@ -749,6 +762,224 @@ describe("runReplyAgent active steering", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "model reply" }));
     expect(onAdopted).not.toHaveBeenCalled();
+  });
+
+  it("admits a rejected steer before a later visible turn", async () => {
+    const steerOutcome = createDeferred<{
+      queued: false;
+      sessionId: string;
+      reason: "runtime_rejected";
+      gatewayHealth: "live";
+    }>();
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(steerOutcome.promise);
+    const prompts: string[] = [];
+    state.runEmbeddedAgentMock.mockImplementation(
+      async (params: AgentRunParams & { prompt: string }) => {
+        prompts.push(params.prompt);
+        return {
+          payloads: [{ text: `${params.prompt} reply` }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const older = createMinimalRun({
+      opts: { onBlockReply: vi.fn() },
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+      replyOperation: active,
+    });
+    older.followupRun.prompt = "older steer";
+
+    const olderAdmission = older.run();
+    await vi.waitFor(() => {
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    });
+    active.complete();
+
+    const newer = createMinimalRun({
+      commandBody: "newer visible turn",
+      sessionCtx: { MessageSid: "newer-msg" },
+    });
+    newer.followupRun.prompt = "newer visible turn";
+    const newerRun = newer.run();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(prompts).toEqual([]);
+
+    steerOutcome.resolve({
+      queued: false,
+      sessionId: "session",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+    });
+    await vi.waitFor(() => {
+      expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    });
+    await olderAdmission;
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
+    const enqueueArgs = mockCallArgs(vi.mocked(enqueueFollowupRun), "enqueue follow-up");
+    const queued = enqueueArgs[1] as FollowupRun;
+    expect(queued.disableCollectBatching).toBe(true);
+    const runFollowup = enqueueArgs[4];
+    if (typeof runFollowup !== "function") {
+      throw new Error("expected queued follow-up runner");
+    }
+
+    const followup = runFollowup(queued);
+    await vi.waitFor(() => {
+      expect(prompts).toContain("older steer");
+    });
+    await followup;
+    await vi.waitFor(() => {
+      expect(prompts).toEqual(["older steer", "newer visible turn"]);
+    });
+    await newerRun;
+  });
+
+  it("enqueues concurrent rejected steers in arrival order", async () => {
+    const olderOutcome = createDeferred<{
+      queued: false;
+      sessionId: string;
+      reason: "runtime_rejected";
+      gatewayHealth: "live";
+    }>();
+    const newerOutcome = createDeferred<{
+      queued: false;
+      sessionId: string;
+      reason: "runtime_rejected";
+      gatewayHealth: "live";
+    }>();
+    state.queueEmbeddedAgentMessageMock
+      .mockReturnValueOnce(olderOutcome.promise)
+      .mockReturnValueOnce(newerOutcome.promise);
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const older = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+      replyOperation: active,
+    });
+    older.followupRun.prompt = "older steer";
+    const newer = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+      replyOperation: active,
+    });
+    newer.followupRun.prompt = "newer steer";
+
+    const olderRun = older.run();
+    const newerRun = newer.run();
+    await vi.waitFor(() => {
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(2);
+    });
+    active.complete();
+    newerOutcome.resolve({
+      queued: false,
+      sessionId: "session",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+    });
+    await Promise.resolve();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+
+    olderOutcome.resolve({
+      queued: false,
+      sessionId: "session",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+    });
+    await Promise.all([olderRun, newerRun]);
+
+    expect(vi.mocked(enqueueFollowupRun).mock.calls.map((call) => call[1].prompt)).toEqual([
+      "older steer",
+      "newer steer",
+    ]);
+  });
+
+  it("keeps an active follow-up behind an unresolved older steer reservation", async () => {
+    const olderOutcome = createDeferred<{
+      queued: false;
+      sessionId: string;
+      reason: "runtime_rejected";
+      gatewayHealth: "live";
+    }>();
+    state.queueEmbeddedAgentMessageMock
+      .mockReturnValueOnce(olderOutcome.promise)
+      .mockReturnValueOnce({
+        queued: false,
+        sessionId: "session",
+        reason: "no_active_run",
+        gatewayHealth: "live",
+      });
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const older = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+      replyOperation: active,
+    });
+    older.followupRun.prompt = "older steer";
+
+    const olderRun = older.run();
+    await vi.waitFor(() => {
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    });
+    active.complete();
+    const pendingReservation = replyRunRegistry.get("main");
+    expect(pendingReservation).toBeDefined();
+
+    const newer = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+      replyOperation: pendingReservation,
+    });
+    newer.followupRun.prompt = "newer active follow-up";
+    const newerRun = newer.run();
+    await vi.waitFor(() => {
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(2);
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+
+    olderOutcome.resolve({
+      queued: false,
+      sessionId: "session",
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+    });
+    await Promise.all([olderRun, newerRun]);
+
+    expect(vi.mocked(enqueueFollowupRun).mock.calls.map((call) => call[1].prompt)).toEqual([
+      "older steer",
+      "newer active follow-up",
+    ]);
   });
 
   it("adopts but never replays steering accepted without transcript confirmation", async () => {

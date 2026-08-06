@@ -148,7 +148,8 @@ export function enqueueFollowupRun(
         completeFollowupRunLifecycle(item);
       }
     },
-    isProtected: (item) => item.protectFromQueueOverflow === true,
+    isProtected: (item) =>
+      item.protectFromQueueOverflow === true || item.replyOperationHandoff !== undefined,
   });
   if (queue.dropPolicy === "summarize") {
     const overflow = queue.summarySources.length - queue.summaryLines.length;

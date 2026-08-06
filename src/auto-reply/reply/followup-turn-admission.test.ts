@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
 const state = vi.hoisted(() => ({
   admitLifecycle: vi.fn(),
@@ -65,6 +66,14 @@ vi.mock("./agent-runner-failure-reply.js", () => ({
 
 const { admitFollowupTurn } = await import("./followup-turn-admission.js");
 
+type TestReplyOperation = ReplyOperation & {
+  abortForRestart: Mock<ReplyOperation["abortForRestart"]>;
+  complete: Mock<ReplyOperation["complete"]>;
+  fail: Mock<ReplyOperation["fail"]>;
+  retainFailureUntilComplete: Mock<ReplyOperation["retainFailureUntilComplete"]>;
+  updateSessionId: Mock<ReplyOperation["updateSessionId"]>;
+};
+
 function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return {
     prompt: "queued prompt",
@@ -86,7 +95,7 @@ function createRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   };
 }
 
-function createOperation(sessionId = "queued-session") {
+function createOperation(sessionId = "queued-session"): TestReplyOperation {
   return {
     sessionId,
     abortForRestart: vi.fn(() => true),
@@ -94,7 +103,7 @@ function createOperation(sessionId = "queued-session") {
     fail: vi.fn(),
     complete: vi.fn(),
     updateSessionId: vi.fn(),
-  };
+  } as unknown as TestReplyOperation;
 }
 
 function createDefaults(overrides: Record<string, unknown> = {}) {
@@ -128,6 +137,72 @@ describe("admitFollowupTurn", () => {
       admitFollowupTurn({ queued: createRun(), defaults: createDefaults() }),
     ).resolves.toEqual({ kind: "deferred", reason: "active-run" });
     expect(state.admitLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("completes a claimed handoff when admission skips", async () => {
+    const operation = createOperation();
+    const handoff = {
+      waitForFallbackTurn: vi.fn(async () => {}),
+      markFallbackQueued: vi.fn(),
+      claim: vi.fn(async () => operation),
+      reacquireAfter: vi.fn(),
+      release: vi.fn(),
+    };
+    state.admitReply.mockResolvedValue({ status: "skipped", reason: "lifecycle-invalidated" });
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun({ replyOperationHandoff: handoff }),
+        defaults: createDefaults(),
+      }),
+    ).resolves.toEqual({ kind: "skipped", reason: "lifecycle-invalidated" });
+    expect(operation.complete).toHaveBeenCalledOnce();
+    expect(handoff.reacquireAfter).not.toHaveBeenCalled();
+    expect(state.admitLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("reacquires a claimed handoff when admission defers for an active run", async () => {
+    const operation = createOperation();
+    const replacementHandoff = { release: vi.fn() };
+    const handoff = {
+      waitForFallbackTurn: vi.fn(async () => {}),
+      markFallbackQueued: vi.fn(),
+      claim: vi.fn(async () => operation),
+      reacquireAfter: vi.fn(() => replacementHandoff),
+      release: vi.fn(),
+    };
+    const queued = createRun({ replyOperationHandoff: handoff as never });
+    state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
+
+    await expect(admitFollowupTurn({ queued, defaults: createDefaults() })).resolves.toEqual({
+      kind: "deferred",
+      reason: "active-run",
+    });
+
+    expect(handoff.reacquireAfter).toHaveBeenCalledWith(operation);
+    expect(queued.replyOperationHandoff).toBe(replacementHandoff);
+    expect(operation.complete).toHaveBeenCalledOnce();
+  });
+
+  it("completes a claimed handoff when admission throws", async () => {
+    const operation = createOperation();
+    const handoff = {
+      waitForFallbackTurn: vi.fn(async () => {}),
+      markFallbackQueued: vi.fn(),
+      claim: vi.fn(async () => operation),
+      reacquireAfter: vi.fn(),
+      release: vi.fn(),
+    };
+    state.admitReply.mockRejectedValue(new Error("admission failed"));
+
+    await expect(
+      admitFollowupTurn({
+        queued: createRun({ replyOperationHandoff: handoff }),
+        defaults: createDefaults(),
+      }),
+    ).rejects.toThrow("admission failed");
+    expect(handoff.reacquireAfter).toHaveBeenCalledWith(operation);
+    expect(operation.complete).toHaveBeenCalledOnce();
   });
 
   it("stops after asynchronous source adoption aborts the aggregate owner", async () => {

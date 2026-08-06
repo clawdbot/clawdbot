@@ -1851,6 +1851,24 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
   });
 
+  it("keeps a handoff-bearing followup out of overflow summaries", () => {
+    const key = `test-handoff-followup-cap-one-${Date.now()}`;
+    const settings = createQueueSettings({ mode: "followup", cap: 1 });
+    const handoffRun = createRun({ prompt: "older steer fallback" });
+    handoffRun.replyOperationHandoff = {
+      waitForFallbackTurn: async () => {},
+      markFallbackQueued: () => {},
+      claim: async () => undefined,
+      reacquireAfter: () => handoffRun.replyOperationHandoff!,
+      release: () => {},
+    };
+
+    expect(enqueueFollowupRun(key, handoffRun, settings)).toBe(true);
+    expect(enqueueFollowupRun(key, createRun({ prompt: "later message" }), settings)).toBe(false);
+    expect(getExistingFollowupQueue(key)?.items).toEqual([handoffRun]);
+    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+  });
+
   it("does not advance debounce stamp when overflow rejects an incoming message", () => {
     const key = `test-priority-followup-debounce-reject-${Date.now()}`;
     const settings = createQueueSettings({

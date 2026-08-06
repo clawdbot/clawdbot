@@ -26,6 +26,7 @@ import type {
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
+import type { ReplyOperationHandoff } from "../reply-run-registry.js";
 import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
@@ -91,6 +92,8 @@ export type FollowupRun = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Older-turn ownership of the next cleared reply lane. */
+  replyOperationHandoff?: ReplyOperationHandoff;
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Provider message ID, when available (for deduplication). */
@@ -230,7 +233,7 @@ const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecy
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
 
-type FollowupLifecycleRun = Pick<FollowupRun, "turnAdoptionLifecycle">;
+type FollowupLifecycleRun = Pick<FollowupRun, "replyOperationHandoff" | "turnAdoptionLifecycle">;
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -282,6 +285,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 }
 
 export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+  run.replyOperationHandoff?.release();
   const lifecycle = run.turnAdoptionLifecycle;
 
   const finish = () => {

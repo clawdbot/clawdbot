@@ -134,6 +134,14 @@ export async function admitFollowupTurn(params: {
     initialStoredEntry ??
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
+  const replyOperationHandoff = params.queued.replyOperationHandoff;
+  const handedOffOperation = await replyOperationHandoff?.claim();
+  const reacquireHandoff = () => {
+    if (replyOperationHandoff && handedOffOperation) {
+      params.queued.replyOperationHandoff =
+        replyOperationHandoff.reacquireAfter(handedOffOperation);
+    }
+  };
   const resolveRunSessionFile = (source: FollowupRun["run"], sessionId: string) =>
     resolveAdmittedRunSessionFile({
       agentId: source.agentId,
@@ -152,8 +160,17 @@ export async function admitFollowupTurn(params: {
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
     onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
+    ...(handedOffOperation ? { adoptOperation: handedOffOperation } : {}),
+  }).catch((error: unknown) => {
+    reacquireHandoff();
+    handedOffOperation?.complete();
+    throw error;
   });
   if (admission.status === "skipped") {
+    if (admission.reason === "active-run") {
+      reacquireHandoff();
+    }
+    handedOffOperation?.complete();
     return admission.reason === "active-run"
       ? { kind: "deferred", reason: "active-run" }
       : { kind: "skipped", reason: admission.reason };
@@ -470,6 +487,7 @@ export async function admitFollowupTurn(params: {
     if (queuedFollowupAdmitted) {
       await settleQueuedFollowupPresentation(params.defaults);
     }
+    reacquireHandoff();
     operation.complete();
     throw error instanceof Error ? error : new Error(formatErrorMessage(error));
   }

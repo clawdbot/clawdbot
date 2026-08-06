@@ -1,24 +1,11 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import {
-  formatEmbeddedAgentQueueFailureSummary,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-} from "../../agents/embedded-agent-runner/runs.js";
+import { formatEmbeddedAgentQueueFailureSummary } from "../../agents/embedded-agent-runner/runs.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-  withBeforeAgentReplyObserver,
-} from "../../plugins/before-agent-reply.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../plugins/hook-agent-context.js";
+import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -42,6 +29,7 @@ import {
 } from "./agent-runner-helpers.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { finalizeAcceptedSteer } from "./agent-runner-steer-adoption.js";
+import { attemptActiveReplySteer } from "./agent-runner-steer-attempt.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -57,7 +45,11 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import * as replyRunState from "./reply-operation-run-state.js";
-import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  type ReplyOperation,
+  replyRunRegistry,
+  type ReplyOperationHandoff,
+} from "./reply-run-registry.js";
 import { bindReplyOperationTyping, refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
@@ -66,7 +58,7 @@ import {
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
-import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
+import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
   params: RunReplyAgentParams,
@@ -219,6 +211,7 @@ export async function runReplyAgent(
 
   let shouldQueueAfterSteerRejection = false;
   let beforeAgentReplyDispatchedForSteer = false;
+  let steerFallbackHandoff: ReplyOperationHandoff | undefined;
   if (effectiveShouldSteer && isActive) {
     // Steer against the operation that owns THIS session's run slot. A native
     // command continuation whose slot adoption was skipped (#104844) still
@@ -229,86 +222,25 @@ export async function runReplyAgent(
       providedReplyOperation?.key === sessionKey
         ? providedReplyOperation
         : (registeredReplyOperation ?? providedReplyOperation);
-    const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
-    // Channel dispatch normally stamps the route-scoped source id. Internal
-    // callers can derive the same per-message identity from the prepared turn.
-    const steerRunId = expectDefined(
-      restartRecoverySourceTurnId ??
-        buildChannelSourceTurnId({
-          provider:
-            followupRun.originatingChannel ??
-            followupRun.run.messageProvider ??
-            sessionCtx.Provider,
-          accountId:
-            followupRun.originatingAccountId ??
-            followupRun.run.agentAccountId ??
-            sessionCtx.AccountId,
-          conversationId:
-            followupRun.originatingTo ??
-            followupRun.originatingChatId ??
-            sessionKey ??
-            followupRun.run.sessionKey,
-          messageId: followupRun.messageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-        }) ??
-        normalizeOptionalString(opts?.runId),
-      "steered turn id",
-    );
-    const trigger = "user";
-    const hookResult = await runBeforeAgentReplyForTurn({
-      runId: steerRunId,
-      trigger,
-      event: { cleanedBody: followupRun.prompt },
-      context: {
-        runId: steerRunId,
-        agentId: followupRun.run.agentId,
-        sessionKey: sessionKey ?? followupRun.run.sessionKey,
-        sessionId: steerSessionId,
-        workspaceDir: followupRun.run.workspaceDir,
-        modelProviderId: followupRun.run.provider,
-        modelId: followupRun.run.model,
-        trigger,
-        ...buildAgentHookContextChannelFields({
-          sessionKey: sessionKey ?? followupRun.run.sessionKey,
-          messageChannel: followupRun.originatingChannel,
-          messageProvider: followupRun.run.messageProvider,
-          currentChannelId: followupRun.originatingChatId,
-          messageTo: followupRun.originatingTo,
-          senderId: followupRun.run.senderId,
-        }),
-        ...buildAgentHookContextIdentityFields({
-          trigger,
-          senderId: followupRun.run.senderId,
-          chatId: followupRun.originatingChatId,
-          channelContext: followupRun.run.channelContext,
-        }),
-      },
+    const steerAttempt = await attemptActiveReplySteer({
+      activeReplyOperation,
+      followupRun,
+      opts,
+      resetTriggered: effectiveResetTriggered,
+      resolvedQueue,
+      restartRecoverySourceTurnId,
+      sessionCtx,
+      sessionKey,
     });
     beforeAgentReplyDispatchedForSteer = true;
-    if (hookResult?.handled) {
+    if (steerAttempt.kind === "handled") {
       typing.cleanup();
-      return buildHandledBeforeAgentReplyPayloads(hookResult.reply);
+      return steerAttempt.payloads;
     }
-    const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-      steerSessionId,
-      followupRun.prompt,
-      {
-        steeringMode: "all",
-        isInboundUserMessage: true,
-        ...(followupRun.images?.length ? { images: followupRun.images } : {}),
-        ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
-        ...(followupRun.media?.length ? { media: followupRun.media } : {}),
-        ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
-        ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
-        ...(followupRun.run.sourceReplyDeliveryMode
-          ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
-          : {}),
-        taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
-        ...(followupRun.userTurnTranscriptRecorder
-          ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
-          : {}),
-      },
-    );
+    const { handoff, outcome: steerOutcome, steerSessionId } = steerAttempt;
+    steerFallbackHandoff = handoff;
     if (steerOutcome.queued) {
+      steerFallbackHandoff?.release();
       const adoptionDisposition = await finalizeAcceptedSteer({
         activeReplyOperation,
         abortKey: sessionKey ?? queueKey,
@@ -379,6 +311,7 @@ export async function runReplyAgent(
       : baseQueuedRunFollowupTurn(queued);
 
   if (activeRunQueueAction === "drop") {
+    steerFallbackHandoff?.release();
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
     }
@@ -386,7 +319,13 @@ export async function runReplyAgent(
     return undefined;
   }
 
+  await steerFallbackHandoff?.waitForFallbackTurn();
+
   if (activeRunQueueAction === "enqueue-followup") {
+    followupRun.replyOperationHandoff = steerFallbackHandoff;
+    if (steerFallbackHandoff) {
+      followupRun.disableCollectBatching = true;
+    }
     replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     const enqueued = enqueueFollowupRun(
       queueKey,
@@ -397,16 +336,21 @@ export async function runReplyAgent(
       false,
     );
     if (!enqueued) {
+      steerFallbackHandoff?.release();
       typing.cleanup();
       return undefined;
     }
+    steerFallbackHandoff?.markFallbackQueued();
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "accepted", mode: "followup" };
     }
     // The queue must stay dormant while the active owner can still collect
     // messages. Registering after enqueue closes the owner-clear race.
     const activeReplyOperation = replyRunRegistry.get(queueKey);
-    if (activeReplyOperation) {
+    if (steerFallbackHandoff) {
+      // The handoff itself owns the next slot; its drain must claim that slot.
+      scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
+    } else if (activeReplyOperation) {
       scheduleFollowupDrainAfterReplyOperationClear({
         operation: activeReplyOperation,
         queueKey,
@@ -425,13 +369,19 @@ export async function runReplyAgent(
     return undefined;
   }
 
-  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
-    originatingChannel: sessionCtx.OriginatingChannel,
-    messageProvider: followupRun.run.messageProvider,
-    originatingAccountId: followupRun.originatingAccountId,
-    agentAccountId: followupRun.run.agentAccountId,
-  });
-  followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
+  steerFallbackHandoff?.markFallbackQueued();
+  try {
+    followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
+      originatingChannel: sessionCtx.OriginatingChannel,
+      messageProvider: followupRun.run.messageProvider,
+      originatingAccountId: followupRun.originatingAccountId,
+      agentAccountId: followupRun.run.agentAccountId,
+    });
+    followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
+  } catch (error) {
+    steerFallbackHandoff?.release();
+    throw error;
+  }
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -500,9 +450,11 @@ export async function runReplyAgent(
     ctx: sessionCtx,
     sessionKey: replySessionKey,
   });
+  const handedOffReplyOperation = await steerFallbackHandoff?.claim();
+  const ownedReplyOperation = providedReplyOperation ?? handedOffReplyOperation;
   let replyOperation: ReplyOperation;
-  if (providedReplyOperation) {
-    replyOperation = providedReplyOperation;
+  if (ownedReplyOperation) {
+    replyOperation = ownedReplyOperation;
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "owned" };
     }

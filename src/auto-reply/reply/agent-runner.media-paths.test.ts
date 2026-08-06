@@ -9,8 +9,10 @@ import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   createReplyOperation as createRegisteredReplyOperation,
+  replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -276,6 +278,8 @@ const { runReplyAgent } = await import("./agent-runner.js");
 
 function createReplyOperation(): ReplyOperation {
   return {
+    key: "main",
+    sessionId: "session",
     result: undefined,
     startedAtMs: Date.now(),
     lastActivityAtMs: Date.now(),
@@ -393,6 +397,7 @@ describe("runReplyAgent media path normalization", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    replyRunRegistryTesting.resetReplyRunRegistry();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
@@ -611,6 +616,33 @@ describe("runReplyAgent media path normalization", () => {
 
     expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
+  });
+
+  it("releases a fallback handoff when queued configuration preparation fails", async () => {
+    const failure = new Error("secret resolution failed");
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+    }));
+    resolveCommandSecretRefsViaGatewayMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      runReplyAgent(
+        makeRunReplyAgentParams({
+          resolvedQueue: { mode: "steer" } as QueueSettings,
+          shouldSteer: true,
+          shouldFollowup: true,
+          isActive: true,
+          isStreaming: true,
+          resetTriggered: true,
+        }),
+      ),
+    ).rejects.toBe(failure);
+
+    expect(replyRunRegistry.isActive("main")).toBe(false);
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {
