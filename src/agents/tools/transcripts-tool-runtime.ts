@@ -252,10 +252,9 @@ export async function startTranscripts(params: {
       `transcripts provider ${provider.id} could not use trusted account ${formatAccountIdForToolText(trustedAccountId)}`,
     );
   }
-  const providerSource = {
-    ...sourceForResolution,
-    ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
-  };
+  const providerSource = provider.resolveAccountId
+    ? { ...sourceForResolution, accountId: resolvedAccountId }
+    : sourceForResolution;
   const configuredOwner = resolveConfiguredLifecycleOwner({
     accountBindingChannels,
     accountId: providerSource.accountId?.trim(),
