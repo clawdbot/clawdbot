@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -449,6 +450,390 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.firstSeq).toBe(6);
     expect(snapshot.lastSeq).toBe(1005);
     expectFields(snapshot.events[0], { seq: 6, queueDepth: 5 });
+  });
+
+  it("keeps trusted exporter state sticky and rejects spoofed untrusted facts", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "export_failed",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "default_endpoint",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "export_failed",
+      errorCategory: "collector-secret-message",
+    });
+    for (let index = 0; index < 1005; index += 1) {
+      emitDiagnosticEvent({
+        type: "message.queued",
+        source: "test",
+        queueDepth: index,
+      });
+    }
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    });
+    const defaultSnapshot = getDiagnosticStabilitySnapshot({ limit: 1000 });
+
+    expect(snapshot.capacity).toBe(16);
+    expect(snapshot.count).toBe(1);
+    expect(snapshot.events).toEqual([
+      expect.objectContaining({
+        type: "telemetry.exporter",
+        source: "diagnostics-otel",
+        target: "traces",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "export_failed",
+        mode: "default_endpoint",
+      }),
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("collector-secret-message");
+    expect(defaultSnapshot.count).toBe(1000);
+    expect(defaultSnapshot.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message.queued",
+          source: "test",
+        }),
+      ]),
+    );
+    expect(defaultSnapshot.events).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "telemetry.exporter" })]),
+    );
+  });
+
+  it("retains exporter ownership through recovery", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "export_failed",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      status: "recovered",
+      reason: "export_failed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({
+        type: "telemetry.exporter",
+        limit: 1000,
+      }).events,
+    ).toEqual([
+      expect.objectContaining({
+        target: "metrics",
+        outcome: "recovered",
+        reason: "export_failed",
+        mode: "configured",
+      }),
+    ]);
+  });
+
+  it("preserves explicit and dependency-default ownership on startup failures", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      endpointMode: "default_endpoint",
+      status: "failure",
+      reason: "start_failed",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "metrics",
+      transport: "otlp-http-protobuf",
+      endpointMode: "configured",
+      status: "failure",
+      reason: "start_failed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({
+        type: "telemetry.exporter",
+        limit: 1000,
+      }).events,
+    ).toEqual([
+      expect.objectContaining({
+        target: "traces",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "start_failed",
+        mode: "default_endpoint",
+      }),
+      expect.objectContaining({
+        target: "metrics",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "start_failed",
+        mode: "configured",
+      }),
+    ]);
+  });
+
+  it("keeps safe generic codes while dropping unsafe sources and redacting transports", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-prometheus",
+      signal: "metrics",
+      transport: "prometheus-scrape",
+      status: "started",
+      reason: "configured",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "custom-exporter",
+      signal: "logs",
+      transport: "https://private.example/transport",
+      status: "failure",
+      reason: "queue_full",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "telemetry.exporter",
+      exporter: "https://private.example/exporter",
+      signal: "traces",
+      transport: "vendor-proto",
+      status: "failure",
+      reason: "export_failed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    });
+    expect(snapshot.events).toEqual([
+      expect.objectContaining({
+        source: "diagnostics-prometheus",
+        transport: "prometheus-scrape",
+      }),
+      expect.objectContaining({
+        source: "custom-exporter",
+        outcome: "failure",
+        reason: "queue_full",
+      }),
+    ]);
+    expect(snapshot.events[1]).not.toHaveProperty("transport");
+    expect(JSON.stringify(snapshot)).not.toContain("private.example");
+  });
+
+  it("replaces retired routes while retaining every current logs both route", async () => {
+    startDiagnosticStabilityRecorder();
+    const emitExporter = (
+      event: Omit<
+        Extract<Parameters<typeof emitTrustedDiagnosticEvent>[0], { type: "telemetry.exporter" }>,
+        "type"
+      >,
+    ) => {
+      emitTrustedDiagnosticEvent({ type: "telemetry.exporter", ...event });
+    };
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "external-sdk",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events,
+    ).toEqual([
+      expect.objectContaining({
+        target: "traces",
+        transport: "external-sdk",
+        outcome: "started",
+      }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "external-sdk",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "failure",
+      reason: "unsupported_protocol",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    let events = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    }).events;
+    expect(events.filter((event) => event.target === "traces")).toEqual([
+      expect.objectContaining({
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "unsupported_protocol",
+      }),
+    ]);
+    expect(events.filter((event) => event.target === "logs")).toEqual([
+      expect.objectContaining({ transport: "otlp-http-protobuf", outcome: "started" }),
+      expect.objectContaining({ transport: "stdout", outcome: "started" }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events.filter(
+        (event) => event.target === "traces",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        transport: "otlp-http-protobuf",
+        outcome: "started",
+      }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    events = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    }).events;
+    expect(events.filter((event) => event.target === "logs")).toEqual([
+      expect.objectContaining({ transport: "stdout", outcome: "started" }),
+    ]);
+
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "dropped",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "otlp-http-protobuf",
+      status: "started",
+      reason: "configured",
+    });
+    emitExporter({
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      transport: "stdout",
+      status: "started",
+      reason: "configured",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    events = getDiagnosticStabilitySnapshot({
+      type: "telemetry.exporter",
+      limit: 1000,
+    }).events;
+    expect(events.filter((event) => event.target === "logs")).toEqual([
+      expect.objectContaining({ transport: "otlp-http-protobuf", outcome: "started" }),
+      expect.objectContaining({ transport: "stdout", outcome: "started" }),
+    ]);
   });
 
   it("filters snapshots by type, sequence, and limit", () => {

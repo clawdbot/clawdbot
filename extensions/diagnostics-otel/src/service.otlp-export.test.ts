@@ -9,7 +9,7 @@
 // Collector-boundary cases start the real NodeSDK, so teardown restores every global SDK
 // registration; otherwise a shutdown provider would poison later real-SDK cases.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -28,6 +28,7 @@ import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
+  onInternalDiagnosticEvent,
   parseDiagnosticTraceparent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -37,6 +38,7 @@ import {
   runModelCallAndCaptureTraceparent,
   startLocalOtlpReceiver,
 } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import type { DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   createOtelContext,
@@ -45,6 +47,7 @@ import {
 } from "./service.test-helpers.js";
 
 const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
+const IMMEDIATE_RETRY_AFTER = "Thu, 01 Jan 1970 00:00:00 GMT";
 const ENDPOINT_ENV_KEYS = [
   "OTEL_SDK_DISABLED",
   "OTEL_TRACES_EXPORTER",
@@ -58,6 +61,8 @@ const ENDPOINT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
   "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
   "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TIMEOUT",
+  "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_KEY",
@@ -82,6 +87,8 @@ type OtelGlobalRegistrations = {
   propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
   trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
 };
+
+type ExporterEvent = Extract<DiagnosticEventPayload, { type: "telemetry.exporter" }>;
 
 let exporter: InMemorySpanExporter;
 let provider: BasicTracerProvider;
@@ -232,6 +239,59 @@ async function startOtlpReceiver() {
   };
 }
 
+async function startExporterHealthReceiver(
+  handleRequest: (request: IncomingMessage, response: ServerResponse, requestCount: number) => void,
+) {
+  let requestCount = 0;
+  const server = createServer((request, response) => {
+    requestCount += 1;
+    request.resume();
+    handleRequest(request, response, requestCount);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    get requestCount() {
+      return requestCount;
+    },
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
+    },
+  };
+}
+
+function captureExporterEvents() {
+  const events: ExporterEvent[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "telemetry.exporter") {
+      events.push(event);
+    }
+  });
+  return { events, unsubscribe };
+}
+
+async function waitForExporterStatus(events: ExporterEvent[], status: ExporterEvent["status"]) {
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    if (events.some((event) => event.status === status)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for exporter status ${status}`);
+}
+
+function emitExporterHealthSpan(name: string) {
+  trace.getTracer("openclaw-otel-exporter-health-test").startSpan(name).end();
+}
+
 function releasePreloadedOtelGlobals() {
   context.disable();
   logs.disable();
@@ -282,6 +342,178 @@ const SHARED_ENDPOINT_ROUTING_CASES = [
     ],
   },
 ] as const;
+
+test("retries a real OTLP 503 then succeeds without an intermediate failure fact", async () => {
+  const receiver = await startExporterHealthReceiver((_request, response, requestCount) => {
+    if (requestCount === 1) {
+      response.writeHead(503, { "retry-after": IMMEDIATE_RETRY_AFTER });
+    } else {
+      response.writeHead(200, { "content-type": "application/x-protobuf" });
+    }
+    response.end();
+  });
+  const capture = captureExporterEvents();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = "1000";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: false,
+    logs: false,
+  });
+
+  try {
+    emitExporterHealthSpan("retry-then-success");
+    await service.stop?.(ctx);
+    await waitForDiagnosticEventsDrained();
+
+    expect(receiver.requestCount).toBe(2);
+    expect(capture.events.some((event) => event.status === "failure")).toBe(false);
+    expect(capture.events.some((event) => event.status === "recovered")).toBe(false);
+  } finally {
+    capture.unsubscribe();
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 15_000);
+
+test("records a final failure after persistent real OTLP 503 responses", async () => {
+  const receiver = await startExporterHealthReceiver((_request, response) => {
+    response.writeHead(503, { "retry-after": IMMEDIATE_RETRY_AFTER });
+    response.end();
+  });
+  const capture = captureExporterEvents();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = "1000";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: false,
+    logs: false,
+  });
+
+  try {
+    emitExporterHealthSpan("persistent-503");
+    await service.stop?.(ctx).catch(() => {});
+    await waitForDiagnosticEventsDrained();
+
+    expect(receiver.requestCount).toBe(6);
+    expect(
+      capture.events.filter(
+        (event) => event.status === "failure" && event.reason === "export_failed",
+      ),
+    ).toHaveLength(1);
+  } finally {
+    capture.unsubscribe();
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 15_000);
+
+test("records a final failure for a real OTLP connection reset", async () => {
+  const receiver = await startExporterHealthReceiver((request) => {
+    request.socket.destroy();
+  });
+  const capture = captureExporterEvents();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = "200";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: false,
+    logs: false,
+  });
+
+  try {
+    emitExporterHealthSpan("connection-reset");
+    await service.stop?.(ctx).catch(() => {});
+    await waitForDiagnosticEventsDrained();
+
+    expect(receiver.requestCount).toBeGreaterThanOrEqual(1);
+    expect(
+      capture.events.filter(
+        (event) => event.status === "failure" && event.reason === "export_failed",
+      ),
+    ).toHaveLength(1);
+  } finally {
+    capture.unsubscribe();
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 15_000);
+
+test("records a final failure for a real OTLP request timeout", async () => {
+  const receiver = await startExporterHealthReceiver(() => {
+    // Keep the request open until the exporter-owned timeout settles.
+  });
+  const capture = captureExporterEvents();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = "150";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: false,
+    logs: false,
+  });
+
+  try {
+    emitExporterHealthSpan("request-timeout");
+    await service.stop?.(ctx).catch(() => {});
+    await waitForDiagnosticEventsDrained();
+
+    expect(receiver.requestCount).toBeGreaterThanOrEqual(1);
+    expect(
+      capture.events.filter(
+        (event) => event.status === "failure" && event.reason === "export_failed",
+      ),
+    ).toHaveLength(1);
+  } finally {
+    capture.unsubscribe();
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 15_000);
+
+test("records recovery after a later real OTLP export succeeds", async () => {
+  let failExports = true;
+  const receiver = await startExporterHealthReceiver((_request, response) => {
+    response.writeHead(failExports ? 503 : 200, {
+      "content-type": "application/x-protobuf",
+      ...(failExports ? { "retry-after": IMMEDIATE_RETRY_AFTER } : {}),
+    });
+    response.end();
+  });
+  const capture = captureExporterEvents();
+  releasePreloadedOtelGlobals();
+  process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = "1000";
+  const { service, ctx } = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    metrics: false,
+    logs: false,
+    configure: (serviceContext) => {
+      serviceContext.config.diagnostics!.otel!.flushIntervalMs = 1000;
+    },
+  });
+
+  try {
+    emitExporterHealthSpan("failure-before-recovery");
+    await waitForExporterStatus(capture.events, "failure");
+    failExports = false;
+    emitExporterHealthSpan("successful-recovery");
+    await waitForExporterStatus(capture.events, "recovered");
+
+    expect(
+      capture.events
+        .filter((event) => event.reason === "export_failed")
+        .map((event) => event.status),
+    ).toEqual(["failure", "recovered"]);
+  } finally {
+    capture.unsubscribe();
+    await service.stop?.(ctx);
+    await receiver.close();
+  }
+}, 15_000);
 
 test.each(SHARED_ENDPOINT_ROUTING_CASES)(
   "routes real exporters from a shared $label endpoint",

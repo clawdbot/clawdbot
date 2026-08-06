@@ -1,6 +1,6 @@
 // Diagnostic stability helpers compare diagnostic outputs across runs.
 import {
-  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
@@ -9,6 +9,7 @@ import {
 const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
 const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
+const MAX_DIAGNOSTIC_EXPORTER_STATES = 16;
 const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -140,6 +141,8 @@ type DiagnosticStabilityState = {
   nextIndex: number;
   count: number;
   dropped: number;
+  exporterRecords: Map<string, DiagnosticStabilityEventRecord>;
+  exporterDropped: number;
   unsubscribe: (() => void) | null;
 };
 
@@ -150,6 +153,8 @@ function createState(capacity = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY): Diagnost
     nextIndex: 0,
     count: 0,
     dropped: 0,
+    exporterRecords: new Map(),
+    exporterDropped: 0,
     unsubscribe: null,
   };
 }
@@ -542,9 +547,21 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       break;
     case "telemetry.exporter":
-      record.source = event.exporter;
+      record.source = copyReasonCode(event.exporter);
       record.target = event.signal;
       record.outcome = event.status;
+      const transport = copyReasonCode(event.transport);
+      if (transport) {
+        record.transport = transport;
+      }
+      if (event.endpointMode === "configured" || event.endpointMode === "default_endpoint") {
+        record.mode = event.endpointMode;
+      } else if (
+        event.status === "started" &&
+        (event.reason === "configured" || event.reason === "default_endpoint")
+      ) {
+        record.mode = event.reason;
+      }
       assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
     case "diagnostic.async_queue.dropped":
@@ -577,6 +594,34 @@ function appendRecord(record: DiagnosticStabilityEventRecord): void {
   state.dropped += 1;
 }
 
+function upsertExporterRecord(record: DiagnosticStabilityEventRecord): void {
+  if (!record.source) {
+    return;
+  }
+  const state = getDiagnosticStabilityState();
+  const key = `${record.source}\u0000${record.target ?? "unknown"}\u0000${record.transport ?? "unknown"}`;
+  if (record.outcome === "dropped") {
+    state.exporterRecords.delete(key);
+    return;
+  }
+  const previous = state.exporterRecords.get(key);
+  if (!record.mode && previous?.mode) {
+    record.mode = previous.mode;
+  }
+  if (
+    !state.exporterRecords.has(key) &&
+    state.exporterRecords.size >= MAX_DIAGNOSTIC_EXPORTER_STATES
+  ) {
+    const oldestKey = state.exporterRecords.keys().next().value;
+    if (oldestKey !== undefined) {
+      state.exporterRecords.delete(oldestKey);
+      state.exporterDropped += 1;
+    }
+  }
+  state.exporterRecords.delete(key);
+  state.exporterRecords.set(key, record);
+}
+
 function listRecords(): DiagnosticStabilityEventRecord[] {
   const state = getDiagnosticStabilityState();
   if (state.count === 0) {
@@ -591,6 +636,12 @@ function listRecords(): DiagnosticStabilityEventRecord[] {
     ...state.records.slice(state.nextIndex),
     ...state.records.slice(0, state.nextIndex),
   ].filter((record): record is DiagnosticStabilityEventRecord => record !== undefined);
+}
+
+function listExporterRecords(): DiagnosticStabilityEventRecord[] {
+  return [...getDiagnosticStabilityState().exporterRecords.values()].toSorted(
+    (left, right) => left.seq - right.seq,
+  );
 }
 
 function summarizeRecords(
@@ -733,7 +784,16 @@ export function startDiagnosticStabilityRecorder(): void {
   if (state.unsubscribe) {
     return;
   }
-  state.unsubscribe = onDiagnosticEvent((event) => {
+  state.unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+    if (event.type === "telemetry.exporter") {
+      if (metadata.trusted) {
+        upsertExporterRecord(sanitizeDiagnosticEvent(event));
+      }
+      return;
+    }
+    if (metadata.trusted || event.type === "log.record") {
+      return;
+    }
     appendRecord(sanitizeDiagnosticEvent(event));
   });
 }
@@ -752,12 +812,16 @@ export function getDiagnosticStabilitySnapshot(options?: {
   sinceSeq?: number;
 }): DiagnosticStabilitySnapshot {
   const state = getDiagnosticStabilityState();
-  const { filtered, events } = selectRecords(listRecords(), options);
+  const exporterQuery = options?.type === "telemetry.exporter";
+  const { filtered, events } = selectRecords(
+    exporterQuery ? listExporterRecords() : listRecords(),
+    options,
+  );
   return {
     generatedAt: new Date().toISOString(),
-    capacity: state.capacity,
+    capacity: exporterQuery ? MAX_DIAGNOSTIC_EXPORTER_STATES : state.capacity,
     count: filtered.length,
-    dropped: state.dropped,
+    dropped: exporterQuery ? state.exporterDropped : state.dropped,
     firstSeq: filtered[0]?.seq,
     lastSeq: filtered.at(-1)?.seq,
     events,
