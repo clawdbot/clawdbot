@@ -17,6 +17,7 @@ import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
 import { connectOverCdpPinnedTransport } from "./pw-session-cdp-transport.js";
+import { isBrowserRateLimitError } from "./rate-limit-message.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -420,6 +421,9 @@ export async function connectBrowser(
           endpointDiscoveryError = err;
           return null;
         });
+        if (isBrowserRateLimitError(endpointDiscoveryError)) {
+          throw endpointDiscoveryError;
+        }
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
         if (!resolvedEndpoint && hasUrlCredentials && !isWebSocketUrl(normalized)) {
           // Playwright preserves explicit headers across HTTP discovery redirects.

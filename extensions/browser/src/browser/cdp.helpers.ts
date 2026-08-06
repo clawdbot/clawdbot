@@ -21,7 +21,10 @@ import { CDP_HTTP_REQUEST_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { withCdpSocket } from "./cdp-websocket.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
-import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
+import {
+  BROWSER_TOOL_RATE_LIMIT_NO_RETRY_HINT,
+  resolveBrowserRateLimitMessage,
+} from "./rate-limit-message.js";
 import {
   allowsDiscoveredCdpAuthorityChange,
   withExactHostnamePolicy,
@@ -503,7 +506,9 @@ export async function fetchCdpChecked(
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
-        throw new Error(`${resolveBrowserRateLimitMessage(url)} Do NOT retry the browser tool.`);
+        throw new Error(
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_RATE_LIMIT_NO_RETRY_HINT}.`,
+        );
       }
       throw new Error(`HTTP ${res.status}`);
     }

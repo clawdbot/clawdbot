@@ -9,6 +9,12 @@ const BROWSERBASE_RATE_LIMIT_MESSAGE =
   "Browserbase rate limit reached (max concurrent sessions). " +
   "Wait for the current session to complete, or upgrade your plan.";
 
+export const BROWSER_TOOL_RATE_LIMIT_NO_RETRY_HINT = "Do NOT retry the browser tool";
+
+export function isBrowserRateLimitError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(BROWSER_TOOL_RATE_LIMIT_NO_RETRY_HINT);
+}
+
 function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }

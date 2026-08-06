@@ -363,6 +363,19 @@ describe("pw-session connection scoping", () => {
     expect(connectOverCdpSpy).not.toHaveBeenCalled();
   });
 
+  it("does not retry or fall back to Playwright after rate-limited CDP discovery", async () => {
+    getChromeWebSocketEndpointSpy.mockRejectedValue(
+      new Error("Browser service rate limit reached. Do NOT retry the browser tool."),
+    );
+
+    await expect(
+      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
+    ).rejects.toThrow("rate limit");
+
+    expect(getChromeWebSocketEndpointSpy).toHaveBeenCalledOnce();
+    expect(connectOverCdpSpy).not.toHaveBeenCalled();
+  });
+
   it("does not fall back to Playwright discovery for guarded non-loopback CDP hosts", async () => {
     getChromeWebSocketEndpointSpy.mockRejectedValue(new Error("discovery unavailable"));
 

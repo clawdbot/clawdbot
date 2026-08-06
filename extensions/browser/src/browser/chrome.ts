@@ -83,6 +83,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
+import { isBrowserRateLimitError } from "./rate-limit-message.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
@@ -912,7 +913,10 @@ async function fetchChromeVersion(
 ): Promise<ChromeVersion | null> {
   try {
     return await readChromeVersionWithCredentialFallback(cdpUrl, timeoutMs, ssrfPolicy);
-  } catch {
+  } catch (error) {
+    if (isBrowserRateLimitError(error)) {
+      throw error;
+    }
     return null;
   }
 }
