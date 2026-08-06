@@ -392,11 +392,8 @@ type DreamingStoreStats = Pick<
 
 const DREAMING_ENTRY_LIST_LIMIT = 8;
 
-// Coerces unparseable timestamps to -Infinity so the comparators below never
-// propagate NaN through Array.sort. The previous guard
-// (`Number.isFinite(aMs) || Number.isFinite(bMs)` then `return bMs - aMs`)
-// still returned NaN when exactly one side parsed to NaN, leaving the sort
-// order undefined for malformed store timestamps.
+// Keep malformed persisted timestamps behind valid entries; returning NaN here
+// makes Array.sort preserve arbitrary input order and can hide valid diagnostics.
 function parseDreamingTimestampMs(value: string | undefined): number {
   if (!value) {
     return Number.NEGATIVE_INFINITY;

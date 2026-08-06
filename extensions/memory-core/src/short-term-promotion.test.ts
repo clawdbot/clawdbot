@@ -1480,6 +1480,72 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps recent valid recall stats ahead of malformed timestamps at the entry cap", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+      const malformedEntries = Object.fromEntries(
+        Array.from({ length: 8 }, (_, index) => {
+          const key = `malformed-${index}`;
+          return [
+            key,
+            {
+              key,
+              path: `memory/2026-04-01-malformed-${index}.md`,
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: `Malformed timestamp entry ${index}`,
+              recallCount: 100 - index,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1,
+              maxScore: 1,
+              firstRecalledAt: "not-a-timestamp",
+              lastRecalledAt: "not-a-timestamp",
+              queryHashes: [],
+              recallDays: [],
+              conceptTags: [],
+            },
+          ];
+        }),
+      );
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-05T10:00:00.000Z",
+        entries: {
+          ...malformedEntries,
+          recent: {
+            key: "recent",
+            path: "memory/2026-04-05-recent.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Recent valid timestamp entry",
+            recallCount: 1,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 1,
+            maxScore: 1,
+            firstRecalledAt: "2026-04-05T09:00:00.000Z",
+            lastRecalledAt: "2026-04-05T09:00:00.000Z",
+            queryHashes: [],
+            recallDays: [],
+            conceptTags: [],
+          },
+        },
+      });
+
+      const stats = await loadShortTermPromotionDreamingStats({ workspaceDir, nowMs });
+
+      expect(stats.shortTermEntries).toHaveLength(8);
+      expect(stats.shortTermEntries[0]?.path).toBe("memory/2026-04-05-recent.md");
+      expect(stats.shortTermEntries[1]?.path).toBe("memory/2026-04-01-malformed-0.md");
+      expect(stats.shortTermEntries.map((entry) => entry.path)).not.toContain(
+        "memory/2026-04-01-malformed-7.md",
+      );
+    });
+  });
+
   it("reconciles existing promotion markers instead of appending duplicates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
