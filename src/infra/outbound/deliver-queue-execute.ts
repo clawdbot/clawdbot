@@ -228,7 +228,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
-          if (exactReconciliationRequired || reusableProducerClaimId) {
+          // Any SQLite-fenced live producer must prove it still owns the row at
+          // dispatch. Continuing after a failed refresh can outlive the lease and
+          // let recovery duplicate a recipient-visible send.
+          if (exactReconciliationRequired || producerClaimId) {
             throw dispatchMarkError;
           }
           log.warn(

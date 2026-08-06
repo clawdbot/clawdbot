@@ -1149,7 +1149,7 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
   });
 
-  it("continues best-effort sends when the precise dispatch timestamp cannot be refreshed", async () => {
+  it("stops a claimed best-effort send when dispatch ownership cannot be refreshed", async () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockRejectedValueOnce(
       new Error("dispatch state unavailable"),
     );
@@ -1173,9 +1173,9 @@ describe("deliverOutboundPayloads", () => {
       deliverMatrix({
         queuePolicy: "best_effort",
       }),
-    ).resolves.toHaveLength(1);
+    ).rejects.toThrow("dispatch state unavailable");
     expect(messageSendText).toHaveBeenCalledOnce();
-    expect(logMocks.warn).toHaveBeenCalledWith(
+    expect(logMocks.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("continuing best-effort send: dispatch state unavailable"),
     );
   });
