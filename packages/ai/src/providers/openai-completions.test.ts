@@ -239,7 +239,29 @@ describe("OpenAI-compatible completions params", () => {
     },
   );
 
-  it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
+    it("omits reasoning_effort for the default payload shape when thinking is off", async () => {
+    // Regression for #119959: a model configured with reasoning: true and no
+    // special thinkingFormat (the shape used by plain self-hosted openai-completions
+    // endpoints, e.g. vLLM) must honor an explicit off/none request instead of
+    // always emitting the resolved (default "high") effort.
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "custom-openai-compatible",
+      baseUrl: "https://third-party.test/v1",
+      compat: { supportsReasoningEffort: true },
+    } satisfies Model<"openai-completions">;
+
+    await streamOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "off",
+    }).result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning");
+    });
+
+it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
     const compatibleModel = {
       ...reasoningModel,
