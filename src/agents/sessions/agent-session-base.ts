@@ -69,8 +69,8 @@ export abstract class AgentSessionBase {
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
 
-  /** Tracks pending steering messages for UI display. Removed when delivered. */
-  protected steeringMessages: string[] = [];
+  /** Tracks pending steering text and its exact queue receipt. Removed when delivered. */
+  protected steeringItems: Array<{ text: string; receipt: AgentMessage }> = [];
   /** Tracks pending follow-up messages for UI display. Removed when delivered. */
   protected followUpMessages: string[] = [];
   /** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -301,7 +301,7 @@ export abstract class AgentSessionBase {
   protected emitQueueUpdate(): void {
     this.emit({
       type: "queue_update",
-      steering: [...this.steeringMessages],
+      steering: this.steeringItems.map((item) => item.text),
       followUp: [...this.followUpMessages],
     });
   }
@@ -337,20 +337,17 @@ export abstract class AgentSessionBase {
     // This ensures the UI sees the updated queue state
     if (event.type === "message_start" && event.message.role === "user") {
       this.overflowRecoveryAttempted = false;
+      const receiptIndex = this.steeringItems.findIndex((item) => item.receipt === event.message);
+      if (receiptIndex !== -1) {
+        this.steeringItems.splice(receiptIndex, 1);
+        this.emitQueueUpdate();
+      }
       const messageText = extractTextContent(event.message.content);
-      if (messageText) {
-        // Check steering queue first
-        const steeringIndex = this.steeringMessages.indexOf(messageText);
-        if (steeringIndex !== -1) {
-          this.steeringMessages.splice(steeringIndex, 1);
+      if (receiptIndex === -1 && messageText) {
+        const followUpIndex = this.followUpMessages.indexOf(messageText);
+        if (followUpIndex !== -1) {
+          this.followUpMessages.splice(followUpIndex, 1);
           this.emitQueueUpdate();
-        } else {
-          // Check follow-up queue
-          const followUpIndex = this.followUpMessages.indexOf(messageText);
-          if (followUpIndex !== -1) {
-            this.followUpMessages.splice(followUpIndex, 1);
-            this.emitQueueUpdate();
-          }
         }
       }
     }

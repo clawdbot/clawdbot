@@ -174,6 +174,15 @@ class PendingMessageQueue {
     this.messages.push(message);
   }
 
+  remove(message: AgentMessage): boolean {
+    const index = this.messages.indexOf(message);
+    if (index === -1) {
+      return false;
+    }
+    this.messages.splice(index, 1);
+    return true;
+  }
+
   hasItems(): boolean {
     return this.messages.length > 0;
   }
@@ -331,8 +340,14 @@ export class Agent {
   }
 
   /** Queue a message to be injected after the current assistant turn finishes. */
-  steer(message: AgentMessage): void {
+  steer(message: AgentMessage): AgentMessage {
     this.steeringQueue.enqueue(message);
+    return message;
+  }
+
+  /** Remove one exact pending steering message. */
+  cancelSteer(message: AgentMessage): boolean {
+    return this.steeringQueue.remove(message);
   }
 
   /** Queue a message to run only after the agent would otherwise stop. */

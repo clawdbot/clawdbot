@@ -11,6 +11,7 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
 import type {
   EmbeddedAgentQueueMessageOptions,
@@ -22,8 +23,6 @@ import type {
  * whether the queued user message reached the transcript.
  */
 type EmbeddedAgentActiveSessionSteerTarget = {
-  agent?: unknown;
-  getSteeringMessages?(): readonly string[];
   steer(
     text: string,
     images?: ImageContent[],
@@ -31,7 +30,8 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<void>;
+  ): Promise<AgentMessage>;
+  cancelSteer(receipt: AgentMessage): boolean;
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
@@ -53,7 +53,7 @@ function steerActiveSession(
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
   inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
-): Promise<void> {
+): Promise<AgentMessage> {
   if (inputProvenance) {
     return activeSession.steer(
       text,
@@ -72,41 +72,12 @@ function steerActiveSession(
     : activeSession.steer(text, images);
 }
 
-function extractQueuedUserMessageText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const record = message as { content?: unknown; role?: unknown };
-  if (record.role !== "user") {
-    return undefined;
-  }
-  if (typeof record.content === "string") {
-    return record.content;
-  }
-  if (!Array.isArray(record.content)) {
-    return undefined;
-  }
-  const text = record.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return undefined;
-      }
-      const typedBlock = block as { text?: unknown; type?: unknown };
-      return typedBlock.type === "text" && typeof typedBlock.text === "string"
-        ? typedBlock.text
-        : undefined;
-    })
-    .filter((part): part is string => part !== undefined)
-    .join("");
-  return text || undefined;
-}
-
-function isQueuedUserMessageEnd(event: unknown, text: string): boolean {
+function isQueuedUserMessageEnd(event: unknown, receipt: AgentMessage): boolean {
   if (!event || typeof event !== "object") {
     return false;
   }
   const record = event as { message?: unknown; type?: unknown };
-  return record.type === "message_end" && extractQueuedUserMessageText(record.message) === text;
+  return record.type === "message_end" && record.message === receipt;
 }
 
 function isTerminalActiveSessionEvent(event: unknown): boolean {
@@ -127,52 +98,8 @@ function isCompactionStartEvent(event: unknown): boolean {
   );
 }
 
-function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
-  if (!agent || typeof agent !== "object") {
-    return undefined;
-  }
-  const queue = (agent as { steeringQueue?: unknown }).steeringQueue;
-  if (!queue || typeof queue !== "object") {
-    return undefined;
-  }
-  const messages = (queue as { messages?: unknown }).messages;
-  return Array.isArray(messages) ? messages : undefined;
-}
-
 /**
- * Removes one pending steered user message from both the runtime queue and UI
- * steering list. This targets the exact text so unrelated queued messages keep
- * their payloads and ordering.
- */
-async function cancelQueuedSteeringMessage(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
-): Promise<boolean> {
-  const queuedMessages = getAgentSteeringQueueMessages(activeSession.agent);
-  if (!queuedMessages) {
-    return false;
-  }
-  // The session runtime exposes only all-queue clears publicly; mutate the exact pending message
-  // so unrelated queued messages keep their full payloads.
-  const queueIndex = queuedMessages.findIndex(
-    (message) => extractQueuedUserMessageText(message) === text,
-  );
-  if (queueIndex === -1) {
-    return false;
-  }
-  queuedMessages.splice(queueIndex, 1);
-  const uiSteeringMessages = activeSession.getSteeringMessages?.();
-  if (Array.isArray(uiSteeringMessages)) {
-    const uiIndex = uiSteeringMessages.indexOf(text);
-    if (uiIndex !== -1) {
-      uiSteeringMessages.splice(uiIndex, 1);
-    }
-  }
-  return true;
-}
-
-/**
- * Sends a steering message and resolves only after the matching user
+ * Sends a steering message and resolves only after the exact queued user
  * `message_end` event appears. If the run ends or times out first, the pending
  * queue entry is removed so an abandoned steer does not leak into a later turn.
  */
@@ -188,6 +115,10 @@ async function steerAndWaitForTranscriptCommit(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
+    let receipt: AgentMessage | undefined;
+    let cancellationMessage: string | undefined;
+    const committedBeforeAdmission = new Set<AgentMessage>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let terminalTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err?: unknown) => {
       if (settled) {
@@ -208,27 +139,23 @@ async function steerAndWaitForTranscriptCommit(
       resolve();
     };
     const rejectAfterCancellation = (message: string) => {
+      if (!receipt) {
+        cancellationMessage = message;
+        return;
+      }
       // Cancellation is best-effort but must finish before rejecting so callers
       // do not return while a stale queued message can leak into the next turn.
-      void cancelQueuedSteeringMessage(activeSession, text)
-        .then((removed) => {
-          if (!removed) {
-            log.warn("failed to find queued steering message for cancellation");
-            throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
-          }
-        })
-        .catch((err: unknown) => {
-          if (!(err instanceof EmbeddedSteeringAcceptedUnconfirmedError)) {
-            log.warn(`failed to cancel queued steering message: ${String(err)}`);
-          }
-          throw err instanceof EmbeddedSteeringAcceptedUnconfirmedError
-            ? err
-            : new EmbeddedSteeringAcceptedUnconfirmedError(message, { cause: err });
-        })
-        .then(
-          () => finish(new Error(message)),
-          (error: unknown) => finish(error),
-        );
+      try {
+        if (!activeSession.cancelSteer(receipt)) {
+          log.warn("failed to find queued steering receipt for cancellation");
+          finish(new EmbeddedSteeringAcceptedUnconfirmedError(message));
+          return;
+        }
+        finish(new Error(message));
+      } catch (error) {
+        log.warn(`failed to cancel queued steering message: ${String(error)}`);
+        finish(new EmbeddedSteeringAcceptedUnconfirmedError(message, { cause: error }));
+      }
     };
     const scheduleTerminalCancellation = () => {
       if (terminalTimer) {
@@ -242,15 +169,17 @@ async function steerAndWaitForTranscriptCommit(
       }, 0);
       terminalTimer.unref?.();
     };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
-      () => {
-        rejectAfterCancellation(
-          "queued steering message was not committed to the transcript before timeout",
-        );
-      },
-      Math.max(1, timeoutMs),
-    );
-    timer.unref?.();
+    const startCommitTimer = () => {
+      timer = setTimeout(
+        () => {
+          rejectAfterCancellation(
+            "queued steering message was not committed to the transcript before timeout",
+          );
+        },
+        Math.max(1, timeoutMs),
+      );
+      timer.unref?.();
+    };
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
         // Continuation events prove the run is still alive under a new attempt,
@@ -261,8 +190,17 @@ async function steerAndWaitForTranscriptCommit(
         }
         return;
       }
-      if (isQueuedUserMessageEnd(event, text)) {
-        finish();
+      if (
+        event &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "message_end"
+      ) {
+        const message = (event as { message?: unknown }).message;
+        if (receipt && isQueuedUserMessageEnd(event, receipt)) {
+          finish();
+        } else if (!receipt && message && typeof message === "object") {
+          committedBeforeAdmission.add(message as AgentMessage);
+        }
         return;
       }
       if (isTerminalActiveSessionEvent(event)) {
@@ -272,7 +210,7 @@ async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    const steer = steerActiveSession(
+    void steerActiveSession(
       activeSession,
       text,
       images,
@@ -280,10 +218,21 @@ async function steerAndWaitForTranscriptCommit(
       media,
       imageOrder,
       inputProvenance,
+    ).then(
+      (queuedReceipt) => {
+        receipt = queuedReceipt;
+        if (committedBeforeAdmission.has(queuedReceipt)) {
+          finish();
+          return;
+        }
+        if (cancellationMessage) {
+          rejectAfterCancellation(cancellationMessage);
+          return;
+        }
+        startCommitTimer();
+      },
+      (error: unknown) => finish(error),
     );
-    steer.catch((err: unknown) => {
-      finish(err);
-    });
   });
 }
 

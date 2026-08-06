@@ -341,7 +341,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<void> {
+  ): Promise<AgentMessage> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -352,7 +352,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
-    await this.queueSteer(
+    return await this.queueSteer(
       expandedText,
       images,
       preparedMessage && userTurnTranscriptRecorder
@@ -397,9 +397,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<void> {
-    this.steeringMessages.push(text);
-    this.emitQueueUpdate();
+  ): Promise<AgentMessage> {
     const runtimeMessage = applyInputProvenanceToUserMessage(
       this.createUserMessage(text, images),
       inputProvenance,
@@ -407,11 +405,27 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
-    this.agent.steer(
+    const receipt = this.agent.steer(
       transcriptContext
         ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
         : promptMessage,
     );
+    this.steeringItems.push({ text, receipt });
+    this.emitQueueUpdate();
+    return receipt;
+  }
+
+  /** Remove one exact pending steering message admitted by steer(). */
+  cancelSteer(receipt: AgentMessage): boolean {
+    if (!this.agent.cancelSteer(receipt)) {
+      return false;
+    }
+    const index = this.steeringItems.findIndex((item) => item.receipt === receipt);
+    if (index !== -1) {
+      this.steeringItems.splice(index, 1);
+      this.emitQueueUpdate();
+    }
+    return true;
   }
 
   /**
@@ -537,9 +551,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @returns Object with steering and followUp arrays
    */
   clearQueue(): { steering: string[]; followUp: string[] } {
-    const steering = [...this.steeringMessages];
+    const steering = this.steeringItems.map((item) => item.text);
     const followUp = [...this.followUpMessages];
-    this.steeringMessages = [];
+    this.steeringItems = [];
     this.followUpMessages = [];
     this.agent.clearAllQueues();
     this.emitQueueUpdate();
@@ -548,12 +562,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /** Number of pending messages (includes both steering and follow-up) */
   get pendingMessageCount(): number {
-    return this.steeringMessages.length + this.followUpMessages.length;
+    return this.steeringItems.length + this.followUpMessages.length;
   }
 
   /** Get pending steering messages (read-only) */
   getSteeringMessages(): readonly string[] {
-    return this.steeringMessages;
+    return this.steeringItems.map((item) => item.text);
   }
 
   /** Get pending follow-up messages (read-only) */

@@ -401,7 +401,7 @@ describe("AgentSession queued user turns", () => {
       sourceChannel: "internal",
       sourceTool: "sessions_send",
     };
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation((message) => message);
 
     await session.steer("delegated work", undefined, undefined, undefined, undefined, origin);
 
@@ -423,7 +423,7 @@ describe("AgentSession queued user turns", () => {
       },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation((message) => message);
 
     await session.steer("runtime group prompt", undefined, recorder);
 
@@ -447,7 +447,7 @@ describe("AgentSession queued user turns", () => {
 
   it("carries prompt facts non-enumerably on the exact steered message", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation((message) => message);
     const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
     const imageOrder = ["inline"] as const;
     const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
@@ -474,6 +474,23 @@ describe("AgentSession queued user turns", () => {
       mediaImageBlockFactIndexes: [0],
     });
     expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
+  });
+
+  it("cancels identical queued text by exact receipt", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const first = await session.steer("same delegated prompt");
+    const second = await session.steer("same delegated prompt");
+
+    expect(session.getSteeringMessages()).toEqual([
+      "same delegated prompt",
+      "same delegated prompt",
+    ]);
+    expect(session.cancelSteer(second)).toBe(true);
+    expect(session.cancelSteer(second)).toBe(false);
+    expect(session.getSteeringMessages()).toEqual(["same delegated prompt"]);
+    expect(session.cancelSteer(first)).toBe(true);
+    expect(session.getSteeringMessages()).toEqual([]);
+    session.dispose();
   });
 });
 

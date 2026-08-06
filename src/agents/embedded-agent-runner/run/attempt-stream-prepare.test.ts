@@ -268,7 +268,8 @@ describe("prepareEmbeddedAttemptStream", () => {
       isStreaming: true,
       messages: [message],
       pendingMessageCount: 1,
-      steer: vi.fn(async () => undefined),
+      steer: vi.fn(async () => message),
+      cancelSteer: vi.fn(() => false),
       subscribe: vi.fn((listener: (event: unknown) => void) => {
         emit = listener;
         return () => undefined;
@@ -327,20 +328,128 @@ describe("prepareEmbeddedAttemptStream", () => {
     });
   });
 
+  it("records each identical queued prompt from only its exact committed receipt", async () => {
+    const firstOrigin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:first:main",
+      sourceTool: "sessions_send",
+    };
+    const secondOrigin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:second:main",
+      sourceTool: "sessions_send",
+    };
+    const firstMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same delegated work" }],
+      timestamp: 1,
+      provenance: firstOrigin,
+    };
+    const secondMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "same delegated work" }],
+      timestamp: 2,
+      provenance: secondOrigin,
+    };
+    const receipts = [firstMessage, secondMessage];
+    const listeners = new Set<(event: unknown) => void>();
+    const activeSession = {
+      agent: { hasQueuedMessages: () => true },
+      isStreaming: true,
+      messages: [firstMessage, secondMessage],
+      pendingMessageCount: 2,
+      steer: vi.fn(async () => receipts.shift()!),
+      cancelSteer: vi.fn(() => false),
+      subscribe: vi.fn((listener: (event: unknown) => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+    };
+    const recordEvent = vi.fn();
+    const prepared = prepareEmbeddedAttemptStream({
+      attempt: {
+        runId: "run-identical-delegation",
+        sessionId: "session-identical-delegation",
+        sessionKey: "agent:receiver:main",
+      } as never,
+      activeSession: activeSession as never,
+      hookRunner: undefined as never,
+      hookAgentId: "receiver",
+      diagnosticTrace: {} as never,
+      clientToolCallSlots: [],
+      toolSearchTargetTranscriptProjections: [],
+      isReplaySafeTool: () => false,
+      runAbortController: new AbortController(),
+      abortRun: vi.fn(),
+      markExternalAbort: vi.fn(),
+      getRunState: () => ({
+        aborted: false,
+        promptError: undefined,
+        timedOut: false,
+        yieldDetected: false,
+      }),
+      hasDeliveredSourceReply: () => false,
+      markSourceReplyDelivered: vi.fn(),
+      onBlockReply: vi.fn(),
+      onBlockReplyFlush: vi.fn(),
+      sandboxSessionKey: "agent:receiver:main",
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      trajectoryRecorder: { recordEvent } as never,
+    });
+
+    const firstQueued = prepared.queueHandle.queueMessage("same delegated work", {
+      waitForTranscriptCommit: true,
+      inputProvenance: firstOrigin,
+    });
+    const secondQueued = prepared.queueHandle.queueMessage("same delegated work", {
+      waitForTranscriptCommit: true,
+      inputProvenance: secondOrigin,
+    });
+    await vi.waitFor(() => expect(activeSession.steer).toHaveBeenCalledTimes(2));
+
+    for (const listener of listeners) {
+      listener({ type: "message_end", message: firstMessage });
+    }
+    await firstQueued;
+    expect(recordEvent).toHaveBeenCalledTimes(1);
+    expect(recordEvent).toHaveBeenLastCalledWith(
+      "prompt.submitted",
+      expect.objectContaining({ origin: firstOrigin }),
+    );
+
+    for (const listener of listeners) {
+      listener({ type: "message_end", message: secondMessage });
+    }
+    await secondQueued;
+    expect(recordEvent).toHaveBeenCalledTimes(2);
+    expect(recordEvent).toHaveBeenLastCalledWith(
+      "prompt.submitted",
+      expect.objectContaining({ origin: secondOrigin }),
+    );
+  });
+
   it.each([
     {
       name: "runtime rejection",
-      steer: vi.fn(async () => {
-        throw new Error("steering rejected");
-      }),
+      runtimeReject: true,
+      cancelResult: false,
       timeoutMs: 10_000,
       expectedError: "steering rejected",
     },
     {
       name: "transcript timeout",
-      steer: vi.fn(async () => undefined),
+      runtimeReject: false,
+      cancelResult: true,
       timeoutMs: 1,
       expectedError: "before timeout",
+    },
+    {
+      name: "accepted without transcript confirmation",
+      runtimeReject: false,
+      cancelResult: false,
+      timeoutMs: 1,
+      expectedError: undefined,
     },
   ])("does not record queued prompt provenance after $name", async (testCase) => {
     vi.useFakeTimers();
@@ -354,6 +463,11 @@ describe("prepareEmbeddedAttemptStream", () => {
         role: "user" as const,
         content: [{ type: "text" as const, text: "delegated work" }],
       };
+      const steer = testCase.runtimeReject
+        ? vi.fn(async () => {
+            throw new Error("steering rejected");
+          })
+        : vi.fn(async () => queuedMessage);
       const recordEvent = vi.fn();
       const prepared = prepareEmbeddedAttemptStream({
         attempt: {
@@ -369,7 +483,8 @@ describe("prepareEmbeddedAttemptStream", () => {
           isStreaming: true,
           messages: [],
           pendingMessageCount: 1,
-          steer: testCase.steer,
+          steer,
+          cancelSteer: vi.fn(() => testCase.cancelResult),
           subscribe: vi.fn(() => () => undefined),
           getSteeringMessages: () => ["delegated work"],
         } as never,
@@ -403,10 +518,12 @@ describe("prepareEmbeddedAttemptStream", () => {
         waitForTranscriptCommit: true,
         inputProvenance: origin,
       });
-      const rejected = expect(queued).rejects.toThrow(testCase.expectedError);
+      const outcome = testCase.expectedError
+        ? expect(queued).rejects.toThrow(testCase.expectedError)
+        : expect(queued).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
       await vi.advanceTimersByTimeAsync(testCase.timeoutMs + 1);
 
-      await rejected;
+      await outcome;
       expect(recordEvent).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
