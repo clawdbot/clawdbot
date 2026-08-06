@@ -47,8 +47,7 @@
       "defaults": {
         "blockStreaming": true,
         "chunkMode": "newline",
-        "surfaceReasoning": true,
-        "surfaceSteps": true
+        "surfaceReasoning": true
       }
     },
     "install": {

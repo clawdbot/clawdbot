@@ -25,8 +25,6 @@ export const AguiChannelConfigSchema = {
       chunkMode: { type: "string" },
       /** Surface model reasoning as AG-UI REASONING_* events. */
       surfaceReasoning: { type: "boolean" },
-      /** Surface step/phase signals as AG-UI activity events. */
-      surfaceSteps: { type: "boolean" },
     },
   },
   uiHints: {},
