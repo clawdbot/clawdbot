@@ -30,7 +30,10 @@ import {
   resolveContentCapturePolicy,
 } from "./service-content-normalization.js";
 import { createDiagnosticsEventHandler } from "./service-events.js";
-import { observeOtlpExporterHealth } from "./service-exporter-health.js";
+import {
+  createExporterHealthEventEmitter,
+  observeOtlpExporterHealth,
+} from "./service-exporter-health.js";
 import {
   errorCategory,
   findOtlpExporterError,
@@ -168,28 +171,28 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       }
 
       const exporterRoutes = new Map<string, ExporterRouteState>();
-      const emitExporterEvent = (
-        event: Omit<TelemetryExporterDiagnosticEvent, "type" | "seq" | "ts">,
-      ) => {
-        const key = `${event.signal}\u0000${event.transport ?? "unknown"}`;
-        if (event.status === "dropped") {
-          exporterRoutes.delete(key);
-        } else {
-          exporterRoutes.set(key, {
-            signal: event.signal,
-            status: event.status,
-            ...(event.transport ? { transport: event.transport } : {}),
-          });
-        }
-        try {
-          ctx.internalDiagnostics?.emit({
-            type: "telemetry.exporter",
-            ...event,
-          });
-        } catch {
-          // Exporter health must never affect the exporter lifecycle.
-        }
-      };
+      const emitExporterEvent = createExporterHealthEventEmitter(
+        (event: Omit<TelemetryExporterDiagnosticEvent, "type" | "seq" | "ts">) => {
+          const key = `${event.signal}\u0000${event.transport ?? "unknown"}`;
+          if (event.status === "dropped") {
+            exporterRoutes.delete(key);
+          } else {
+            exporterRoutes.set(key, {
+              signal: event.signal,
+              status: event.status,
+              ...(event.transport ? { transport: event.transport } : {}),
+            });
+          }
+          try {
+            ctx.internalDiagnostics?.emit({
+              type: "telemetry.exporter",
+              ...event,
+            });
+          } catch {
+            // Exporter health must never affect the exporter lifecycle.
+          }
+        },
+      );
       const tracesEnabled = otel.traces !== false;
       const metricsEnabled = otel.metrics !== false;
       const logsEnabled = otel.logs === true;

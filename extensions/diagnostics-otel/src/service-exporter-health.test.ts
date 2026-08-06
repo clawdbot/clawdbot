@@ -1,7 +1,10 @@
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventPayload } from "../api.js";
-import { observeOtlpExporterHealth } from "./service-exporter-health.js";
+import {
+  createExporterHealthEventEmitter,
+  observeOtlpExporterHealth,
+} from "./service-exporter-health.js";
 
 type ExporterEvent = Extract<DiagnosticEventPayload, { type: "telemetry.exporter" }>;
 
@@ -16,9 +19,9 @@ function createObservedExporter(events: ExporterEvent[]) {
   };
   observeOtlpExporterHealth(exporter, {
     signal: "traces",
-    emitExporterEvent: (event) => {
+    emitExporterEvent: createExporterHealthEventEmitter((event) => {
       events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
-    },
+    }),
   });
   return {
     exporter,
@@ -98,9 +101,9 @@ describe("observeOtlpExporterHealth", () => {
     };
     observeOtlpExporterHealth(exporter, {
       signal: "logs",
-      emitExporterEvent: (event) => {
+      emitExporterEvent: createExporterHealthEventEmitter((event) => {
         events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
-      },
+      }),
     });
 
     expect(() => exporter.export([], vi.fn())).toThrow("private serialization details");
@@ -127,9 +130,9 @@ describe("observeOtlpExporterHealth", () => {
     };
     observeOtlpExporterHealth(exporter, {
       signal: "metrics",
-      emitExporterEvent: (event) => {
+      emitExporterEvent: createExporterHealthEventEmitter((event) => {
         events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
-      },
+      }),
     });
 
     expect(() =>

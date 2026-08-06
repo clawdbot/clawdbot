@@ -88,8 +88,6 @@ export function createDiagnosticsLogExporter(params: {
     | undefined;
   if (logsEnabled) {
     let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
-    const failedEmits = new Set<"otlp-http-protobuf" | "stdout" | undefined>();
-
     let otelLogger: { emit: (logRecord: LogRecord) => void } | undefined;
     if (logsToOtlp) {
       const logExporter = observeOtlpExporterHealth(
@@ -118,17 +116,14 @@ export function createDiagnosticsLogExporter(params: {
       label: "log record" | "security event",
       transport?: "otlp-http-protobuf" | "stdout",
     ) => {
-      if (!failedEmits.has(transport)) {
-        failedEmits.add(transport);
-        emitExporterEvent({
-          exporter: "diagnostics-otel",
-          signal: "logs",
-          ...(transport ? { transport } : {}),
-          status: "failure",
-          reason: "emit_failed",
-          errorCategory: errorCategory(err),
-        });
-      }
+      emitExporterEvent({
+        exporter: "diagnostics-otel",
+        signal: "logs",
+        ...(transport ? { transport } : {}),
+        status: "failure",
+        reason: "emit_failed",
+        errorCategory: errorCategory(err),
+      });
       const now = Date.now();
       if (
         now - logRecordExportFailureLastReportedAt >=
@@ -139,9 +134,6 @@ export function createDiagnosticsLogExporter(params: {
       }
     };
     const reportLogExportRecovery = (transport?: "otlp-http-protobuf" | "stdout") => {
-      if (!failedEmits.delete(transport)) {
-        return;
-      }
       emitExporterEvent({
         exporter: "diagnostics-otel",
         signal: "logs",

@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {
@@ -221,6 +222,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { emitDiagnosticEvent, type DiagnosticEventPayload } from "../api.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
+import { createExporterHealthEventEmitter } from "./service-exporter-health.js";
 import { createDiagnosticsLogExporter } from "./service-logs.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
@@ -2329,6 +2331,74 @@ describe("diagnostics-otel service", () => {
     unsubscribe();
   });
 
+  test("does not recover log OTLP health while an export failure remains active", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    let completeExport: ((result: ExportResult) => void) | undefined;
+    logExporterExport.mockImplementation(
+      (_items: unknown, callback: (result: ExportResult) => void) => {
+        completeExport = callback;
+      },
+    );
+    logEmit
+      .mockImplementationOnce(() => {
+        throw new TypeError("private enqueue failure");
+      })
+      .mockImplementationOnce(() => {});
+    await startOtelService({ traces: false, metrics: false, logs: true });
+    const exporter = firstLogProcessorOptions().exporter as
+      | {
+          export(items: unknown, callback: (result: ExportResult) => void): void;
+        }
+      | undefined;
+    if (!exporter) {
+      throw new Error("expected log exporter");
+    }
+
+    exporter.export([], vi.fn());
+    completeExport?.({
+      code: ExportResultCode.FAILED,
+      error: new Error("private collector failure"),
+    });
+    await emitAndFlush({ type: "log.record", level: "INFO", message: "enqueue failure" });
+    await emitAndFlush({ type: "log.record", level: "INFO", message: "enqueue recovery" });
+    exporter.export([], vi.fn());
+    completeExport?.({
+      code: ExportResultCode.FAILED,
+      error: new Error("repeated private collector failure"),
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      events
+        .filter((event) => event.transport === "otlp-http-protobuf")
+        .map(({ status, reason }) => ({ status, reason })),
+    ).toEqual([
+      { status: "started", reason: "configured" },
+      { status: "failure", reason: "export_failed" },
+    ]);
+
+    exporter.export([], vi.fn());
+    completeExport?.({ code: ExportResultCode.SUCCESS });
+    await waitForDiagnosticEventsDrained();
+    expect(
+      events
+        .filter((event) => event.transport === "otlp-http-protobuf")
+        .map(({ status, reason }) => ({ status, reason })),
+    ).toEqual([
+      { status: "started", reason: "configured" },
+      { status: "failure", reason: "export_failed" },
+      { status: "recovered", reason: "export_failed" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("private");
+
+    unsubscribe();
+  });
+
   test("recovers stdout emit health after repeated failures", async () => {
     const events: TelemetryExporterEvent[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {
@@ -2387,9 +2457,9 @@ describe("diagnostics-otel service", () => {
         toolDefinitions: false,
         logBodies: false,
       },
-      emitExporterEvent: (event) => {
+      emitExporterEvent: createExporterHealthEventEmitter((event) => {
         events.push({ type: "telemetry.exporter", seq: 1, ts: 1, ...event });
-      },
+      }),
       logger,
       logsEnabled: true,
       logsToOtlp: true,
