@@ -3,6 +3,8 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js";
 
 const EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS = 60_000;
+const EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES = 50;
+const EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS = 200;
 
 type ExperienceReviewPromptCandidate = {
   ctx: { runId?: string };
@@ -87,6 +89,27 @@ export function formatSkillExperienceReviewTranscript(messages: readonly unknown
   return `${first}\n\n[older trajectory omitted]\n\n${sliceUtf16Safe(full, -tailBudget)}`;
 }
 
+function renderExistingSkillsSection(
+  existingSkills: ExperienceReviewPromptCandidate["existingSkills"],
+): string[] {
+  if (!existingSkills?.length) {
+    return [];
+  }
+  const shown = existingSkills.slice(0, EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES);
+  const omitted = existingSkills.length - shown.length;
+  return [
+    "",
+    "Existing workspace skills (update targets):",
+    ...shown.map((skill) =>
+      truncateUtf16Safe(
+        `- ${skill.name}${skill.description ? ` — ${skill.description}` : ""}`,
+        EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS,
+      ),
+    ),
+    ...(omitted > 0 ? [`(+${omitted} more not shown)`] : []),
+  ];
+}
+
 export function buildSkillExperienceReviewPrompt(
   candidate: ExperienceReviewPromptCandidate,
 ): string {
@@ -114,15 +137,7 @@ export function buildSkillExperienceReviewPrompt(
           "The trajectory may end mid-task. Only capture procedures that visibly worked before the interruption.",
         ]
       : []),
-    ...(candidate.existingSkills?.length
-      ? [
-          "",
-          "Existing workspace skills (update targets):",
-          ...candidate.existingSkills.map(
-            (skill) => `- ${skill.name}${skill.description ? ` — ${skill.description}` : ""}`,
-          ),
-        ]
-      : []),
+    ...renderExistingSkillsSection(candidate.existingSkills),
     `Model iterations in turn: ${candidate.modelIterations}`,
     "",
     "Trajectory:",

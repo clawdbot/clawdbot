@@ -509,6 +509,15 @@ async function runSkillExperienceReviewInner(
     ) {
       continue;
     }
+    // The reviewer drafts update bodies from name/description summaries without the live
+    // skill content, so applying one unseen would replace user-authored sections. Update
+    // proposals stay pending for operator review; only create proposals auto-apply.
+    if (proposal.record.kind === "update") {
+      log.info(
+        `skill experience review left update proposal ${proposalId} pending for operator review`,
+      );
+      continue;
+    }
     await autoApplySkillProposal({
       workspaceDir,
       ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),

@@ -502,6 +502,30 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("- release-runbook");
   });
 
+  it("caps the existing-skill list injected into the review prompt", () => {
+    const params = completedRun();
+    const prompt = buildSkillExperienceReviewPrompt({
+      ctx: params.ctx,
+      transcript: formatSkillExperienceReviewTranscript(params.event.messages),
+      modelIterations: 10,
+      existingSkills: Array.from({ length: 120 }, (_, index) => ({
+        name: `skill-${String(index)}`,
+        description: "d".repeat(500),
+      })),
+    });
+
+    expect(prompt).toContain("- skill-49");
+    expect(prompt).not.toContain("- skill-50");
+    expect(prompt).toContain("(+70 more not shown)");
+    const longestLine = Math.max(...prompt.split("\n").map((line) => line.length));
+    expect(longestLine).toBeLessThanOrEqual(60_000);
+    for (const line of prompt.split("\n")) {
+      if (line.startsWith("- skill-")) {
+        expect(line.length).toBeLessThanOrEqual(200);
+      }
+    }
+  });
+
   it("flags interrupted turns in the review prompt", () => {
     const params = completedRun({ success: false });
     const prompt = buildSkillExperienceReviewPrompt({

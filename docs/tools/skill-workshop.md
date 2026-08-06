@@ -337,17 +337,14 @@ the proposal threshold, and troubleshooting.
 | `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
 | `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
 
-Autonomous capture in `propose` and `auto` modes recognizes prospective rules (for example, “from now on”) and reactive
-corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
-to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
-revises its own pending proposal when another correction targets the same skill.
-
-For successful substantial work without an explicit correction, an isolated run of the selected
-model decides whether the completed trajectory clears the conservative proposal bar. The
-foreground model is not prompted to learn before it replies. The background reviewer preserves the
-foreground run as proposal provenance, cannot access general agent tools, and cannot make lifecycle
-decisions. In `auto` mode, the capture pipeline applies the resulting pending proposal only after
-the isolated run completes. The review starts only when the foreground runtime reports its resolved model
+In `propose` and `auto` modes, an isolated run of the selected model decides whether the
+completed trajectory clears the conservative proposal bar. The foreground model is not prompted
+to learn before it replies. The background reviewer preserves the foreground run as proposal
+provenance, cannot access general agent tools, and cannot make lifecycle decisions. In `auto`
+mode, the capture pipeline applies a resulting new-skill proposal only after the isolated run
+completes; update proposals targeting an existing skill always stay pending for operator review,
+because the reviewer drafts them without reading the live skill body. The review starts only when
+the foreground runtime reports its resolved model
 and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
 fails closed and creates no proposal.
 

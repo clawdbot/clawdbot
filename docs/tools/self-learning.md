@@ -50,14 +50,16 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
-The reviewer is isolated and conservative. It sees the workspace skill list and
-can list or inspect proposals. It drafts at most one pending proposal: preferring
-to revise a matching pending proposal, then to propose an update to the existing
-skill governing the work, and creating a new skill only when nothing covers the
-class. Its one-mutation budget is shared across retries. Every mutation is a
-pending proposal — it never writes a live skill directly and cannot apply,
-reject, quarantine, message, or use general agent tools. The reviewed trajectory
-is evidence, not instructions.
+The reviewer is isolated and conservative. It sees a bounded workspace skill
+list and can list or inspect proposals. It drafts at most one pending proposal:
+preferring to revise a matching pending proposal, then to propose an update to
+the existing skill governing the work, and creating a new skill only when
+nothing covers the class. Its one-mutation budget is shared across retries.
+Every mutation is a pending proposal — it never writes a live skill directly and
+cannot apply, reject, quarantine, message, or use general agent tools. Because
+the reviewer drafts update bodies without reading the live skill, update
+proposals are never auto-applied: they stay pending for operator review even in
+`auto` mode. The reviewed trajectory is evidence, not instructions.
 
 Good candidates include:
 
@@ -80,11 +82,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                          |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| `off`     | Does not create experience-review captures.                                                               |
-| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                      |
-| `auto`    | Creates or revises proposals, then immediately calls the normal Workshop apply path. This is the default. |
+| Mode      | Capture behavior                                                                                                                                                      |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`     | Does not create experience-review captures.                                                                                                                           |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                  |
+| `auto`    | Creates or revises proposals, then applies new-skill proposals through the normal Workshop apply path. Update proposals stay pending for review. This is the default. |
 
 Set the mode with the CLI:
 
