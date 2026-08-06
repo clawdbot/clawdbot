@@ -82,7 +82,11 @@ export function parsePageRange(range: string, maxPages: number): number[] {
       }
     }
   }
-  return Array.from(pages).toSorted((a, b) => a - b);
+  const parsedPages = Array.from(pages).toSorted((a, b) => a - b);
+  if (parsedPages.length === 0) {
+    throw new Error(`No PDF pages matched requested range "${range}"`);
+  }
+  return parsedPages;
 }
 
 /** Converts a provider assistant message into PDF text or throws a model-labelled failure. */

@@ -27,6 +27,12 @@ import { createWebFetchTool } from "./web-fetch.js";
 
 const lookupMock = vi.fn();
 
+function responseWithUrl(body: BodyInit, init: ResponseInit, url: string): Response {
+  const response = new Response(body, init);
+  Object.defineProperty(response, "url", { value: url });
+  return response;
+}
+
 type MockResponse = {
   ok: boolean;
   status: number;
