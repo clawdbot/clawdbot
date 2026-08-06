@@ -290,22 +290,35 @@ export async function startGatewayService(
   if (nextState.loadState.status === "unknown") {
     throw new Error(`Service status inspection failed after start: ${nextState.loadState.detail}`);
   }
-  const runtime = nextState.runtime;
-  const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
-  const newFailedExit =
-    runtime?.status === "stopped" &&
-    typeof runtime.lastExitStatus === "number" &&
-    runtime.lastExitStatus !== 0 &&
-    runtime.lastExitStatus !== state.runtime?.lastExitStatus;
-  if (failedState || newFailedExit) {
-    const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
-    throw new Error(`Service failed to start (${failure}). Check the service logs and retry.`);
-  }
+  assertGatewayServiceStarted(state, nextState, "start");
 
   return {
     outcome: "started",
     state: nextState,
   };
+}
+
+/**
+ * Validates that a gateway service actually started after a raw platform start.
+ * Rejects if the service manager reports a failed state or a new non-zero exit
+ * code, which indicates the binary started but immediately crashed.
+ */
+export function assertGatewayServiceStarted(
+  preState: GatewayServiceState,
+  postState: GatewayServiceState,
+  context: string,
+): void {
+  const runtime = postState.runtime;
+  const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
+  const newFailedExit =
+    runtime?.status === "stopped" &&
+    typeof runtime.lastExitStatus === "number" &&
+    runtime.lastExitStatus !== 0 &&
+    runtime.lastExitStatus !== preState.runtime?.lastExitStatus;
+  if (failedState || newFailedExit) {
+    const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
+    throw new Error(`Service failed to ${context} (${failure}). Check the service logs and retry.`);
+  }
 }
 
 export function describeGatewayServiceRestart(
@@ -479,9 +492,17 @@ export async function startGatewayServiceAfterFailedUpdate(
   if (args.env && args.env !== process.env) {
     assertGatewayServiceMutationAllowed("start the gateway service", args.env);
   }
-  if (isSupportedGatewayServicePlatform(process.platform)) {
-    await GATEWAY_SERVICE_REGISTRY[process.platform].start(args);
-    return;
+  const service = isSupportedGatewayServicePlatform(process.platform)
+    ? GATEWAY_SERVICE_REGISTRY[process.platform]
+    : createUnsupportedGatewayService();
+
+  const preState = await readGatewayServiceState(service, { env: args.env });
+  await service.start(args);
+  const postState = await readGatewayServiceState(service, { env: args.env });
+  if (postState.loadState.status === "unknown") {
+    throw new Error(
+      `Service status inspection failed after start: ${postState.loadState.detail}`,
+    );
   }
-  await createUnsupportedGatewayService().start(args);
+  assertGatewayServiceStarted(preState, postState, "start after update recovery");
 }
