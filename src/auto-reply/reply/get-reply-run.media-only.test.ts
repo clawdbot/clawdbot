@@ -161,7 +161,7 @@ function createGatewayDrainingError(): Error {
 }
 
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
-  "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
+  "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
 
 function createInboundBody<T extends string>(body: T) {
   return { Body: body, RawBody: body, CommandBody: body };
@@ -2285,9 +2285,9 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     const call = requireLastRunReplyAgentCall();
-    expect(call?.commandBody).toBe("[OpenClaw room event]");
+    expect(call?.commandBody).toBe("#35676 Keśava: No wtf");
     expect(call?.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
-    expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
+    expect(call?.followupRun.prompt).toBe("#35676 Keśava: No wtf");
     expect(call?.followupRun.transcriptPrompt).toBe("#35676 Keśava: No wtf");
     expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call?.followupRun.currentInboundAudio).toBe(true);
@@ -2334,9 +2334,7 @@ describe("runPreparedReply media-only handling", () => {
       ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
     );
     expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
-    expect(call?.followupRun.currentInboundContext?.text).toContain(
-      "Current event:\n#35676 Keśava: No wtf",
-    );
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain("Current event:");
   });
 
   it("queues active room events as followups instead of steering fake prompts", async () => {
@@ -2378,10 +2376,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
     expect(call.resolvedQueue.mode).toBe("steer");
-    expect(call.followupRun.prompt).toBe("[OpenClaw room event]");
+    expect(call.followupRun.prompt).toBe("#992 Alice: ambient");
     expect(call.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call.followupRun.abortSignal).toBe(abortController.signal);
-    expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
+    expect(call.followupRun.currentInboundContext?.text).toContain("Room context:");
   });
 
   it("uses queued followup abort ownership instead of borrowed active-lane abort ownership", async () => {
