@@ -147,8 +147,27 @@ async function discoverClawProjectRoot(projectPath: string): Promise<string> {
   return roots[0] as string;
 }
 
+function projectPathKey(value: string, caseInsensitive: boolean): string {
+  const normalized = value.normalize("NFC");
+  return caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
+async function isCaseInsensitiveProjectRoot(root: string): Promise<boolean> {
+  const [canonical, folded] = await Promise.all([
+    lstat(resolve(root, "CLAW.md")).catch(() => undefined),
+    lstat(resolve(root, "claw.md")).catch(() => undefined),
+  ]);
+  return Boolean(
+    canonical && folded && canonical.dev === folded.dev && canonical.ino === folded.ino,
+  );
+}
+
 async function collectExcludedPaths(root: string, selectedPaths: Set<string>): Promise<string[]> {
   const excluded: string[] = [];
+  const caseInsensitive = await isCaseInsensitiveProjectRoot(root);
+  const selectedPathKeys = new Set(
+    [...selectedPaths].map((path) => projectPathKey(path, caseInsensitive)),
+  );
   let entryCount = 0;
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(resolve(root, directory), { withFileTypes: true });
@@ -167,7 +186,7 @@ async function collectExcludedPaths(root: string, selectedPaths: Set<string>): P
         } else {
           await visit(path);
         }
-      } else if (!selectedPaths.has(path)) {
+      } else if (!selectedPathKeys.has(projectPathKey(path, caseInsensitive))) {
         excluded.push(path);
       }
     }
@@ -326,6 +345,22 @@ export async function validateClawProject(
   const claw = await readClawManifestFile(root);
   if (!claw.ok) {
     return { ok: false, root, diagnostics: claw.diagnostics };
+  }
+  const reservedPackageSource = claw.snapshot.workspaceSources.find(
+    (source) => source.sourcePath.normalize("NFC").toLowerCase() === "package.json",
+  );
+  if (reservedPackageSource) {
+    return {
+      ok: false,
+      root,
+      diagnostics: [
+        diagnostic(
+          "project_invalid",
+          "$.workspace.files",
+          `Workspace source ${JSON.stringify(reservedPackageSource.sourcePath)} collides with generated package metadata.`,
+        ),
+      ],
+    };
   }
   const selectedPaths = new Set([
     "package.json",

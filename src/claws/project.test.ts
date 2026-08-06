@@ -109,6 +109,28 @@ describe("Claw projects", () => {
     }
   });
 
+  it("rejects package.json as a managed workspace source", async () => {
+    const project = tempDirs.make("openclaw-claw-package-source-");
+    const output = join(tempDirs.make("openclaw-claw-package-source-output-"), "claw.tgz");
+    await writeRichProject(project);
+    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+    await writeFile(
+      join(project, "CLAW.md"),
+      manifest.replace(
+        "    - source: workspace/reference.md\n      path: reference.md",
+        "    - source: package.json\n      path: metadata.json",
+      ),
+    );
+
+    await expect(validateClawProject(project)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "project_invalid" })],
+    });
+    await expect(buildClawProject(project, output)).rejects.toMatchObject({
+      code: "project_invalid",
+    } satisfies Partial<ClawProjectError>);
+  });
+
   it("builds byte-identical artifacts containing only declared project inputs", async () => {
     const project = tempDirs.make("openclaw-claw-build-");
     const output = tempDirs.make("openclaw-claw-output-");
@@ -135,6 +157,24 @@ describe("Claw projects", () => {
     ]);
     expect(entries).not.toContain("package/not-packed.txt");
   });
+
+  it.runIf(process.platform === "win32")(
+    "does not report a differently cased selected file as excluded",
+    async () => {
+      const project = tempDirs.make("openclaw-claw-selected-case-");
+      await writeRichProject(project);
+      const temporaryManifest = join(project, "manifest.tmp");
+      await rename(join(project, "CLAW.md"), temporaryManifest);
+      await rename(temporaryManifest, join(project, "claw.md"));
+
+      const result = await validateClawProject(project);
+
+      expect(result).toMatchObject({ ok: true });
+      if (result.ok) {
+        expect(result.excludedPaths).not.toContain("claw.md");
+      }
+    },
+  );
 
   it("dereferences only a confined CLAW.md symlink into the artifact", async () => {
     const project = tempDirs.make("openclaw-claw-manifest-link-");
