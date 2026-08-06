@@ -117,7 +117,9 @@ agent ownership. For an account-bound source, a row with no stored account
 cannot be safely claimed from a channel: recover an agent-owned row with a local
 turn for that agent. An account-bound row with no agent attribution requires a
 local main-agent turn. Sources without account binding retain main-agent access
-across their normal surfaces.
+across their normal surfaces. If a legacy row has an account but its provider
+is unavailable, binding provenance cannot be verified; use the same local
+recovery path until the provider is available again.
 
 ```bash
 openclaw agent --agent <owning-agent-or-main> --local --message \

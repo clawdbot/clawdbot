@@ -74,6 +74,15 @@ function ownsTranscriptSession(
     // later changes; only the channel-less local main agent may recover it.
     return isLocalMainOperator;
   }
+  const sourceAccountId = session.source.accountId?.trim();
+  if (!provider && sourceAccountId) {
+    // Without provider metadata, core cannot prove whether this legacy account
+    // belonged to a binding namespace. Keep recovery on the recorded agent's
+    // local surface, or local main for ownerless rows, instead of guessing.
+    return typeof ownerAgentId === "string"
+      ? ownerAgentId === ctx.agentId && !channel
+      : isLocalMainOperator;
+  }
   if (!ctx.agentId) {
     return !providerUsesAccountOwnership;
   }
@@ -81,7 +90,6 @@ function ownsTranscriptSession(
     if (ownerAgentId !== ctx.agentId) {
       return false;
     }
-    const sourceAccountId = session.source.accountId?.trim();
     if (providerUsesAccountOwnership && !sourceAccountId) {
       // An account-bound legacy row without an account has no channel claim to verify.
       // Keep recovery local to its recorded agent instead of trusting another surface.

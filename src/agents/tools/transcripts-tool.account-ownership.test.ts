@@ -484,7 +484,7 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).resolves.toMatchObject({ details: { sessionId: "stable-ownerless" } });
+    ).rejects.toThrow("transcripts session not found: stable-ownerless");
     await expect(
       localMainTool.execute(
         "call-provider-missing-local",
@@ -500,7 +500,23 @@ describe("transcripts tool account ownership", () => {
         undefined,
         vi.fn(),
       ),
-    ).resolves.toMatchObject({ details: { sessionId: "beta-agent-only" } });
+    ).rejects.toThrow("transcripts session not found: beta-agent-only");
+    await expect(
+      createTool(stateDir, "research", { channel: "webchat", accountId: "operator" }).execute(
+        "call-provider-missing-named-channel",
+        { action: "summarize", sessionId: "beta-named-agent" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: beta-named-agent");
+    await expect(
+      createTool(stateDir, "research").execute(
+        "call-provider-missing-named-local",
+        { action: "summarize", sessionId: "beta-named-agent" },
+        undefined,
+        vi.fn(),
+      ),
+    ).resolves.toMatchObject({ details: { sessionId: "beta-named-agent" } });
   });
 
   it("preserves main-agent access to ownerless non-binding sessions", async () => {

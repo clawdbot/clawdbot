@@ -144,7 +144,8 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
 
     expect(discordVoiceTranscriptsSourceProvider.resolveAccountId?.({ cfg, source })).toEqual({
       ok: false,
-      error: "No Discord account is enabled for voice; enable voice or specify an account.",
+      error:
+        "No Discord account is enabled for voice; configure credentials and enable voice for an account.",
     });
     expect(
       discordVoiceTranscriptsSourceProvider.resolveAccountId?.({
