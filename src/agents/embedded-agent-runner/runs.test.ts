@@ -52,10 +52,7 @@ function createRunHandle(
     isStreaming?: boolean;
     isStopped?: () => boolean;
     runId?: string;
-    queueMessage?: (
-      text: string,
-      options?: Parameters<RunHandle["queueMessage"]>[1],
-    ) => Promise<void>;
+    queueMessage?: RunHandle["queueMessage"];
     supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
   } = {},
@@ -749,6 +746,31 @@ describe("embedded-agent runner run registry", () => {
     expect(formatEmbeddedAgentQueueFailureSummary(outcome)).toBe(
       "queue_message_failed reason=runtime_rejected sessionId=session-rejected gatewayHealth=live error=cannot steer a compact turn",
     );
+  });
+
+  it("reports accepted steering without transcript confirmation as non-replayable", async () => {
+    setActiveEmbeddedRun("session-unconfirmed", {
+      ...createRunHandle(),
+      queueMessage: async () => ({
+        transcriptCommit: "unconfirmed",
+        errorMessage: "receipt unavailable",
+      }),
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-unconfirmed",
+      "continue",
+    );
+
+    expect(outcome).toEqual({
+      queued: true,
+      sessionId: "session-unconfirmed",
+      target: "embedded_run",
+      gatewayHealth: "live",
+      transcriptCommit: "unconfirmed",
+      errorMessage: "receipt unavailable",
+      enqueuedAtMs: expect.any(Number),
+    });
   });
 
   it("rejects transcript-commit waits for active handles without support", async () => {

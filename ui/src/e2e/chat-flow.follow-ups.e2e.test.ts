@@ -355,7 +355,7 @@ suite.define(() => {
         sessionKey: "main",
       });
       const queue = page.locator(".chat-queue");
-      await queue.getByText("Steered").waitFor({ timeout: 10_000 });
+      await queue.getByText("Steering").waitFor({ timeout: 10_000 });
       await queue.getByText(followUp).waitFor({ timeout: 10_000 });
       if (artifactDir) {
         await page.screenshot({
@@ -581,7 +581,7 @@ suite.define(() => {
         message: queuedPrompt,
         sessionKey: "main",
       });
-      await queue.getByText("Steered").waitFor({ timeout: 10_000 });
+      await queue.getByText("Steering").waitFor({ timeout: 10_000 });
       await gateway.emitChatFinal({
         runId: requireString(steerParams.idempotencyKey, "restored steer idempotency key"),
         text: "Restored steer completed.",

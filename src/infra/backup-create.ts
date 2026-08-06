@@ -12,6 +12,7 @@ import {
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
@@ -31,7 +32,7 @@ import {
 } from "./backup-archive-publication.js";
 import { removePreparedBackupArchive, writeArchiveStreamToFile } from "./backup-create-stream.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
-import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
 import {
   createBackupLinkCache,
   createBackupVolatileStatCache,
@@ -376,9 +377,6 @@ type StateSqliteBackupPlan = {
 };
 
 const SQLITE_BACKUP_SOURCE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
-const SQLITE_BACKUP_EXCLUDED_SUFFIXES = [".reindex-lock.sqlite"] as const;
-const SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN =
-  /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 function isCanonicalAgentSqlitePathOrAncestor(sourcePath: string, stateDir: string): boolean {
   const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
@@ -445,18 +443,10 @@ function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined
   return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
 }
 
-function resolveSqliteBackupBasePath(sourcePath: string): string {
-  for (const suffix of SQLITE_BACKUP_SOURCE_SUFFIXES.slice(1)) {
-    if (sourcePath.endsWith(suffix)) {
-      return sourcePath.slice(0, -suffix.length);
-    }
-  }
-  return sourcePath;
-}
-
 function classifyStateSqliteBackupSourcePath(
   sourcePath: string,
   stateDir: string,
+  gatewayLockDirs: readonly string[],
 ): "excluded" | "sqlite" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
   if (!isPathWithin(resolvedSourcePath, stateDir)) {
@@ -465,18 +455,14 @@ function classifyStateSqliteBackupSourcePath(
   if (isStatePackageContentPath(resolvedSourcePath, stateDir)) {
     return undefined;
   }
-  if (
-    SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN.test(resolveSqliteBackupBasePath(resolvedSourcePath))
-  ) {
+  if (isTransientSqliteBackupPath(resolvedSourcePath, gatewayLockDirs)) {
     return "excluded";
   }
   const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
   if (!databasePath) {
     return undefined;
   }
-  return SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => databasePath.endsWith(suffix))
-    ? "excluded"
-    : "sqlite";
+  return "sqlite";
 }
 
 function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
@@ -486,6 +472,7 @@ function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").Re
 async function listStateSqlitePaths(params: {
   stateDir: string;
   globalStateSqlitePath: string;
+  gatewayLockDirs: readonly string[];
   preservedStatePaths?: readonly string[];
 }): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
   const snapshotPaths = new Set<string>();
@@ -534,13 +521,15 @@ async function listStateSqlitePaths(params: {
         !isStatePackageContentPath(entryPath, params.stateDir)
       ) {
         const resolvedEntryPath = path.resolve(entryPath);
-        if (resolveSqliteBackupDatabasePath(resolvedEntryPath)) {
+        const sqliteSourceKind = classifyStateSqliteBackupSourcePath(
+          resolvedEntryPath,
+          params.stateDir,
+          params.gatewayLockDirs,
+        );
+        if (sqliteSourceKind === "sqlite") {
           discoveredSourcePaths.add(resolvedEntryPath);
         }
-        if (
-          entry.name.endsWith(".sqlite") &&
-          !SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))
-        ) {
+        if (entry.name.endsWith(".sqlite") && sqliteSourceKind === "sqlite") {
           snapshotPaths.add(resolvedEntryPath);
         }
       }
@@ -607,6 +596,12 @@ async function createStateSqliteBackupPlan(params: {
   const discovery = await listStateSqlitePaths({
     stateDir: params.stateDir,
     globalStateSqlitePath,
+    // CLI and managed services use different temp roots for the same
+    // disposable gateway/device coordination databases.
+    gatewayLockDirs: [
+      resolveGatewayLockDir(),
+      resolveGatewayLockDir(() => path.join(params.stateDir, "tmp")),
+    ],
     preservedStatePaths: params.preservedStatePaths,
   });
   const globalStateIdentity = await fs.stat(globalStateSqlitePath).catch((error: unknown) => {
@@ -871,6 +866,10 @@ export async function createBackupArchive(
     const stateFilter = stateAsset
       ? buildStateBackupFilter(stateAsset.sourcePath, preservedStatePaths)
       : undefined;
+    const gatewayLockDirs = [
+      resolveGatewayLockDir(),
+      resolveGatewayLockDir(() => path.join(plan.stateDir, "tmp")),
+    ];
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     // node-tar invokes filters from async stat callbacks, so throwing inside
@@ -896,7 +895,11 @@ export async function createBackupArchive(
         return false;
       }
       const sqliteSourceKind = stateAsset
-        ? classifyStateSqliteBackupSourcePath(resolvedEntryPath, stateAsset.sourcePath)
+        ? classifyStateSqliteBackupSourcePath(
+            resolvedEntryPath,
+            stateAsset.sourcePath,
+            gatewayLockDirs,
+          )
         : undefined;
       if (sqliteSourceKind === "excluded") {
         return false;

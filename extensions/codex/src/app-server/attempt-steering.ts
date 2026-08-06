@@ -6,10 +6,21 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerClient } from "./client.js";
+import {
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerIndeterminateTransportError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
+
+export class CodexSteeringAcceptedUnconfirmedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "CodexSteeringAcceptedUnconfirmedError";
+  }
+}
 
 /** Per-message options for Codex steering queue behavior. */
 export type CodexSteeringQueueOptions = {
@@ -36,6 +47,7 @@ export function createCodexSteeringQueue(params: {
   signal: AbortSignal;
 }) {
   type PendingSteerMessage = {
+    accepted: boolean;
     text: string;
     images?: EmbeddedRunAttemptParams["images"];
     resolve: () => void;
@@ -75,7 +87,14 @@ export function createCodexSteeringQueue(params: {
     }
     item.settled = true;
     pendingMessages.delete(item);
-    item.reject(error);
+    item.reject(
+      item.accepted
+        ? new CodexSteeringAcceptedUnconfirmedError(
+            "Codex accepted steering but did not confirm transcript consumption",
+            { cause: error },
+          )
+        : error,
+    );
   };
 
   const closeQueue = (error: Error) => {
@@ -132,10 +151,24 @@ export function createCodexSteeringQueue(params: {
         },
         { timeoutMs: params.requestTimeoutMs, signal: params.signal },
       );
+      for (const item of liveItems) {
+        item.accepted = true;
+      }
     } catch (error) {
       dispatchedBatches.delete(clientUserMessageId);
+      const acceptedUnconfirmed =
+        isCodexAppServerIndeterminateRequestCancellationError(error) ||
+        isCodexAppServerIndeterminateTransportError(error);
       for (const item of liveItems) {
-        rejectItem(item, error);
+        rejectItem(
+          item,
+          acceptedUnconfirmed
+            ? new CodexSteeringAcceptedUnconfirmedError(
+                "Codex steering request may have been accepted before confirmation",
+                { cause: error },
+              )
+            : error,
+        );
       }
       throw error;
     }
@@ -178,6 +211,7 @@ export function createCodexSteeringQueue(params: {
       rejectDelivery = reject;
     });
     const item = {
+      accepted: false,
       text,
       images,
       resolve: resolveDelivery,
