@@ -21,6 +21,8 @@ export type ClickClackGroupConfig = {
 export type ClickClackAccountConfig = {
   name?: string;
   enabled?: boolean;
+  /** Restrict the account to host-managed ClickClack channels. */
+  managedOnly?: boolean;
   baseUrl?: string;
   apiBaseUrl?: string;
   token?: unknown;
@@ -68,6 +70,7 @@ export type ResolvedClickClackAccount = {
   enabled: boolean;
   configured: boolean;
   name?: string;
+  managedOnly: boolean;
   baseUrl: string;
   apiEndpoint: string;
   token: string;

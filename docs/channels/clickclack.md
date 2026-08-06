@@ -122,6 +122,7 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `allowFrom`             | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                                               |
 | `botUserId`             | auto-detected       | Resolved from the bot token identity at startup.                                                                      |
 | `agentId`               | route default       | Pin this account's inbound messages to one agent.                                                                     |
+| `managedOnly`           | `false`             | Use this account only for managed discussions addressed to its `agentId`.                                             |
 | `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                                                   |
 | `model`, `systemPrompt` | none                | Used by `replyMode: "model"` completions.                                                                             |
 | `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                                                          |
@@ -226,9 +227,44 @@ the ClickClack sidebar section and defaults to `Sessions`. When
 `controlUrlBase` is set, the managed channel links back to the canonical
 [Control UI session path](/web/urls#session-and-dashboard-urls).
 
-Enable discussions on exactly one ClickClack account. The gateway provider has
-no account selector, so multiple enabled discussion accounts are rejected
-rather than choosing one by configuration order.
+Enable discussions on one ordinary ClickClack account, or mark managed
+discussion accounts with `managedOnly: true` and give each one an `agentId`.
+Managed discussions select the matching account from the session's agent id;
+duplicate matches remain unavailable instead of being selected by account
+order. A single ordinary discussion account remains the fallback for agents
+without a managed-only match. Messages on managed-only accounts without an
+active discussion binding are ignored instead of entering ordinary workspace
+routing.
+
+For example, a gateway serving separate ClickClack bots for `compass` and
+`forge` can use:
+
+```json5
+{
+  channels: {
+    clickclack: {
+      accounts: {
+        compass: {
+          managedOnly: true,
+          agentId: "compass",
+          baseUrl: "https://clickclack.example.com",
+          token: { source: "env", provider: "default", id: "CLICKCLACK_COMPASS_TOKEN" },
+          workspace: "default",
+          discussions: { enabled: true },
+        },
+        forge: {
+          managedOnly: true,
+          agentId: "forge",
+          baseUrl: "https://clickclack.example.com",
+          token: { source: "env", provider: "default", id: "CLICKCLACK_FORGE_TOKEN" },
+          workspace: "default",
+          discussions: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
 
 Opening a discussion creates a public ClickClack channel marked as externally
 managed. The plugin keeps the session label and category in sync, but channel

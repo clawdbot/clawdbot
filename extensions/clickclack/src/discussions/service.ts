@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionProvider,
@@ -28,6 +30,7 @@ import {
 import { controlSessionUrl } from "./control-session-url.js";
 import {
   discussionAccounts,
+  discussionAccountsForAgent,
   discussionInfoForBinding,
   normalizedServerBaseUrl,
   resolveDiscussionBindingAccount,
@@ -57,6 +60,10 @@ import {
 
 const RECONCILE_INTERVAL_MS = 60_000;
 const CHANNEL_NAME_MUTATION_ATTEMPTS = 4;
+
+function resolveDiscussionAgentId(cfg: CoreConfig, sessionKey: string): string {
+  return resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(cfg));
+}
 type DiscussionServiceOptions = {
   clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
   installationId?: string;
@@ -145,12 +152,13 @@ export class ClickClackDiscussionService {
   }
 
   hasEnabledAccount(): boolean {
-    return discussionAccounts(this.#currentConfig()).length === 1;
+    return discussionAccounts(this.#currentConfig()).length > 0;
   }
 
   async info(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withSessionLock(sessionKey, async () => {
-      const accounts = discussionAccounts(this.#currentConfig());
+      const cfg = this.#currentConfig();
+      const accounts = discussionAccountsForAgent(cfg, resolveDiscussionAgentId(cfg, sessionKey));
       if (accounts.length !== 1) {
         return { state: "none" };
       }
@@ -172,7 +180,7 @@ export class ClickClackDiscussionService {
         await this.#reconcileBinding(sessionKey, existing, resolved.account);
         const current = this.#store.get(sessionKey);
         if (!current) {
-          return { state: this.hasEnabledAccount() ? "available" : "none" };
+          return { state: accounts.length === 1 ? "available" : "none" };
         }
         return discussionInfoForBinding(current, resolved.account);
       }
@@ -182,9 +190,15 @@ export class ClickClackDiscussionService {
 
   async open(sessionKey: string): Promise<SessionDiscussionInfo> {
     return await this.#withSessionLock(sessionKey, async () => {
-      const accounts = discussionAccounts(this.#currentConfig());
+      const cfg = this.#currentConfig();
+      const agentId = resolveDiscussionAgentId(cfg, sessionKey);
+      const accounts = discussionAccountsForAgent(cfg, agentId);
       if (accounts.length > 1) {
-        throw new Error("ClickClack discussions require exactly one enabled discussion account");
+        throw new Error(
+          agentId
+            ? `ClickClack discussions require exactly one enabled discussion account for agent ${agentId}`
+            : "ClickClack discussions require exactly one enabled discussion account",
+        );
       }
       const account = accounts[0];
       if (!account) {
@@ -526,7 +540,20 @@ export class ClickClackDiscussionService {
       sessionKey: pending.sessionKey,
       readConsistency: "latest",
     });
-    const activeAccounts = discussionAccounts(cfg);
+    let activeAccounts: ResolvedClickClackAccount[] = [];
+    try {
+      activeAccounts = discussionAccountsForAgent(
+        cfg,
+        resolveDiscussionAgentId(cfg, pending.sessionKey),
+      );
+    } catch (error) {
+      // A malformed or legacy pending key cannot select a retry account. Keep
+      // reconciliation moving so a permanent routing error does not enter the
+      // scheduler's transient retry loop.
+      this.#logger().warn(
+        `skipping ClickClack pending-open retry for ${pending.sessionKey}: ${String(error)}`,
+      );
+    }
     const retryAccount = activeAccounts.length === 1 ? activeAccounts[0] : undefined;
     if (
       options.allowRetry !== false &&

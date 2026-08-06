@@ -112,9 +112,13 @@ Control UI uses that provider-owned capability to apply its full palette before
 the sidebar first paints and to stream live palette changes without rewriting
 opaque or signed discussion URLs from other providers.
 
-Enable discussions on exactly one ClickClack account. Multiple enabled
-discussion accounts are rejected because the session discussion provider does
-not have an account selector.
+Enable discussions on one ordinary ClickClack account, or set
+`managedOnly: true` and an `agentId` on each per-agent discussion account.
+Managed discussions select the account matching the session's agent id.
+Duplicate matches are rejected, and a single ordinary discussion account is
+used as the fallback when no managed-only account matches.
+Messages on managed-only accounts without an active discussion binding are
+ignored instead of entering ordinary workspace routing.
 
 Messages in the managed channel run in a stable side session under the same
 agent id as the attached main session. The plugin installs a scoped host grant

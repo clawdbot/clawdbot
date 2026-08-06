@@ -310,4 +310,19 @@ describe("session discussion gateway methods", () => {
       });
     },
   );
+
+  it.each(["session.discussion.info", "session.discussion.open"] as const)(
+    "rejects a malformed agent session key for %s as invalid input",
+    async (method) => {
+      const registered = provider();
+      mocks.getProvider.mockReturnValue(registered.value);
+
+      expect(await invoke(method, { sessionKey: "agent::malformed" })).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST" },
+      });
+      expect(registered.info).not.toHaveBeenCalled();
+      expect(registered.open).not.toHaveBeenCalled();
+    },
+  );
 });

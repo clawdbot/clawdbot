@@ -148,6 +148,7 @@ describe("ClickClack account resolution", () => {
       },
       configured: true,
       agentId: undefined,
+      managedOnly: false,
       botUserId: undefined,
       defaultTo: "channel:general",
       enabled: true,
@@ -243,6 +244,7 @@ describe("ClickClack account resolution", () => {
       allowFrom: ["*"],
       accountId: "peter",
       agentId: "peter-bot",
+      managedOnly: false,
       apiEndpoint: "https://app.clickclack.chat",
       baseUrl: "https://app.clickclack.chat",
       config: {

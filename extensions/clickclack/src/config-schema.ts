@@ -8,11 +8,16 @@ import {
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
-const ClickClackAccountConfigSchema = z
+const MANAGED_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
+const ClickClackAccountConfigSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    // Managed-only accounts accept only bound host-managed channels and are
+    // selected by agent id for session discussions.
+    managedOnly: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
     apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
@@ -54,12 +59,69 @@ const ClickClackAccountConfigSchema = z
   })
   .strict();
 
+function validateManagedOnlyAccount(
+  value: { managedOnly?: boolean; agentId?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.managedOnly === true && !MANAGED_AGENT_ID_RE.test(value.agentId?.trim() ?? "")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["agentId"],
+      message: "managedOnly accounts require a valid agentId",
+    });
+  }
+}
+
+type ClickClackDiscussionConfigValue = {
+  enabled?: boolean;
+};
+
+type ClickClackManagedAccountConfigValue = {
+  managedOnly?: boolean;
+  discussions?: ClickClackDiscussionConfigValue;
+};
+
+function validateManagedOnlyDiscussions(
+  value: ClickClackManagedAccountConfigValue & {
+    accounts?: Record<string, ClickClackManagedAccountConfigValue>;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.managedOnly === true && value.discussions?.enabled !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["discussions", "enabled"],
+      message: "managedOnly accounts require discussions.enabled=true",
+    });
+  }
+  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+    if (
+      account.managedOnly === true &&
+      (account.discussions?.enabled ?? value.discussions?.enabled) !== true
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accounts", accountId, "discussions", "enabled"],
+        message: "managedOnly accounts require discussions.enabled=true",
+      });
+    }
+  }
+}
+
+const ClickClackAccountConfigSchema = ClickClackAccountConfigSchemaBase.superRefine(
+  validateManagedOnlyAccount,
+);
 const ClickClackConfigSchema = buildMultiAccountChannelSchema(ClickClackAccountConfigSchema, {
-  accountSchema: ClickClackAccountConfigSchema.partial(),
+  accountSchema: ClickClackAccountConfigSchemaBase.partial().superRefine(
+    validateManagedOnlyAccount,
+  ),
 });
+const ClickClackValidatedConfigSchema = ClickClackConfigSchema.superRefine(
+  validateManagedOnlyDiscussions,
+);
 
 /**
  * Config schema exported to core so `openclaw doctor` and config validation
  * understand both default and named ClickClack accounts.
  */
-export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackConfigSchema);
+export const clickClackConfigSchema = buildChannelConfigSchema(ClickClackValidatedConfigSchema);
