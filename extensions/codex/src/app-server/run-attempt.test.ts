@@ -5399,7 +5399,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnParams?.approvalsReviewer).toBe("auto_review");
     expect(turnParams?.serviceTier).toBe("priority");
   });
-  it("fails before client startup when a successor generation hides a private supervision binding", async () => {
+  it("starts a fresh thread when a successor generation hides a private supervision binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const sessionKey = "agent:main:supervised-stale-generation";
     registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
@@ -5420,28 +5420,23 @@ describe("runCodexAppServerAttempt", () => {
         updatedAt: Date.now(),
       },
     });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") return threadStartResult("thread-fresh");
+      if (method === "turn/start") return turnStartResult("turn-fresh");
+      return undefined;
+    });
     const params = createParams(sessionFile, workspaceDir);
     params.sessionId = "session-current";
     params.sessionKey = sessionKey;
     params.config = { session: { store: storePath } };
-    const clientFactory = vi.fn(async () => {
-      throw new Error("client must not start");
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { supervision: { enabled: true } },
     });
-    await expect(
-      runCodexAppServerAttempt(params, {
-        pluginConfig: { supervision: { enabled: true } },
-        clientFactory,
-      }),
-    ).rejects.toMatchObject({
-      name: "AgentHarnessSessionSupersededError",
-      message: "Codex session generation is no longer current: session-current",
-    });
-    expect(clientFactory).not.toHaveBeenCalled();
-    registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
-      connectionScope: "supervision",
-    });
+    await expect(run).resolves.toBeDefined();
+    // A successor generation clears the stale supervision binding — the old
+    // generation's private native ownership is no longer reachable through this key.
+    registerCodexTestSessionIdentity(sessionFile, "session-current", sessionKey);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("starts sequential ephemeral generations that share a stable session key", async () => {

@@ -39,7 +39,6 @@ import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
   createCodexSessionGenerationSupersededError,
-  reclaimCurrentCodexSessionGeneration,
   resolveCodexRunSessionBindingAuthority,
   scopeCodexRunBindingStore,
   sessionBindingIdentity,
@@ -166,18 +165,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }
   }
   let startupBinding = await bindingStore.read(bindingIdentity);
-  if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const reclaimed = await reclaimCurrentCodexSessionGeneration({
-      bindingStore,
-      identity: bindingIdentity,
-      config: params.config,
-      storePath: params.sessionTarget?.storePath,
-    });
-    if (!reclaimed) {
-      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-    }
-    startupBinding = await bindingStore.read(bindingIdentity);
-  }
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
   if (usesSupervisionConnection) {

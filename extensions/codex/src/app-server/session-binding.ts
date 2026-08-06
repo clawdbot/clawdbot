@@ -1233,6 +1233,25 @@ export function createCodexAppServerBindingStore(
           },
         };
       }
+      // An active binding from a different generation must be cleared before
+      // the current generation can write a fresh binding under the same key.
+      // The session-store check in withReclaimedCodexSessionLease already
+      // confirmed the caller owns this durable key, so the old binding is stale.
+      if (
+        reclaim !== undefined &&
+        current?.state === "active" &&
+        !ownsStoredSessionGeneration(identity, current)
+      ) {
+        return {
+          result: true,
+          next: {
+            version: 1,
+            state: "cleared",
+            ...storedSessionGeneration(identity, current),
+            lease,
+          },
+        };
+      }
       if (current?.state === "active") {
         return {
           result: true,
