@@ -30,7 +30,9 @@ const loadAgentRuntimePluginRegistryHandleMock = vi.fn();
 const withPluginRuntimeRegistryScopeMock = vi.fn((_registry: unknown, run: () => unknown) => run());
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
-const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(async () => undefined);
+const refreshPreparedModelRuntimeSnapshotsMock = vi.fn<
+  (_config: unknown, _options?: unknown) => Promise<void>
+>(async () => undefined);
 const unregisterConfigWriteListenerMock = vi.fn();
 let configWriteListener: ((event: { runtimeConfig: Record<string, unknown> }) => void) | undefined;
 const createGatewaySessionMock = vi.fn();
@@ -159,8 +161,8 @@ vi.mock("../agents/context.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
-  refreshPreparedModelRuntimeSnapshots: (...args: unknown[]) =>
-    refreshPreparedModelRuntimeSnapshotsMock(...args),
+  refreshPreparedModelRuntimeSnapshots: (config: unknown, options?: unknown) =>
+    refreshPreparedModelRuntimeSnapshotsMock(config, options),
 }));
 
 vi.mock("../agents/defaults.js", () => ({
