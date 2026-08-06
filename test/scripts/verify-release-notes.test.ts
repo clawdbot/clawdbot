@@ -74,7 +74,7 @@ describe("release-note verification", () => {
           "",
           "### Complete contribution record",
           "",
-          `This audited record covers the complete base..${target} history: 1 merged PR.`,
+          `This audited record covers the complete base..${target} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
         ].join("\n"),
       }),
     ).toBe(target);
@@ -948,7 +948,15 @@ describe("release-note verification", () => {
 
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("1 errors");
-      expect(JSON.parse(readFileSync(manifestPath, "utf8")).version).toBe("2026.7.1");
+      expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
+        schemaVersion: 3,
+        version: "2026.7.1",
+        source: {
+          inRangePullRequests: 0,
+          retainedSeedOnlyPullRequests: 0,
+          uniquePullRequests: 0,
+        },
+      });
       expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
     } finally {
       rmSync(cwd, { recursive: true, force: true });

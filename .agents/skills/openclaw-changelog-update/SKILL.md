@@ -74,6 +74,10 @@ every human `Thanks @...` attribution.
      older merged commit omitted its PR number; the verifier excludes records
      for work reverted after the base tag, including beta work reverted before
      the stable release
+   - generated provenance reports in-range PRs separately from retained
+     seed-only PRs, then states the unique row total. A PR present in both
+     inventories counts as in-range; never describe the seed-inclusive total
+     as work merged in the current release range
    - add repeatable `--shipped-ref <prior-shipped-tag>` when the reachable main
      closeout differs from the shipped tag or later forward-port commits
      re-associate PRs that were already released. Each tag is a cumulative
@@ -150,6 +154,8 @@ every human `Thanks @...` attribution.
      PR references explicitly present in active commit subjects/bodies. It
      preserves author/co-author credit and any issue references in the original
      title
+   - the provenance arithmetic and unique total must match the rendered PR
+     rows exactly; candidate validation rejects malformed or forged counts
    - direct commits remain in the manifest with GitHub-resolved author,
      co-author, issue, and editorial-eligibility data. They inform grouped
      prose but are never rendered as a public `#### Direct commits` dump. Add
