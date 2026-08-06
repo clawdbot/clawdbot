@@ -106,6 +106,86 @@ describe("cron edit command", () => {
     }
   });
 
+  it.each(["", "   "])(
+    "rejects blank --agent %j instead of silently ignoring it",
+    async (agent) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(["edit", "job-1", "--agent", agent], { from: "user" });
+
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--agent must not be blank"));
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["", "   "])("rejects blank --agent %j combined with --clear-agent", async (agent) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--agent", agent, "--clear-agent"], {
+        from: "user",
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--agent must not be blank"));
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("rejects --agent combined with --clear-agent", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--agent", "main", "--clear-agent"], {
+        from: "user",
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Use --agent or --clear-agent, not both"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it.each(["", "   "])(
+    "rejects blank --session-key %j instead of silently ignoring it",
+    async (sessionKey) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+
+      try {
+        await createCronProgram().parseAsync(["edit", "job-1", "--session-key", sessionKey], {
+          from: "user",
+        });
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("--session-key must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
   it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
     const program = createCronProgram();
 
