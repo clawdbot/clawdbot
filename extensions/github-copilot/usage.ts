@@ -42,10 +42,7 @@ export async function fetchCopilotUsage(
     });
   }
 
-  const data = await readProviderJsonResponse<CopilotUsageResponse>(
-    res,
-    "github-copilot-usage",
-  );
+  const data = await readProviderJsonResponse<CopilotUsageResponse>(res, "github-copilot-usage");
   const windows: UsageWindow[] = [];
 
   if (data.quota_snapshots?.premium_interactions) {
