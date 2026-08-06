@@ -8,7 +8,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
+import {
+  listActiveDegradedPlugins,
+  toPublicPluginVerificationDiagnostic,
+} from "../plugins/runtime-degraded-state.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import {
+  isReadinessCriterionSelected,
+  MODEL_ROUTE_READY_CRITERION_ID,
+} from "../readiness/activation.js";
+import { buildRuntimeReadiness, type PluginReadinessInput } from "../readiness/conditions.js";
+import { captureExecutionCapabilityReadinessSnapshot } from "../readiness/execution-capabilities.js";
+import { createSelectedReadinessResolver } from "../readiness/selection.js";
+import { createGatewayReadinessIdentity } from "../readiness/subjects.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -26,7 +38,11 @@ import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.j
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
-import { createReadinessChecker } from "./server/readiness.js";
+import {
+  createReadinessChecker,
+  evaluateConfiguredGatewayReadiness,
+  type CanonicalGatewayReadinessResult,
+} from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -58,6 +74,32 @@ type GatewayStartupChannelPlugin = {
 
 function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
   return listLoadedChannelPlugins() as GatewayStartupChannelPlugin[];
+}
+
+function buildGatewayPluginReadinessInput(
+  registry: GatewayBootstrap["pluginBootstrap"]["pluginRegistry"],
+): PluginReadinessInput {
+  const errors = registry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .map((plugin): PluginReadinessInput["errors"][number] => {
+      const error: PluginReadinessInput["errors"][number] = {
+        id: plugin.id,
+        activated: plugin.activated === true,
+        error: plugin.error ?? "unknown plugin load error",
+      };
+      if (plugin.activationSource) {
+        error.activationSource = plugin.activationSource;
+      }
+      return error;
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  const unavailable = listActiveDegradedPlugins()
+    .map((plugin) => ({
+      id: plugin.pluginId,
+      diagnostic: toPublicPluginVerificationDiagnostic(plugin.diagnostic),
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return { errors, unavailable };
 }
 
 export async function prepareGatewayRuntimeState(params: {
@@ -101,9 +143,20 @@ export async function prepareGatewayRuntimeState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
   } = bootstrap;
+  const makeState = (config: OpenClawConfig, registry: typeof pluginBootstrap.pluginRegistry) => ({
+    config,
+    registry,
+    executionCapabilities: captureExecutionCapabilityReadinessSnapshot(config),
+  });
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
+    makeState,
+    modelRouteReadinessStartupOptions: (config: OpenClawConfig) =>
+      isReadinessCriterionSelected(config, MODEL_ROUTE_READY_CRITERION_ID)
+        ? { enabled: true as const }
+        : {},
+    readinessSnapshot: makeState(cfgAtStart, pluginBootstrap.pluginRegistry),
   };
   // Unconfigured clean installs get no service; durable rows still need list/status projection.
   const hasConfiguredWorkerProfiles =
@@ -330,7 +383,7 @@ export async function prepareGatewayRuntimeState(params: {
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
-  const getReadiness = createReadinessChecker({
+  const getGatewayReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -341,6 +394,41 @@ export async function prepareGatewayRuntimeState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
+  const readinessIdentity = createGatewayReadinessIdentity();
+  const resolveSelectedReadiness = createSelectedReadinessResolver();
+  const evaluateRuntimeReadiness = async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const snapshot = pluginRuntime.readinessSnapshot;
+      const contribution = await resolveSelectedReadiness({
+        config: snapshot.config,
+        registry: snapshot.registry,
+        executionCapabilities: snapshot.executionCapabilities,
+        env: process.env,
+        stateServices: {
+          scheduler: runtimeStateRef.current?.cronState.cron.getReadinessSnapshot(),
+        },
+      });
+      if (snapshot !== pluginRuntime.readinessSnapshot) {
+        continue;
+      }
+      return buildRuntimeReadiness({
+        identity: readinessIdentity,
+        configLoaded: true,
+        gateway: "responding",
+        plugins: buildGatewayPluginReadinessInput(snapshot.registry),
+        additionalConditions: contribution.conditions,
+        additionalSubjects: contribution.subjects,
+      });
+    }
+    throw new Error("Readiness runtime changed while it was being evaluated.");
+  };
+  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
+    evaluateConfiguredGatewayReadiness({
+      config: pluginRuntime.readinessSnapshot.config,
+      identity: readinessIdentity,
+      evaluateGateway: getGatewayReadiness,
+      evaluateRuntime: evaluateRuntimeReadiness,
+    });
   log.info("starting HTTP server...");
   const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
     current: undefined,
@@ -464,6 +552,7 @@ export async function prepareGatewayRuntimeState(params: {
     channelManager,
     sidecarStartup,
     isGatewayStartupPending,
+    getReadiness,
     pluginGatewayContext,
     watchNodeRequestHandler,
     httpServer,

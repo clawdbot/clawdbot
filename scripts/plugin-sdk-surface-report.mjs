@@ -220,7 +220,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
       // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
       // +1: auth-profile preservation decision for native model pickers.
-      4831,
+      // +4: composable readiness criterion, result, subject input, and collector contracts.
+      4835,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
