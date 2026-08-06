@@ -498,6 +498,22 @@ function parseArchiveContent(content: string, filePath: string): TranscriptEvent
   });
 }
 
+/**
+ * Recovery-only helper for archived session JSONL: filesystem tears (crash or
+ * power loss during an interrupted truncate/write) can leave a non-empty
+ * terminal suffix made entirely of NUL bytes after otherwise-valid records.
+ * Only a *terminal* run of NUL bytes is removed; interior NUL bytes, all-NUL
+ * content, blank records, and truncated JSON stay untouched so malformed
+ * archives remain byte-for-byte intact for diagnosis.
+ */
+function stripTerminalNulSuffix(content: string): { content: string; stripped: boolean } {
+  let end = content.length;
+  while (end > 0 && content.charCodeAt(end - 1) === 0) {
+    end -= 1;
+  }
+  return { content: content.slice(0, end), stripped: end < content.length };
+}
+
 function serializeArchiveEvents(
   events: readonly TranscriptEvent[],
   trailingNewline: boolean,
@@ -513,9 +529,13 @@ function migrateTranscriptArchive(
   options: { beforeReplace?: () => void } = {},
 ): boolean {
   const source = readArchiveSourceSnapshot(filePath);
-  const content = readSessionArchiveContentSync(filePath);
+  const rawContent = readSessionArchiveContentSync(filePath);
+  const { content, stripped } = stripTerminalNulSuffix(rawContent);
+  if (stripped && content.length === 0) {
+    throw new Error(`${filePath} consists entirely of NUL bytes; archive left untouched`);
+  }
   const events = parseArchiveContent(content, filePath);
-  let changed = false;
+  let changed = stripped;
   const transformed = events.map((event) => {
     const result = transformTranscriptEvent(event);
     changed ||= result.changed;
