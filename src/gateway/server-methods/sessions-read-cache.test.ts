@@ -290,6 +290,31 @@ describe("sessions.list single-flight", () => {
     });
   });
 
+  it("invalidates a completed result after an external session identity mutation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+
+      const first = await listSessions({ client, context, request });
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:external" },
+        {
+          sessionId: "main-external",
+          updatedAt: 500,
+          createdActor: { type: "human", id: "owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      const refreshed = await listSessions({ client, context, request });
+
+      expect(refreshed).not.toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+      expect(refreshed.sessions.map((session) => session.key)).toContain("agent:main:external");
+    });
+  });
+
   it("expires completed rows at the earliest projected agent-status deadline", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
