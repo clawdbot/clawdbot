@@ -68,7 +68,13 @@ type AcpxRuntimeFactoryParams = {
   logger?: PluginLogger;
 };
 
+type AcpxBackendLifecycle = {
+  publish: (backend: { runtime: AcpRuntime; healthy?: () => boolean }) => void;
+  retract: (runtime: AcpRuntime) => void;
+};
+
 type CreateAcpxRuntimeServiceParams = {
+  backendLifecycle?: AcpxBackendLifecycle;
   pluginConfig?: unknown;
   openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
@@ -411,11 +417,15 @@ export function createAcpxRuntimeService(
         ["probeAgent", pluginConfig.probeAgent ?? "default"],
       ]);
       await measureAcpxStartup(ctx, "backend.register", () => {
-        registerAcpRuntimeBackend({
-          id: ACPX_BACKEND_ID,
+        const backend = {
           runtime: startedRuntime,
           ...(shouldProbeRuntime ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
-        });
+        };
+        if (params.backendLifecycle) {
+          params.backendLifecycle.publish(backend);
+        } else {
+          registerAcpRuntimeBackend({ id: ACPX_BACKEND_ID, ...backend });
+        }
         ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
       });
 
@@ -460,7 +470,11 @@ export function createAcpxRuntimeService(
     },
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       lifecycleRevision += 1;
-      unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+      if (runtime && params.backendLifecycle) {
+        params.backendLifecycle.retract(runtime);
+      } else if (!params.backendLifecycle) {
+        unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+      }
       runtime = null;
     },
   };

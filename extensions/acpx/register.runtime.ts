@@ -15,13 +15,15 @@ import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
 const ACPX_BACKEND_ID = "acpx";
 
 type RealAcpxServiceModule = typeof import("./src/service.js");
-type CreateAcpxRuntimeServiceParams = NonNullable<
+type InnerAcpxRuntimeServiceParams = NonNullable<
   Parameters<RealAcpxServiceModule["createAcpxRuntimeService"]>[0]
 >;
+type CreateAcpxRuntimeServiceParams = Omit<InnerAcpxRuntimeServiceParams, "backendLifecycle">;
 
 type DeferredServiceState = {
   ctx: OpenClawPluginServiceContext | null;
   lifecycleRevision: number;
+  ownedRuntime: AcpRuntime | null;
   params: CreateAcpxRuntimeServiceParams;
   realRuntime: AcpRuntime | null;
   realService: OpenClawPluginService | null;
@@ -31,9 +33,16 @@ type DeferredServiceState = {
 
 const loadServiceModule = createLazyRuntimeModule(() => import("./src/service.js"));
 
+function unregisterOwnedRuntime(runtime: AcpRuntime | null): void {
+  if (runtime && getAcpRuntimeBackend(ACPX_BACKEND_ID)?.runtime === runtime) {
+    unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+  }
+}
+
 async function startRealService(
   state: DeferredServiceState,
   lifecycleRevision: number,
+  deferredRuntime: AcpRuntime,
 ): Promise<AcpRuntime> {
   if (state.lifecycleRevision !== lifecycleRevision || !state.ctx) {
     throw new Error("ACPX runtime service is not started");
@@ -41,23 +50,49 @@ async function startRealService(
   if (state.realRuntime) {
     return state.realRuntime;
   }
+  if (state.startPromise) {
+    return await state.startPromise;
+  }
   const ctx = state.ctx;
-  state.startPromise ??= (async () => {
+  state.startPromise = (async () => {
+    let publishedRuntime: AcpRuntime | null = null;
     const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
-    const service = createAcpxRuntimeServiceLocal(state.params);
+    const service = createAcpxRuntimeServiceLocal({
+      ...state.params,
+      backendLifecycle: {
+        publish(backend) {
+          if (state.lifecycleRevision !== lifecycleRevision || state.ctx !== ctx) {
+            throw new Error("ACPX runtime service stopped during activation");
+          }
+          if (getAcpRuntimeBackend(ACPX_BACKEND_ID)?.runtime !== deferredRuntime) {
+            throw new Error("ACPX runtime service lost registry ownership during activation");
+          }
+          // Publication is a synchronous compare-and-replace: another plugin
+          // generation cannot be adopted between the ownership check and write.
+          registerAcpRuntimeBackend({ id: ACPX_BACKEND_ID, ...backend });
+          publishedRuntime = backend.runtime;
+          state.ownedRuntime = backend.runtime;
+        },
+        retract(runtime) {
+          unregisterOwnedRuntime(runtime);
+        },
+      },
+    });
     state.realService = service;
     await service.start(ctx);
-    // The real service registers its backend during start. Only the current
-    // outer lifecycle may publish that runtime after the async boundary.
     if (state.lifecycleRevision !== lifecycleRevision || state.ctx !== ctx) {
       throw new Error("ACPX runtime service stopped during activation");
     }
-    const backend = getAcpRuntimeBackend(ACPX_BACKEND_ID);
-    if (!backend?.runtime) {
+    if (!publishedRuntime) {
       throw new Error("ACPX runtime service did not register an ACP backend");
     }
-    state.realRuntime = backend.runtime;
-    return state.realRuntime;
+    if (getAcpRuntimeBackend(ACPX_BACKEND_ID)?.runtime !== publishedRuntime) {
+      throw new Error("ACPX runtime service lost registry ownership during activation");
+    }
+    // Registry publication intentionally precedes the startup probe, but callers
+    // must keep sharing the start promise until the inner service is fully ready.
+    state.realRuntime = publishedRuntime;
+    return publishedRuntime;
   })();
   try {
     return await state.startPromise;
@@ -71,8 +106,10 @@ async function startRealService(
 }
 
 function createDeferredRuntime(state: DeferredServiceState, lifecycleRevision: number): AcpRuntime {
-  const resolveRuntime = () => startRealService(state, lifecycleRevision);
-  return createLazyAcpRuntimeProxy(resolveRuntime);
+  const deferredRuntime = createLazyAcpRuntimeProxy(() =>
+    startRealService(state, lifecycleRevision, deferredRuntime),
+  );
+  return deferredRuntime;
 }
 
 /** Creates the plugin service that registers ACPX as an ACP runtime backend. */
@@ -82,6 +119,7 @@ export function createAcpxRuntimeService(
   const state: DeferredServiceState = {
     ctx: null,
     lifecycleRevision: 0,
+    ownedRuntime: null,
     params,
     realRuntime: null,
     realService: null,
@@ -103,9 +141,11 @@ export function createAcpxRuntimeService(
       state.lifecycleRevision += 1;
       const lifecycleRevision = state.lifecycleRevision;
       state.ctx = ctx;
+      const deferredRuntime = createDeferredRuntime(state, lifecycleRevision);
+      state.ownedRuntime = deferredRuntime;
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
-        runtime: createDeferredRuntime(state, lifecycleRevision),
+        runtime: deferredRuntime,
       });
       ctx.logger.info("embedded acpx runtime backend registered lazily");
     },
@@ -118,14 +158,16 @@ export function createAcpxRuntimeService(
       // service still owns cleanup, but it can no longer become the active runtime.
       state.lifecycleRevision += 1;
       state.ctx = null;
-      unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+      const ownedRuntime = state.ownedRuntime;
+      unregisterOwnedRuntime(ownedRuntime);
       const startPromise = state.startPromise;
       state.stopPromise = (async () => {
         await startPromise?.catch(() => undefined);
         try {
           await state.realService?.stop?.(ctx);
         } finally {
-          unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+          unregisterOwnedRuntime(ownedRuntime);
+          state.ownedRuntime = null;
           state.realRuntime = null;
           state.realService = null;
           state.startPromise = null;
