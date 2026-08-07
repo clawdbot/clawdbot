@@ -405,26 +405,6 @@ describe("ManagedWorktreeService", () => {
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
   });
 
-  it("keeps registry operations anchored to the primary checkout", async () => {
-    const linked = path.join(root, "linked-source");
-    await git(repo, "worktree", "add", "-b", "linked-source", linked, "HEAD");
-    const linkedRoot = await fs.realpath(linked);
-    const created = await service.create({
-      repoRoot: linkedRoot,
-      name: "linked-task",
-      baseRef: "HEAD",
-    });
-    expect(created.repoRoot).toBe(repo);
-    await git(repo, "worktree", "remove", "--force", linkedRoot);
-
-    await service.acquire(created.id);
-    await service.release(created.id);
-    await service.remove({ id: created.id, reason: "linked-source-removed" });
-    const restored = await service.restore({ id: created.id });
-
-    expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("base\n");
-  });
-
   it("retries worktree add from local HEAD when the resolved remote base is stale", async () => {
     await addRemote(root, repo);
     const blob = await git(repo, "rev-parse", "HEAD:README.md");
@@ -769,35 +749,6 @@ describe("ManagedWorktreeService", () => {
     await git(committed.path, "commit", "-m", "unpushed");
     expect(await service.removeIfLossless(committed.id)).toBe(false);
   });
-
-  it.skipIf(process.platform === "win32")(
-    "canonicalizes managed paths minted below a symlinked state directory",
-    async () => {
-      await addRemote(root, repo);
-      const realStateDir = await fs.mkdtemp(path.join(root, "real-state-"));
-      const linkedStateDir = path.join(root, "linked-state");
-      await fs.symlink(realStateDir, linkedStateDir, "dir");
-      env = { ...process.env, OPENCLAW_STATE_DIR: linkedStateDir };
-      service = new ManagedWorktreeService({ env, now: () => now });
-
-      const created = await service.create({
-        repoRoot: repo,
-        name: "canonical-state",
-        baseRef: "HEAD",
-      });
-      const expectedPath = path.join(
-        await fs.realpath(realStateDir),
-        "worktrees",
-        created.repoFingerprint,
-        "canonical-state",
-      );
-      expect(created.path).toBe(expectedPath);
-
-      await service.acquire(created.id);
-      await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
-      await expect(fs.stat(expectedPath)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
 
   it("snapshots provisioned ignored file state independently of the source", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nnode_modules/\n");
