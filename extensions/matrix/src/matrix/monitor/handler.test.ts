@@ -652,6 +652,7 @@ describe("matrix monitor handler pairing account scope", () => {
     });
     const lifecycle = {
       abortSignal: new AbortController().signal,
+      receivedAt: Date.now(),
       onAdopted: vi.fn(async () => {}),
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
