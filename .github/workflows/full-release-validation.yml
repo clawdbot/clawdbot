@@ -482,6 +482,10 @@ jobs:
           validate_child_run() {
             local candidate_run_id="$1"
             local candidate_run_json
+            if [[ ! "$candidate_run_id" =~ ^[0-9]+$ ]]; then
+              echo "::error::Refusing to adopt invalid ${workflow} run ID ${candidate_run_id}." >&2
+              return 1
+            fi
             candidate_run_json="$(
               gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate_run_id}"
             )"
@@ -490,12 +494,10 @@ jobs:
               --argjson workflow_id "$expected_workflow_id" \
               --arg title "$dispatch_run_name" \
               --arg branch "$CHILD_WORKFLOW_REF" \
-              --arg head_sha "$PARENT_WORKFLOW_SHA" \
               '(.id == $id)
                 and (.workflow_id == $workflow_id)
                 and (.display_title == $title)
                 and (.head_branch == $branch)
-                and (.head_sha == $head_sha)
                 and (.event == "workflow_dispatch")' \
               <<< "$candidate_run_json" >/dev/null; then
               echo "::error::Refusing to adopt unvalidated ${workflow} run ${candidate_run_id}." >&2
@@ -503,6 +505,7 @@ jobs:
                 <<< "$candidate_run_json" >&2
               return 1
             fi
+            printf '%s\n' "$candidate_run_json"
           }
 
           fetch_child_jobs() {
@@ -569,7 +572,7 @@ jobs:
             local workflow="$1"
             local dispatch_run_name="$2"
             shift 2
-            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json encoded_workflow_ref current_workflow_sha expected_workflow_id
+            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json child_head_sha encoded_workflow_ref current_workflow_sha expected_workflow_id
 
             encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
             current_workflow_sha="$(
@@ -631,12 +634,6 @@ jobs:
               echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
             fi
-            validate_child_run "$run_id"
-            if [[ "$dispatch_status" -ne 0 ]]; then
-              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
-            fi
-            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-            echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
             cancel_child() {
               if [[ -n "${active_child_run_id:-}" ]]; then
@@ -644,10 +641,26 @@ jobs:
                 gh run cancel "$active_child_run_id" >/dev/null 2>&1 || true
               fi
             }
+            run_json="$(validate_child_run "$run_id")"
+            # Identity fields prove cancellation ownership before workflow-SHA validation.
             # EXIT traps run after function locals unwind; preserve only adopted child identity.
             active_child_workflow="$workflow"
             active_child_run_id="$run_id"
             trap cancel_child EXIT INT TERM
+
+            child_head_sha="$(jq -r '.head_sha // ""' <<< "$run_json")"
+            if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+              echo "::error::${workflow} child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}." >&2
+              cancel_child
+              trap - EXIT INT TERM
+              exit 1
+            fi
+
+            if [[ "$dispatch_status" -ne 0 ]]; then
+              echo "::warning::${workflow} dispatch returned status ${dispatch_status}; adopted exact run ${run_id}." >&2
+            fi
+            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
             fail_fast_failed_jobs() {
               if [[ "$FAIL_FAST" != "true" ]]; then

@@ -1946,6 +1946,7 @@ describe("package acceptance workflow", () => {
       expect(
         calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/101"))),
       ).toBe(true);
+      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
     },
   );
 
@@ -1967,7 +1968,6 @@ describe("package acceptance workflow", () => {
     ["workflow", { MOCK_GH_RUN_WORKFLOW_ID: "790" }],
     ["title", { MOCK_GH_RUN_TITLE: "Unrelated workflow run" }],
     ["head branch", { MOCK_GH_RUN_HEAD_BRANCH: "other" }],
-    ["head SHA", { MOCK_GH_CHILD_SHA: "c".repeat(40) }],
     ["event", { MOCK_GH_RUN_EVENT: "push" }],
   ] as const)("refuses a returned run URL with the wrong %s", (_label, overrides) => {
     const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
@@ -1981,6 +1981,20 @@ describe("package acceptance workflow", () => {
       calls.some(({ args }) =>
         args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
       ),
+    ).toBe(false);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+  });
+
+  it("refuses a nonnumeric exact-name candidate without cancellation ownership", () => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "",
+      MOCK_GH_MATCHES: '["not-a-run-id"]',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to adopt invalid ci.yml run ID not-a-run-id");
+    expect(
+      calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/not-a-run-id"))),
     ).toBe(false);
     expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
   });
@@ -2057,15 +2071,18 @@ describe("package acceptance workflow", () => {
   );
 
   it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "refuses the $jobName child when its workflow SHA differs",
+    "cancels exactly the identified $jobName child when its workflow SHA differs",
     (child) => {
       const { calls, result } = runFullReleaseChildDispatch(child, {
         MOCK_GH_CHILD_SHA: "c".repeat(40),
+        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
       });
 
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`Refusing to adopt unvalidated ${child.workflow} run 101`);
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+      expect(result.stderr).toContain("expected parent workflow SHA");
+      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toEqual([
+        expect.objectContaining({ args: ["run", "cancel", "101"] }),
+      ]);
     },
   );
 
@@ -4051,7 +4068,7 @@ describe("package artifact reuse", () => {
       'dispatch_and_wait npm-telegram-beta-e2e.yml "$dispatch_run_name" "${args[@]}"',
       ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
       "The dispatch was not retried to avoid creating a duplicate child.",
-      "and (.head_sha == $head_sha)",
+      'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="$PACKAGE_SPEC"',
       'args+=(-f scenario="$SCENARIO")',
