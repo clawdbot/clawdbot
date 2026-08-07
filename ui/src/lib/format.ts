@@ -261,11 +261,6 @@ export function truncateText(
   };
 }
 
-export function toNumber(value: string, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 export function formatCost(cost: number | null | undefined, fallback = "$0.00"): string {
   if (cost == null || !Number.isFinite(cost)) {
     return fallback;
