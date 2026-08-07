@@ -1532,7 +1532,7 @@ surfaces:
             description: "Exact coverage for long run stability within Abort and terminal outcomes."
           - name: Managed worktrees
             coverageIds: [agent-runtime.managed-worktrees-lifecycle]
-            description: Managed worktree create with ignored-file provisioning and repository setup hooks, dirty-removal snapshots, snapshot restore, and gc across manual, session, and Workboard owners.
+            description: Managed worktree create with ignored-file provisioning and repository setup hooks, dirty-removal snapshots, snapshot restore, and manual-owner gc retention.
         docs:
           - docs/concepts/agent-loop.md
           - docs/cli/agent.md
