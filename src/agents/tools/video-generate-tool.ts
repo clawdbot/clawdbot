@@ -70,7 +70,6 @@ import {
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
-  hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   readGenerationTimeoutMs,
@@ -901,25 +900,14 @@ export function createVideoGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
-}): AnyAgentTool | null {
+}): AnyAgentTool {
+  // Availability is decided once by resolveOptionalMediaToolFactoryPlan (or tests that
+  // construct the tool definition directly). Do not re-scan providers/auth here.
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
   const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
     ?.videoGenerationProviders
     ? [...options.preparedModelRuntime.mediaCapabilityProviders.videoGenerationProviders]
     : undefined;
-  if (
-    !hasGenerationToolAvailability({
-      cfg,
-      agentDir: options?.agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.mediaModels?.video,
-      providerKey: "videoGenerationProviders",
-      providers: preparedProviders,
-    })
-  ) {
-    return null;
-  }
 
   const sandboxConfig = options?.sandbox
     ? {

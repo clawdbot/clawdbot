@@ -396,9 +396,17 @@ describe("createImageGenerateTool", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns null when no image-generation model can be inferred", () => {
-    stubImageGenerationProviders();
-    expect(createImageGenerateTool({ config: {} })).toBeNull();
+  it("constructs the definition without applying availability policy", () => {
+    const listProviders = vi
+      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders")
+      .mockReturnValue([]);
+
+    const tool = createImageGenerateTool({
+      config: { plugins: { enabled: false } },
+    });
+
+    expect(tool.name).toBe("image_generate");
+    expect(listProviders).not.toHaveBeenCalled();
   });
 
   it("tells agents how to request transparent OpenAI backgrounds", () => {

@@ -406,6 +406,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["github-copilot"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -462,6 +463,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -481,6 +483,7 @@ describe("optional media tool factory planning", () => {
         toolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -513,6 +516,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["video_generate", "pdf"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: false,
       musicGenerate: true,
@@ -531,6 +535,7 @@ describe("optional media tool factory planning", () => {
         toolAllowlist: ["image_generate"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: false,
       musicGenerate: false,
@@ -549,6 +554,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["image_generate", "pdf"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -585,6 +591,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["*_generate", "p*"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -603,6 +610,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["image-owner", "music-owner", "media-owner"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -690,6 +698,7 @@ describe("optional media tool factory planning", () => {
         ]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -815,6 +824,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -869,6 +879,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -1080,6 +1091,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["external-image"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -1097,9 +1109,66 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
+      pdf: false,
+    });
+  });
+
+  it("keeps explicit generation models when the prepared provider family is empty", () => {
+    const config = createExplicitMediaModelConfig();
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        preparedModelRuntime: {
+          mediaCapabilityProviders: {
+            imageGenerationProviders: [],
+            videoGenerationProviders: [],
+            musicGenerationProviders: [],
+          },
+        } as never,
+      }),
+    ).toEqual({
+      image: false,
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+      pdf: true,
+    });
+  });
+
+  it("uses prepared provider isConfigured for generation availability", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        preparedModelRuntime: {
+          mediaCapabilityProviders: {
+            imageGenerationProviders: [
+              { id: "local-image", defaultModel: "workflow", isConfigured: () => true },
+            ],
+            videoGenerationProviders: [
+              { id: "local-video", defaultModel: "clip", isConfigured: () => false },
+            ],
+            musicGenerationProviders: [
+              { id: "local-music", defaultModel: "song", isConfigured: () => true },
+            ],
+          },
+        } as never,
+      }),
+    ).toEqual({
+      image: false,
+      imageGenerate: true,
+      videoGenerate: false,
+      musicGenerate: true,
       pdf: false,
     });
   });

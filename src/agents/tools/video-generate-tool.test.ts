@@ -1,7 +1,7 @@
 // video_generate tool tests cover provider/model selection, plugin metadata,
 // background task handling, input media, and saved video output.
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
@@ -346,15 +346,6 @@ function resetVideoGenerateMocks() {
 }
 
 describe("createVideoGenerateTool", () => {
-  let emptyConfigTool: ReturnType<typeof createVideoGenerateTool>;
-
-  beforeAll(() => {
-    resetVideoGenerateMocks();
-    emptyConfigTool = createVideoGenerateTool({ config: asConfig({}) });
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  });
-
   beforeEach(() => {
     resetVideoGenerateMocks();
     for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
@@ -367,10 +358,15 @@ describe("createVideoGenerateTool", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns null when no video-generation config or auth-backed provider is available", () => {
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+  it("constructs the definition without applying availability policy", () => {
+    const listProviders = vi
+      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+      .mockReturnValue([]);
 
-    expect(emptyConfigTool).toBeNull();
+    const tool = createVideoGenerateTool({ config: asConfig({ plugins: { enabled: false } }) });
+
+    expect(tool.name).toBe("video_generate");
+    expect(listProviders).not.toHaveBeenCalled();
   });
 
   it("treats legacy OpenAI-Codex auth profiles as canonical OpenAI video auth", () => {

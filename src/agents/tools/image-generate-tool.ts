@@ -87,7 +87,6 @@ import {
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
-  hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -876,25 +875,14 @@ export function createImageGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
-}): AnyAgentTool | null {
+}): AnyAgentTool {
+  // Availability is decided once by resolveOptionalMediaToolFactoryPlan (or tests that
+  // construct the tool definition directly). Do not re-scan providers/auth here.
   const cfg = options?.config ?? getRuntimeConfig();
   const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
     ?.imageGenerationProviders
     ? [...options.preparedModelRuntime.mediaCapabilityProviders.imageGenerationProviders]
     : undefined;
-  if (
-    !hasGenerationToolAvailability({
-      cfg,
-      agentDir: options?.agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.mediaModels?.image,
-      providerKey: "imageGenerationProviders",
-      providers: preparedProviders,
-    })
-  ) {
-    return null;
-  }
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {

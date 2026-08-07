@@ -19,16 +19,81 @@ import {
   hasSnapshotProviderEnvAvailability,
   loadCapabilityMetadataSnapshot,
 } from "./tools/manifest-capability-availability.js";
+import { isCapabilityProviderConfigured } from "./tools/media-tool-shared.js";
 
 /**
  * Plans optional media-tool factory registration from config, policy, capabilities, and auth.
+ * Generation eligibility is decided once here so create*GenerateTool can skip a second scan.
  */
 type OptionalMediaToolFactoryPlan = {
+  image: boolean;
   imageGenerate: boolean;
   videoGenerate: boolean;
   musicGenerate: boolean;
   pdf: boolean;
 };
+
+type PreparedGenerationProviderKey =
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
+
+type PreparedCapabilityProvider = {
+  id: string;
+  aliases?: string[];
+  defaultModel?: string;
+  models?: readonly string[];
+  isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
+};
+
+function resolvePreparedGenerationProviders(
+  prepared: PreparedModelRuntimeSnapshot["mediaCapabilityProviders"] | undefined,
+  key: PreparedGenerationProviderKey,
+): PreparedCapabilityProvider[] | undefined {
+  const providers = prepared?.[key];
+  return providers ? [...(providers as PreparedCapabilityProvider[])] : undefined;
+}
+
+/**
+ * Generation readiness for the factory plan.
+ * - Explicit model config wins even when a prepared family is empty (prepared runtimes are
+ *   not a deny list for configured models).
+ * - Prepared families evaluate provider isConfigured callbacks.
+ * - Without prepared providers, use snapshot capability (workspace scope + base-url guards).
+ *   Do not fall back to raw auth-only checks; that would reintroduce snapshot leaks.
+ */
+function planGenerationToolAvailability(params: {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
+  modelConfig?: AgentModelConfig;
+  providerKey: PreparedGenerationProviderKey;
+  preparedProviders?: PreparedCapabilityProvider[];
+  snapshot: Parameters<typeof hasSnapshotCapabilityAvailability>[0]["snapshot"];
+}): boolean {
+  if (hasExplicitToolModelConfig(params.modelConfig)) {
+    return true;
+  }
+  if (params.preparedProviders !== undefined) {
+    return params.preparedProviders.some((provider) =>
+      isCapabilityProviderConfigured({
+        providers: params.preparedProviders!,
+        provider,
+        cfg: params.config,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
+    );
+  }
+  return hasSnapshotCapabilityAvailability({
+    snapshot: params.snapshot,
+    authStore: params.authStore,
+    key: params.providerKey,
+    config: params.config,
+  });
+}
 
 type ToolModelConfig = { primary?: string; fallbacks?: string[] };
 
@@ -217,6 +282,8 @@ function hasConfiguredVisionModelAuthSignal(params: {
 /** Resolves which optional media tools should be created for the current tool factory call. */
 export function resolveOptionalMediaToolFactoryPlan(params: {
   config?: OpenClawConfig;
+  agentDir?: string;
+  modelHasVision?: boolean;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   toolAllowlist?: string[];
@@ -249,14 +316,40 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
     allowlist: toolAllowlist,
     denylist: toolDenylist,
   });
-  const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.image);
-  const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.video);
-  const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.music);
   const explicitPdf = hasExplicitPdfModelConfig(params.config);
   if (params.config?.plugins?.enabled === false) {
+    // Provider credentials can make the built-in image tool usable even when plugin tools are
+    // globally disabled. Keep the provider/env lookup independent from that global plugin gate.
+    const providerSignalConfig: OpenClawConfig | undefined = params.config
+      ? {
+          ...params.config,
+          plugins: params.config.plugins ? { ...params.config.plugins, enabled: true } : undefined,
+        }
+      : undefined;
+    const snapshot =
+      params.preparedModelRuntime?.metadataSnapshot ??
+      loadCapabilityMetadataSnapshot({
+        config: params.config,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      });
+    const preparedProviders =
+      params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
     // Optional media tools are plugin/capability backed. Disabling plugins shuts them off even when
     // stale defaults or env availability would otherwise appear to make a tool available.
+    // Image understanding can still be available via modelHasVision, explicit config, or a
+    // configured vision provider with a usable auth/env signal.
+    const imageWhenPluginsDisabled =
+      Boolean(params.agentDir?.trim()) &&
+      (params.modelHasVision === true ||
+        hasExplicitImageModelConfig(params.config) ||
+        hasConfiguredVisionModelAuthSignal({
+          config: providerSignalConfig,
+          snapshot,
+          authStore: params.authStore,
+          preparedProviders,
+        }));
     return {
+      image: imageWhenPluginsDisabled,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -270,39 +363,63 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
   const preparedProviders = params.preparedModelRuntime?.mediaCapabilityProviders;
-  const preparedFamilyAvailable = (providers: readonly unknown[] | undefined) =>
-    providers === undefined || providers.length > 0;
+  const image = resolveImageToolFactoryAvailable({
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    modelHasVision: params.modelHasVision,
+    authStore: params.authStore,
+    preparedModelRuntime: params.preparedModelRuntime,
+  });
+  // Generation readiness (explicit model, prepared isConfigured, snapshot guards) lives here so
+  // create*GenerateTool can skip a second availability scan on the tool-prep hot path.
   return {
+    image,
     imageGenerate:
       allowImageGenerate &&
-      preparedFamilyAvailable(preparedProviders?.imageGenerationProviders) &&
-      (explicitImageGeneration ||
-        hasSnapshotCapabilityAvailability({
-          snapshot,
-          authStore: params.authStore,
-          key: "imageGenerationProviders",
-          config: params.config,
-        })),
+      planGenerationToolAvailability({
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        authStore: params.authStore,
+        modelConfig: defaults?.mediaModels?.image,
+        providerKey: "imageGenerationProviders",
+        preparedProviders: resolvePreparedGenerationProviders(
+          preparedProviders,
+          "imageGenerationProviders",
+        ),
+        snapshot,
+      }),
     videoGenerate:
       allowVideoGenerate &&
-      preparedFamilyAvailable(preparedProviders?.videoGenerationProviders) &&
-      (explicitVideoGeneration ||
-        hasSnapshotCapabilityAvailability({
-          snapshot,
-          authStore: params.authStore,
-          key: "videoGenerationProviders",
-          config: params.config,
-        })),
+      planGenerationToolAvailability({
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        authStore: params.authStore,
+        modelConfig: defaults?.mediaModels?.video,
+        providerKey: "videoGenerationProviders",
+        preparedProviders: resolvePreparedGenerationProviders(
+          preparedProviders,
+          "videoGenerationProviders",
+        ),
+        snapshot,
+      }),
     musicGenerate:
       allowMusicGenerate &&
-      preparedFamilyAvailable(preparedProviders?.musicGenerationProviders) &&
-      (explicitMusicGeneration ||
-        hasSnapshotCapabilityAvailability({
-          snapshot,
-          authStore: params.authStore,
-          key: "musicGenerationProviders",
-          config: params.config,
-        })),
+      planGenerationToolAvailability({
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        authStore: params.authStore,
+        modelConfig: defaults?.mediaModels?.music,
+        providerKey: "musicGenerationProviders",
+        preparedProviders: resolvePreparedGenerationProviders(
+          preparedProviders,
+          "musicGenerationProviders",
+        ),
+        snapshot,
+      }),
     pdf:
       allowPdf &&
       (explicitPdf ||
