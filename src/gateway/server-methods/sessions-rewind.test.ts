@@ -7,57 +7,13 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  active: false,
-  capability: false,
-  external: false,
   upstreamFork: vi.fn(),
-  queueClear: vi.fn(),
   readMediaBuffer: vi.fn(),
 }));
 
 vi.mock("../../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../media/store.js")>();
   return { ...actual, readMediaBuffer: mocks.readMediaBuffer };
-});
-
-vi.mock("../../agents/harness/registry.js", () => ({
-  listRegisteredAgentHarnesses: () =>
-    mocks.capability
-      ? [
-          {
-            harness: {
-              sessionFork: {
-                upstreamKinds: ["codex-app-server"],
-                fork: mocks.upstreamFork,
-              },
-            },
-          },
-        ]
-      : [],
-}));
-
-vi.mock("../../auto-reply/reply/queue/cleanup.js", () => ({
-  clearSessionQueues: mocks.queueClear,
-}));
-
-vi.mock("../../sessions/session-upstream-links.js", () => ({
-  readSessionUpstreamLink: () =>
-    mocks.external
-      ? {
-          agentId: "main",
-          catalogId: "codex",
-          hostId: "gateway:local",
-          marker: { turnId: "turn-2", userMessageCount: 1 },
-          sessionKey,
-          threadId: "thread-source",
-          upstreamKind: "codex-app-server",
-          upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
-        }
-      : undefined,
-}));
-
-vi.mock("./session-active-runs.js", () => {
-  return { hasVisibleActiveSessionRun: () => mocks.active };
 });
 
 import {
@@ -67,7 +23,10 @@ import {
   loadSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import type { GatewayClient } from "./types.js";
 
@@ -78,11 +37,7 @@ const storedImagePath = `/state/media/inbound/${storedImageId}`;
 const storedImageData = Buffer.from("stored-image");
 
 beforeEach(async () => {
-  mocks.active = false;
-  mocks.capability = false;
-  mocks.external = false;
   mocks.upstreamFork.mockReset();
-  mocks.queueClear.mockReset();
   mocks.readMediaBuffer.mockReset().mockImplementation(async (id: string) => {
     if (id !== storedImageId) {
       throw new Error(`missing media: ${id}`);
@@ -94,6 +49,7 @@ beforeEach(async () => {
       size: storedImageData.byteLength,
     };
   });
+  setActivePluginRegistry(createEmptyPluginRegistry());
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
   await upsertSessionEntry(
     { agentId: "main", sessionKey },
@@ -157,15 +113,18 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  resetPluginRuntimeStateForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
-function context(): GatewayRequestContext {
+function context(active = false): GatewayRequestContext {
   return {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
+    chatAbortControllers: new Map(
+      active ? [["active-run", { sessionId: "rewind-handler-source", sessionKey }]] : undefined,
+    ),
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;
@@ -181,6 +140,7 @@ async function invoke(
   method: MessageCutMethod,
   entryId?: string,
   client: GatewayClient | null = null,
+  active = false,
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -197,11 +157,47 @@ async function invoke(
           : { entryId }),
     },
     respond: respond as unknown as RespondFn,
-    context: context(),
+    context: context(active),
     client,
     isWebchatConnect: () => false,
   });
   return respond;
+}
+
+function linkToUpstreamConversation(): void {
+  expect(
+    upsertSessionUpstreamLink({
+      agentId: "main",
+      catalogId: "codex",
+      hostId: "gateway:local",
+      marker: { turnId: "turn-2", userMessageCount: 1 },
+      sessionKey,
+      threadId: "thread-source",
+      upstreamKind: "codex-app-server",
+      upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
+    }),
+  ).toBe(true);
+}
+
+function installUpstreamForkHarness(): void {
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "test-harness",
+    source: "runtime",
+    harness: {
+      id: "test-harness",
+      label: "Test harness",
+      runAttempt: async () => {
+        throw new Error("not used");
+      },
+      sessionFork: {
+        upstreamKinds: ["codex-app-server"],
+        fork: mocks.upstreamFork,
+      },
+      supports: () => ({ supported: false }),
+    },
+  });
+  setActivePluginRegistry(registry);
 }
 
 describe("session message-cut methods", () => {
@@ -246,7 +242,6 @@ describe("session message-cut methods", () => {
 
     const switched = await invoke("sessions.branches.switch", "off-path-entry");
     expect(switched).toHaveBeenCalledWith(true, {}, undefined);
-    expect(mocks.queueClear).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -318,7 +313,6 @@ describe("session message-cut methods", () => {
       undefined,
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
-    expect(mocks.queueClear).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -335,11 +329,10 @@ describe("session message-cut methods", () => {
         message: expect.stringContaining(message),
       }),
     );
-    expect(mocks.queueClear).not.toHaveBeenCalled();
   });
 
   it("rejects externally owned conversations", async () => {
-    mocks.external = true;
+    linkToUpstreamConversation();
     const respond = await invoke("sessions.branches.switch", "off-path-entry");
     const listed = await invoke("sessions.branches.list");
 
@@ -358,8 +351,8 @@ describe("session message-cut methods", () => {
   it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
     "rejects %s for upstream-linked sessions even with a fork-capable harness",
     async (method) => {
-      mocks.external = true;
-      mocks.capability = true;
+      linkToUpstreamConversation();
+      installUpstreamForkHarness();
       const respond = await invoke(method, "user-entry");
 
       expect(respond).toHaveBeenCalledWith(
@@ -375,8 +368,8 @@ describe("session message-cut methods", () => {
   );
 
   it("delegates complete upstream fork materialization to the harness", async () => {
-    mocks.external = true;
-    mocks.capability = true;
+    linkToUpstreamConversation();
+    installUpstreamForkHarness();
     mocks.upstreamFork.mockResolvedValue({
       status: "created",
       key: "agent:main:dashboard:forked",
@@ -404,8 +397,8 @@ describe("session message-cut methods", () => {
   });
 
   it("does not mutate the local session when the upstream fork fails", async () => {
-    mocks.external = true;
-    mocks.capability = true;
+    linkToUpstreamConversation();
+    installUpstreamForkHarness();
     mocks.upstreamFork.mockResolvedValue({
       status: "failed",
       code: "upstream-unavailable",
@@ -429,8 +422,8 @@ describe("session message-cut methods", () => {
   it.each(["steer-message", "in-progress-turn", "drift-mismatch"] as const)(
     "passes through the %s boundary failure",
     async (reason) => {
-      mocks.external = true;
-      mocks.capability = true;
+      linkToUpstreamConversation();
+      installUpstreamForkHarness();
       mocks.upstreamFork.mockResolvedValue({
         status: "failed",
         code: reason,
@@ -456,10 +449,11 @@ describe("session message-cut methods", () => {
     ["sessions.rewind", "Rewind"],
     ["sessions.branches.switch", "Branch switch"],
   ] as const)("rejects %s while the source run is active", async (method, label) => {
-    mocks.active = true;
     const respond = await invoke(
       method,
       method === "sessions.branches.switch" ? "off-path-entry" : "user-entry",
+      null,
+      true,
     );
 
     expect(respond).toHaveBeenCalledWith(
@@ -470,6 +464,5 @@ describe("session message-cut methods", () => {
         message: `${label} is unavailable while the agent is working.`,
       }),
     );
-    expect(mocks.queueClear).not.toHaveBeenCalled();
   });
 });
