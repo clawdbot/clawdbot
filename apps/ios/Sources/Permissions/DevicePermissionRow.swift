@@ -8,8 +8,11 @@ struct DevicePermissionActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(OpenClawType.footnoteSemiBold)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 14)
-            .frame(height: 32)
+            .padding(.vertical, 8)
+            .frame(minHeight: 32)
             .foregroundStyle(
                 self.prominent
                     ? OpenClawBrand.activationPrimaryActionText
@@ -40,6 +43,8 @@ struct DevicePermissionActionButtonStyle: ButtonStyle {
 /// One device permission with an icon tile, explanation, and a single clear
 /// affordance: Continue when unset, a green check when granted, a repair action otherwise.
 struct DevicePermissionRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let identifierPrefix: String
     let identifier: String
     let symbol: String
@@ -53,6 +58,45 @@ struct DevicePermissionRow: View {
     var action: (() -> Void)?
 
     var body: some View {
+        Group {
+            if self.dynamicTypeSize.isAccessibilitySize {
+                self.stackedLayout
+            } else {
+                // Localized actions can be wider than the disclosure column. Keep the
+                // action intrinsic, then stack it before SwiftUI can ellipsize the label.
+                ViewThatFits(in: .horizontal) {
+                    self.horizontalLayout
+                    self.stackedLayout
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var horizontalLayout: some View {
+        HStack(alignment: .center, spacing: 0) {
+            self.labelBlock
+                .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            self.trailingControl
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var stackedLayout: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            self.labelBlock
+
+            HStack {
+                Spacer(minLength: 48)
+                self.trailingControl
+            }
+        }
+    }
+
+    private var labelBlock: some View {
         HStack(alignment: .center, spacing: 12) {
             self.iconTile
 
@@ -64,12 +108,8 @@ struct DevicePermissionRow: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer(minLength: 8)
-
-            self.trailingControl
+            .layoutPriority(1)
         }
-        .padding(.vertical, 6)
     }
 
     private var isGrantedTile: Bool {

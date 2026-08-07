@@ -26859,7 +26859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 111,
+      "line": 151,
       "path": "apps/ios/Sources/Permissions/DevicePermissionRow.swift",
       "source": "Allowed",
       "surface": "apple",
@@ -26867,7 +26867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 131,
+      "line": 171,
       "path": "apps/ios/Sources/Permissions/DevicePermissionRow.swift",
       "source": "Limited",
       "surface": "apple",
@@ -26875,7 +26875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 133,
+      "line": 173,
       "path": "apps/ios/Sources/Permissions/DevicePermissionRow.swift",
       "source": "Off in Settings",
       "surface": "apple",

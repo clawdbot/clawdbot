@@ -987,6 +987,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(appleHealth.waitForExistence(timeout: 8))
         let action = try XCTUnwrap(self.app?.buttons["apple-health-summaries-action"])
         XCTAssertTrue(action.waitForExistence(timeout: 5))
+        XCTAssertEqual(action.label, "Enable Apple Health Summaries")
+        let labelWidth = (action.label as NSString).size(withAttributes: [
+            .font: UIFont.preferredFont(forTextStyle: .footnote),
+        ]).width
+        XCTAssertGreaterThanOrEqual(action.frame.width, labelWidth + 24)
         self.attachScreenshot(named: "apple-health-disclosure")
     }
 }
