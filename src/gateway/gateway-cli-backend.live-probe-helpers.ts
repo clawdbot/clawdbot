@@ -1,6 +1,7 @@
 // CLI backend live probe helpers run cron/MCP/image probes through the gateway
 // CLI backend and poll for externally visible live results.
 import { randomUUID } from "node:crypto";
+import { asNullableRecord as asLoopbackSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
@@ -124,12 +125,6 @@ function parsePositiveInt(value: string | undefined, fallback: number, name: str
     throw new Error(`invalid ${name}: ${value}`);
   }
   return parsed;
-}
-
-function asLoopbackSchemaRecord(schema: unknown): Record<string, unknown> | null {
-  return schema && typeof schema === "object" && !Array.isArray(schema)
-    ? (schema as Record<string, unknown>)
-    : null;
 }
 
 function assertLoopbackObjectSchemasHaveProperties(params: {

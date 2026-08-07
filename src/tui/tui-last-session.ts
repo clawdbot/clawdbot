@@ -1,6 +1,7 @@
 // Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -35,10 +36,6 @@ export function buildTuiLastSessionScopeKey(params: {
     .update(`${params.sessionScope}\n${agentId}\n${connectionUrl}`)
     .digest("hex")
     .slice(0, 32);
-}
-
-function normalizeMarker(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function isHeartbeatSessionKey(sessionKey: string): boolean {

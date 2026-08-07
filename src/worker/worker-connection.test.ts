@@ -13,6 +13,7 @@ import type {
   WorkerInferenceEventFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { toError } from "./worker-connection-contract.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
@@ -129,6 +130,18 @@ function installThrowingThenHealthyListeners(connection: ReturnType<typeof creat
   });
   return { observed, throwingCalls: () => throwingCalls };
 }
+
+describe("worker connection error coercion", () => {
+  it("preserves structured non-Error causes", () => {
+    const cause = { code: "ECONNRESET", status: 503 };
+
+    const error = toError(cause);
+
+    expect(error.message).toBe("[object Object]");
+    expect(error.cause).toBe(cause);
+    expect(error).toMatchObject(cause);
+  });
+});
 
 describe("WorkerConnection state listener isolation", () => {
   it("settles stop and reaches later listeners when an earlier listener throws", async () => {

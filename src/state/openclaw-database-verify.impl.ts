@@ -2,6 +2,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { toErrorObject } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   confirmOpenClawAgentDatabaseIntegrity,
@@ -26,7 +27,7 @@ const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
 function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return toErrorObject(error, String(error));
 }
 
 function resolveDatabaseVerifyWorkerUrl(currentModuleUrl = import.meta.url): URL {

@@ -10,6 +10,13 @@ import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
 
+/** Cancels a response body only when no consumer has started reading it. */
+export async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
+  if (response && !response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 

@@ -2306,6 +2306,9 @@ importers:
 
   packages/net-policy:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0
@@ -2319,7 +2322,11 @@ importers:
         specifier: 1.3.6
         version: 1.3.6
 
-  packages/plugin-package-contract: {}
+  packages/plugin-package-contract:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/plugin-sdk: {}
 
@@ -2330,6 +2337,9 @@ importers:
       '@openclaw/gateway-client':
         specifier: workspace:*
         version: link:../gateway-client
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/session-url-contract: {}
 

@@ -6,6 +6,7 @@ import type {
   WorkerProtocolCloseReason,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import { toErrorObject } from "../infra/errors.js";
 
 const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "credential-replaced",
@@ -95,5 +96,5 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
 }
 
 export function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return toErrorObject(error, String(error));
 }
