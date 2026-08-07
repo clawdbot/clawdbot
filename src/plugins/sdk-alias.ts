@@ -1029,6 +1029,7 @@ function isTrustedPrivatePluginSdkOwnerPath(params: {
   packageRoot: string;
   modulePath: string;
   owner: PrivatePluginSdkSubpathOwner;
+  trustedInstalledPrivateSdkOwner?: string;
 }) {
   if (
     isBundledPluginModulePath({
@@ -1039,7 +1040,10 @@ function isTrustedPrivatePluginSdkOwnerPath(params: {
   ) {
     return true;
   }
-  return params.owner.officialInstalledPackageName
+  // Installed package metadata is attacker-controlled. Require the host manifest
+  // registry to authenticate this exact official plugin ID before granting aliases.
+  return params.trustedInstalledPrivateSdkOwner === params.owner.bundledPluginId &&
+    params.owner.officialInstalledPackageName
     ? isOfficialInstalledPluginModulePath({
         modulePath: params.modulePath,
         packageName: params.owner.officialInstalledPackageName,
@@ -1056,6 +1060,7 @@ function findPrivatePluginSdkSubpathOwners(
 function listTrustedPrivatePluginSdkOwnerKeys(params: {
   packageRoot: string;
   modulePath: string;
+  trustedInstalledPrivateSdkOwner?: string;
 }): string[] {
   return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) =>
     isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }),
@@ -1081,6 +1086,7 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   packageRoot: string;
   modulePath: string;
   subpath: string;
+  trustedInstalledPrivateSdkOwner?: string;
 }) {
   if (PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS.has(params.subpath)) {
     return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
@@ -1128,6 +1134,7 @@ function listPrivateLocalOnlyPluginSdkSubpaths(params: {
   packageRoot: string;
   ownerPackageRoot: string;
   modulePath: string;
+  trustedInstalledPrivateSdkOwner?: string;
 }): string[] {
   return readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).filter(
     (subpath) =>
@@ -1135,6 +1142,7 @@ function listPrivateLocalOnlyPluginSdkSubpaths(params: {
         packageRoot: params.ownerPackageRoot,
         modulePath: params.modulePath,
         subpath,
+        trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
       }) && hasPluginSdkSubpathArtifact(params.packageRoot, subpath),
   );
 }
@@ -1146,6 +1154,7 @@ function listPluginSdkExportedSubpaths(
     moduleUrl?: string;
     devSourceRoot?: string | null;
     pluginSdkResolution?: PluginSdkResolutionPreference;
+    trustedInstalledPrivateSdkOwner?: string;
   } = {},
 ): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
@@ -1167,6 +1176,7 @@ function listPluginSdkExportedSubpaths(
   const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
     packageRoot: ownerPackageRoot,
     modulePath,
+    trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
   });
   const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
@@ -1176,7 +1186,12 @@ function listPluginSdkExportedSubpaths(
   const subpaths = [
     ...new Set([
       ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...listPrivateLocalOnlyPluginSdkSubpaths({ packageRoot, ownerPackageRoot, modulePath }),
+      ...listPrivateLocalOnlyPluginSdkSubpaths({
+        packageRoot,
+        ownerPackageRoot,
+        modulePath,
+        trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
+      }),
     ]),
   ].toSorted();
   cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
@@ -1190,6 +1205,7 @@ function resolvePluginSdkScopedAliasMap(
     moduleUrl?: string;
     devSourceRoot?: string | null;
     pluginSdkResolution?: PluginSdkResolutionPreference;
+    trustedInstalledPrivateSdkOwner?: string;
   } = {},
 ): Record<string, string> {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
@@ -1216,6 +1232,7 @@ function resolvePluginSdkScopedAliasMap(
   const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
     packageRoot: ownerPackageRoot,
     modulePath,
+    trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
   });
   const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
@@ -1232,6 +1249,7 @@ function resolvePluginSdkScopedAliasMap(
     moduleUrl: params.moduleUrl,
     devSourceRoot: params.devSourceRoot,
     pluginSdkResolution: params.pluginSdkResolution,
+    trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
   })) {
     for (const kind of orderedKinds) {
       if (kind === "dist") {
@@ -1439,6 +1457,7 @@ function buildPluginLoaderAliasMapCacheKey(params: {
   moduleUrl?: string;
   pluginSdkResolution: PluginSdkResolutionPreference;
   devSourceRoot?: string | null;
+  trustedInstalledPrivateSdkOwner?: string;
 }) {
   const devSourceRoot = resolveDevSourceRootParam(params);
   return [
@@ -1450,6 +1469,7 @@ function buildPluginLoaderAliasMapCacheKey(params: {
     devSourceRoot ?? "",
     process.env.NODE_ENV === "production" ? "production" : "non-production",
     shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "private-qa" : "public",
+    params.trustedInstalledPrivateSdkOwner ?? "",
   ].join("\0");
 }
 
@@ -1479,6 +1499,7 @@ export function buildPluginLoaderAliasMap(
   moduleUrl?: string,
   pluginSdkResolution: PluginSdkResolutionPreference = "auto",
   devSourceRoot?: string | null,
+  trustedInstalledPrivateSdkOwner?: string,
 ): Record<string, string> {
   const cacheKey = buildPluginLoaderAliasMapCacheKey({
     modulePath,
@@ -1486,6 +1507,7 @@ export function buildPluginLoaderAliasMap(
     moduleUrl,
     pluginSdkResolution,
     devSourceRoot,
+    trustedInstalledPrivateSdkOwner,
   });
   const cached = aliasMapCache.get(cacheKey);
   if (cached) {
@@ -1513,6 +1535,7 @@ export function buildPluginLoaderAliasMap(
       moduleUrl,
       pluginSdkResolution,
       devSourceRoot,
+      trustedInstalledPrivateSdkOwner,
     }),
   );
   // Different plugin entrypoints commonly resolve the same process-stable SDK surface.
