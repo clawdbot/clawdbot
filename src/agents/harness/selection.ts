@@ -19,6 +19,7 @@ import {
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { transferEmbeddedAttemptExecutionAttribution } from "../embedded-agent-runner/run/attempt-execution-attribution.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -589,7 +590,7 @@ function withoutInternalHarnessAuthority(
     return params;
   }
   const { systemAgentTool: _systemAgentTool, ...pluginParams } = params;
-  return pluginParams;
+  return transferEmbeddedAttemptExecutionAttribution(params, pluginParams);
 }
 
 function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {
@@ -601,11 +602,13 @@ function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedR
   if (model === params.model && resolvedApiKey === params.resolvedApiKey) {
     return applyPluginHarnessDenyAllToolPolicy(params);
   }
-  return applyPluginHarnessDenyAllToolPolicy({
-    ...params,
-    model,
-    resolvedApiKey,
-  });
+  return applyPluginHarnessDenyAllToolPolicy(
+    transferEmbeddedAttemptExecutionAttribution(params, {
+      ...params,
+      model,
+      resolvedApiKey,
+    }),
+  );
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
@@ -622,11 +625,11 @@ function applyPluginHarnessDenyAllToolPolicy(
   if (!prompt) {
     return params;
   }
-  return {
+  return transferEmbeddedAttemptExecutionAttribution(params, {
     ...params,
     toolsAllow: [],
     extraSystemPrompt: appendPluginHarnessToolPolicyPrompt(params.extraSystemPrompt, prompt),
-  };
+  });
 }
 
 export function resolvePluginHarnessPolicyToolsAllow(

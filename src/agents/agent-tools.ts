@@ -29,6 +29,8 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
+import type { AgentExecutionAttribution } from "./agent-execution-attribution.js";
+import { bindToolExecutionAttribution } from "./agent-tools.before-tool-call.attribution.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -374,7 +376,14 @@ type OpenClawCodingToolsOptions = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
-function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+type OpenClawCodingToolsInternalOptions = OpenClawCodingToolsOptions & {
+  /** Admission-owned correlation; intentionally absent from the plugin SDK options. */
+  attribution?: AgentExecutionAttribution;
+};
+
+export function createOpenClawCodingToolsInternal(
+  options?: OpenClawCodingToolsInternalOptions,
+): AnyAgentTool[] {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
@@ -741,6 +750,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            ...(options?.attribution
+              ? {
+                  beforeToolCallHookContext: bindToolExecutionAttribution({}, options.attribution),
+                }
+              : {}),
             runSessionKey: options?.runSessionKey,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
@@ -933,32 +947,35 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     ...(options?.memberRoleIds?.length ? { roleIds: [...options.memberRoleIds] } : {}),
   } satisfies PluginHookToolRequesterContext;
   const hasRequester = Object.keys(requester).length > 0;
-  const hookContext = {
-    agentId,
-    ...(options?.config ? { config: options.config } : {}),
-    cwd: codingRoot,
-    workspaceDir: workspaceRoot,
-    ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
-    ...(options?.skillUsagePaths ? { skillUsagePaths: options.skillUsagePaths } : {}),
-    ...(sandboxRoot && allowWorkspaceWrites
-      ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
-      : {}),
-    sessionKey: options?.sessionKey,
-    sessionId: options?.sessionId,
-    runId: options?.runId,
-    trigger: options?.trigger,
-    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
-    channelId: options?.hookChannelId ?? options?.currentChannelId,
-    ...(hasRequester ? { requester } : {}),
-    ...(turnSourceChannel ? { turnSourceChannel } : {}),
-    ...(turnSourceTo ? { turnSourceTo } : {}),
-    ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-    ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
-    ...(options?.trace ? { trace: options.trace } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-    onToolOutcome: options?.onToolOutcome,
-    allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
-  };
+  const hookContext = bindToolExecutionAttribution(
+    {
+      agentId,
+      ...(options?.config ? { config: options.config } : {}),
+      cwd: codingRoot,
+      workspaceDir: workspaceRoot,
+      ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
+      ...(options?.skillUsagePaths ? { skillUsagePaths: options.skillUsagePaths } : {}),
+      ...(sandboxRoot && allowWorkspaceWrites
+        ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
+        : {}),
+      sessionKey: options?.sessionKey,
+      sessionId: options?.sessionId,
+      runId: options?.runId,
+      trigger: options?.trigger,
+      approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
+      channelId: options?.hookChannelId ?? options?.currentChannelId,
+      ...(hasRequester ? { requester } : {}),
+      ...(turnSourceChannel ? { turnSourceChannel } : {}),
+      ...(turnSourceTo ? { turnSourceTo } : {}),
+      ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+      ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
+      ...(options?.trace ? { trace: options.trace } : {}),
+      loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      onToolOutcome: options?.onToolOutcome,
+      allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
+    },
+    options?.attribution,
+  );
   // NOTE: Keep canonical (lowercase) tool names here. Provider transports remap on the wire.
   return finalizeAgentTools({
     tools: authorizedTools,
@@ -977,6 +994,13 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
 
 /** Build the runtime tool list exposed through the public agent harness SDK. */
 export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
-  return createOpenClawCodingToolsInternal(options);
+  if (!options) {
+    return createOpenClawCodingToolsInternal();
+  }
+  // The SDK is a JavaScript boundary. Untyped plugins cannot stamp trusted
+  // execution correlation onto the host-owned tool hook context.
+  const { attribution: _attribution, ...publicOptions } = options as OpenClawCodingToolsOptions &
+    Pick<OpenClawCodingToolsInternalOptions, "attribution">;
+  return createOpenClawCodingToolsInternal(publicOptions);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
