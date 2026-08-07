@@ -7,8 +7,8 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { buildSessionUsageDateParams, requestSessionUsage } from "../../lib/sessions/index.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 function currentLocalDate(): string {
@@ -45,13 +45,14 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       result: null,
       costSummary: null,
       providerUsageSummary: null,
+      providerUsageUnavailable: false,
       loadedAtMs: null,
       error: null,
     };
   }
 
   try {
-    const [result, costSummary, providerUsageSummary] = await Promise.all([
+    const [result, costSummary, providerUsage] = await Promise.all([
       requestSessionUsage(gatewaySnapshot.client, {
         ...query,
         agentId: query.agentId ?? undefined,
@@ -62,7 +63,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
         ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" as const }),
         ...buildSessionUsageDateParams(query.timeZone),
       }),
-      gatewaySnapshot.client.request<ProviderUsageSummary>("usage.status").catch(() => null),
+      requestProviderUsage(gatewaySnapshot.client),
     ]);
     return {
       gateway,
@@ -70,7 +71,8 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result,
       costSummary,
-      providerUsageSummary,
+      providerUsageSummary: providerUsage.summary,
+      providerUsageUnavailable: providerUsage.failed,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -82,6 +84,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       result: null,
       costSummary: null,
       providerUsageSummary: null,
+      providerUsageUnavailable: false,
       loadedAtMs: null,
       error: errorMessage(error),
     };

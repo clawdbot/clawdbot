@@ -24,6 +24,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import {
   buildSessionUsageDateParams,
   requestSessionUsage,
@@ -70,6 +71,7 @@ export type UsageRouteData = {
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
   providerUsageSummary: ProviderUsageSummary | null;
+  providerUsageUnavailable: boolean;
   loadedAtMs: number | null;
   error: string | null;
 };
@@ -78,6 +80,7 @@ type UsageTaskValue = {
   result: SessionsUsageResult;
   costSummary: CostUsageSummary;
   providerUsageSummary: ProviderUsageSummary | null;
+  providerUsageUnavailable: boolean;
 };
 
 type UsageDetailTaskValue<T> = {
@@ -94,6 +97,7 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
   @state() private providerUsageSummary: ProviderUsageSummary | null = null;
+  @state() private providerUsageUnavailable = false;
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -191,7 +195,7 @@ class UsagePage extends OpenClawLightDomElement {
       this.refreshPolicy.beginLoad();
       const agentId = normalizedAgentId || undefined;
       const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
-      const [result, costSummary, providerUsageSummary] = await Promise.all([
+      const [result, costSummary, providerUsage] = await Promise.all([
         requestSessionUsage(client, { startDate, endDate, agentId, scope, timeZone }),
         client.request<CostUsageSummary>(
           "usage.cost",
@@ -203,17 +207,21 @@ class UsagePage extends OpenClawLightDomElement {
           },
           { signal },
         ),
-        client
-          .request<ProviderUsageSummary>("usage.status", undefined, { signal })
-          .catch(() => null),
+        requestProviderUsage(client, { signal }),
       ]);
-      return { result, costSummary, providerUsageSummary } satisfies UsageTaskValue;
+      return {
+        result,
+        costSummary,
+        providerUsageSummary: providerUsage.summary,
+        providerUsageUnavailable: providerUsage.failed,
+      } satisfies UsageTaskValue;
     },
     onComplete: (value) => {
       this.usageTaskActiveClient = null;
       this.usageResult = value.result;
       this.usageCostSummary = value.costSummary;
       this.providerUsageSummary = value.providerUsageSummary;
+      this.providerUsageUnavailable = value.providerUsageUnavailable;
       this.usageError = null;
       this.refreshPolicy.markLoaded();
       this.refreshPolicy.flushPending();
@@ -336,6 +344,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
     this.providerUsageSummary = data.providerUsageSummary;
+    this.providerUsageUnavailable = data.providerUsageUnavailable;
     this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs);
     this.usageError = data.error;
   }
@@ -363,6 +372,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = null;
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
+    this.providerUsageUnavailable = false;
     this.refreshPolicy.resetPayload();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
@@ -526,6 +536,7 @@ class UsagePage extends OpenClawLightDomElement {
           this.usageCostSummary?.cacheStatus,
         ),
         providerUsage: this.providerUsageSummary?.providers ?? [],
+        providerUsageUnavailable: this.providerUsageUnavailable,
       },
       filters: {
         startDate: this.usageStartDate,

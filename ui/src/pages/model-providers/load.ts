@@ -11,6 +11,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
 import { loadModels } from "../chat/models.ts";
 
@@ -23,6 +24,8 @@ export type ModelProvidersData = {
   catalogModels: ModelCatalogEntry[] | null;
   config: Record<string, unknown> | null;
   providerUsage: UsageSummary | null;
+  /** True when the usage.status request failed, as opposed to returning no data. */
+  providerUsageFailed: boolean;
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
   error: string | null;
@@ -34,6 +37,7 @@ export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   catalogModels: null,
   config: null,
   providerUsage: null,
+  providerUsageFailed: false,
   costByProvider: null,
   updatedAt: null,
   error: null,
@@ -65,7 +69,7 @@ export async function loadModelProvidersData(
       : params === undefined
         ? client.request<T>(method)
         : client.request<T>(method, params);
-  const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
+  const [authStatus, models, catalogModels, config, providerUsageFetch, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
         (result) => ({ ok: true as const, result }),
@@ -81,7 +85,7 @@ export async function loadModelProvidersData(
       request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
-      request<UsageSummary>("usage.status").catch(() => null),
+      requestProviderUsage(client, opts?.signal ? { signal: opts.signal } : undefined),
       requestSessionUsage(client, {
         startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
         endDate: localDate(0),
@@ -97,7 +101,8 @@ export async function loadModelProvidersData(
     models,
     catalogModels,
     config,
-    providerUsage,
+    providerUsage: providerUsageFetch.summary,
+    providerUsageFailed: providerUsageFetch.failed,
     costByProvider,
     updatedAt: Date.now(),
     // Auth status is the primary provider list; its failure is the only one

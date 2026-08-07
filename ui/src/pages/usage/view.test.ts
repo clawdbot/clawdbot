@@ -63,6 +63,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       costDaily: [],
       cacheStatus: undefined,
       providerUsage: [],
+      providerUsageUnavailable: false,
     },
     filters: {
       startDate: "2026-05-14",
@@ -154,6 +155,26 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 }
 
 describe("renderUsage", () => {
+  it("surfaces a provider-usage failure instead of hiding the panel", () => {
+    const container = document.createElement("div");
+    const base = createUsageProps();
+    render(
+      renderUsage(createUsageProps({ data: { ...base.data, providerUsageUnavailable: true } })),
+      container,
+    );
+
+    expect(container.textContent).toContain(
+      "Provider usage is unavailable; the last request failed. Refresh to retry.",
+    );
+  });
+
+  it("keeps the provider panel hidden when usage is empty without a failure", () => {
+    const container = document.createElement("div");
+    render(renderUsage(createUsageProps()), container);
+
+    expect(container.textContent).not.toContain("Provider usage is unavailable");
+  });
+
   it("keeps pending sessions on their selected local or UTC activity day", () => {
     const localOffsetMs = -7 * 60 * 60 * 1000;
     const localYear = vi

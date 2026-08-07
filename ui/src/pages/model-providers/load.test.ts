@@ -60,7 +60,34 @@ describe("loadModelProvidersData", () => {
     expect(result.catalogModels).toEqual([]);
     expect(result.config).toEqual({});
     expect(result.providerUsage).toEqual({ updatedAt: 1, providers: [] });
+    expect(result.providerUsageFailed).toBe(false);
     expect(result.costByProvider).toEqual([]);
+    expect(result.error).toBeNull();
+  });
+
+  it("records a usage.status failure instead of reducing it to no data", async () => {
+    const request = vi.fn(async (method: string) => {
+      switch (method) {
+        case "models.authStatus":
+          return { ts: 1, providers: [] };
+        case "models.list":
+          return { models: [] };
+        case "config.get":
+          return { config: {}, hash: "hash" };
+        case "usage.status":
+          throw new Error("usage.status failed");
+        case "sessions.usage":
+          return { aggregates: { byProvider: [] } };
+        default:
+          return {};
+      }
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const result = await loadModelProvidersData(client);
+
+    expect(result.providerUsage).toBeNull();
+    expect(result.providerUsageFailed).toBe(true);
     expect(result.error).toBeNull();
   });
 });
