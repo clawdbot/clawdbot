@@ -30,8 +30,13 @@ export type BundleMcpConfig = {
   mcpServers: Record<string, BundleMcpServerConfig>;
 };
 
+export type BundleMcpDataDirOwnership = {
+  pluginId: string;
+  dataDir: string;
+};
+
 type BundleMcpRuntimeConfig = BundleMcpConfig & {
-  prepareDataDirsByServer: Record<string, string | null>;
+  prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership | null>;
 };
 
 export type BundleMcpDiagnostic = {
@@ -42,7 +47,7 @@ export type BundleMcpDiagnostic = {
 type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
-  prepareDataDirsByServer: Record<string, string>;
+  prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
 };
 type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
@@ -452,7 +457,7 @@ function loadBundleFileBackedMcpConfig(params: {
         Object.entries(servers).map(([serverName, server]) => [
           serverName,
           agentLoaded?.pluginDataDir && server.transport === "stdio"
-            ? agentLoaded.pluginDataDir
+            ? { pluginId: params.pluginId, dataDir: agentLoaded.pluginDataDir }
             : null,
         ]),
       ),
@@ -630,7 +635,7 @@ export function loadEnabledBundleMcpConfig(params: {
     diagnostics: loaded.diagnostics,
     prepareDataDirsByServer: Object.fromEntries(
       Object.entries(loaded.config.prepareDataDirsByServer).filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
+        (entry): entry is [string, BundleMcpDataDirOwnership] => entry[1] !== null,
       ),
     ),
   };

@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
       },
     },
     diagnostics: [],
-    prepareDataDirsByServer: { bundleProbe: "/state/plugin-data/bundle-probe" },
+    prepareDataDirsByServer: {
+      bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
+    },
   },
 }));
 
@@ -50,10 +52,14 @@ describe("loadMergedBundleMcpConfig", () => {
   });
 
   it("preserves Agent Plugins launch ownership for unshadowed bundle servers", () => {
-    const merged = loadMergedBundleMcpConfig({ workspaceDir: "/workspace" });
+    const merged = loadMergedBundleMcpConfig({
+      workspaceDir: "/workspace",
+      mapConfiguredServer: (server) => ({ ...server, mapped: true }),
+    });
 
+    expect(merged.config.mcpServers.bundleProbe).toMatchObject({ mapped: true });
     expect(merged.prepareDataDirsByServer).toEqual({
-      bundleProbe: "/state/plugin-data/bundle-probe",
+      bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
     });
   });
 

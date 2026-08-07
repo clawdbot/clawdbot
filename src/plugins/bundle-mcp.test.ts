@@ -524,7 +524,9 @@ describe("loadEnabledBundleMcpConfig", () => {
         const pluginDataPath = path.join(homeDir, ".openclaw", "plugin-data", "portable-mcp");
         expect(localEnv.PLUGIN_DATA).toBe(pluginDataPath);
         expect(local.cwd).toBe(pluginDataPath);
-        expect(loaded.prepareDataDirsByServer).toEqual({ local: pluginDataPath });
+        expect(loaded.prepareDataDirsByServer).toEqual({
+          local: { pluginId: "portable-mcp", dataDir: pluginDataPath },
+        });
         await expectPathMissing(pluginDataPath);
         expect(localEnv.ROOT_COPY).toBe(localEnv.PLUGIN_ROOT);
         expect(localEnv.DATA_COPY).toBe(localEnv.PLUGIN_DATA);
@@ -678,7 +680,9 @@ describe("loadEnabledBundleMcpConfig", () => {
           remote: { transport: "streamable-http", url: "https://example.test/mcp" },
         });
         expect(loaded.diagnostics).toStrictEqual([]);
-        expect(loaded.prepareDataDirsByServer).toEqual({ local: pluginDataPath });
+        expect(loaded.prepareDataDirsByServer).toEqual({
+          local: { pluginId, dataDir: pluginDataPath },
+        });
         expect(
           inspectBundleMcpRuntimeSupport({
             pluginId,

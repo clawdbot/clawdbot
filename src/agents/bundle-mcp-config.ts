@@ -2,12 +2,15 @@
  * Merges bundled plugin MCP servers with user-configured MCP servers for agent
  * runtimes.
  */
+import fs from "node:fs";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
+  type BundleMcpDataDirOwnership,
   type BundleMcpDiagnostic,
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
@@ -16,7 +19,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
-  prepareDataDirsByServer: Record<string, string>;
+  prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
 };
 
 type BundleMcpServerMapper = (server: BundleMcpServerConfig, name: string) => BundleMcpServerConfig;
@@ -27,6 +30,31 @@ const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   sse: "sse",
   stdio: "stdio",
 };
+
+export function prepareOwnedBundleMcpDataDirs(params: {
+  config: BundleMcpConfig;
+  prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
+}): MergedBundleMcpConfig {
+  const mcpServers = { ...params.config.mcpServers };
+  const prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership> = {};
+  const diagnostics: BundleMcpDiagnostic[] = [];
+  for (const [serverName, ownership] of Object.entries(params.prepareDataDirsByServer)) {
+    if (!Object.hasOwn(mcpServers, serverName)) {
+      continue;
+    }
+    try {
+      fs.mkdirSync(ownership.dataDir, { recursive: true });
+      prepareDataDirsByServer[serverName] = ownership;
+    } catch (error) {
+      delete mcpServers[serverName];
+      diagnostics.push({
+        pluginId: ownership.pluginId,
+        message: `unable to prepare PLUGIN_DATA directory "${ownership.dataDir}" for MCP server "${serverName}": ${formatErrorMessage(error)}`,
+      });
+    }
+  }
+  return { config: { mcpServers }, diagnostics, prepareDataDirsByServer };
+}
 
 /**
  * User config stores OpenClaw MCP transport names, while CLI backends such as
@@ -96,7 +124,12 @@ export function loadMergedBundleMcpConfig(params: {
     config: {
       // OpenClaw config is the owner-managed layer, so it overrides bundle defaults.
       mcpServers: {
-        ...enabledBundleMcp,
+        ...Object.fromEntries(
+          Object.entries(enabledBundleMcp).map(([name, server]) => [
+            name,
+            mapConfiguredServer(server as BundleMcpServerConfig, name),
+          ]),
+        ),
         ...Object.fromEntries(
           Object.entries(enabledConfiguredMcp).map(([name, server]) => [
             name,
