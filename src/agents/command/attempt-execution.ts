@@ -1198,7 +1198,8 @@ export function runAgentAttempt(params: {
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     media: params.opts.media,
     clientTools: params.opts.clientTools,
-    toolsAllow: params.opts.toolsAllow,
+    // Announce handoffs may replace opts.toolsAllow with a tighter runtime cap.
+    toolsAllow: runtimeToolsAllow,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,
@@ -1226,7 +1227,6 @@ export function runAgentAttempt(params: {
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
-    toolsAllow: runtimeToolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
     trustedInternalHandoff: trustedSubagentAnnounceHandoff
       ? params.opts.trustedInternalHandoff
