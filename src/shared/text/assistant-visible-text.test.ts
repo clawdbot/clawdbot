@@ -918,6 +918,7 @@ describe("sanitizeAssistantVisibleText", () => {
       "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
       "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
       "⚠️ 🛠️ Bash failed: `git status` (workspace) (exit 1)",
+      ':warning: :hammer_and_wrench: Bash failed: `search "1786020243|1786037375|1786090730" in !node_modules` (agent)',
       "⚠️ 🛠️ Exec failed (exit 1)",
       "⚠️ 🛠️ Bash failed",
       "🛠️ run git status",
