@@ -51,7 +51,21 @@ function resolvePreparedGenerationProviders(
   key: PreparedGenerationProviderKey,
 ): PreparedCapabilityProvider[] | undefined {
   const providers = prepared?.[key];
-  return providers ? [...(providers as PreparedCapabilityProvider[])] : undefined;
+  if (!providers) {
+    return undefined;
+  }
+  // Project prepared runtime providers onto the narrow readiness surface used by
+  // isCapabilityProviderConfigured (id + optional isConfigured). Avoid casting the
+  // full image/video/music provider unions — they are not assignable to each other.
+  return providers.map((provider) => ({
+    id: provider.id,
+    ...(typeof provider.isConfigured === "function"
+      ? {
+          isConfigured: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) =>
+            provider.isConfigured?.(ctx) === true,
+        }
+      : {}),
+  }));
 }
 
 /**
