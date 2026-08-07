@@ -31,7 +31,7 @@ export type EmbeddedAgentQueueHandle = {
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
-  ) => Promise<void | EmbeddedAgentQueueMessageResult>;
+  ) => Promise<void | ReplyBackendQueueMessageResult>;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
@@ -48,8 +48,6 @@ export type EmbeddedAgentQueueHandle = {
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
-
-export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;
 
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;
