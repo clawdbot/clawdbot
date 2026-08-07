@@ -123,7 +123,7 @@ vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
 }));
 
 vi.mock("./sdk.js", () => ({
-  loadMSTeamsSdkWithAuth: (creds?: unknown, options?: unknown) =>
+  loadMSTeamsSdkWithAuth: (creds?: unknown, options?: Record<string, unknown>) =>
     loadMSTeamsSdkWithAuth(creds, options),
   createMSTeamsTokenProvider: () => ({
     getAccessToken: vi.fn().mockResolvedValue("mock-token"),
