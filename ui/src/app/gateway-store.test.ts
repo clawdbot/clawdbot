@@ -8,6 +8,7 @@ import type {
   GatewayHelloOk,
 } from "../api/gateway.ts";
 import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { loadDeviceAuthToken, storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
@@ -1095,5 +1096,105 @@ describe("createApplicationGateway connection phase", () => {
 
     expect(current().opts.url).toBe(otherGateway);
     expect(localStorage.getItem(selectionKey)).toBe(otherGateway);
+  });
+});
+
+describe("createApplicationGateway stored device credential", () => {
+  const DEVICE_ID = "device-1";
+  const OTHER_GATEWAY = "wss://other-remote.example.test";
+
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    vi.stubGlobal("location", {
+      protocol: "http:",
+      host: "127.0.0.1:18789",
+      hostname: "127.0.0.1",
+      origin: "http://127.0.0.1:18789",
+      pathname: "/",
+    } as Location);
+  });
+
+  afterEach(() => {
+    setAvatarGatewayOrigin(null);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function seedDeviceIdentity() {
+    localStorage.setItem(
+      "openclaw-device-identity-v1",
+      JSON.stringify({
+        version: 1,
+        deviceId: DEVICE_ID,
+        publicKey: "AA",
+        privateKey: "AA",
+        createdAtMs: 1,
+      }),
+    );
+  }
+
+  it("forgets only the current gateway's operator token and reconnects", () => {
+    const { gateway, clients } = createStore();
+    gateway.start();
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    seedDeviceIdentity();
+    storeDeviceAuthToken({
+      deviceId: DEVICE_ID,
+      gatewayUrl,
+      role: "operator",
+      token: "current-gateway-token",
+      scopes: ["operator.read"],
+    });
+    storeDeviceAuthToken({
+      deviceId: DEVICE_ID,
+      gatewayUrl: OTHER_GATEWAY,
+      role: "operator",
+      token: "other-gateway-token",
+      scopes: ["operator.read"],
+    });
+
+    expect(gateway.hasStoredDeviceToken?.()).toBe(true);
+    const clientsBefore = clients.length;
+    expect(gateway.forgetDeviceToken?.()).toBe(true);
+
+    expect(loadDeviceAuthToken({ deviceId: DEVICE_ID, gatewayUrl, role: "operator" })).toBeNull();
+    expect(
+      loadDeviceAuthToken({ deviceId: DEVICE_ID, gatewayUrl: OTHER_GATEWAY, role: "operator" })
+        ?.token,
+    ).toBe("other-gateway-token");
+    // Token-only reset: the browser device identity survives.
+    expect(localStorage.getItem("openclaw-device-identity-v1")).not.toBeNull();
+    expect(clients.length).toBe(clientsBefore + 1);
+    expect(gateway.hasStoredDeviceToken?.()).toBe(false);
+  });
+
+  it("reports no stored credential and skips reconnect when nothing is stored", () => {
+    const { gateway, clients } = createStore();
+    gateway.start();
+    const clientsBefore = clients.length;
+
+    expect(gateway.hasStoredDeviceToken?.()).toBe(false);
+    expect(gateway.forgetDeviceToken?.()).toBe(false);
+    expect(clients.length).toBe(clientsBefore);
+  });
+
+  it("clears the credential without auto-connecting a stopped gateway", () => {
+    const { gateway, clients } = createStore();
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    seedDeviceIdentity();
+    storeDeviceAuthToken({
+      deviceId: DEVICE_ID,
+      gatewayUrl,
+      role: "operator",
+      token: "current-gateway-token",
+      scopes: ["operator.read"],
+    });
+
+    expect(gateway.forgetDeviceToken?.()).toBe(true);
+
+    expect(loadDeviceAuthToken({ deviceId: DEVICE_ID, gatewayUrl, role: "operator" })).toBeNull();
+    expect(clients.length).toBe(0);
   });
 });

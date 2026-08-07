@@ -111,7 +111,7 @@ export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | 
   policy?: Partial<HelloOk["policy"]>;
 };
 
-const CONTROL_UI_OPERATOR_ROLE = "operator";
+export const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",

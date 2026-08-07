@@ -7,6 +7,7 @@ import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control
 // snapshot around GatewayBrowserClient consumed by the app shell.
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
+  CONTROL_UI_OPERATOR_ROLE,
   GatewayBrowserClient,
   resolveGatewayErrorDetailCode,
   type GatewayBrowserClientOptions,
@@ -18,6 +19,11 @@ import { t } from "../i18n/index.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import {
+  clearDeviceAuthToken,
+  loadDeviceAuthToken,
+  peekStoredDeviceIdentityId,
+} from "../lib/nodes/index.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
@@ -535,6 +541,19 @@ export function createApplicationGateway(
     }
   };
 
+  const storedOperatorDeviceToken = () => {
+    const deviceId = peekStoredDeviceIdentityId();
+    if (!deviceId) {
+      return null;
+    }
+    const entry = loadDeviceAuthToken({
+      deviceId,
+      gatewayUrl: connection.gatewayUrl,
+      role: CONTROL_UI_OPERATOR_ROLE,
+    });
+    return entry ? { deviceId } : null;
+  };
+
   const gateway: ApplicationGateway = {
     get snapshot() {
       return snapshot;
@@ -595,6 +614,26 @@ export function createApplicationGateway(
         return;
       }
       setSnapshot({ ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } });
+    },
+    hasStoredDeviceToken: () => storedOperatorDeviceToken() !== null,
+    forgetDeviceToken: () => {
+      const stored = storedOperatorDeviceToken();
+      if (!stored) {
+        return false;
+      }
+      // Token-only reset: keep the browser device identity so the gateway can
+      // mint a fresh token for the same device on the next pairing/login.
+      clearDeviceAuthToken({
+        deviceId: stored.deviceId,
+        gatewayUrl: connection.gatewayUrl,
+        role: CONTROL_UI_OPERATOR_ROLE,
+      });
+      // A stopped gateway stays on the login gate; the cleared credential
+      // simply won't be offered on the next explicit connect.
+      if (!stopped) {
+        connect();
+      }
+      return true;
     },
   };
   return gateway;

@@ -313,4 +313,73 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     await rotateReveal.getByRole("button", { name: "I saved this token", exact: true }).click();
     await rotateReveal.waitFor({ state: "detached" });
   });
+
+  it("forgets this browser's stored credential from the identity menu", async () => {
+    const context = await createContext();
+    const opened = await openGatewayPage({
+      appBaseUrl: server.baseUrl,
+      context,
+      deviceToken: ROSITA_DEVICE_TOKEN,
+      gatewayUrl: ROSITA_GATEWAY_URL,
+      sharedToken: "shared-rosita",
+    });
+    const { gateway, page } = opened;
+    expect(requireConnectAuth(opened.connect).token).toBe("shared-rosita");
+
+    // The hello mints and stores the device token; wait for it before forgetting.
+    const storeKey =
+      `openclaw.device.auth.v1:` + normalizeGatewayCredentialScope(ROSITA_GATEWAY_URL);
+    await expect
+      .poll(() =>
+        page.evaluate((key) => {
+          const raw = localStorage.getItem(key);
+          if (!raw) {
+            return undefined;
+          }
+          const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
+          return store.tokens?.operator;
+        }, storeKey),
+      )
+      .toBeDefined();
+    const identityBefore = await page.evaluate(() =>
+      localStorage.getItem("openclaw-device-identity-v1"),
+    );
+    expect(identityBefore).not.toBeNull();
+
+    await page.locator(".sidebar-identity-card").click();
+    const forgetRow = page.locator('wa-dropdown-item[value="command:forget-device"]');
+    await forgetRow.waitFor({ state: "visible" });
+    await captureProof(page, "identity-menu-forget-device.png");
+    await forgetRow.click();
+    const confirmButton = page.getByRole("button", { name: "Forget", exact: true });
+    await confirmButton.waitFor({ state: "visible" });
+    await confirmButton.click();
+
+    // Forgetting reconnects without the stored device token; the shared page
+    // token still authenticates, so the operator lands back in the app.
+    await expect
+      .poll(async () => {
+        const requests = await page.evaluate(() => {
+          const mock = (
+            window as Window & {
+              openclawControlUiE2eGateway?: { requests: Array<{ method: string }> };
+            }
+          ).openclawControlUiE2eGateway;
+          return mock?.requests.filter((request) => request.method === "connect").length ?? 0;
+        });
+        return requests;
+      })
+      .toBeGreaterThanOrEqual(2);
+    const reconnect = await gateway.waitForRequest("connect");
+    expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
+    await page.locator("openclaw-app-shell").waitFor();
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    await captureProof(page, "after-forget-reconnected.png");
+
+    // Token-only reset: the browser device identity survives.
+    const identityAfter = await page.evaluate(() =>
+      localStorage.getItem("openclaw-device-identity-v1"),
+    );
+    expect(identityAfter).toBe(identityBefore);
+  });
 });
