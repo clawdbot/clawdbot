@@ -178,6 +178,41 @@ describe("usage.status provider usage cache", () => {
     expect((result as { refreshing?: boolean }).refreshing).toBeUndefined();
   });
 
+  it("surfaces a failed background refresh to the next capable cold read", async () => {
+    mocks.loadProviderUsageSummary.mockRejectedValueOnce(new Error("provider stack down"));
+
+    // Cold read answers the marker while the doomed refresh runs.
+    const first = await runUsageStatus();
+    expect(first).toMatchObject({ providers: [], refreshing: true });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    // The bounded retry must observe the recorded failure, not another
+    // successful placeholder.
+    const respond = vi.fn();
+    await expect(
+      expectDefined(
+        usageHandlers["usage.status"],
+        'usageHandlers["usage.status"] test invariant',
+      )({
+        respond,
+        params: {},
+        context: { getRuntimeConfig: () => config },
+        client: refreshingCapableClient,
+      } as unknown as Parameters<(typeof usageHandlers)["usage.status"]>[0]),
+    ).rejects.toThrow("provider stack down");
+    expect(respond).not.toHaveBeenCalled();
+
+    // The failure is consumed and the retry already scheduled a fresh refresh,
+    // so a recovered provider self-heals on the following read.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    const third = await runUsageStatus();
+    expect((third as { providers: unknown[] }).providers).toHaveLength(1);
+  });
+
   it("keeps the blocking cold read for board widget data reads", async () => {
     // The board relay carries the operator connection's client, but a widget
     // one-shot read has no bounded-refetch machinery and must never see the
