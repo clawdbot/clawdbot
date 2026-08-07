@@ -160,6 +160,99 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toBe("");
   });
 
+  it("retains a separator-only streamed delta until the next text delta", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+
+    chunker.append("abcdefghij\n\n");
+
+    expect(drainChunks(chunker)).toEqual(["abcdefghij"]);
+    expect(chunker.bufferedText).toBe("\n\n");
+
+    chunker.append("Rest");
+
+    expect(drainChunks(chunker)).toEqual(["\n\nRest"]);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it("force flushes a separator-only tail at the end of the stream", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+
+    chunker.append("\n\n");
+
+    expect(drainChunks(chunker, true)).toEqual(["\n\n"]);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it("does not stall when whitespace after a separator exceeds maxChars", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 6 });
+    const input = "\n\n     x";
+
+    chunker.append(input);
+
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks).toEqual(["\n\n    ", " x"]);
+    expectChunksWithinLength(chunks, 6);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it("retains non-paragraph whitespace across forced splits", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 6 });
+    const input = "\n     x";
+
+    chunker.append(input);
+
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.join("")).toBe(input);
+    expectChunksWithinLength(chunks, 6);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it("force flushes indentation before a paragraph separator", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 6 });
+    const input = "    \n\nx";
+
+    chunker.append(input);
+
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.join("")).toBe(input);
+    expectChunksWithinLength(chunks, 6);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it("retains indentation after a paragraph boundary when maxChars forces a whitespace split", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 6 });
+
+    chunker.append("a\n\n    code");
+
+    expect(drainChunks(chunker)).toEqual(["a\n\n", "    co"]);
+    expect(chunker.bufferedText).toBe("de");
+    expect(drainChunks(chunker, true)).toEqual(["de"]);
+
+    const forcedChunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 6 });
+    const forcedInput = "a".repeat(10) + "\n\n    code";
+    forcedChunker.append(forcedInput);
+    const forcedChunks = drainChunks(forcedChunker, true);
+    expect(forcedChunks).toEqual(["aaaaaa", "aaaa\n\n", "    co", "de"]);
+    expect(forcedChunks.join("")).toBe(forcedInput);
+  });
+
+  it("keeps reopened fence state across leading blank lines after a forced split", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 16 });
+
+    chunker.append("```js\nxxxxxxxxxx\n\nyyyyyyyyyyyyyyyyyyyy\n```");
+
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks).toEqual([
+      "```js\nxxxxxxxxxx\n```\n",
+      "```js\n\n\nyyyyyyyyyyyyyy\n```\n",
+      "```js\nyyyyyy\n```",
+    ]);
+  });
+
   it("ignores paragraph breaks inside fences when flushOnParagraph is set", () => {
     // Blank lines inside fenced code are content, not paragraph boundaries.
     const chunker = new EmbeddedBlockChunker({

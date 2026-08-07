@@ -174,7 +174,7 @@ export class EmbeddedBlockChunker {
         break;
       }
 
-      if (this.#chunking.flushOnParagraph) {
+      if (this.#chunking.flushOnParagraph && !reopenFence) {
         const leadingParagraphSeparator = findLeadingParagraphSeparator(source, start);
         if (leadingParagraphSeparator) {
           const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
@@ -182,9 +182,18 @@ export class EmbeddedBlockChunker {
           if (chunk.length === 0) {
             break;
           }
-          if (chunk.trim().length > 0) {
-            emit(`${reopenPrefix}${chunk}`);
+          if (chunk.trim().length === 0) {
+            // Text that fits is handled above; only advance this bounded whitespace
+            // prefix when later visible text would otherwise remain blocked.
+            if (!force && source.slice(start + chunk.length).trim().length === 0) {
+              break;
+            }
+            emit(chunk);
+            start += chunk.length;
+            reopenFence = undefined;
+            continue;
           }
+          emit(`${reopenPrefix}${chunk}`);
           start += chunk.length;
           reopenFence = undefined;
           continue;
@@ -236,7 +245,7 @@ export class EmbeddedBlockChunker {
         start,
       });
       if (consumed === null) {
-        continue;
+        break;
       }
       start = consumed.start;
       reopenFence = consumed.reopenFence;
@@ -274,7 +283,15 @@ export class EmbeddedBlockChunker {
     const absoluteBreakIdx = start + breakIdx;
     let rawChunk = `${reopenPrefix}${source.slice(start, absoluteBreakIdx)}`;
     if (rawChunk.trim().length === 0) {
-      return { start: skipLeadingNewlines(source, absoluteBreakIdx), reopenFence: undefined };
+      if (
+        this.#chunking.flushOnParagraph &&
+        hasTrailingParagraphSeparator(source, absoluteBreakIdx) &&
+        rawChunk.startsWith("\n")
+      ) {
+        return null;
+      }
+      emit(rawChunk);
+      return { start: absoluteBreakIdx, reopenFence: undefined };
     }
 
     const fenceSplit = breakResult.fenceSplit;
@@ -293,7 +310,8 @@ export class EmbeddedBlockChunker {
 
     const preserveParagraphSeparator =
       this.#chunking.flushOnParagraph &&
-      Boolean(findLeadingParagraphSeparator(source, absoluteBreakIdx));
+      (Boolean(findLeadingParagraphSeparator(source, absoluteBreakIdx)) ||
+        hasTrailingParagraphSeparator(source, absoluteBreakIdx));
     const nextStart = preserveParagraphSeparator
       ? absoluteBreakIdx
       : absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
@@ -464,6 +482,14 @@ function stripLeadingNewlines(value: string): string {
 
 function findLeadingParagraphSeparator(value: string, start = 0): string | null {
   return value.slice(start).match(/^\n[\t ]*\n+/)?.[0] ?? null;
+}
+
+function hasTrailingParagraphSeparator(value: string, end: number): boolean {
+  let start = end - 1;
+  while (start >= 0 && (value[start] === "\n" || value[start] === "\t" || value[start] === " ")) {
+    start--;
+  }
+  return /\n[\t ]*\n+[\t ]*$/.test(value.slice(start + 1, end));
 }
 
 function findNextParagraphBreak(
