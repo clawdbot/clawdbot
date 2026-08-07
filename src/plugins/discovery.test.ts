@@ -2338,6 +2338,21 @@ describe("discoverOpenClawPlugins", () => {
 
   it.each([
     {
+      name: "auto-detects Agent Plugins bundles as bundle candidates",
+      idHint: "portable-bundle",
+      bundleFormat: "agent",
+      setup: (stateDir: string) => {
+        const bundleDir = path.join(stateDir, "extensions", "portable-bundle");
+        createBundleRoot(bundleDir, "plugin.json", {
+          $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          name: "portable-bundle",
+        });
+        mkdirSafe(path.join(bundleDir, "skills", "sample"));
+        return bundleDir;
+      },
+      expectRootDir: true,
+    },
+    {
       name: "auto-detects Codex bundles as bundle candidates",
       idHint: "sample-bundle",
       bundleFormat: "codex",

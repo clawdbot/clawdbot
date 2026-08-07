@@ -11,7 +11,7 @@ title: "Claws"
 
 A Claw is a versioned setup for one new OpenClaw agent. It can describe the
 agent's portable identity, workspace files, skills, plugins, MCP servers, and
-cron jobs. Harness-specific agent settings may be carried in a referenced
+cron jobs. Harness-specific agent settings may be carried in a conventional
 package profile. A Claw does not replace or modify an existing agent.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
@@ -27,8 +27,8 @@ separate registry track and are not part of this command surface yet.
 
 ## Create a Claw package
 
-A package contains `package.json`, a `CLAW.md` manifest, and any profiles or
-workspace sidecars referenced by that manifest:
+A package contains `package.json`, a `CLAW.md` manifest, and any conventional
+profiles, bootstrap instructions, or portable assets used by that manifest:
 
 ```json
 {
@@ -49,8 +49,6 @@ schemaVersion: 1
 agent:
   id: incident-triage
   name: Incident triage
-metadata:
-  openclaw.config: profiles/openclaw.yml
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -64,10 +62,13 @@ You review incoming incidents, identify severity and ownership, and leave a
 concise handoff with evidence.
 ```
 
-`metadata` is a string-to-string map for portable consumer hints. OpenClaw's
-`openclaw.config` key points to an optional, package-relative YAML profile. The
-exported default is `profiles/openclaw.yml`; the pointer is normative, so a
-package may choose another safe relative `.yml` or `.yaml` path.
+OpenClaw automatically discovers the optional `profiles/openclaw.yml` file.
+There is no manifest pointer. Other harnesses may discover their own
+conventional profile, such as `profiles/codex.yml`, without changing the
+portable manifest.
+
+Experimental packages that used `metadata.openclaw.config` must move that file
+to `profiles/openclaw.yml` and remove the metadata entry.
 
 ```yaml
 schemaVersion: 1
@@ -87,13 +88,13 @@ agent:
 
 This profile exists only inside the Claw package. OpenClaw validates and uses it
 while inspecting, adding, updating, and exporting that Claw; it is not copied
-to the user's normal OpenClaw configuration path. Other harnesses can ignore
-the namespaced metadata key and consume the portable manifest fields.
+to the user's normal OpenClaw configuration path. Other harnesses consume the
+portable manifest and interpret only their own conventional profile.
 
 The same strict version 1 schema continues to accept grouped JSON manifests.
-Grouped JSON uses the same `metadata.openclaw.config` pointer rather than
-embedding a second copy of the OpenClaw profile. The remaining schema fragments
-on this page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
+Grouped JSON discovers the same conventional profile rather than embedding a
+second copy of the OpenClaw settings. The remaining schema fragments on this
+page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
 
 The OpenClaw package profile may select any built-in tool profile registered by
 the running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
@@ -105,7 +106,7 @@ and opt into cross-conversation memory with `rememberAcrossConversations`.
 Declaring the `sessions` source requires that opt-in.
 Host policy still constrains these settings, and Claws do not carry custom
 profile definitions, providers, credentials, bindings, or local memory paths.
-The referenced profile is limited to 256 KiB, must be JSON-compatible YAML, may
+The conventional profile is limited to 256 KiB, must be JSON-compatible YAML, may
 not use aliases, anchors, tags, or merge keys, and must be a regular,
 non-symlinked, non-hardlinked file inside the package.
 
@@ -134,6 +135,21 @@ workspace-relative targets:
   }
 }
 ```
+
+Additional files are the portable asset mechanism. Authors may organize package
+sources under directories such as `assets/`, `schemas/`, `templates/`, and
+`examples/`, then map them into the new agent workspace with
+`workspace.files`. Apply records those destinations as managed files; update
+reconciles unchanged managed assets, and remove preserves modified or
+user-owned files.
+
+An optional package-root `BOOTSTRAP.md` supplies conversational first-run
+instructions. OpenClaw seeds it into the new agent workspace and records
+progress through the native workspace bootstrap state. Once the agent consumes
+or removes it, Claw update does not recreate it. Root `BOOTSTRAP.md` therefore
+cannot also be declared through `workspace.files`. Claw removal deletes an
+unchanged, still-pending package bootstrap after verifying its recorded digest;
+it preserves edited bootstrap content and files created during onboarding.
 
 Skills and plugins use exact ClawHub versions:
 
@@ -236,10 +252,11 @@ defaults collide with local state. For disposable profiles and parallel validati
 pass an explicit `--workspace`; `OPENCLAW_STATE_DIR` relocates runtime state but
 does not change the default workspace location.
 
-Adding a Claw creates the new agent and workspace configuration, writes declared
-workspace files, installs or reuses declared skill and plugin artifacts, and
-records package, MCP, and cron provenance. Existing files are not overwritten,
-and retries fail closed when owned content drifted.
+Adding a Claw creates the new agent and workspace configuration, seeds optional
+first-run instructions, writes declared workspace assets, installs or reuses
+declared skill and plugin artifacts, and records package, MCP, and cron
+provenance. Existing files are not overwritten, and retries fail closed when
+owned content drifted.
 
 ## Inspect installed state
 
@@ -250,7 +267,8 @@ openclaw doctor
 ```
 
 `status` compares the installed agent and its recorded workspace, package, MCP,
-and cron provenance with current state. It reports incomplete installs, missing
+and cron provenance with current state. It also reports whether native
+first-run bootstrap remains pending. It reports incomplete installs, missing
 resources, and drift without changing local state. `openclaw doctor` adds
 Claw-specific diagnostics for incomplete ownership records, unsafe managed
 files, and cron jobs that cannot be corroborated with live Gateway inventory.

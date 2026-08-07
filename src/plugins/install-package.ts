@@ -33,6 +33,7 @@ const PLUGIN_ARCHIVE_ROOT_MARKERS = [
   ".codex-plugin/plugin.json",
   ".claude-plugin/plugin.json",
   ".cursor-plugin/plugin.json",
+  "plugin.json",
 ];
 
 function pickPackageInstallCommonParams(
