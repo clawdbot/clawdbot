@@ -26,15 +26,14 @@ import type {
 } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
-import { setActiveMatrixClient } from "../active-client.js";
 import {
+  acquireSharedMatrixClient,
   backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
-  resolveSharedMatrixClient,
+  type SharedMatrixClientLease,
 } from "../client.js";
-import { releaseSharedClientInstance } from "../client/shared.js";
 import type { MatrixClient } from "../sdk.js";
 import { isMatrixStartupAbortError } from "../startup-abort.js";
 import {
@@ -201,36 +200,34 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     statusSink: opts.setStatus,
   });
   let cleanedUp = false;
+  let cleanupPromise: Promise<void> | null = null;
   let client: MatrixClient | null = null;
+  let clientLease: SharedMatrixClientLease | null = null;
+  let monitorLifecycleSignal = opts.abortSignal;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
     logVerboseMessage,
   });
+  let disposeAutoJoin = () => {};
+  let disposeMonitorEvents = () => {};
   let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
-  const cleanup = async (mode: "persist" | "stop" = "persist") => {
-    if (cleanedUp) {
-      return;
+  let monitorSetupClosed = false;
+  const cleanup = (mode: "persist" | "stop" = "persist"): Promise<void> => {
+    if (cleanupPromise) {
+      return cleanupPromise;
     }
     cleanedUp = true;
-    try {
-      client?.stopSyncWithoutPersist();
-      if (client && mode === "persist") {
-        await client.drainPendingDecryptions("matrix monitor shutdown");
+    cleanupPromise = (async () => {
+      try {
+        await clientLease?.release({
+          mode,
+        });
+      } finally {
+        statusController.markStopped();
       }
-      if (mode === "persist") {
-        await monitorTaskRunner.waitForIdle();
-      }
-      threadBindingManager?.stop();
-      if (client) {
-        await releaseSharedClientInstance(client, mode);
-      }
-    } finally {
-      client?.off("sync.state", onSyncState);
-      syncLifecycle?.dispose();
-      statusController.markStopped();
-      setActiveMatrixClient(null, auth.accountId);
-    }
+    })();
+    return cleanupPromise;
   };
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
@@ -295,15 +292,35 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const onSyncState = (state: MatrixSyncState) => {
     noteSyncHealthState(state);
   };
+  const monitorRetirement = {
+    closeTaskAdmission: () => {
+      monitorSetupClosed = true;
+      monitorTaskRunner.close();
+    },
+    detachListeners: () => {
+      disposeAutoJoin();
+      disposeMonitorEvents();
+      client?.off("sync.state", onSyncState);
+      syncLifecycle?.dispose();
+    },
+    waitForTasks: monitorTaskRunner.waitForIdle,
+    cleanup: () => threadBindingManager?.stop(),
+  };
 
   try {
-    client = await resolveSharedMatrixClient({
+    clientLease = await acquireSharedMatrixClient({
       cfg,
       auth: authWithLimit,
       startClient: false,
       accountId: auth.accountId,
+      abortSignal: opts.abortSignal,
+      role: "monitor",
     });
-    setActiveMatrixClient(client, auth.accountId);
+    client = clientLease.client;
+    monitorLifecycleSignal = opts.abortSignal
+      ? AbortSignal.any([opts.abortSignal, clientLease.abortSignal])
+      : clientLease.abortSignal;
+    clientLease.registerMonitorRetirement(monitorRetirement);
     const inboundDeduper = createMatrixInboundEventDeduper({
       auth,
       env: process.env,
@@ -311,7 +328,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     syncLifecycle = createMatrixMonitorSyncLifecycle({
       client,
       statusController,
-      isStopping: () => cleanedUp || opts.abortSignal?.aborted === true,
+      isStopping: () => cleanedUp || monitorLifecycleSignal?.aborted === true,
     });
     client.on("sync.state", onSyncState);
     // Cold starts should ignore old room history, but once we have a persisted
@@ -372,7 +389,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         }
       },
     });
-    registerMatrixAutoJoin({ client, accountConfig, runtime });
+    disposeAutoJoin = registerMatrixAutoJoin({
+      client,
+      accountConfig,
+      runtime,
+      runDetachedTask: monitorTaskRunner.runDetachedTask,
+    });
     const handleRoomMessage = createMatrixRoomMessageHandler({
       client,
       core,
@@ -411,7 +433,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       getMemberDisplayName,
       needsRoomAliasesForConfig,
     });
-    threadBindingManager = await createMatrixThreadBindingManager({
+    const createdThreadBindingManager = await createMatrixThreadBindingManager({
       cfg,
       accountId: effectiveAccountId,
       auth,
@@ -421,11 +443,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       maxAgeMs: threadBindingMaxAgeMs,
       logVerboseMessage,
     });
+    if (monitorSetupClosed) {
+      createdThreadBindingManager.stop();
+      await cleanup("stop");
+      return;
+    }
+    threadBindingManager = createdThreadBindingManager;
     logVerboseMessage(
       `matrix: thread bindings ready account=${threadBindingManager.accountId} idleMs=${threadBindingIdleTimeoutMs} maxAgeMs=${threadBindingMaxAgeMs}`,
     );
 
-    registerMatrixMonitorEvents({
+    disposeMonitorEvents = registerMatrixMonitorEvents({
       cfg,
       client,
       auth,
@@ -456,20 +484,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     // Register Matrix thread bindings before the client starts syncing so threaded
     // commands during startup never observe Matrix as "unavailable".
     logVerboseMessage("matrix: starting client");
-    await resolveSharedMatrixClient({
-      cfg,
-      auth: authWithLimit,
-      accountId: auth.accountId,
-      abortSignal: opts.abortSignal,
-    });
+    await clientLease.start(monitorLifecycleSignal);
+    if (monitorSetupClosed) {
+      await cleanup("stop");
+      return;
+    }
     logVerboseMessage("matrix: client started");
 
-    // Shared client is already started via resolveSharedMatrixClient.
     logger.info(`matrix: logged in as ${auth.userId}`);
     void backfillMatrixAuthDeviceIdAfterStartup({
       auth,
       env: process.env,
-      abortSignal: opts.abortSignal,
+      abortSignal: monitorLifecycleSignal,
     }).catch((err: unknown) => {
       logVerboseMessage(`matrix: failed to backfill deviceId after startup (${String(err)})`);
     });
@@ -482,7 +508,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       context: {
         client,
       },
-      abortSignal: opts.abortSignal,
+      abortSignal: monitorLifecycleSignal,
     });
 
     await runMatrixStartupMaintenance({
@@ -502,11 +528,15 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       },
       loadWebMedia: async (url, maxBytes) => await core.media.loadWebMedia(url, maxBytes),
       env: process.env,
-      abortSignal: opts.abortSignal,
+      abortSignal: monitorLifecycleSignal,
     });
+    if (monitorSetupClosed) {
+      await cleanup("stop");
+      return;
+    }
 
     await Promise.race([
-      waitUntilAbort(opts.abortSignal, async () => {
+      waitUntilAbort(monitorLifecycleSignal, async () => {
         try {
           logVerboseMessage("matrix: stopping client");
           await cleanup();
@@ -518,8 +548,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       }),
       syncLifecycle.waitForFatalStop(),
     ]);
+    await cleanup();
   } catch (err) {
-    if (opts.abortSignal?.aborted === true && isMatrixStartupAbortError(err)) {
+    if (monitorSetupClosed) {
+      await cleanup("stop");
+      return;
+    }
+    if (monitorLifecycleSignal?.aborted === true && isMatrixStartupAbortError(err)) {
       await cleanup("stop");
       return;
     }

@@ -7,6 +7,7 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSlackAttachmentContent,
@@ -186,12 +187,7 @@ function requireMockCall(mock: unknown, index: number, label: string): unknown[]
   return call;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectFetchCalledWithUrl(mock: unknown, expectedUrl: string): void {
   expect(requireMockCall(mock, 0, "fetch")[0]).toBe(expectedUrl);
@@ -1175,6 +1171,18 @@ describe("resolveSlackAttachmentContent", () => {
       text: "[Forwarded message from Bob]\nPlease review this",
       media: [],
     });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves forwarded file identities when downloads fail", async () => {
+    const file = { id: "FFORWARD", name: "forwarded-report.pdf" };
+    const result = await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, files: [file] }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual({ text: "", media: [], files: [file] });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

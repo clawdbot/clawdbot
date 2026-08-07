@@ -19,7 +19,7 @@ import type {
   QaBusWaitForInput,
 } from "./runtime-api.js";
 
-export type QaTransportGatewayClient = {
+type QaTransportGatewayClient = {
   call: (
     method: string,
     params?: unknown,
@@ -494,24 +494,29 @@ export async function waitForQaTransportOutboundSequence(params: {
   let stableCursor: number | null = null;
   let stableSince = 0;
   return await waitForQaTransportCondition(async () => {
-    const events = (await params.readEvents())
+    const ownedEvents = (await params.readEvents())
       .filter((event) => event.cursor > (params.input.sinceCursor ?? 0))
       .map((event) =>
         isQaTransportOutboundEvent(event) ? event : normalizeQaBusOutboundEvent(event),
       )
       .filter((event): event is QaTransportOutboundEvent => event !== null)
-      .filter(({ message }) => {
-        if (message.accountId !== params.accountId || message.direction !== "outbound") {
-          return false;
-        }
-        if (
-          params.input.conversationId &&
-          message.conversation.id !== params.input.conversationId
-        ) {
-          return false;
-        }
-        return !params.input.threadId || message.threadId === params.input.threadId;
-      });
+      .filter(
+        ({ message }) => message.accountId === params.accountId && message.direction === "outbound",
+      );
+    // Failures belong to the account, even when a different conversation has a matching final.
+    for (const { kind, message } of ownedEvents) {
+      const failureReply =
+        kind === "deleted" || message.deleted ? undefined : extractQaFailureReplyText(message.text);
+      if (failureReply) {
+        throw new Error(failureReply);
+      }
+    }
+    const events = ownedEvents.filter(({ message }) => {
+      if (params.input.conversationId && message.conversation.id !== params.input.conversationId) {
+        return false;
+      }
+      return !params.input.threadId || message.threadId === params.input.threadId;
+    });
     const finalIndex = events.findLastIndex(
       ({ kind, message }) =>
         kind !== "deleted" &&

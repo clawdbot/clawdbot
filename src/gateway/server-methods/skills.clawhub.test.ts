@@ -11,7 +11,8 @@ const resolveAgentWorkspaceDirMock = vi.fn<(_cfg: unknown, _agentId: string) => 
 );
 const buildWorkspaceSkillStatusMock = vi.fn();
 const readLocalSkillCardContentSyncMock = vi.fn();
-const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
+const fetchExactClawHubSkillSecurityVerdictsMock = vi.fn();
+const resolveClawHubBaseUrlMock = vi.fn(() => "https://clawhub.ai");
 const installSkillFromClawHubMock = vi.fn();
 const installSkillMock = vi.fn();
 const updateSkillsFromClawHubMock = vi.fn();
@@ -46,9 +47,12 @@ vi.mock("../../skills/lifecycle/install.js", () => ({
 
 vi.mock("../../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: vi.fn(),
-  fetchClawHubSkillSecurityVerdicts: (...args: unknown[]) =>
-    fetchClawHubSkillSecurityVerdictsMock(...args),
-  resolveClawHubBaseUrl: () => "https://clawhub.ai",
+  resolveClawHubBaseUrl: () => resolveClawHubBaseUrlMock(),
+}));
+
+vi.mock("../../infra/clawhub-skill-security.js", () => ({
+  fetchExactClawHubSkillSecurityVerdicts: (...args: unknown[]) =>
+    fetchExactClawHubSkillSecurityVerdictsMock(...args),
 }));
 
 const { skillsHandlers } = await import("./skills.js");
@@ -79,7 +83,7 @@ async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
 
   expect(error).toBeUndefined();
   expect(ok).toBe(true);
-  expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
+  expect(fetchExactClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
   expectEmptySecurityVerdicts(response);
 }
 
@@ -91,7 +95,8 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveAgentWorkspaceDirMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
     readLocalSkillCardContentSyncMock.mockReset();
-    fetchClawHubSkillSecurityVerdictsMock.mockReset();
+    fetchExactClawHubSkillSecurityVerdictsMock.mockReset();
+    resolveClawHubBaseUrlMock.mockReset();
     installSkillFromClawHubMock.mockReset();
     installSkillMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
@@ -101,6 +106,7 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(emptySkillStatusReport());
+    resolveClawHubBaseUrlMock.mockReturnValue("https://clawhub.ai");
   });
 
   it("returns an empty verdict batch without calling ClawHub when no skills are linked", async () => {
@@ -152,30 +158,27 @@ describe("skills gateway handlers (clawhub)", () => {
         },
       ],
     });
-    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
-      schema: "clawhub.skill.security-verdicts.v1",
-      items: [
-        {
-          ok: true,
-          decision: "pass",
-          reasons: [],
-          requestedSlug: "agentreceipt",
-          slug: "agentreceipt",
-          requestedVersion: "1.2.3",
-          version: "1.2.3",
-          securityAuditUrl:
-            "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
-          security: { status: "clean", passed: true },
-          scannerPayload: { ignored: true },
-        },
-      ],
-    });
+    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue([
+      {
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        requestedSlug: "agentreceipt",
+        slug: "agentreceipt",
+        requestedVersion: "1.2.3",
+        version: "1.2.3",
+        securityAuditUrl:
+          "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+        security: { status: "clean", passed: true },
+        scannerPayload: { ignored: true },
+      },
+    ]);
 
     const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
 
     expect(error).toBeUndefined();
-    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
-    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
       baseUrl: "https://clawhub.ai",
       items: [{ slug: "agentreceipt", version: "1.2.3" }],
       skipAuth: true,
@@ -199,7 +202,152 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(JSON.stringify(response)).not.toContain('"security":');
   });
 
-  it("does not passively fetch verdicts from a non-default registry", async () => {
+  it("keeps owner-qualified verdict targets distinct for shared slugs", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "alice-weather",
+          skillKey: "alice-weather",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "weather",
+            ownerHandle: "alice",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        },
+        {
+          name: "bob-weather",
+          skillKey: "bob-weather",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "weather",
+            ownerHandle: "bob",
+            installedVersion: "1.2.3",
+            installedAt: 456,
+          },
+        },
+      ],
+    });
+    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue([
+      {
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        requestedSlug: "weather",
+        requestedOwnerHandle: "alice",
+        requestedVersion: "1.2.3",
+        slug: "weather",
+        version: "1.2.3",
+        publisherHandle: "alice",
+        security: { status: "clean", passed: true },
+      },
+      {
+        ok: false,
+        decision: "fail",
+        reasons: ["security.suspicious"],
+        requestedSlug: "weather",
+        requestedOwnerHandle: "bob",
+        requestedVersion: "1.2.3",
+        slug: "weather",
+        version: "1.2.3",
+        publisherHandle: "bob",
+        security: { status: "suspicious", passed: false },
+      },
+    ]);
+
+    const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(error).toBeUndefined();
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      items: [
+        { slug: "weather", ownerHandle: "alice", version: "1.2.3" },
+        { slug: "weather", ownerHandle: "bob", version: "1.2.3" },
+      ],
+      skipAuth: true,
+    });
+    expect(ok).toBe(true);
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          requestedSlug: "weather",
+          requestedOwnerHandle: "alice",
+          requestedVersion: "1.2.3",
+          publisherHandle: "alice",
+        }),
+        expect.objectContaining({
+          requestedSlug: "weather",
+          requestedOwnerHandle: "bob",
+          requestedVersion: "1.2.3",
+          publisherHandle: "bob",
+        }),
+      ],
+    });
+  });
+
+  it("passively fetches verdicts from the configured custom registry without auth", async () => {
+    resolveClawHubBaseUrlMock.mockReturnValue("https://registry.example/base/");
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "agentreceipt",
+          skillKey: "agentreceipt",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://registry.example/base",
+            slug: "agentreceipt",
+            ownerHandle: "openclaw",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue([
+      {
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        requestedSlug: "agentreceipt",
+        requestedOwnerHandle: "openclaw",
+        requestedVersion: "1.2.3",
+        slug: "agentreceipt",
+        version: "1.2.3",
+        publisherHandle: "openclaw",
+        security: { status: "clean", passed: true },
+      },
+    ]);
+
+    const { ok, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://registry.example/base",
+      items: [
+        {
+          slug: "agentreceipt",
+          ownerHandle: "openclaw",
+          version: "1.2.3",
+        },
+      ],
+      skipAuth: true,
+    });
+  });
+
+  it("does not passively fetch verdicts from a non-configured registry", async () => {
     buildWorkspaceSkillStatusMock.mockReturnValue({
       workspaceDir: "/tmp/workspace",
       managedSkillsDir: "/tmp/openclaw/skills",

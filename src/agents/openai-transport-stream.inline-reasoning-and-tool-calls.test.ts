@@ -94,127 +94,53 @@ describe("openai transport stream", () => {
     expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
   });
 
-  it("keeps literal reasoning tag examples visible without mirrored reasoning", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content: "Use `<think>private</think>` only as an example.",
-          },
-          "stop" as const,
-        ),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.content).toContainEqual({
-      type: "text",
+  it.each([
+    {
+      title: "keeps literal reasoning tag examples visible without mirrored reasoning",
       text: "Use `<think>private</think>` only as an example.",
-    });
-    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content: "The <reasoning> tag is deprecated in this example.",
-          },
-          "stop" as const,
-        ),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.content).toContainEqual({
-      type: "text",
+      expectedText: "Use `<think>private</think>` only as an example.",
+    },
+    {
+      title: "keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning",
       text: "The <reasoning> tag is deprecated in this example.",
-    });
-    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unmatched close tags visible without mirrored reasoning", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content: "Use </think> to close the tag.",
-          },
-          "stop" as const,
-        ),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.content).toContainEqual({
-      type: "text",
+      expectedText: "The <reasoning> tag is deprecated in this example.",
+    },
+    {
+      title: "keeps prose mentions of unmatched close tags visible without mirrored reasoning",
       text: "Use </think> to close the tag.",
-    });
-    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("strips content-only closed reasoning tags from OpenAI-compatible visible text", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content: "Before <think>private reasoning</think> after",
-          },
-          "stop" as const,
-        ),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.content).toContainEqual({
-      type: "text",
-      text: "Before  after",
-    });
-    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps content-only unclosed mid-answer reasoning-looking tags visible", async () => {
-    const model = createDeepSeekCompletionsModel();
-    const output = createAssistantOutput(model);
-
-    await testing.processOpenAICompletionsStream(
-      streamChunks([
-        makeCompletionsChunk(
-          {
-            content: "Before <think>literal tag text after",
-          },
-          "stop" as const,
-        ),
-      ]),
-      output,
-      model,
-      { push() {} },
-    );
-
-    expect(output.content).toContainEqual({
-      type: "text",
+      expectedText: "Use </think> to close the tag.",
+    },
+    {
+      title: "strips content-only closed reasoning tags from OpenAI-compatible visible text",
+      text: "Before <think>private reasoning</think> after",
+      expectedText: "Before  after",
+    },
+    {
+      title: "keeps content-only unclosed mid-answer reasoning-looking tags visible",
       text: "Before <think>literal tag text after",
+      expectedText: "Before <think>literal tag text after",
+    },
+  ])("$title", async ({ text, expectedText }) => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        makeCompletionsChunk(
+          {
+            content: text,
+          },
+          "stop" as const,
+        ),
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: expectedText,
     });
     expect(output.content.some((block) => block.type === "thinking")).toBe(false);
   });

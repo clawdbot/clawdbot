@@ -1,7 +1,8 @@
-// Coverage for model-call diagnostic events around attempt stream functions.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+// Coverage for model-call diagnostic events around attempt stream functions.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
@@ -14,6 +15,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { registerDiagnosticTracePropagationBridge } from "../../../infra/diagnostic-trace-propagation.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
@@ -87,12 +89,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function readRecordField(record: Record<string, unknown>, key: string, label: string) {
   const value = record[key];
@@ -1085,6 +1082,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       },
       sessionId: "provider-session",
     };
+    const exportedTrace = createDiagnosticTraceContext({
+      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      spanId: "bbbbbbbbbbbbbbbb",
+      traceFlags: "01",
+    });
+    registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => exportedTrace,
+    });
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       ((
         _model: Parameters<StreamFn>[0],
@@ -1118,13 +1123,50 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(capturedOption.requestId).toBe("call-traceparent");
     const headers = readRecordField(capturedOption, "headers", "captured stream headers");
     expect(headers["X-Custom"]).toBe("kept");
-    expect(typeof headers.traceparent).toBe("string");
-    expect(headers.traceparent).toMatch(/^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/);
+    expect(headers.traceparent).toBe(`00-${exportedTrace.traceId}-${exportedTrace.spanId}-01`);
     expect(capturedOptions[0]?.headers).not.toHaveProperty("TraceParent");
     expect(callerOptions.headers).toEqual({
       "X-Custom": "kept",
       TraceParent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
     });
+  });
+
+  it("removes caller traceparent when the active exporter cannot resolve a span", async () => {
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const capturedOptions: Array<Parameters<StreamFn>[2]> = [];
+    registerDiagnosticTracePropagationBridge({
+      resolveTraceContext: () => undefined,
+    });
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        _model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        capturedOptions.push(options);
+        return stream();
+      }) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-no-exported-span",
+      },
+    );
+
+    await drain(
+      wrapped({} as never, {} as never, {
+        headers: {
+          "X-Custom": "kept",
+          TraceParent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+        },
+      }) as unknown as AsyncIterable<unknown>,
+    );
+
+    expect(capturedOptions[0]?.headers).toEqual({ "X-Custom": "kept" });
   });
 
   it("emits error events when stream iteration fails", async () => {

@@ -291,11 +291,6 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
-export type PendingSkillSuggestion = {
-  skillName: string;
-  detectedAt: number;
-};
-
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -410,10 +405,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
     goal?: SessionGoal;
-    /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
-    pendingSkillSuggestion?: PendingSkillSuggestion;
-    /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
-    skillCaptureSignalHashes?: string[];
     /** Timestamp (ms) when the current sessionId first became active. */
     sessionStartedAt?: number;
     /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -597,6 +588,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Run that owns the current non-terminal Gateway lifecycle projection. */
+  lifecycleRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

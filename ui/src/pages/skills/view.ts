@@ -158,6 +158,7 @@ function verdictForSkill(skill: SkillStatusEntry, verdicts: SkillsProps["clawhub
       clawhubVerdictKey({
         registry: link.registry,
         slug: link.slug,
+        ownerHandle: link.ownerHandle,
         version: link.installedVersion,
       })
     ] ?? null
@@ -818,6 +819,7 @@ function renderInstalledClawHubOverview(
   }
   const auditHref = safeExternalHref(verdict?.securityAuditUrl ?? undefined);
   const reasonText = verdict?.reasons?.length ? verdict.reasons.join(", ") : null;
+  const installedRef = `${link.ownerHandle ? `@${link.ownerHandle}/` : ""}${link.slug}@${link.installedVersion}`;
   return html`
     <div
       class="callout"
@@ -825,7 +827,7 @@ function renderInstalledClawHubOverview(
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
         <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>
-        <span class="muted" style="font-size: 12px;">${link.slug}@${link.installedVersion}</span>
+        <span class="muted" style="font-size: 12px;">${installedRef}</span>
         ${props.clawhubVerdictsLoading
           ? html`<span class="muted">${t("skillsPage.refreshing")}</span>`
           : nothing}

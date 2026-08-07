@@ -446,9 +446,10 @@ describe("normalizeInitialApplicationLocation", () => {
   it.each([
     {
       name: "bootstrap token on the deferred default landing",
-      initialUrl: "/?keep=yes#bootstrapToken=boot-default&tab=keep",
+      initialUrl: "/?keep=yes#bootstrapToken=boot-default&bootstrapProfile=owner&tab=keep",
       expectedUrl: "/?keep=yes#tab=keep",
       expectedBootstrapToken: "boot-default",
+      expectedBootstrapProfile: "owner",
       expectedToken: "",
       expectedDocumentMode: null,
     },
@@ -457,6 +458,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/operator/settings/appearance?keep=yes#tab=keep&bootstrapToken=boot-route",
       expectedUrl: "/operator/settings/appearance?keep=yes#tab=keep",
       expectedBootstrapToken: "boot-route",
+      expectedBootstrapProfile: undefined,
       expectedToken: "",
       expectedDocumentMode: null,
     },
@@ -465,6 +467,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/approve/exec%3A1?keep=yes#bootstrapToken=boot-approval&tab=keep",
       expectedUrl: "/approve/exec%3A1?keep=yes#tab=keep",
       expectedBootstrapToken: "boot-approval",
+      expectedBootstrapProfile: undefined,
       expectedToken: "",
       expectedDocumentMode: { kind: "approval", approvalId: "exec:1" },
     },
@@ -473,6 +476,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/settings/appearance?keep=yes&password=discard#token=shared-fragment&tab=keep",
       expectedUrl: "/settings/appearance?keep=yes#tab=keep",
       expectedBootstrapToken: "",
+      expectedBootstrapProfile: undefined,
       expectedToken: "shared-fragment",
       expectedDocumentMode: null,
     },
@@ -481,6 +485,7 @@ describe("normalizeInitialApplicationLocation", () => {
       initialUrl: "/settings/appearance?keep=yes&token=shared-query#password=discard&tab=keep",
       expectedUrl: "/settings/appearance?keep=yes#tab=keep",
       expectedBootstrapToken: "",
+      expectedBootstrapProfile: undefined,
       expectedToken: "shared-query",
       expectedDocumentMode: null,
     },
@@ -507,6 +512,9 @@ describe("normalizeInitialApplicationLocation", () => {
       expect(replaceState).toHaveBeenCalledExactlyOnceWith({}, "", testCase.expectedUrl);
       expect(runtime.context.gateway.connection.bootstrapToken).toBe(
         testCase.expectedBootstrapToken,
+      );
+      expect(runtime.context.gateway.connection.bootstrapProfile).toBe(
+        testCase.expectedBootstrapProfile,
       );
       expect(runtime.context.gateway.connection.token).toBe(testCase.expectedToken);
       expect(runtime.documentMode).toEqual(testCase.expectedDocumentMode);

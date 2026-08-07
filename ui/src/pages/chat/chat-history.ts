@@ -339,6 +339,7 @@ export type ChatHistoryResult = {
   inFlightRun?: {
     runId: string;
     text?: string;
+    startedAt?: number;
     events?: Array<{
       runId: string;
       seq: number;
@@ -1786,6 +1787,10 @@ async function loadChatHistoryUncached(
       state.chatRunId = inFlightRunId;
     }
     if (inFlightRunIsActive && res.inFlightRun && state.chatRunId === inFlightRunId) {
+      const snapshotStartedAt =
+        typeof res.inFlightRun.startedAt === "number" && Number.isFinite(res.inFlightRun.startedAt)
+          ? res.inFlightRun.startedAt
+          : null;
       const snapshotTail = resolveInFlightAssistantTail(
         state.chatMessages,
         res.inFlightRun?.text,
@@ -1800,7 +1805,7 @@ async function loadChatHistoryUncached(
         : activeStreamBeforeReset;
       const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
       state.chatStream = tail;
-      state.chatStreamStartedAt = tail ? (state.chatStreamStartedAt ?? Date.now()) : null;
+      state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
       state.chatRunStartup = { state: "activity", runId: inFlightRunId };
       // Disconnect cleanup intentionally removes transient activity rows while
       // retaining the owned run. Replay fills that gap; per-identity sequence

@@ -969,6 +969,37 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("blocks catalog-declared plugin id migration before updater side effects", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "fish-audio": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    primeBlockedUpdateConfig("plugins", cfg);
+    setInstalledPluginIndexInstallRecords({
+      "fish-audio": {
+        source: "npm",
+        spec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
+        resolvedName: "@openclaw/fish-audio-speech",
+        resolvedSpec: "@openclaw/fish-audio-speech@2026.7.2-beta.7",
+        installPath: "/tmp/fish-audio",
+      },
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "fish-audio"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Config plugins are stored in an external or unresolved top-level $include",
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("blocks managed npm load-path reconciliation before updater side effects", async () => {
     const installPath = "/tmp/openclaw/npm/projects/demo-v1/node_modules/demo";
     const cfg = {
@@ -1271,9 +1302,35 @@ describe("plugins cli update", () => {
       expect(updateParams.pluginIds).toEqual(["codex"]);
       expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
       expect(updateParams.updateChannel).toBe(updateChannel);
-      expect(updateParams.officialPluginUpdateChannel).toBeUndefined();
+      expect(updateParams.officialPluginUpdateChannel).toBe(
+        resolveRegistryUpdateChannel({ configChannel: updateChannel, currentVersion: VERSION }),
+      );
     },
   );
+
+  it("passes the inferred core channel to a targeted update without enabling catalog sync", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex",
+      resolvedName: "@openclaw/codex",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand(["plugins", "update", "codex"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.syncOfficialPluginInstalls).toBeUndefined();
+    expect(updateParams.updateChannel).toBeUndefined();
+    expect(updateParams.officialPluginUpdateChannel).toBe(
+      resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+    );
+  });
 
   it("syncs official catalog specs with beta channel context for update --all", async () => {
     const config = createTrackedPluginConfig({

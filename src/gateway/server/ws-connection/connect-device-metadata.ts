@@ -6,6 +6,8 @@ import {
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../../../infra/device-pairing.js";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+  deviceBootstrapProfilesEqual,
   isMobilePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
@@ -69,11 +71,34 @@ export function isSetupCodeHandoffBootstrapClient(params: {
   );
 }
 
+/** Match the exact host-issued browser-owner profile and its closed requested scope set. */
+export function isControlUiOwnerBootstrapProfile(params: {
+  profile: DeviceBootstrapProfile | null;
+  requestedScopes: readonly string[];
+}): params is { profile: DeviceBootstrapProfile; requestedScopes: readonly string[] } {
+  const { profile, requestedScopes } = params;
+  return Boolean(
+    profile &&
+    deviceBootstrapProfilesEqual(profile, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE) &&
+    deviceBootstrapProfilesEqual(
+      {
+        roles: ["operator"],
+        scopes: requestedScopes,
+        purpose: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE.purpose,
+      },
+      CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+    ),
+  );
+}
+
 export function isControlUiOperatorBootstrapProfile(params: {
   profile: DeviceBootstrapProfile | null;
   requestedScopes: readonly string[];
 }): params is { profile: DeviceBootstrapProfile; requestedScopes: readonly string[] } {
   const { profile, requestedScopes } = params;
+  if (isControlUiOwnerBootstrapProfile(params)) {
+    return true;
+  }
   if (!profile || profile.purpose !== "control-ui") {
     return false;
   }

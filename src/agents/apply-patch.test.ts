@@ -563,21 +563,82 @@ describe("applyPatch", () => {
     );
   });
 
-  it("keeps context line punctuation when the hunk uses normalized quotes", async () => {
-    const memory = createMemoryPatchSandbox({
-      "notes.md": "It\u2019s done\nold value\n",
-    });
-    const patch = `*** Begin Patch
+  it.each([
+    {
+      title: "keeps context line punctuation when the hunk uses normalized quotes",
+      fileName: "notes.md",
+      initialContent: "It\u2019s done\nold value\n",
+      patchText: `*** Begin Patch
 *** Update File: notes.md
 @@
  It's done
 -old value
 +new value
-*** End Patch`;
+*** End Patch`,
+      expectedPath: "/sandbox/notes.md",
+      expectedContent: "It\u2019s done\nnew value\n",
+    },
+    {
+      title: "does not normalize mixed line endings outside the changed hunk",
+      fileName: "source.txt",
+      initialContent: "first\r\nsecond\nthird\r\n",
+      patchText: `*** Begin Patch
+*** Update File: source.txt
+@@
+-second
++changed
+*** End Patch`,
+      expectedPath: "/sandbox/source.txt",
+      expectedContent: "first\r\nchanged\nthird\r\n",
+    },
+    {
+      title: "applies context-only insertions at the requested context",
+      fileName: "source.txt",
+      initialContent: "alpha\nanchor\nomega\n",
+      patchText: `*** Begin Patch
+*** Update File: source.txt
+@@ anchor
++inserted
+*** End Patch`,
+      expectedPath: "/sandbox/source.txt",
+      expectedContent: "alpha\nanchor\ninserted\nomega\n",
+    },
+    {
+      title: "keeps later insertion contexts in original file coordinates",
+      fileName: "source.txt",
+      initialContent: "a\nb\nc\n",
+      patchText: `*** Begin Patch
+*** Update File: source.txt
+@@ a
++after-a
+@@ b
++after-b
+*** End Patch`,
+      expectedPath: "/sandbox/source.txt",
+      expectedContent: "a\nafter-a\nb\nafter-b\nc\n",
+    },
+    {
+      title: "supports end-of-file inserts",
+      fileName: "end.txt",
+      initialContent: "line1\n",
+      patchText: `*** Begin Patch
+*** Update File: end.txt
+@@
++line2
+*** End of File
+*** End Patch`,
+      expectedPath: "/sandbox/end.txt",
+      expectedContent: "line1\nline2\n",
+    },
+  ])("$title", async ({ fileName, initialContent, patchText, expectedPath, expectedContent }) => {
+    const memory = createMemoryPatchSandbox({
+      [fileName]: initialContent,
+    });
+    const patch = patchText;
 
     await applyPatch(patch, memory.options);
 
-    expect(memory.files.get("/sandbox/notes.md")).toBe("It\u2019s done\nnew value\n");
+    expect(memory.files.get(expectedPath)).toBe(expectedContent);
   });
 
   it("keeps tab indentation on context lines when the hunk uses spaces", async () => {
@@ -600,22 +661,6 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/run.py")).toBe(
       "def run(x):\n\tif x:\n\t\tprepare()\n        value = 2\n\t\treturn value\n\treturn 0\n",
     );
-  });
-
-  it("does not normalize mixed line endings outside the changed hunk", async () => {
-    const memory = createMemoryPatchSandbox({
-      "source.txt": "first\r\nsecond\nthird\r\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@
--second
-+changed
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("first\r\nchanged\nthird\r\n");
   });
 
   it("applies a real deletion of the sole blank line", async () => {
@@ -653,38 +698,6 @@ describe("applyPatch", () => {
     }
   });
 
-  it("applies context-only insertions at the requested context", async () => {
-    const memory = createMemoryPatchSandbox({
-      "source.txt": "alpha\nanchor\nomega\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@ anchor
-+inserted
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("alpha\nanchor\ninserted\nomega\n");
-  });
-
-  it("keeps later insertion contexts in original file coordinates", async () => {
-    const memory = createMemoryPatchSandbox({
-      "source.txt": "a\nb\nc\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@ a
-+after-a
-@@ b
-+after-b
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("a\nafter-a\nb\nafter-b\nc\n");
-  });
-
   it("normalizes supported punctuation while matching update hunks", async () => {
     const cases = [
       ["a\u2010\u2011\u2012\u2013\u2014\u2015\u2212b", "a-------b"],
@@ -711,22 +724,6 @@ describe("applyPatch", () => {
 
       expect(memory.files.get("/sandbox/source.txt")).toBe("updated\n");
     }
-  });
-
-  it("supports end-of-file inserts", async () => {
-    const memory = createMemoryPatchSandbox({
-      "end.txt": "line1\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: end.txt
-@@
-+line2
-*** End of File
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/end.txt")).toBe("line1\nline2\n");
   });
 
   it("rejects path traversal outside cwd by default", async () => {

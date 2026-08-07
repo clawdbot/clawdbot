@@ -64,6 +64,16 @@ describe("provider overflow messages", () => {
   });
 });
 
+describe("bodyless HTTP errors", () => {
+  it("does not treat an ambiguous 400 as context overflow", () => {
+    expect(isContextOverflow(errorMessage("400 status code (no body)"), 262_144)).toBe(false);
+  });
+
+  it("preserves Cerebras 413 overflow recovery", () => {
+    expect(isContextOverflow(errorMessage("413 status code (no body)"), 262_144)).toBe(true);
+  });
+});
+
 describe("usage-based overflow", () => {
   it("prefers an available context snapshot over aggregate billing usage", () => {
     expect(

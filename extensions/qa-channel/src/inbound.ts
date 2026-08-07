@@ -356,8 +356,6 @@ export async function handleQaInbound(params: {
         targetSessionKey: route.sessionKey,
       })
     : undefined;
-  const commandBody = nativeCommand ? `/${nativeCommand.name}` : inbound.text;
-
   const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
   const ctxPayload = buildChannelInboundEventContext({
     channel: params.channelId,
@@ -392,14 +390,14 @@ export async function handleQaInbound(params: {
       messageThreadId: inbound.threadId,
       threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
     },
-    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody },
+    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody: inbound.text },
     media,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
     },
     command: nativeCommand
-      ? { kind: "native", name: nativeCommand.name, body: commandBody, authorized: true }
+      ? { kind: "native", name: nativeCommand.name, body: inbound.text, authorized: true }
       : undefined,
     extra: {
       CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
