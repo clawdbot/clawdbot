@@ -710,6 +710,41 @@ describe("compaction-safeguard summary budgets", () => {
     expect(sliceTailAtLineBoundary(text, 0)).toBe("");
   });
 
+  it("renders a multiline message as a single line", () => {
+    const messages = [
+      {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "first line\nsecond line\r\nthird line" }],
+        timestamp: 0,
+      },
+    ];
+
+    const section = formatSplitTurnContextSection(messages);
+    const rendered = section.split("\n").filter(Boolean);
+
+    // The trims treat every newline as a message boundary, so an embedded one
+    // would let "second line" survive with no role prefix and read as a turn.
+    expect(rendered.filter((l) => l.startsWith("- Assistant:"))).toHaveLength(1);
+    expect(section).toContain("first line second line third line");
+  });
+
+  it("keeps only whole prefixed messages when trimming multiline turns", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i}\nembedded\n${"y".repeat(200)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+    const after = section.slice(section.indexOf(SUFFIX_TRUNCATED_MARKER.trim()));
+
+    for (const line of after.split("\n").slice(1).filter(Boolean)) {
+      expect(line.startsWith("- Assistant:"), `orphan continuation: ${line.slice(0, 40)}`).toBe(
+        true,
+      );
+    }
+  });
+
   it("never exceeds the cap, down to a one-character budget", () => {
     const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
     const suffix =

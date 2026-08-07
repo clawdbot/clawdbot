@@ -804,12 +804,18 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
       } else {
         return null;
       }
+      // One rendered message is exactly one line. Message text can contain
+      // newlines, and the tail trims treat every newline as a message
+      // boundary, so an embedded one would let a continuation survive without
+      // its role prefix and be persisted as if it were a whole turn.
       const rendered = [
         extractMessageText(message),
         formatNonTextPlaceholder((message as { content?: unknown }).content),
       ]
         .filter(Boolean)
-        .join("\n");
+        .join(" ")
+        .replace(/\s*\n\s*/gu, " ")
+        .trim();
       if (!rendered) {
         return null;
       }
