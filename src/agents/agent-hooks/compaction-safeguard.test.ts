@@ -719,12 +719,12 @@ describe("compaction-safeguard summary budgets", () => {
       },
     ];
 
-    const section = formatSplitTurnContextSection(messages);
+    const section: string = formatSplitTurnContextSection(messages);
     const rendered = section.split("\n").filter(Boolean);
 
     // The trims treat every newline as a message boundary, so an embedded one
     // would let "second line" survive with no role prefix and read as a turn.
-    expect(rendered.filter((l) => l.startsWith("- Assistant:"))).toHaveLength(1);
+    expect(rendered.filter((line) => line.startsWith("- Assistant:"))).toHaveLength(1);
     expect(section).toContain("first line second line third line");
   });
 
@@ -735,7 +735,7 @@ describe("compaction-safeguard summary budgets", () => {
       timestamp: 0,
     }));
 
-    const section = formatSplitTurnContextSection(messages);
+    const section: string = formatSplitTurnContextSection(messages);
     const after = section.slice(section.indexOf(SUFFIX_TRUNCATED_MARKER.trim()));
 
     for (const line of after.split("\n").slice(1).filter(Boolean)) {
