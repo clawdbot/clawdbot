@@ -1284,6 +1284,87 @@ describe("cron controller", () => {
     },
   );
 
+  it.each(["0x10", "0b11", "1e5", "Infinity"])(
+    "rejects non-decimal stagger/timeout/failure-alert inputs: %s",
+    (value) => {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "non-decimal",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        scheduleExact: false,
+        staggerAmount: value,
+        payloadKind: "agentTurn",
+        payloadText: "run",
+        timeoutSeconds: value,
+        failureAlertMode: "custom",
+        failureAlertAfter: value,
+        failureAlertCooldownSeconds: value,
+      });
+
+      expect(errors.staggerAmount).toBe("cron.errors.staggerAmountInvalid");
+      expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+      expect(errors.failureAlertAfter).toBeDefined();
+      expect(errors.failureAlertCooldownSeconds).toBeDefined();
+    },
+  );
+
+  it.each(["0x10", "0b11", "1e5"])(
+    "blocks submit instead of persisting coerced stagger/timeout values: %s",
+    async (value) => {
+      const request = createCronRequest("job-nondecimal-fields");
+      const state = createStateWithRequest(request, {
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "non-decimal",
+          scheduleKind: "cron",
+          cronExpr: "0 * * * *",
+          scheduleExact: false,
+          staggerAmount: value,
+          payloadText: "run",
+          timeoutSeconds: value,
+          deliveryMode: "none",
+        },
+      });
+
+      const saved = await addCronJob(state);
+
+      expect(saved.saved).toBe(false);
+      expect(state.cronFieldErrors.staggerAmount).toBe("cron.errors.staggerAmountInvalid");
+      expect(state.cronFieldErrors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps plain decimal stagger/timeout/failure-alert values working", async () => {
+    const { submit } = createCronSubmitHarness("job-decimals", {
+      form: {
+        name: "decimals",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        scheduleExact: false,
+        staggerAmount: "30",
+        staggerUnit: "seconds",
+        payloadText: "run",
+        timeoutSeconds: "0.5",
+        deliveryMode: "none",
+        failureAlertMode: "custom",
+        failureAlertAfter: "2",
+        failureAlertCooldownSeconds: "3600",
+      },
+    });
+
+    const submitted = await submit();
+
+    expect(submitted.result.saved).toBe(true);
+    const payload = requestPayload(submitted.call);
+    expect(payload.schedule).toEqual({ kind: "cron", expr: "0 * * * *", staggerMs: 30_000 });
+    expect(requireRecord(payload.payload, "cron.add payload.payload").timeoutSeconds).toBe(0.5);
+    const failureAlert = requireRecord(payload.failureAlert, "cron.add payload.failureAlert");
+    expect(failureAlert.after).toBe(2);
+    expect(failureAlert.cooldownMs).toBe(3_600_000);
+  });
+
   it.each(["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"])(
     "rejects invalid recurring amounts before submit: %s",
     async (everyAmount) => {

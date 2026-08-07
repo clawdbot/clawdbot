@@ -7,6 +7,18 @@ const CRON_EVERY_UNIT_MS = {
   days: 86_400_000,
 } as const;
 
+// Strict decimal parse for free-text numeric fields: unlike Number(), it
+// rejects hex ("0x10"), binary ("0b11"), exponent ("1e5"), Infinity, signs,
+// and blank input instead of silently coercing them.
+export function parseCronDecimal(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!CRON_POSITIVE_DECIMAL_RE.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export function parseCronEveryMs(
   value: string,
   unit: keyof typeof CRON_EVERY_UNIT_MS,
