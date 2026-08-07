@@ -106,7 +106,7 @@ export function isWindowsProcessDescendant(
  * process tree (e.g. `openclaw gateway restart` spawned by the gateway's own
  * agent exec tool). Requires a Windows process snapshot; false when unknown.
  */
-export async function isCurrentProcessInsideGatewayTree(pid: number): Promise<boolean> {
+async function isCurrentProcessInsideGatewayTree(pid: number): Promise<boolean> {
   if (process.platform !== "win32" || pid === process.pid) {
     return false;
   }
