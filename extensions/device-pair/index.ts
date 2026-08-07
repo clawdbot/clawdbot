@@ -892,7 +892,13 @@ export default definePluginEntry({
               api.logger.warn?.(
                 `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
-              await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
+              await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(
+                (revokeErr: unknown) => {
+                  api.logger.warn?.(
+                    `device-pair: failed to revoke bootstrap token (${String(revokeErr)})`,
+                  );
+                },
+              );
               payload = await issueSetupPayload({
                 url: urlResult.url,
                 urls: urlResult.urls,
@@ -902,7 +908,11 @@ export default definePluginEntry({
             } finally {
               if (qrFilePath) {
                 await rm(path.dirname(qrFilePath), { recursive: true, force: true }).catch(
-                  () => {},
+                  (cleanupErr: unknown) => {
+                    api.logger.warn?.(
+                      `device-pair: failed to remove QR temp directory (${String(cleanupErr)})`,
+                    );
+                  },
                 );
               }
             }
@@ -918,7 +928,13 @@ export default definePluginEntry({
               api.logger.warn?.(
                 `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
               );
-              await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
+              await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(
+                (revokeErr: unknown) => {
+                  api.logger.warn?.(
+                    `device-pair: failed to revoke bootstrap token (${String(revokeErr)})`,
+                  );
+                },
+              );
               payload = await issueSetupPayload({
                 url: urlResult.url,
                 urls: urlResult.urls,

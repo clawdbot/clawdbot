@@ -78,6 +78,7 @@ type RegisterPairOptions = {
   config?: OpenClawPluginApi["config"];
   runtime?: OpenClawPluginApi["runtime"];
   pluginConfig?: Record<string, unknown>;
+  logger?: OpenClawPluginApi["logger"];
 };
 
 const INTERNAL_PAIRING_SCOPES = ["operator.write", "operator.pairing"];
@@ -126,6 +127,7 @@ function createApi(
     },
     runtime: (params.runtime ?? {}) as OpenClawPluginApi["runtime"],
     registerCommand: params.registerCommand,
+    ...(params.logger ? { logger: params.logger } : {}),
   });
 }
 
@@ -442,6 +444,53 @@ describe("device-pair /pair qr", () => {
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(2);
     expect(text).toContain("Pairing setup code generated.");
     expect(text).toContain("If this code leaks or you are done, run /pair cleanup");
+  });
+
+  it("logs a warning when bootstrap token revocation fails after QR delivery failure", async () => {
+    pluginApiMocks.issueDeviceBootstrapToken
+      .mockResolvedValueOnce({ token: "first-token", expiresAtMs: Date.now() + 10 * 60_000 })
+      .mockResolvedValueOnce({ token: "second-token", expiresAtMs: Date.now() + 10 * 60_000 });
+    pluginApiMocks.revokeDeviceBootstrapToken.mockRejectedValueOnce(new Error("revoke failed"));
+    const sendMessage = vi.fn().mockRejectedValue(new Error("upload failed"));
+    const warn = vi.fn();
+
+    requireText(
+      await runPair(
+        {
+          channel: "discord",
+          senderId: "123",
+          gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        },
+        {
+          runtime: createChannelRuntime("discord", sendMessage),
+          logger: { ...createTestPluginApi().logger, warn },
+        },
+      ),
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      "device-pair: failed to revoke bootstrap token (Error: revoke failed)",
+    );
+  });
+
+  it("logs a warning when bootstrap token revocation fails after webchat QR render failure", async () => {
+    pluginApiMocks.issueDeviceBootstrapToken
+      .mockResolvedValueOnce({ token: "first-token", expiresAtMs: Date.now() + 10 * 60_000 })
+      .mockResolvedValueOnce({ token: "second-token", expiresAtMs: Date.now() + 10 * 60_000 });
+    pluginApiMocks.renderQrPngDataUrl.mockRejectedValueOnce(new Error("render failed"));
+    pluginApiMocks.revokeDeviceBootstrapToken.mockRejectedValueOnce(new Error("revoke failed"));
+    const warn = vi.fn();
+
+    requireText(
+      await runPair(
+        { channel: "webchat", gatewayClientScopes: INTERNAL_SETUP_SCOPES },
+        { logger: { ...createTestPluginApi().logger, warn } },
+      ),
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      "device-pair: failed to revoke bootstrap token (Error: revoke failed)",
+    );
   });
 
   it("falls back to the setup code instead of ASCII when the channel cannot send media", async () => {
