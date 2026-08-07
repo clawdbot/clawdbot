@@ -1,6 +1,6 @@
 // External code plugin package.json compatibility and validation contracts.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isRecord } from "../../normalization-core/src/record-coerce.js";
+import { normalizeOptionalString } from "../../normalization-core/src/string-coerce.js";
 
 /** JSON object shape accepted by package contract helpers. */
 export type JsonObject = Record<string, unknown>;

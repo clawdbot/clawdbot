@@ -2322,11 +2322,7 @@ importers:
         specifier: 1.3.6
         version: 1.3.6
 
-  packages/plugin-package-contract:
-    dependencies:
-      '@openclaw/normalization-core':
-        specifier: workspace:*
-        version: link:../normalization-core
+  packages/plugin-package-contract: {}
 
   packages/plugin-sdk: {}
 
