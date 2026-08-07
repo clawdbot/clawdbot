@@ -486,10 +486,10 @@ function archiveSourceMatches(filePath: string, expected: ArchiveSourceSnapshot)
 }
 
 function parseArchiveContent(content: string, filePath: string): TranscriptEvent[] {
-  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
-  if (lines.length === 1 && lines[0] === "") {
+  if (content === "") {
     return [];
   }
+  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
   return lines.map((line, index) => {
     if (!line) {
       throw new Error(`${filePath} contains a blank JSONL record at line ${index + 1}`);
@@ -514,18 +514,31 @@ function migrateTranscriptArchive(
 ): boolean {
   const source = readArchiveSourceSnapshot(filePath);
   const content = readSessionArchiveContentSync(filePath);
-  const events = parseArchiveContent(content, filePath);
-  let changed = false;
+  let nulTailStart = content.length;
+  while (nulTailStart > 0 && content.charCodeAt(nulTailStart - 1) === 0) {
+    nulTailStart -= 1;
+  }
+  const hasTerminalNulSuffix = nulTailStart < content.length;
+  if (hasTerminalNulSuffix && nulTailStart === 0) {
+    throw new Error(`${filePath} contains no JSONL records before its terminal NUL suffix`);
+  }
+  // Torn writes may leave only preallocated NUL bytes after complete JSONL records.
+  // Recovery stays doctor-owned and reaches the same verified atomic replacement as media repair.
+  const recoveredContent = hasTerminalNulSuffix ? content.slice(0, nulTailStart) : content;
+  const events = parseArchiveContent(recoveredContent, filePath);
+  let mediaChanged = false;
   const transformed = events.map((event) => {
     const result = transformTranscriptEvent(event);
-    changed ||= result.changed;
+    mediaChanged ||= result.changed;
     return result.event;
   });
-  if (!changed) {
+  if (!hasTerminalNulSuffix && !mediaChanged) {
     return false;
   }
   assertEventIdentitiesUnchanged(events, transformed, filePath);
-  const rewritten = serializeArchiveEvents(transformed, content.endsWith("\n"));
+  const rewritten = mediaChanged
+    ? serializeArchiveEvents(transformed, recoveredContent.endsWith("\n"))
+    : recoveredContent;
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const encoded = compressed
     ? encodeSessionArchiveContent(rewritten)

@@ -39,8 +39,16 @@ export function renderChatPaneComposerControls(params: {
   selectedSession: GatewaySessionRow | undefined;
   agentDefaultModel: string | undefined;
   mutationAccess: SessionMethodAccess;
+  preferencesBrowserOnly: boolean;
 }) {
-  const { paneId, state, selectedSession, agentDefaultModel, mutationAccess } = params;
+  const {
+    paneId,
+    state,
+    selectedSession,
+    agentDefaultModel,
+    mutationAccess,
+    preferencesBrowserOnly,
+  } = params;
   const mutationAllowed = () => mutationAccess.allowed;
   return renderChatControls({
     paneId,
@@ -74,6 +82,7 @@ export function renderChatPaneComposerControls(params: {
           : Promise.resolve(false),
     },
     onboarding: state.onboarding,
+    preferencesBrowserOnly,
     settings: state.settings,
     viewMenuOpen: state.chatViewMenuOpen,
     onSettingsChange: state.applySettings,

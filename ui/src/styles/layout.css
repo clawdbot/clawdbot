@@ -2346,6 +2346,13 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   color: var(--muted);
 }
 
+.sidebar-customize-menu__provenance {
+  margin: 0 10px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .sidebar-customize-menu__group-title {
   margin: 6px 4px 2px;
   padding: 7px 6px 4px;

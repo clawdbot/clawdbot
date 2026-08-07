@@ -161,9 +161,14 @@ describe("qa scenario catalog channel contracts", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
     const flow = JSON.stringify(scenario.execution.flow);
     const config = scenario.execution.config as
-      | { cases?: Array<{ name?: string; marker?: string; expectedSendCount?: number }> }
+      | {
+          requiredProviderMode?: string;
+          cases?: Array<{ name?: string; marker?: string; expectedSendCount?: number }>;
+        }
       | undefined;
 
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(config?.requiredProviderMode).toBe("mock-openai");
     expect(config?.cases).toEqual([
       {
         name: "visible",
@@ -184,6 +189,7 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("readSettledTerminalTask('restart')");
     expect(flow).toContain("readSettledTerminalTask('empty')");
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
+    expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
     expect(flow).toContain("verdicts.length === 5");
     expect(flow).not.toContain('"call":"sleep"');

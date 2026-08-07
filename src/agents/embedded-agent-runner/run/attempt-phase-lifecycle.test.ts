@@ -292,6 +292,73 @@ describe("embedded attempt phase lifecycle state", () => {
     });
   });
 
+  it("records embedded turn facts for the outer fallback owner", async () => {
+    const afterTurn = vi.fn(async () => {});
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    const onContextEngineTurnCandidate = vi.fn();
+    await completeEmbeddedAttemptAfterTurn({
+      attempt: {
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        provider: "test",
+        modelId: "model",
+        model: { api: "openai-responses" },
+        onContextEngineTurnCandidate,
+      } as never,
+      activeContextEngine: {
+        info: { id: "test", name: "Test" },
+        assemble: vi.fn(),
+        compact: vi.fn(),
+        ingest: vi.fn(),
+        afterTurn,
+        maintain,
+      } as never,
+      activeSession: {} as never,
+      sessionManager: { appendCustomEntry: vi.fn(), getLeafId: vi.fn(() => "terminal") } as never,
+      sessionLockController: {} as never,
+      withOwnedSessionWriteLock: async (operation) => await operation(),
+      state: {
+        promptError: null,
+        yieldAborted: false,
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
+        prePromptMessageCount: 0,
+        contextEngineAfterTurnCheckpoint: null,
+        compactionOccurredThisAttempt: false,
+      },
+      readLifecycleState: () => ({
+        aborted: false,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+      }),
+      runtime: {
+        effectiveWorkspace: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        sessionAgentId: "main",
+        resolveActiveContextEnginePluginId: () => "test",
+        shouldRecordCompletedBootstrapTurn: false,
+        cacheTrace: null,
+        anthropicPayloadLogger: null,
+        hookAgentId: "main",
+        diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+        skillWorkshopAvailable: false,
+        hookRunner: null,
+        promptStartedAt: Date.now(),
+      },
+    });
+
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(maintain).not.toHaveBeenCalled();
+    expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+  });
+
   it("emits an abort-classified agent_end event when a teardown error races the abort", async () => {
     const abortError = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",

@@ -8,8 +8,12 @@ import {
 import {
   emitAgentAuditEvent,
   emitAgentEvent,
+  getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
+  rotateAgentEventLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
@@ -201,6 +205,35 @@ describe("startGatewayEventSubscriptions", () => {
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
     expect(hasExecutionIdentityAdmissionSink()).toBe(false);
+  });
+
+  it("records an authoritative pre-rotation retry through the private subscription", async () => {
+    unsubs = startGatewayEventSubscriptions(createParams());
+    const runId = "pre-rotation-audit-retry";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext(runId, {
+      lifecycleGeneration,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+
+    withAgentRunLifecycleGeneration(lifecycleGeneration, () => {
+      emitAgentAuditEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+    });
+    rotateAgentEventLifecycleGeneration();
+    withAgentRunLifecycleGeneration(lifecycleGeneration, () => {
+      emitAgentAuditEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+    });
+
+    expect(auditTestState.recorded).toBe(2);
   });
 
   it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {

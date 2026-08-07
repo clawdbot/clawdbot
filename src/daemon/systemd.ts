@@ -863,6 +863,17 @@ function isSystemdUnitMissingDetail(detail: string): boolean {
   );
 }
 
+function isSystemdUnitAlreadyMissingOrInactive(detail: string, unitName: string): boolean {
+  const escapedUnitName = escapeRegExp(normalizeLowercaseStringOrEmpty(unitName));
+  return new RegExp(
+    `^(?:failed to (?:disable unit|stop\\s+${escapedUnitName}):\\s*)?` +
+      `(?:unit file\\s+${escapedUnitName}\\s+does not exist|` +
+      `unit\\s+${escapedUnitName}(?:\\s+is)?\\s+` +
+      `(?:inactive|not\\s+active|not\\s+loaded|not-found|could not be found))[.!]?$`,
+    "u",
+  ).test(normalizeLowercaseStringOrEmpty(detail));
+}
+
 const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
 
 function isSystemdUserScopeUnavailable(detail: string): boolean {
@@ -989,6 +1000,16 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   };
 }
 
+/**
+ * Resolves the account whose user manager owns the service operation.
+ * Keep linger diagnostics on this identity so sudo never checks root while
+ * systemctl targets the invoking user's manager.
+ */
+export function resolveSystemdUserServiceAccount(env: GatewayServiceEnv): string | null {
+  const { machineUser } = resolveSystemctlUserScope(env);
+  return machineUser ?? readSystemctlEffectiveUser() ?? readSystemctlEnvUser(env);
+}
+
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
   const trimmedUser = user.trim();
   if (!trimmedUser) {
@@ -1042,6 +1063,30 @@ async function execSystemctlUser(
     return directResult;
   }
   return await execSystemctl([...machineScopeArgs, ...args], env, timeoutMs);
+}
+
+async function disableSystemdUserUnitForRemoval(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<void> {
+  const result = await execSystemctlUser(env, ["disable", "--now", unitName]);
+  if (result.code === 0) {
+    return;
+  }
+  const detail = readSystemctlDetail(result);
+  if (isSystemdUnitAlreadyMissingOrInactive(detail, unitName)) {
+    return;
+  }
+  throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
+}
+
+async function reloadSystemdUserManager(env: GatewayServiceEnv): Promise<void> {
+  const result = await execSystemctlUser(env, ["daemon-reload"]);
+  if (result.code !== 0) {
+    throw new Error(
+      `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,
+    );
+  }
 }
 
 export async function isSystemdUserServiceAvailable(
@@ -1533,21 +1578,7 @@ export async function uninstallSystemdService({
   await assertSystemdAvailable(env);
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  const disabled = await execSystemctlUser(env, ["disable", "--now", unitName]);
-  if (disabled.code !== 0) {
-    const detail = readSystemctlDetail(disabled);
-    const escapedUnitName = escapeRegExp(normalizeLowercaseStringOrEmpty(unitName));
-    const alreadyMissingOrInactive = new RegExp(
-      `^(?:failed to (?:disable unit|stop\\s+${escapedUnitName}):\\s*)?` +
-        `(?:unit file\\s+${escapedUnitName}\\s+does not exist|` +
-        `unit\\s+${escapedUnitName}(?:\\s+is)?\\s+` +
-        `(?:inactive|not\\s+active|not\\s+loaded|not-found|could not be found))[.!]?$`,
-      "u",
-    ).test(normalizeLowercaseStringOrEmpty(detail));
-    if (!alreadyMissingOrInactive) {
-      throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
-    }
-  }
+  await disableSystemdUserUnitForRemoval(env, unitName);
 
   const unitPath = resolveSystemdUnitPath(env);
   let removed = false;
@@ -1790,19 +1821,27 @@ export async function uninstallLegacySystemdUnits({
   }
 
   const systemctlAvailable = await isSystemctlAvailable(env);
+  let removedAny = false;
   for (const unit of units) {
     if (systemctlAvailable) {
-      await execSystemctlUser(env, ["disable", "--now", `${unit.name}.service`]);
+      await disableSystemdUserUnitForRemoval(env, `${unit.name}.service`);
     } else {
       stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
     }
 
     try {
       await fs.unlink(unit.unitPath);
+      removedAny = true;
       stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
     }
+  }
+  if (systemctlAvailable && removedAny) {
+    await reloadSystemdUserManager(env);
   }
 
   return units;
@@ -1834,7 +1873,7 @@ export async function uninstallUserSystemdGatewayUnit({
   const unitPath = resolveSystemdUnitPath(env);
   let disabled = false;
   if (await isSystemctlAvailable(env)) {
-    await execSystemctlUser(env, ["disable", "--now", unitName]);
+    await disableSystemdUserUnitForRemoval(env, unitName);
     disabled = true;
   } else {
     stdout.write(
@@ -1855,7 +1894,7 @@ export async function uninstallUserSystemdGatewayUnit({
   // The manager keeps a deleted unit's definition loaded until it reloads, so
   // without this the unit stays startable while the detector reports it gone.
   if (removed && disabled) {
-    await execSystemctlUser(env, ["daemon-reload"]);
+    await reloadSystemdUserManager(env);
   }
   return { unitName, unitPath, removed, disabled };
 }

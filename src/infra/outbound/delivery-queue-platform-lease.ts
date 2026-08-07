@@ -17,7 +17,7 @@ export async function claimReusableDeliveryPlatformSendAttempt(
   });
 }
 
-/** Extend the exact active reusable producer lease without changing ownership. */
+/** Extend the exact active producer lease without changing ownership. */
 export async function renewDeliveryPlatformSendLease(
   id: string,
   stateDir: string | undefined,

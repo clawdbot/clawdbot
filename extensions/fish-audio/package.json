@@ -15,6 +15,7 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/fish-audio-speech",
       "npmSpec": "@openclaw/fish-audio-speech",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.7.2"
@@ -27,6 +28,7 @@
       "bundledDist": false
     },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

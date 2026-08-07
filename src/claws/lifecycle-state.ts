@@ -15,6 +15,11 @@ import {
   type ClawCronGateway,
 } from "./cron.js";
 import {
+  clawBootstrapStateBlocksRemove,
+  planClawBootstrapRemoval,
+  removeClawBootstrap,
+} from "./lifecycle-bootstrap-removal.js";
+import {
   claimClawAgentConfigRemoval,
   digestClawAgentRemovalSurface,
   type ConfigCommit,
@@ -64,6 +69,7 @@ type ClawRemoveResult = {
   status: "complete" | "partial";
   agentId: string;
   agentRemoved: boolean;
+  bootstrap?: RemovedWorkspaceFile;
   workspaceFiles: RemovedWorkspaceFile[];
   packages: ClawPackageRemovalResult[];
   mcpServers: RemovedMcpServer[];
@@ -109,6 +115,12 @@ export async function buildClawRemovePlan(
         message: `${file.path}: ${file.message ?? "unsafe file"}`,
       });
     }
+  }
+  if (record && clawBootstrapStateBlocksRemove(record)) {
+    blockers.push({
+      code: "bootstrap_cleanup_uncertain",
+      message: `BOOTSTRAP.md has ${record.bootstrap.state} ownership state and must be reconciled before removal.`,
+    });
   }
   for (const server of record?.mcpServers ?? []) {
     if (server.state === "pending") {
@@ -157,12 +169,18 @@ export async function buildClawRemovePlan(
       record.install.agentId,
       record.install.workspace,
     );
-    const workspaceHasModifiedFiles = record.workspaceFiles.some(
-      (file) => file.state === "modified",
-    );
+    const workspaceHasModifiedFiles =
+      record.workspaceFiles.some((file) => file.state === "modified") ||
+      record.bootstrap.state === "modified";
+    const trackedWorkspacePaths = [
+      ...record.workspaceFiles.map((file) => file.path),
+      ...(record.install.bootstrap && record.bootstrap.state === "pending"
+        ? [record.bootstrap.path]
+        : []),
+    ];
     const workspaceHasUntrackedEntries = await workspaceContainsUntrackedEntries(
       record.install.workspace,
-      record.workspaceFiles.map((file) => file.path),
+      trackedWorkspacePaths,
     );
     const attachedJobs = readAttachedCronJobs(record.install.agentId, options);
     const ownedSchedulerJobIds = new Set(
@@ -292,6 +310,10 @@ export async function buildClawRemovePlan(
           ? { reason: "Local content changed; preserve the file." }
           : {}),
       });
+    }
+    const bootstrapAction = planClawBootstrapRemoval(record);
+    if (bootstrapAction) {
+      actions.push(bootstrapAction);
     }
     actions.push(...packagePlan.actions);
     const unmatchedMcpSelectors = new Set(mcpCleanup?.selected ?? []);
@@ -435,6 +457,7 @@ export async function applyClawRemovePlan(
   if (
     !record ||
     record.agentState === "modified" ||
+    clawBootstrapStateBlocksRemove(record) ||
     record.workspaceFiles.some((file) => file.state === "unsafe") ||
     record.mcpServers.some((server) => server.state === "pending")
   ) {
@@ -625,9 +648,13 @@ export async function applyClawRemovePlan(
   for (const file of record.workspaceFiles) {
     workspaceFiles.push(await removeClawWorkspaceFile(file));
   }
+  const bootstrap = await removeClawBootstrap(record);
   const cleanupErrors = workspaceFiles
     .filter((file) => file.action === "error")
     .map((file) => file.message ?? `Could not remove ${file.path}.`);
+  if (bootstrap?.action === "error") {
+    cleanupErrors.push(bootstrap.message ?? `Could not remove ${bootstrap.path}.`);
+  }
   if (cleanupErrors.length === 0 && cleanupTargets && committedNextConfig) {
     const workspaceHasRemainingEntries = await workspaceContainsUntrackedEntries(
       cleanupTargets.workspaceDir,
@@ -642,6 +669,7 @@ export async function applyClawRemovePlan(
         trashPath: options.trashPath,
         retainWorkspace:
           workspaceHasRemainingEntries ||
+          bootstrap?.action === "retainedModified" ||
           workspaceFiles.some((file) => file.action === "retainedModified"),
       })),
     );
@@ -658,6 +686,7 @@ export async function applyClawRemovePlan(
     status: complete ? "complete" : "partial",
     agentId: plan.agentId,
     agentRemoved,
+    ...(bootstrap ? { bootstrap } : {}),
     workspaceFiles,
     packages,
     mcpServers,

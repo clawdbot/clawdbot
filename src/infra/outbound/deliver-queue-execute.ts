@@ -73,9 +73,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     ownsAuditTerminal && hasTrustedMessageAuditListeners()
       ? ([] as OutboundPayloadDeliveryOutcome[])
       : undefined;
-  // Recipient custody must observe ambiguous adapter outcomes even when no
-  // audit listener is installed; audit subscriptions are not delivery proof.
-  const stablePayloadOutcomes = producerClaimId
+  const reusableProducerClaimId = params.reusePendingDeliveryIntent ? producerClaimId : undefined;
+  // Reusable producer custody must observe ambiguous adapter outcomes even when
+  // no audit listener is installed; audit subscriptions are not delivery proof.
+  const stablePayloadOutcomes = reusableProducerClaimId
     ? ([] as OutboundPayloadDeliveryOutcome[])
     : undefined;
   const queuePolicy = params.queuePolicy ?? "best_effort";
@@ -150,7 +151,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     return persistQueuedPostSendState({
       queueId,
       queuePolicy,
-      ...(producerClaimId ? { producerClaimId } : {}),
+      ...(reusableProducerClaimId ? { producerClaimId: reusableProducerClaimId } : {}),
+      ...(producerClaimId ? { expectedPlatformSendAttemptId: producerClaimId } : {}),
     });
   };
   const emitTerminals = (
@@ -226,6 +228,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }
           queuedPreSendState ??= "marked";
         } catch (dispatchMarkError) {
+          // Any SQLite-fenced live producer must prove it still owns the row at
+          // dispatch. Continuing after a failed refresh can outlive the lease and
+          // let recovery duplicate a recipient-visible send.
           if (exactReconciliationRequired || producerClaimId) {
             throw dispatchMarkError;
           }
@@ -445,6 +450,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (err instanceof OutboundDeliveryError && err.results.length > 0) {
       deliveredResults = err.results;
     }
+    const hasPlatformSendEvidence =
+      deliveredResults.length > 0 ||
+      queuedPreSendState === "marked" ||
+      queuedPostSendState === "marked" ||
+      (err instanceof OutboundDeliveryError && err.sentBeforeError) ||
+      stablePayloadOutcomes?.some((outcome) => outcome.status === "sent") === true;
     if (queueId) {
       if (queuedPreSendState === "acked") {
         // Best-effort fallback removed durable custody before provider I/O.
@@ -459,13 +470,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }),
         );
       } else if (isDeliveryAbortError(err)) {
-        const ambiguousStableAbort =
-          producerClaimId !== undefined &&
-          (deliveredResults.length > 0 ||
-            queuedPreSendState === "marked" ||
-            queuedPostSendState === "marked" ||
-            stablePayloadOutcomes?.some((outcome) => outcome.status === "sent"));
-        if (ambiguousStableAbort) {
+        if (hasPlatformSendEvidence) {
           if (queuedPostSendState !== "failed") {
             await recordOwnedQueueFailure(
               failDeliveryAfterPlatformSend,
@@ -478,6 +483,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               outcome: "unknown",
               failureStage: "platform_send",
             }),
+          );
+        } else if (params.abortSignal?.aborted !== true) {
+          await recordOwnedQueueFailure(failDelivery, formatErrorMessage(err)).catch(
+            (failErr: unknown) => {
+              log.warn(
+                `failed to preserve queued delivery ${queueId} after provider abort: ${formatErrorMessage(failErr)}`,
+              );
+            },
           );
         } else if (
           await (

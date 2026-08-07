@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../e2e/lib/upgrade-survivor/config-recipe.mjs";
 import {
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   DEFAULT_LIVE_RETRIES,
@@ -15,6 +16,7 @@ import {
   releasePathChunkLanes,
   tailLanes,
 } from "./docker-e2e-scenarios.mjs";
+import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
 
 export { DEFAULT_LIVE_RETRIES };
 export { normalizeReleaseProfile };
@@ -636,11 +638,72 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function upgradeSurvivorScenarioForLane(poolLane) {
+  if (!poolLane.upgradeSurvivorScenario) {
+    return undefined;
+  }
+  const match = /(?:^|\s)OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=(?:'([^']+)'|"([^"]+)"|([^\s]+))/u.exec(
+    poolLane.command,
+  );
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? poolLane.upgradeSurvivorScenario;
+}
+
+function upgradeSurvivorBaselineVersionForLane(poolLane) {
+  const match =
+    /(?:^|\s)OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=(?:'([^']+)'|"([^"]+)"|([^\s]+))/u.exec(
+      poolLane.command,
+    );
+  const spec = match?.[1] ?? match?.[2] ?? match?.[3];
+  return /(?:^|\/|@)(\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(spec ?? "")?.[1] ?? null;
+}
+
+function configuredChannelIdsForLane(poolLane, scenario) {
+  const channelIds = new Set();
+  const baselineVersion = upgradeSurvivorBaselineVersionForLane(poolLane);
+  for (const step of resolveUpgradeSurvivorConfigStepsForBaseline(scenario, baselineVersion)) {
+    if (step.argv?.[0] !== "config" || step.argv?.[1] !== "set") {
+      continue;
+    }
+    const match = /^channels\.([a-z0-9][a-z0-9-]*)$/u.exec(step.argv[2] ?? "");
+    if (match) {
+      channelIds.add(match[1]);
+    }
+  }
+  return channelIds;
+}
+
+export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
+  const configuredChannelIds = new Set();
+  for (const poolLane of poolLanes) {
+    const scenario = upgradeSurvivorScenarioForLane(poolLane);
+    if (!scenario) {
+      continue;
+    }
+    for (const channelId of configuredChannelIdsForLane(poolLane, scenario)) {
+      configuredChannelIds.add(channelId);
+    }
+  }
+  return (officialExternalChannelCatalog.entries ?? [])
+    .filter((entry) => {
+      const channelId = entry.openclaw?.channel?.id;
+      const install = entry.openclaw?.install;
+      return (
+        typeof entry.name === "string" &&
+        configuredChannelIds.has(channelId) &&
+        install?.defaultChoice === "npm" &&
+        install?.npmSpec === entry.name
+      );
+    })
+    .map((entry) => entry.name)
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
 function buildPlanJson(params) {
   const scheduledLanes = [...params.orderedLanes, ...params.orderedTailLanes];
   const imageKinds = unique(scheduledLanes.map((poolLane) => poolLane.e2eImageKind)).toSorted(
     (a, b) => a.localeCompare(b),
   );
+  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(scheduledLanes);
   return {
     chunk: params.releaseChunk || undefined,
     credentials: unique(scheduledLanes.flatMap(laneCredentialRequirements)).toSorted((a, b) =>
@@ -661,12 +724,14 @@ function buildPlanJson(params) {
     })),
     mainLanes: params.orderedLanes.map((poolLane) => poolLane.name),
     omittedUnsupportedLanes: params.omittedUnsupportedLaneNames,
+    requiredPrepublishPluginPackages,
     needs: {
       bareImage: imageKinds.includes("bare"),
       e2eImage: imageKinds.length > 0,
       functionalImage: imageKinds.includes("functional"),
       liveImage: scheduledLanes.some((poolLane) => poolLane.needsLiveImage),
       package: lanesNeedOpenClawPackage(scheduledLanes),
+      prepublishPluginRegistry: requiredPrepublishPluginPackages.length > 0,
     },
     profile: params.profile,
     releaseProfile: params.releaseProfile,

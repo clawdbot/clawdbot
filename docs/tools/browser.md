@@ -102,16 +102,10 @@ Plugin-bundled skills are listed in the agent's available skills when the
 plugin is enabled. The full skill instructions load on demand, so routine
 turns do not pay the full token cost.
 
-For “read this page and answer X,” use browser `action="extract"` with a
-`query`. It sends sanitized, bounded readable text through one model call and
-returns only the answer; keep `snapshot` for choosing actions and obtaining
-refs. Extraction requires a Playwright-backed profile and falls back to a
-snapshot workflow when it cannot complete.
-
-On large pages, pass `selector` to capture only the relevant CSS subtree and
-`ignoreSelectors` to remove repeated chrome before conversion. Pass a JSON
-`schema` when the caller needs validated machine-usable fields in
-`details.json`; without it, extraction remains a free-text answer.
+For page text, use a selector-scoped snapshot or `act:evaluate` that returns
+only the relevant text or structured data, then let the active agent model
+reason over that bounded result. Use efficient snapshots for controls and
+action discovery; they intentionally omit most non-interactive prose.
 
 ## Missing browser command or tool
 

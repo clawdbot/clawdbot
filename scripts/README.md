@@ -40,7 +40,7 @@ new directory taxonomy.
 | Live proof      | `pnpm test:live`                                                               | Live checks require the matching environment and credentials.                                                      |
 | Release checks  | `pnpm release:check`, `pnpm release:beta`, `pnpm release:candidate`            | Release scripts are maintainer workflows; read release docs before use.                                            |
 | GitHub reads    | `scripts/gh-read`                                                              | Uses a GitHub App read token when configured, leaving normal `gh` login for writes.                                |
-| Commits         | `scripts/committer "<message>" <files...>`                                     | Preferred scoped commit helper for OpenClaw changes.                                                               |
+| Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                     |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Agent default for tests and heavy work; pre-warm by source trust, sync each run, reuse the lease.                  |
 
 ## Script Families

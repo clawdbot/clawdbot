@@ -4,6 +4,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
+import {
+  finalizeAcceptedContextEngineTurn,
+  type ContextEngineTurnAttemptFacts,
+} from "../../agents/harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -89,6 +94,22 @@ function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
 const COMMAND_STYLE_CRON_PREFIX =
   /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
 const MAX_CRON_DELIVERY_TARGET_CONTEXT_CHARS = 1000;
+
+function shouldAdvanceCronContextEngineTurn(params: {
+  outcome: "completed" | "exhausted";
+  result: CronPromptRunResult;
+}): boolean {
+  const meta = params.result.meta;
+  return (
+    params.outcome === "completed" &&
+    meta.yielded !== true &&
+    meta.aborted !== true &&
+    meta.error === undefined &&
+    meta.timeoutPhase === undefined &&
+    meta.stopReason !== "error" &&
+    meta.stopReason !== "timeout"
+  );
+}
 
 function resolveIsolatedCronPromptCacheKey(params: {
   job: CronJob;
@@ -339,6 +360,12 @@ function createCronPromptExecutor(params: {
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
+      config: params.cfgWithAgentDefaults,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    let acceptedContextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -350,6 +377,10 @@ function createCronPromptExecutor(params: {
       agentDir: params.agentDir,
       agentId: params.agentId,
       sessionKey: params.runSessionKey,
+      userLockedAuthProfileId:
+        params.liveSelection.authProfileIdSource === "user"
+          ? params.liveSelection.authProfileId
+          : undefined,
       abortSignal: params.abortSignal,
       resolveAgentHarnessRuntimeOverride: (provider) =>
         resolveSessionRuntimeOverrideForProvider({
@@ -381,6 +412,7 @@ function createCronPromptExecutor(params: {
       canFallbackAfterError: () => !currentAttemptCommittedMedia(),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
+        let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
         attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -495,6 +527,8 @@ function createCronPromptExecutor(params: {
                 jobId: params.job.id,
                 cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
                 sessionFile,
+                storePath: params.cronSession.storePath,
+                persistAssistantTranscript: true,
                 workspaceDir: params.workspaceDir,
                 config: params.cfgWithAgentDefaults,
                 prompt: promptText,
@@ -532,6 +566,10 @@ function createCronPromptExecutor(params: {
                 fastModeStartedAtMs,
                 fastModeAutoProgressState,
                 isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                contextEngineLogicalTurnLease,
+                onContextEngineTurnCandidate: (facts) => {
+                  contextEngineTurnCandidate = facts;
+                },
                 userTurnTranscriptRecorder,
                 suppressNextUserMessagePersistence:
                   userTurnTranscriptRecorder.hasPersisted() ||
@@ -541,6 +579,7 @@ function createCronPromptExecutor(params: {
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
+          acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
           return result;
         }
         const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
@@ -641,6 +680,10 @@ function createCronPromptExecutor(params: {
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+          contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: (facts) => {
+            contextEngineTurnCandidate = facts;
+          },
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
           onExecutionPhase: params.onExecutionPhase,
@@ -654,9 +697,29 @@ function createCronPromptExecutor(params: {
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
+        acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
         return result;
       },
+    }).catch(async (error: unknown) => {
+      await contextEngineLogicalTurnLease.dispose();
+      throw error;
     });
+    try {
+      if (
+        acceptedContextEngineTurnCandidate &&
+        shouldAdvanceCronContextEngineTurn({
+          outcome: fallbackResult.outcome,
+          result: fallbackResult.result,
+        })
+      ) {
+        await finalizeAcceptedContextEngineTurn({
+          facts: acceptedContextEngineTurnCandidate,
+          lease: contextEngineLogicalTurnLease,
+        });
+      }
+    } finally {
+      await contextEngineLogicalTurnLease.dispose();
+    }
     runResult = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;

@@ -583,6 +583,59 @@ describe("gateway/node-command-policy", () => {
     expect(resolveNodeCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
   });
 
+  it("requires an explicit allow for the dangerous cua-computer plugin command", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands.push({
+      pluginId: "cua-computer",
+      pluginName: "CUA Computer",
+      source: "/extensions/cua-computer/index.ts",
+      rootDir: "/extensions/cua-computer",
+      command: {
+        command: "computer.act",
+        cap: "computer",
+        dangerous: true,
+        handle: async () => "{}",
+      },
+    });
+    registry.nodeInvokePolicies.push({
+      pluginId: "cua-computer",
+      pluginName: "CUA Computer",
+      source: "/extensions/cua-computer/index.ts",
+      rootDir: "/extensions/cua-computer",
+      pluginConfig: {},
+      policy: {
+        commands: ["computer.act"],
+        dangerous: true,
+        handle: async (ctx) => await ctx.invokeNode(),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const node = {
+      platform: "windows",
+      deviceFamily: "Windows",
+      commands: ["computer.act"],
+      approvedCommands: ["computer.act"],
+    };
+    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("computer.act")).toBe(false);
+
+    const allowlist = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: { commands: { allow: ["computer.act"] } },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(
+      isNodeCommandAllowed({
+        command: "computer.act",
+        declaredCommands: node.commands,
+        allowlist,
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it("allows node-enabled and paired mobile UI without a persistent allow", () => {
     const node = {
       platform: "android",

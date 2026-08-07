@@ -71,7 +71,7 @@ describe("OpenClaw profile schema", () => {
 });
 
 describe("OpenClaw profile reader", () => {
-  it("loads and integrity-binds a metadata-referenced profile", async () => {
+  it("loads and integrity-binds the conventional profile", async () => {
     const root = tempDirs.make("openclaw-claw-profile-");
     await mkdir(join(root, "profiles"));
     await writeFile(
@@ -85,17 +85,9 @@ describe("OpenClaw profile reader", () => {
     );
     await writeFile(
       join(root, "CLAW.md"),
-      [
-        "---",
-        "schemaVersion: 1",
-        "agent:",
-        "  id: triage",
-        "metadata:",
-        "  openclaw.config: profiles/openclaw.yml",
-        "---",
-        "",
-        "# GitHub Triage",
-      ].join("\n"),
+      ["---", "schemaVersion: 1", "agent:", "  id: triage", "---", "", "# GitHub Triage"].join(
+        "\n",
+      ),
       "utf8",
     );
     const profilePath = join(root, "profiles", "openclaw.yml");
@@ -116,9 +108,6 @@ describe("OpenClaw profile reader", () => {
     const first = await readClawManifestFile(root);
     expect(first).toMatchObject({
       ok: true,
-      manifest: {
-        metadata: { "openclaw.config": "profiles/openclaw.yml" },
-      },
       openClawProfile: {
         schemaVersion: 1,
         agent: {
@@ -151,7 +140,6 @@ describe("OpenClaw profile reader", () => {
       JSON.stringify({
         schemaVersion: 1,
         agent: { id: "triage" },
-        metadata: { "openclaw.config": "profiles/openclaw.yml" },
       }),
       "utf8",
     );
@@ -175,7 +163,6 @@ describe("OpenClaw profile reader", () => {
       JSON.stringify({
         schemaVersion: 1,
         agent: { id: "triage" },
-        metadata: { "openclaw.config": "profiles/openclaw.yml" },
       }),
       "utf8",
     );
@@ -190,8 +177,8 @@ describe("OpenClaw profile reader", () => {
     });
   });
 
-  it("rejects an escaping profile path", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-path-");
+  it("fails closed for a retired metadata profile pointer", async () => {
+    const root = tempDirs.make("openclaw-claw-profile-pointer-");
     const path = join(root, "openclaw.claw.json");
     await writeFile(
       path,
@@ -202,54 +189,34 @@ describe("OpenClaw profile reader", () => {
       }),
       "utf8",
     );
+    await writeFile(join(root, "openclaw.yml"), "schemaVersion: 1\nagent: {}\n", "utf8");
 
     const result = await readClawManifestFile(path);
 
     expect(result).toMatchObject({
       ok: false,
-      diagnostics: [expect.objectContaining({ code: "invalid_openclaw_profile_path" })],
+      diagnostics: [
+        expect.objectContaining({
+          code: "legacy_openclaw_profile_pointer",
+          path: "$.metadata.openclaw.config",
+        }),
+      ],
     });
   });
 
-  it("rejects a backslash profile path", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-backslash-path-");
+  it("does not inspect profiles owned by other harnesses", async () => {
+    const root = tempDirs.make("openclaw-claw-foreign-profile-");
+    await mkdir(join(root, "profiles"));
     const path = join(root, "openclaw.claw.json");
-    await writeFile(
-      path,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "triage" },
-        metadata: { "openclaw.config": "profiles\\openclaw.yml" },
-      }),
-      "utf8",
-    );
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, agent: { id: "triage" } }), "utf8");
+    await writeFile(join(root, "profiles", "codex.yml"), Buffer.alloc(300 * 1024, "x"));
 
     const result = await readClawManifestFile(path);
 
-    expect(result).toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "invalid_openclaw_profile_path" })],
-    });
-  });
-
-  it("rejects an empty declared profile path", async () => {
-    const root = tempDirs.make("openclaw-claw-profile-empty-path-");
-    const path = join(root, "openclaw.claw.json");
-    await writeFile(
-      path,
-      JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "triage" },
-        metadata: { "openclaw.config": "" },
-      }),
-      "utf8",
-    );
-
-    const result = await readClawManifestFile(path);
-
-    expect(result).toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "invalid_openclaw_profile_path" })],
-    });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) {
+      throw new Error("expected foreign profile to remain opaque");
+    }
+    expect(result.openClawProfile).toBeUndefined();
   });
 });

@@ -23,13 +23,10 @@ import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,
+  resolveQaScenarioRequiredProviderMode,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
-import {
-  expandQaScenarioExecutionCells,
-  resolveQaScenarioRequiredProviderMode,
-  type QaScenarioExecutionCell,
-} from "./scenario-lane.js";
+import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,

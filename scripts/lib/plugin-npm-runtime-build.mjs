@@ -93,6 +93,10 @@ function createNeverBundleDependencyMatcher(packageJson) {
 
 const HOST_PLUGIN_SDK_IMPORT_RE =
   /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\b(?:require|_+require\d*)\(\s*)["'](openclaw\/plugin-sdk\/[^"']+)["']/gu;
+const OWNER_RESTRICTED_HOST_IMPORTS_BY_PACKAGE_NAME = new Map([
+  ["@openclaw/codex", new Set(["openclaw/plugin-sdk/agent-harness-tool-authority-runtime"])],
+  ["@openclaw/copilot", new Set(["openclaw/plugin-sdk/agent-harness-tool-authority-runtime"])],
+]);
 
 function listRuntimeJavaScriptFiles(rootDir) {
   if (!fs.existsSync(rootDir)) {
@@ -111,8 +115,8 @@ function listRuntimeJavaScriptFiles(rootDir) {
 }
 
 /**
- * List host SDK imports emitted by a built plugin runtime but absent from package exports.
- * @param {{ repoRoot: string; outDir: string }} plan
+ * List host SDK imports emitted by a built plugin runtime but unavailable to its package owner.
+ * @param {{ repoRoot: string; outDir: string; packageJson?: { name?: unknown } }} plan
  */
 export function listMissingPluginNpmRuntimeHostExports(plan) {
   const hostImports = new Set();
@@ -131,8 +135,16 @@ export function listMissingPluginNpmRuntimeHostExports(plan) {
 
   const hostPackageJson = readJsonFile(path.join(plan.repoRoot, "package.json"));
   const hostExports = new Set(Object.keys(hostPackageJson.exports ?? {}));
+  const packageName =
+    typeof plan.packageJson?.name === "string" ? plan.packageJson.name.trim() : "";
+  const ownerRestrictedHostImports =
+    OWNER_RESTRICTED_HOST_IMPORTS_BY_PACKAGE_NAME.get(packageName) ?? new Set();
   return [...hostImports]
-    .filter((specifier) => !hostExports.has(specifier.replace(/^openclaw/u, ".")))
+    .filter(
+      (specifier) =>
+        !hostExports.has(specifier.replace(/^openclaw/u, ".")) &&
+        !ownerRestrictedHostImports.has(specifier),
+    )
     .toSorted((left, right) => left.localeCompare(right));
 }
 

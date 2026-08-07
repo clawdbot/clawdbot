@@ -363,6 +363,32 @@ export type QaBootstrapScenarioCatalog = {
   scenarios: QaSeedScenarioWithSource[];
 };
 
+export function resolveQaScenarioRequiredProviderMode(
+  scenario: Pick<QaSeedScenarioWithSource, "id" | "execution">,
+) {
+  const configuredValue = scenario.execution.config?.requiredProviderMode;
+  const configuredResult =
+    configuredValue === undefined
+      ? undefined
+      : qaScenarioModuleFlow.providerModeSchema.safeParse(
+          typeof configuredValue === "string" ? configuredValue.trim() : configuredValue,
+        );
+  if (configuredResult && !configuredResult.success) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares unknown provider mode: ${String(configuredValue)}`,
+    );
+  }
+  const configuredMode = configuredResult?.success ? configuredResult.data : undefined;
+  const executionMode =
+    scenario.execution.kind === "flow" ? scenario.execution.providerMode : undefined;
+  if (configuredMode && executionMode && configuredMode !== executionMode) {
+    throw new Error(
+      `QA scenario ${scenario.id} declares conflicting provider modes: execution.providerMode=${executionMode}, execution.config.requiredProviderMode=${configuredMode}`,
+    );
+  }
+  return configuredMode ?? executionMode;
+}
+
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.yaml";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
 const QA_SCENARIO_DIR_PATH = "qa/scenarios";
@@ -463,7 +489,7 @@ export function readQaScenarioPack(): QaScenarioPack {
         parsedScenarioFile.title,
       );
       qaScenarioModuleFlow.assertDefined({ executionKind: execution.kind, flow, relativePath });
-      return {
+      const scenario = {
         ...parsedScenario,
         sourcePath: relativePath,
         execution: {
@@ -471,6 +497,8 @@ export function readQaScenarioPack(): QaScenarioPack {
           ...(flow ? { flow, flowKind } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
+      resolveQaScenarioRequiredProviderMode(scenario);
+      return scenario;
     })(),
   );
   const seenScenarioIds = new Set<string>();

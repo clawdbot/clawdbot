@@ -772,7 +772,7 @@ async function processOpenAICompletionsStream(
               currentBlock = null;
               flushPendingPostToolCallDeltas();
             }
-            const initialSig = extractGoogleThoughtSignature(toolCall);
+            const initialSig = extractToolCallThoughtSignature(toolCall);
             block = {
               type: "toolCall",
               id: toolCall.id || "",
@@ -800,7 +800,7 @@ async function processOpenAICompletionsStream(
           if (toolCall.function?.name) {
             block.name = toolCall.function.name;
           }
-          const deltaSig = extractGoogleThoughtSignature(toolCall);
+          const deltaSig = extractToolCallThoughtSignature(toolCall);
           if (deltaSig) {
             block.thoughtSignature = deltaSig;
           }
@@ -1557,7 +1557,7 @@ function convertTools(
   };
 }
 
-function extractGoogleThoughtSignature(toolCall: unknown): string | undefined {
+function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
   const tc = toolCall as Record<string, unknown> | undefined;
   if (!tc) {
     return undefined;
@@ -1571,7 +1571,11 @@ function extractGoogleThoughtSignature(toolCall: unknown): string | undefined {
   }
   const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
     ?.thought_signature;
-  return typeof fromFunction === "string" && fromFunction.length > 0 ? fromFunction : undefined;
+  if (typeof fromFunction === "string" && fromFunction.length > 0) {
+    return fromFunction;
+  }
+  const fromToolCall = tc.thought_signature;
+  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
 }
 
 function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
