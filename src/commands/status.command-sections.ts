@@ -181,15 +181,37 @@ export function buildStatusMemoryValue(
   const colorByTone = (tone: Tone, text: string) =>
     tone === "ok" ? params.ok(text) : tone === "warn" ? params.warn(text) : params.muted(text);
   if (params.memory.vector) {
-    const vector =
-      params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
-        ? // Built-in memory reports store availability under a backend-specific field.
-          { ...params.memory.vector, available: params.memory.vector.storeAvailable }
-        : params.memory.vector;
-    const state = params.resolveMemoryVectorState(vector);
+    const vector = params.memory.vector;
     const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
-    const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
-    parts.push(colorByTone(state.tone, label));
+    const isBuiltinWithIndependentVectorHealth =
+      params.memory.backend === "builtin" &&
+      vector.storeAvailable !== undefined &&
+      vector.semanticAvailable !== undefined;
+    let label: string;
+    let tone: Tone;
+    if (isBuiltinWithIndependentVectorHealth) {
+      // Builtin can report store health and semantic probing independently;
+      // show both facts so a healthy store does not mask a failed semantic probe.
+      const storeState = vector.storeAvailable === true ? "ready" : "unavailable";
+      const semanticState = vector.semanticAvailable === true ? "ready" : "unavailable";
+      label = `${prefix} ${storeState} · semantic ${semanticState}`;
+      tone =
+        vector.storeAvailable === true && vector.semanticAvailable === true
+          ? "ok"
+          : vector.storeAvailable === false || vector.semanticAvailable === false
+            ? "warn"
+            : "muted";
+    } else {
+      const vectorForState =
+        params.memory.backend === "builtin" && vector.storeAvailable !== undefined
+          ? // Built-in memory reports store availability under a backend-specific field.
+            { ...vector, available: vector.storeAvailable }
+          : vector;
+      const state = params.resolveMemoryVectorState(vectorForState);
+      label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
+      tone = state.tone;
+    }
+    parts.push(colorByTone(tone, label));
   }
   if (params.memory.fts) {
     const state = params.resolveMemoryFtsState(params.memory.fts);

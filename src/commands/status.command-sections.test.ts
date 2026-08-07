@@ -1,10 +1,12 @@
 // Status command section tests cover footer, health, and report section rendering.
 import { describe, expect, it } from "vitest";
+import { resolveMemoryVectorState } from "../memory-host-sdk/status.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
   buildStatusHeartbeatValue,
+  buildStatusMemoryValue,
   buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
@@ -365,5 +367,70 @@ describe("status.command-sections", () => {
       { key: "Status", header: "Status", minWidth: 8 },
       { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
     ]);
+  });
+
+  it("renders builtin vector store and semantic health independently", () => {
+    const value = buildStatusMemoryValue({
+      memory: {
+        backend: "builtin",
+        provider: "local",
+        files: 1,
+        chunks: 2,
+        vector: {
+          enabled: true,
+          storeAvailable: true,
+          semanticAvailable: false,
+          available: false,
+        },
+      },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      ok: (v) => `ok(${v})`,
+      warn: (v) => `warn(${v})`,
+      muted: (v) => `muted(${v})`,
+      resolveMemoryVectorState,
+      resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+      resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" }),
+    });
+    expect(value).toContain("warn(vector store ready · semantic unavailable)");
+  });
+
+  it("keeps builtin vector store-only rendering when semantic health is unknown", () => {
+    const value = buildStatusMemoryValue({
+      memory: {
+        backend: "builtin",
+        provider: "local",
+        files: 1,
+        chunks: 2,
+        vector: { enabled: true, storeAvailable: true },
+      },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      ok: (v) => `ok(${v})`,
+      warn: (v) => `warn(${v})`,
+      muted: (v) => `muted(${v})`,
+      resolveMemoryVectorState,
+      resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+      resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" }),
+    });
+    expect(value).toContain("ok(vector store ready)");
+  });
+
+  it("keeps builtin vector rendering on aggregate availability when store health is unknown", () => {
+    const value = buildStatusMemoryValue({
+      memory: {
+        backend: "builtin",
+        provider: "local",
+        files: 1,
+        chunks: 2,
+        vector: { enabled: true, available: false, semanticAvailable: false },
+      },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      ok: (v) => `ok(${v})`,
+      warn: (v) => `warn(${v})`,
+      muted: (v) => `muted(${v})`,
+      resolveMemoryVectorState,
+      resolveMemoryFtsState: () => ({ state: "ready", tone: "ok" }),
+      resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" }),
+    });
+    expect(value).toContain("warn(vector unavailable)");
   });
 });
