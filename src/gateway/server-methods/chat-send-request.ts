@@ -9,8 +9,8 @@ import {
   formatValidationErrors,
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
-import type { QueueMode } from "../../auto-reply/reply/queue/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { isBrowserCopilotClient, isOperatorUiClient } from "../../utils/message-channel.js";

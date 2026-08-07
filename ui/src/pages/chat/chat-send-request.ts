@@ -1,4 +1,4 @@
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
