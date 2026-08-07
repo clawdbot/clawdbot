@@ -193,6 +193,28 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
 
     expect(result.ctxPayload.Body).toContain("look at this");
     expect(result.ctxPayload.Body).toContain("[discord attachment unavailable]");
+    // BodyForAgent is what the model reads; Body alone would leave it silent.
+    // It derives from the raw message text (harness baseText), not the envelope.
+    expect(result.ctxPayload.BodyForAgent).toContain("hi");
+    expect(result.ctxPayload.BodyForAgent).toContain("[discord attachment unavailable]");
+  });
+
+  it("keeps audio-transcript precedence in the agent text when media fails", async () => {
+    const ctx = await createBaseDiscordMessageContext({
+      preflightAudioTranscript: "spoken words",
+    });
+
+    const result = await buildDiscordMessageProcessContext({
+      ctx,
+      text: "look at this",
+      mediaList: [{ contentType: "image/png", kind: "image" }],
+    });
+    if (!result) {
+      throw new Error("expected a built Discord message context");
+    }
+
+    expect(result.ctxPayload.BodyForAgent).toContain("spoken words");
+    expect(result.ctxPayload.BodyForAgent).toContain("[discord attachment unavailable]");
   });
 
   it("pluralizes the unavailable notice and skips it when all media resolved", async () => {
