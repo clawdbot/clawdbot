@@ -12,14 +12,12 @@ import {
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   listActiveReplyRunSessionIds,
-  queueReplyMessageInjectionTarget,
   resolveActiveReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveReplyBackendQueueMessageMismatch,
   resolveReplyRunPhaseForSessionId,
   type ReplyOperation,
   type ReplyOperationPhase,
-  type ReplyMessageInjectionTarget,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -453,38 +451,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   sessionId: string,
   text: string,
   options?: EmbeddedAgentQueueMessageOptions,
-  injectionTarget?: ReplyMessageInjectionTarget,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
-  if (injectionTarget) {
-    const enqueuedAtMs = Date.now();
-    const outcome = await queueReplyMessageInjectionTarget(injectionTarget, text, options);
-    if (outcome.status === "rejected") {
-      return createQueueFailureOutcome(
-        sessionId,
-        "runtime_rejected",
-        outcome.errorMessage ?? outcome.reason,
-      );
-    }
-    if (outcome.result?.transcriptCommit === "unconfirmed") {
-      return {
-        queued: true,
-        sessionId,
-        target: "reply_run",
-        gatewayHealth: "live",
-        transcriptCommit: "unconfirmed",
-        errorMessage: outcome.result.errorMessage,
-        enqueuedAtMs,
-      };
-    }
-    return {
-      queued: true,
-      sessionId,
-      target: "reply_run",
-      gatewayHealth: "live",
-      enqueuedAtMs,
-      ...(options?.waitForTranscriptCommit ? { deliveredAtMs: Date.now() } : {}),
-    };
-  }
   const prepared = prepareEmbeddedAgentQueueMessage(sessionId, options);
   if (prepared.kind === "complete") {
     return prepared.outcome;

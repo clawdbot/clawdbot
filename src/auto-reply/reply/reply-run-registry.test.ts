@@ -13,6 +13,8 @@ import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   abortActiveReplyRuns,
+  abortReplyMessageInjectionTarget,
+  beginReplyMessageInjectionTarget,
   createReplyOperation,
   expireStaleReplyOperation,
   forceClearReplyOperation,
@@ -22,7 +24,6 @@ import {
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
   clearReplyRunForResetBySessionId,
-  queueReplyMessageInjectionTarget,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
@@ -53,7 +54,7 @@ function createTestReplyOperation(
 async function queueCurrentReplyRunMessage(
   sessionId: string,
   text: string,
-  options?: Parameters<typeof queueReplyMessageInjectionTarget>[2],
+  options?: Parameters<typeof beginReplyMessageInjectionTarget>[2],
 ) {
   const operation = resolveActiveReplyOperationForSessionId(sessionId);
   const target = operation
@@ -65,6 +66,12 @@ async function queueCurrentReplyRunMessage(
   return target
     ? await queueReplyMessageInjectionTarget(target, text, options)
     : { status: "rejected" as const, reason: "injection_unavailable" as const };
+}
+
+async function queueReplyMessageInjectionTarget(
+  ...args: Parameters<typeof beginReplyMessageInjectionTarget>
+) {
+  return await beginReplyMessageInjectionTarget(...args).outcome;
 }
 
 describe("reply run registry", () => {
@@ -1403,7 +1410,9 @@ describe("reply run registry", () => {
       expectedRunId: "run-a",
     })!;
 
-    await expect(queueReplyMessageInjectionTarget(target, "first")).resolves.toMatchObject({
+    const synchronousAttempt = beginReplyMessageInjectionTarget(target, "first");
+    expect(synchronous).toHaveBeenCalledOnce();
+    await expect(synchronousAttempt.outcome).resolves.toMatchObject({
       status: "rejected",
       reason: "runtime_rejected",
       errorMessage: "Error: sync rejection",
@@ -1457,6 +1466,36 @@ describe("reply run registry", () => {
       reason: "no_active_run",
     });
     expect(successorQueue).not.toHaveBeenCalled();
+  });
+
+  it("exact-target abort cannot abort a same-key successor", () => {
+    const first = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    first.setPhase("running");
+    first.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: first.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    first.complete();
+    const successorCancel = vi.fn();
+    const successor = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    successor.setPhase("running");
+    successor.attachBackend({
+      kind: "embedded",
+      runId: "run-b",
+      cancel: successorCancel,
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+
+    expect(abortReplyMessageInjectionTarget(target)).toBe(false);
+    expect(successor.result).toBeNull();
+    expect(successorCancel).not.toHaveBeenCalled();
   });
 
   it("uses a replacement backend on the same operation", async () => {

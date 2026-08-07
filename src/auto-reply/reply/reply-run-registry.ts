@@ -110,9 +110,16 @@ type ReplyMessageInjectionRejectionReason =
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
 
-type ReplyMessageInjectionOutcome =
+export type ReplyMessageInjectionOutcome =
   | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
+
+type ReplyMessageInjectionAttempt = {
+  /** Native run identity captured with the opaque operation target. */
+  targetRunId: string | undefined;
+  /** Settles after the backend confirms or rejects this exact injection. */
+  outcome: Promise<ReplyMessageInjectionOutcome>;
+};
 
 type ReplyBackendQueueMessageMismatch =
   | "image_input_unsupported"
@@ -1369,11 +1376,11 @@ export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
   return Boolean(operation && !isReplyOperationPreBackendPhase(operation.phase));
 }
 
-export async function queueReplyMessageInjectionTarget(
+export function beginReplyMessageInjectionTarget(
   target: ReplyMessageInjectionTarget,
   text: string,
   options?: ReplyBackendQueueMessageOptions,
-): Promise<ReplyMessageInjectionOutcome> {
+): ReplyMessageInjectionAttempt {
   const resolved = resolveReplyMessageInjectionRejection({
     operation: target[replyMessageInjectionTargetOperation],
     originatingLeafEntryId: target.originatingLeafEntryId,
@@ -1381,7 +1388,10 @@ export async function queueReplyMessageInjectionTarget(
     options,
   });
   if (!("injection" in resolved)) {
-    return { status: "rejected", ...resolved };
+    return {
+      targetRunId: target.runId,
+      outcome: Promise.resolve({ status: "rejected", ...resolved }),
+    };
   }
   // Injection is user input, not run evidence: stamping activity here would let
   // sub-10-minute user messages re-arm a wedged run's staleness window forever.
@@ -1393,13 +1403,43 @@ export async function queueReplyMessageInjectionTarget(
       ? resolved.injection.queueMessage(text, options)
       : resolved.injection.queueMessage(text);
   } catch (error) {
-    return { status: "rejected", reason: "runtime_rejected", errorMessage: String(error) };
+    return {
+      targetRunId: target.runId,
+      outcome: Promise.resolve({
+        status: "rejected",
+        reason: "runtime_rejected",
+        errorMessage: String(error),
+      }),
+    };
   }
-  try {
-    const result = await queued;
-    return result ? { status: "accepted", result } : { status: "accepted" };
-  } catch (error) {
-    return { status: "rejected", reason: "runtime_rejected", errorMessage: String(error) };
+  return {
+    targetRunId: target.runId,
+    outcome: queued.then(
+      (result): ReplyMessageInjectionOutcome =>
+        result ? { status: "accepted", result } : { status: "accepted" },
+      (error): ReplyMessageInjectionOutcome => ({
+        status: "rejected",
+        reason: "runtime_rejected",
+        errorMessage: String(error),
+      }),
+    ),
+  };
+}
+
+/** Abort only the operation captured by this target; never a same-key successor. */
+export function abortReplyMessageInjectionTarget(target: ReplyMessageInjectionTarget): boolean {
+  return target[replyMessageInjectionTargetOperation].abortByUser();
+}
+
+/** Record accepted input on the exact operation without rediscovering its session slot. */
+export function recordAcceptedReplyMessageInjectionTarget(
+  target: ReplyMessageInjectionTarget,
+  options?: { inboundAudio?: boolean },
+): void {
+  const operation = target[replyMessageInjectionTargetOperation];
+  operation.recordActivity();
+  if (options?.inboundAudio === true) {
+    operation.markAcceptedSteeredInboundAudio();
   }
 }
 
