@@ -55,6 +55,27 @@ describe("scripts/lib/vitest-shard-timings.mts", () => {
     expect(first).toMatch(/^test\/vitest\/vitest\.auto-reply-reply\.config\.ts#include-1-/u);
   });
 
+  it("keeps the include-pattern hash stable when file order changes", () => {
+    const first = resolveShardTimingKey({
+      config: "test/vitest/vitest.auto-reply-reply.config.ts",
+      env: {},
+      includePatterns: [
+        "src/auto-reply/reply/session.test.ts",
+        "src/auto-reply/reply/agent-runner.test.ts",
+      ],
+    });
+    const second = resolveShardTimingKey({
+      config: "test/vitest/vitest.auto-reply-reply.config.ts",
+      env: {},
+      includePatterns: [
+        "src/auto-reply/reply/agent-runner.test.ts",
+        "src/auto-reply/reply/session.test.ts",
+      ],
+    });
+
+    expect(second).toBe(first);
+  });
+
   it("persists include-pattern timing metadata", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
     tempDirs.push(tempDir);
