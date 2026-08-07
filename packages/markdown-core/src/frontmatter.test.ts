@@ -196,6 +196,17 @@ metadata:
     expect(result.metadata).toBe('{"openclaw":true}');
   });
 
+  it("reports which values came from structured YAML", () => {
+    const result = parseFrontmatterBlockResult(`---
+name: sample-skill
+tools: [Read, Grep]
+metadata:
+  openclaw: true
+---`);
+
+    expect(result.structuredFields).toEqual(["tools", "metadata"]);
+  });
+
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toStrictEqual({});

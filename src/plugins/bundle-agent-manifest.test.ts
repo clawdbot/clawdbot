@@ -64,7 +64,7 @@ describe("loadBundleAgentTemplates", () => {
     expect(result.diagnostics).toEqual([]);
     expect(result.agentTemplates).toEqual([
       expect.objectContaining({
-        id: "reviewer",
+        id: "review-pack:reviewer",
         pluginId: "review-pack",
         sourceFormat: "claude",
         name: "reviewer",
@@ -170,7 +170,7 @@ describe("loadBundleAgentTemplates", () => {
     expect(result.diagnostics).toEqual([]);
     expect(result.agentTemplates).toEqual([
       expect.objectContaining({
-        id: "explorer",
+        id: "cursor-pack:explorer",
         pluginId: "cursor-pack",
         sourceFormat: "cursor",
         name: "explorer",
@@ -178,6 +178,37 @@ describe("loadBundleAgentTemplates", () => {
         tools: ["Read", "Grep", "Glob"],
       }),
     ]);
+  });
+
+  it("keeps a Cursor manifest-declared agents root owned by Cursor", () => {
+    const rootDir = makeBundleRoot();
+    writeAgent(
+      rootDir,
+      ".cursor-plugin/plugin.json",
+      JSON.stringify({ name: "cursor-team-kit", agents: "./agents/" }),
+    );
+    writeAgent(
+      rootDir,
+      "agents/ci-watcher.md",
+      [
+        "---",
+        "name: ci-watcher",
+        "description: Watches CI until completion",
+        "---",
+        "Monitor CI and report failures.",
+      ].join("\n"),
+    );
+
+    const result = loadBundleManifest({ rootDir, bundleFormat: "cursor" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected Cursor bundle manifest to load");
+    }
+    expect(result.manifest.agentTemplates).toMatchObject([
+      { name: "ci-watcher", sourceFormat: "cursor" },
+    ]);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("preserves Claude agent metadata when Codex is the preferred bundle format", () => {
@@ -327,7 +358,7 @@ describe("loadBundleAgentTemplates", () => {
     );
   });
 
-  it("drops conflicting template ids instead of choosing one implicitly", () => {
+  it("preserves Claude plugin subfolder identity when names repeat", () => {
     const rootDir = makeBundleRoot();
     for (const relativePath of ["agents/reviewer.md", "agents/nested/reviewer.md"]) {
       writeAgent(
@@ -345,13 +376,14 @@ describe("loadBundleAgentTemplates", () => {
       rejectHardlinks: true,
     });
 
-    expect(result.agentTemplates).toEqual([]);
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ message: expect.stringContaining("conflicting compatible") }),
-    );
+    expect(result.agentTemplates).toMatchObject([
+      { id: "collision-pack:nested:reviewer", name: "reviewer" },
+      { id: "collision-pack:reviewer", name: "reviewer" },
+    ]);
+    expect(result.diagnostics).toEqual([]);
   });
 
-  it("drops a cross-format template when the same id already conflicts within one format", () => {
+  it("drops cross-format definitions with the same scoped id", () => {
     const rootDir = makeBundleRoot();
     writeAgent(rootDir, ".claude-plugin/plugin.json", JSON.stringify({ name: "mixed-pack" }));
     for (const relativePath of ["agents/reviewer.md", "agents/nested/reviewer.md"]) {
@@ -373,10 +405,40 @@ describe("loadBundleAgentTemplates", () => {
     if (!result.ok) {
       throw new Error("expected mixed bundle manifest to load");
     }
-    expect(result.manifest.agentTemplates ?? []).toEqual([]);
+    expect(result.manifest.agentTemplates).toMatchObject([
+      { id: "mixed-pack:nested:reviewer", sourceFormat: "claude" },
+    ]);
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ message: expect.stringContaining("conflicting compatible") }),
     );
+  });
+
+  it("does not reinterpret native Agent Plugin directories as compatible templates", () => {
+    const rootDir = makeBundleRoot();
+    writeAgent(
+      rootDir,
+      "plugin.json",
+      JSON.stringify({
+        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        name: "portable-pack",
+      }),
+    );
+    for (const relativePath of ["agents/reviewer.md", ".cursor/agents/explorer.md"]) {
+      writeAgent(
+        rootDir,
+        relativePath,
+        ["---", "name: reviewer", "description: Metadata", "---", "Prompt."].join("\n"),
+      );
+    }
+
+    const result = loadBundleManifest({ rootDir, bundleFormat: "agent" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected Agent Plugin manifest to load");
+    }
+    expect(result.manifest.agentTemplates).toBeUndefined();
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("keeps default agents visible when an optional secondary manifest is malformed", () => {

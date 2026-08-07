@@ -419,10 +419,12 @@ function loadCompatibleAgentTemplates(params: {
         ? CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH
         : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
     const defaultAgentRoot = format === "cursor" ? ".cursor/agents" : "agents";
+    const hasManifest = pluginScanExistsSync(path.join(params.rootDir, manifestRelativePath));
+    const canInferDefaultRoot = !(params.preferredFormat === "cursor" && format === "claude");
     const hasContribution =
       params.preferredFormat === format ||
-      pluginScanExistsSync(path.join(params.rootDir, manifestRelativePath)) ||
-      pluginScanExistsSync(path.join(params.rootDir, defaultAgentRoot));
+      hasManifest ||
+      (canInferDefaultRoot && pluginScanExistsSync(path.join(params.rootDir, defaultAgentRoot)));
     if (!hasContribution) {
       continue;
     }
@@ -567,6 +569,7 @@ export function loadBundleManifest(params: {
         capabilities: buildAgentCapabilities(params.rootDir),
       },
       manifestPath: loaded.manifestPath,
+      diagnostics: [],
     };
   }
 

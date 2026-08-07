@@ -74,7 +74,11 @@ function buildInstalledPluginIndex(
     diagnostics: discovery.diagnostics,
     installRecords,
   });
-  const diagnostics = [...(registry.diagnostics ?? [])];
+  // Agent Markdown is rescanned when the manifest registry is materialized from
+  // the index. Persisting these diagnostics would make repaired files look stale.
+  const diagnostics = (registry.diagnostics ?? []).filter(
+    (diagnostic) => diagnostic.code !== "bundle-agent-metadata",
+  );
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
   const plugins = buildInstalledPluginIndexRecords({
     candidates: discovery.candidates,

@@ -15,7 +15,6 @@ import { parseBooleanValue } from "../utils/boolean.js";
 import type {
   BundleAgentTemplate,
   BundleAgentUnsupportedField,
-  PluginBundleFormat,
   PluginDiagnostic,
 } from "./manifest-types.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
@@ -51,6 +50,11 @@ type BundleAgentTemplateLoadResult = {
   diagnostics: PluginDiagnostic[];
 };
 
+type BundleAgentFile = {
+  relativePath: string;
+  identityPath: string;
+};
+
 /** Drops every definition involved in an id collision instead of choosing implicitly. */
 export function filterConflictingBundleAgentTemplates(templates: readonly BundleAgentTemplate[]): {
   agentTemplates: BundleAgentTemplate[];
@@ -82,6 +86,7 @@ function addDiagnostic(params: {
   message: string;
 }): void {
   params.diagnostics.push({
+    code: "bundle-agent-metadata",
     level: "warn",
     pluginId: params.pluginId,
     source: params.source,
@@ -95,7 +100,7 @@ function listAgentFiles(params: {
   agentRoots: readonly string[];
   pluginId: string;
   diagnostics: PluginDiagnostic[];
-}): string[] {
+}): BundleAgentFile[] {
   const uniqueRoots = [...new Set(params.agentRoots.map((entry) => entry.trim()).filter(Boolean))];
   const roots = uniqueRoots.toSorted().slice(0, MAX_AGENT_ROOTS);
   if (uniqueRoots.length > MAX_AGENT_ROOTS) {
@@ -106,7 +111,7 @@ function listAgentFiles(params: {
     });
   }
 
-  const files = new Set<string>();
+  const files = new Map<string, BundleAgentFile>();
   const scannedRoots: string[] = [];
   let remainingEntries = MAX_AGENT_SCAN_ENTRIES;
   for (const declaredRoot of roots) {
@@ -155,7 +160,11 @@ function listAgentFiles(params: {
     }
     if (stat.isFile()) {
       if (absoluteRoot.toLowerCase().endsWith(".md")) {
-        files.add(normalizeRelativePath(path.relative(params.rootDir, absoluteRoot)));
+        const relativePath = normalizeRelativePath(path.relative(params.rootDir, absoluteRoot));
+        files.set(relativePath, {
+          relativePath,
+          identityPath: path.basename(relativePath),
+        });
       }
       continue;
     }
@@ -178,7 +187,13 @@ function listAgentFiles(params: {
       include: (entry) => entry.kind === "file" && entry.name.toLowerCase().endsWith(".md"),
     });
     for (const entry of scan.entries) {
-      files.add(normalizeRelativePath(path.relative(params.rootDir, entry.path)));
+      const relativePath = normalizeRelativePath(path.relative(params.rootDir, entry.path));
+      if (!files.has(relativePath)) {
+        files.set(relativePath, {
+          relativePath,
+          identityPath: normalizeRelativePath(path.relative(absoluteRoot, entry.path)),
+        });
+      }
     }
     remainingEntries -= scan.scannedEntryCount;
     if (scan.truncated) {
@@ -198,7 +213,9 @@ function listAgentFiles(params: {
     }
   }
 
-  const ordered = [...files].toSorted();
+  const ordered = [...files.values()].toSorted((left, right) =>
+    left.relativePath.localeCompare(right.relativePath),
+  );
   if (ordered.length > MAX_AGENT_FILES) {
     addDiagnostic({
       ...params,
@@ -301,7 +318,7 @@ function parseBoolean(
 
 function buildUnsupportedFields(params: {
   frontmatter: Record<string, string>;
-  sourceFormat: PluginBundleFormat;
+  sourceFormat: BundleAgentTemplate["sourceFormat"];
   invalid: ReadonlyMap<string, string>;
 }): BundleAgentUnsupportedField[] | undefined {
   const unsupported = Object.keys(params.frontmatter)
@@ -321,7 +338,8 @@ function buildUnsupportedFields(params: {
 function parseAgentTemplate(params: {
   raw: string;
   relativePath: string;
-  sourceFormat: PluginBundleFormat;
+  identityPath: string;
+  sourceFormat: BundleAgentTemplate["sourceFormat"];
   pluginId: string;
   diagnostics: PluginDiagnostic[];
 }): BundleAgentTemplate | undefined {
@@ -445,7 +463,10 @@ function parseAgentTemplate(params: {
     invalid,
   });
   return {
-    id: name,
+    id: [
+      params.pluginId,
+      ...params.identityPath.replace(/\.md$/iu, "").split("/").filter(Boolean),
+    ].join(":"),
     pluginId: params.pluginId,
     sourceFormat: params.sourceFormat,
     name,
@@ -474,7 +495,7 @@ function parseAgentTemplate(params: {
 export function loadBundleAgentTemplates(params: {
   rootDir: string;
   agentRoots: readonly string[];
-  sourceFormat: PluginBundleFormat;
+  sourceFormat: BundleAgentTemplate["sourceFormat"];
   pluginId: string;
   rejectHardlinks: boolean;
 }): BundleAgentTemplateLoadResult {
@@ -493,7 +514,7 @@ export function loadBundleAgentTemplates(params: {
 
   const templates: BundleAgentTemplate[] = [];
   let totalBytes = 0;
-  for (const relativePath of listAgentFiles({
+  for (const agentFile of listAgentFiles({
     rootDir,
     rootRealPath,
     agentRoots: params.agentRoots,
@@ -503,14 +524,14 @@ export function loadBundleAgentTemplates(params: {
     const file = readAgentFile({
       rootDir,
       rootRealPath,
-      relativePath,
+      relativePath: agentFile.relativePath,
       rejectHardlinks: params.rejectHardlinks,
     });
     if (!file) {
       addDiagnostic({
         diagnostics,
         pluginId: params.pluginId,
-        source: relativePath,
+        source: agentFile.relativePath,
         message: "bundle agent metadata file exceeds the size limit or is unsafe; entry ignored",
       });
       continue;
@@ -520,14 +541,15 @@ export function loadBundleAgentTemplates(params: {
       addDiagnostic({
         diagnostics,
         pluginId: params.pluginId,
-        source: relativePath,
+        source: agentFile.relativePath,
         message: "bundle agent metadata aggregate size limit reached; remaining files ignored",
       });
       break;
     }
     const template = parseAgentTemplate({
       raw: file.raw,
-      relativePath,
+      relativePath: agentFile.relativePath,
+      identityPath: agentFile.identityPath,
       sourceFormat: params.sourceFormat,
       pluginId: params.pluginId,
       diagnostics,

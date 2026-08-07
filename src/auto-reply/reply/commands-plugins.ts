@@ -38,12 +38,41 @@ function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
 
+const CHAT_AGENT_TEMPLATE_LIMIT = 2;
+const CHAT_AGENT_TEMPLATE_TEXT_LIMIT = 80;
+
+function truncateChatMetadata(value: string): string {
+  const characters = Array.from(value);
+  return characters.length <= CHAT_AGENT_TEMPLATE_TEXT_LIMIT
+    ? value
+    : `${characters.slice(0, CHAT_AGENT_TEMPLATE_TEXT_LIMIT - 1).join("")}…`;
+}
+
+function buildChatSafePluginInspect(
+  inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
+) {
+  const templates = inspect.bundleAgentTemplates ?? [];
+  const { bundleAgentTemplates: _nestedTemplates, ...plugin } = inspect.plugin;
+  return {
+    ...inspect,
+    plugin,
+    bundleAgentTemplates: templates.slice(0, CHAT_AGENT_TEMPLATE_LIMIT).map((template) => ({
+      id: truncateChatMetadata(template.id),
+      sourceFormat: template.sourceFormat,
+      name: truncateChatMetadata(template.name),
+      sourceFilePath: truncateChatMetadata(template.sourceFilePath),
+    })),
+    bundleAgentTemplateCount: templates.length,
+    bundleAgentTemplatesOmitted: Math.max(0, templates.length - CHAT_AGENT_TEMPLATE_LIMIT),
+  };
+}
+
 function buildPluginInspectJson(
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
   installRecords: Record<string, PluginInstallRecord>,
 ) {
   return {
-    inspect,
+    inspect: buildChatSafePluginInspect(inspect),
     compatibilityWarnings: inspect.compatibility.map((warning) => ({
       code: warning.code,
       severity: warning.severity,
@@ -275,7 +304,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         const payload = buildPluginInspectJson(inspect, installRecords);
         return commandReply(
           renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
-            ...inspect,
+            ...payload.inspect,
             compatibilityWarnings: payload.compatibilityWarnings,
             install: payload.install,
           }),

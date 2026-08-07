@@ -6,7 +6,7 @@ type ParsedFrontmatter = Record<string, string>;
 export type ParsedFrontmatterBlockResult = {
   frontmatter: ParsedFrontmatter;
   issues: FrontmatterParseIssue[];
-  structuredFields?: string[];
+  structuredFields: string[];
 };
 
 export type FrontmatterParseIssue = {
@@ -114,6 +114,7 @@ function parseYamlFrontmatterOnce(
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
       return {
         frontmatter: fallback,
+        structuredFields: [],
         issues:
           doc.errors.length > 0
             ? doc.errors.map((error) => ({
@@ -128,6 +129,7 @@ function parseYamlFrontmatterOnce(
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         frontmatter: fallback,
+        structuredFields: [],
         issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
       };
     }
@@ -176,6 +178,7 @@ function parseYamlFrontmatterOnce(
     const message = error instanceof Error ? error.message : String(error);
     return {
       frontmatter: fallback,
+      structuredFields: [],
       issues: [{ code: "YAML_EXCEPTION", message }],
     };
   }
@@ -247,11 +250,14 @@ export function parseFrontmatterBlockResult(content: string): ParsedFrontmatterB
   const normalized = normalizeFrontmatterContent(content);
   const block = extractFrontmatterBlockFromNormalized(normalized)?.block;
   if (block !== undefined) {
-    return block ? parseYamlFrontmatter(block) : { frontmatter: {}, issues: [] };
+    return block
+      ? parseYamlFrontmatter(block)
+      : { frontmatter: {}, issues: [], structuredFields: [] };
   }
   return FRONTMATTER_OPENING_DELIMITER.test(normalized)
     ? {
         frontmatter: {},
+        structuredFields: [],
         issues: [
           {
             code: "UNTERMINATED_FRONTMATTER",
@@ -259,5 +265,5 @@ export function parseFrontmatterBlockResult(content: string): ParsedFrontmatterB
           },
         ],
       }
-    : { frontmatter: {}, issues: [] };
+    : { frontmatter: {}, issues: [], structuredFields: [] };
 }

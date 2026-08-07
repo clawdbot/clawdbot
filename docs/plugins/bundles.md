@@ -203,13 +203,14 @@ them:
 
 ### Agent templates: inspected, not executed
 
-OpenClaw parses Claude `agents/` and Cursor `.cursor/agents/` Markdown files
-into normalized, metadata-only capability records. Run
+OpenClaw parses agent Markdown from Claude and Cursor bundles into normalized,
+metadata-only capability records. It recognizes default Claude `agents/`,
+default Cursor `.cursor/agents/`, and either format's manifest-declared agent roots. Run
 `openclaw plugins inspect <id>` for a template summary. Add `--json` to inspect
 the full record: source format, name, description, prompt file reference and
 digest, source path, model and effort hints, maximum-turn hint, requested tools
-and skills, supported execution hints, and fields retained with an unsupported
-reason. Malformed definitions produce diagnostics instead of stopping bundle
+and skills, supported execution hints, and unsupported field names with their
+reasons. Malformed definitions produce diagnostics instead of stopping bundle
 loading.
 
 These records are **not executable**. Discovery does not instantiate an
@@ -298,10 +299,10 @@ Other detected-but-not-executed surfaces remain:
   <Accordion title="Cursor bundles">
     Markers: `.cursor-plugin/plugin.json`
 
-    Optional content: `skills/`, `.cursor/commands/`, `.cursor/agents/`, `.cursor/rules/`, `.cursor/hooks.json`, `.mcp.json`
+    Optional content: `skills/`, `.cursor/commands/`, `.cursor/agents/`, manifest-declared agent roots, `.cursor/rules/`, `.cursor/hooks.json`, `.mcp.json`
 
     - `.cursor/commands/` is treated as skill content
-    - `.cursor/agents/` definitions are parsed for inspection but are not executed
+    - `.cursor/agents/` and manifest-declared agent roots (commonly `agents/`) are parsed for inspection but are not executed
     - `.cursor/rules/` and `.cursor/hooks.json` are detect-only
 
   </Accordion>

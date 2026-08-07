@@ -258,7 +258,7 @@ describe("bundle plugins", () => {
       bundleFormat: fixture.bundleFormat,
       bundleAgentTemplates: [
         {
-          id: fixture.name,
+          id: `${fixture.pluginId}:${fixture.name}`,
           pluginId: fixture.pluginId,
           sourceFormat: fixture.bundleFormat,
           name: fixture.name,

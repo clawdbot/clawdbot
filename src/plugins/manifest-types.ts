@@ -39,7 +39,7 @@ export type BundleAgentUnsupportedField = {
 export type BundleAgentTemplate = {
   id: string;
   pluginId: string;
-  sourceFormat: PluginBundleFormat;
+  sourceFormat: "claude" | "cursor";
   name: string;
   description: string;
   prompt: BundlePromptReference;
@@ -62,6 +62,7 @@ export type BundleAgentTemplate = {
  * on these instead of matching freeform diagnostic message text.
  */
 export type PluginDiagnosticCode =
+  | "bundle-agent-metadata"
   | "channel-setup-failure"
   | "dashboard-declaration-invalid"
   | "plugin-verification";

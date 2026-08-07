@@ -566,7 +566,12 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
             .filter((plugin) => enabledPluginIds.has(plugin.id))
             .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.id))
             .map(normalizePreparedManifestRecord),
-          diagnostics: [...diagnostics],
+          diagnostics: [
+            ...diagnostics,
+            ...params.manifestRegistry.diagnostics.filter(
+              (diagnostic) => diagnostic.code === "bundle-agent-metadata",
+            ),
+          ],
         };
       }
       const candidates = params.index.plugins
