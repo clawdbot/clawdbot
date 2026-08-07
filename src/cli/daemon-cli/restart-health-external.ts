@@ -1,4 +1,8 @@
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
+import {
+  hasFreshGatewayStartupProgress,
+  type GatewayStartupProgressExpectation,
+} from "../../infra/gateway-startup-progress.js";
 import { sleep } from "../../utils.js";
 import {
   inspectGatewayPortHealth,
@@ -8,7 +12,10 @@ import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
 } from "./restart-health.constants.js";
-import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
+import type {
+  GatewayPortHealthSnapshot,
+  GatewayPortHealthWaitResult,
+} from "./restart-health.types.js";
 import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
 
 export async function waitForGatewayHealthyListener(params: {
@@ -17,10 +24,18 @@ export async function waitForGatewayHealthyListener(params: {
   delayMs?: number;
   previousLockIdentity?: GatewayLockIdentity;
   waitIndefinitelyForPreviousOwner?: boolean;
-}): Promise<GatewayPortHealthSnapshot> {
+  startupProgress?: GatewayStartupProgressExpectation;
+}): Promise<GatewayPortHealthWaitResult> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const previousLockIdentity = params.previousLockIdentity;
+  const finishWaiting = (current: GatewayPortHealthSnapshot): GatewayPortHealthWaitResult => ({
+    ...current,
+    waitOutcome:
+      params.startupProgress && hasFreshGatewayStartupProgress(params.startupProgress)
+        ? "still-starting"
+        : "timeout",
+  });
 
   const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
   let snapshot: GatewayPortHealthSnapshot = previousLockIdentity
@@ -51,7 +66,7 @@ export async function waitForGatewayHealthyListener(params: {
       waitIndefinitelyForPreviousOwner: params.waitIndefinitelyForPreviousOwner === true,
     });
     if (replacement.status === "timeout") {
-      return snapshot;
+      return finishWaiting(snapshot);
     }
     attempt = replacement.attemptsUsed;
     expectedListenerPid = replacement.lockIdentity.pid;
@@ -63,7 +78,7 @@ export async function waitForGatewayHealthyListener(params: {
   }
 
   if (snapshot.healthy) {
-    return snapshot;
+    return { ...snapshot, waitOutcome: "healthy" };
   }
   while (attempt < attempts) {
     attempt += 1;
@@ -74,9 +89,9 @@ export async function waitForGatewayHealthyListener(params: {
       expectedListenerPid,
     });
     if (snapshot.healthy) {
-      return snapshot;
+      return { ...snapshot, waitOutcome: "healthy" };
     }
   }
 
-  return snapshot;
+  return finishWaiting(snapshot);
 }

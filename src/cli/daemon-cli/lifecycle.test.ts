@@ -78,6 +78,7 @@ const restartSystemdService = vi.hoisted(() =>
 const stopSystemdService = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
 const isTerminalInteractive = vi.fn(() => true);
 const appendGatewayLifecycleAudit = vi.fn();
+const getFileLockProcessStartTime = vi.fn<(_pid: number) => number | null>(() => null);
 const createGatewayLifecycleMutationAudit = vi.fn(
   (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
     appendGatewayLifecycleAudit({
@@ -105,6 +106,8 @@ vi.mock("../../infra/gateway-processes.js", () => ({
     signalVerifiedGatewayPidSync(pid, signal),
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
 }));
+
+vi.mock("../../shared/pid-alive.js", () => ({ getFileLockProcessStartTime }));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   readActiveGatewayLockPort: () => readActiveGatewayLockPort(),
@@ -194,6 +197,7 @@ describe("runDaemonRestart health checks", () => {
   let runDaemonRestart: typeof import("./lifecycle.js").runDaemonRestart;
   let runDaemonStop: typeof import("./lifecycle.js").runDaemonStop;
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let postRestartWarnings: string[];
 
   function mockUnmanagedRestart({
     runPostRestartCheck = false,
@@ -207,7 +211,7 @@ describe("runDaemonRestart health checks", () => {
           await params.postRestartCheck?.({
             json: Boolean(params.opts?.json),
             stdout: process.stdout,
-            warnings: [],
+            warnings: postRestartWarnings,
             fail: (message: string) => {
               throw new Error(message);
             },
@@ -243,6 +247,7 @@ describe("runDaemonRestart health checks", () => {
       "OPENCLAW_SYSTEMD_UNIT",
     ]);
     delete process.env.OPENCLAW_CONTAINER_HINT;
+    postRestartWarnings = [];
     service.readCommand.mockReset();
     service.readRuntime.mockReset().mockResolvedValue({ status: "stopped" });
     service.restart.mockReset().mockResolvedValue({ outcome: "completed" });
@@ -271,6 +276,7 @@ describe("runDaemonRestart health checks", () => {
     repairLoadedGatewayServiceForStart.mockReset();
     isTerminalInteractive.mockReset().mockReturnValue(true);
     appendGatewayLifecycleAudit.mockClear();
+    getFileLockProcessStartTime.mockReset().mockReturnValue(null);
     createGatewayLifecycleMutationAudit.mockClear();
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
 
@@ -807,11 +813,18 @@ describe("runDaemonRestart health checks", () => {
 
   it("signals a single unmanaged gateway process on restart", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(Date, "now").mockReturnValue(123_456);
+    getFileLockProcessStartTime.mockReturnValue(777);
     isDefaultInstallIdentity.mockReturnValue(false);
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    waitForGatewayHealthyListener.mockResolvedValue({
+      healthy: false,
+      waitOutcome: "still-starting",
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+    });
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
-    await runDaemonRestart({ json: true });
+    await runDaemonRestart({ json: true, force: true });
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
@@ -824,6 +837,14 @@ describe("runDaemonRestart health checks", () => {
     });
     expect(probeGateway).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startupProgress: { pid: 4200, processStartTime: 777, requestedAtMs: 123_456 },
+      }),
+    );
+    expect(postRestartWarnings).toContain(
+      "Gateway restart was accepted and is still starting after 60s. Check progress with openclaw gateway status --deep.",
+    );
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();

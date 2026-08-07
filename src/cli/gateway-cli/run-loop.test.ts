@@ -139,9 +139,16 @@ const gatewayLog = {
   error: vi.fn(),
 };
 const flushLogger = vi.fn(async () => {});
+const withGatewayStartupProgress = vi.fn(
+  async <T>(_run: () => Promise<T>): Promise<T> => await _run(),
+);
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
+}));
+
+vi.mock("../../infra/gateway-startup-progress.js", () => ({
+  withGatewayStartupProgress: <T>(run: () => Promise<T>) => withGatewayStartupProgress(run),
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -456,6 +463,7 @@ function expectRestartHandoffCall(expected: {
 
 describe("runGatewayLoop", () => {
   it("keeps truncated startup failure reasons free of lone surrogates", async () => {
+    vi.clearAllMocks();
     await withIsolatedSignals(async () => {
       const failure = `${"a".repeat(499)}😀tail`;
       const { runtime } = createRuntimeWithExitSignal();
@@ -475,6 +483,7 @@ describe("runGatewayLoop", () => {
         (completeBoot.mock.calls[0]?.[0] as { reason?: string } | undefined)?.reason ?? "";
       expect(reason).toHaveLength(499);
       expect(Buffer.from(reason).toString()).toBe(reason);
+      expect(withGatewayStartupProgress).toHaveBeenCalledOnce();
     });
   });
 
@@ -745,6 +754,7 @@ describe("runGatewayLoop", () => {
       expectRestartCloseCall(closeFirst, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
+      expect(withGatewayStartupProgress).toHaveBeenCalledTimes(2);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -1652,6 +1662,9 @@ describe("runGatewayLoop", () => {
           expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(3);
           expect(start).toHaveBeenCalledTimes(2);
           expect(runtime.exit).not.toHaveBeenCalled();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
         } finally {
           sigterm();
           await expect(exited).resolves.toBe(0);

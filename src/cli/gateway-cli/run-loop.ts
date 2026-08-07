@@ -17,6 +17,7 @@ import {
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { withGatewayStartupProgress } from "../../infra/gateway-startup-progress.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -1066,10 +1067,13 @@ export async function runGatewayLoop(params: {
       try {
         await onIteration();
         startupStartedAt = Date.now();
-        await params.beginBoot?.(startupStartedAt);
-        server = await params.start({
-          startupStartedAt,
-          requestHotReloadRecovery: eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
+        server = await withGatewayStartupProgress(async () => {
+          await params.beginBoot?.(startupStartedAt);
+          return await params.start({
+            startupStartedAt,
+            requestHotReloadRecovery:
+              eagerLifecycleRuntime.requestGatewayRestartWithSignalAdmission,
+          });
         });
         startupFailedWithoutServerHandle = false;
         isFirstStart = false;

@@ -33,6 +33,8 @@ export {
 export { waitForGatewayHealthyListener } from "./restart-health-external.js";
 export type {
   GatewayPortHealthSnapshot,
+  GatewayPortHealthWaitOutcome,
+  GatewayPortHealthWaitResult,
   GatewayRestartSnapshot,
   GatewayRestartWaitOutcome,
 } from "./restart-health.types.js";

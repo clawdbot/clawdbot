@@ -1,6 +1,7 @@
 // Externally supervised gateway restart polling tests.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  hasFreshGatewayStartupProgress,
   inspectPortUsage,
   mockGatewayLockReplacement,
   probeGateway,
@@ -94,8 +95,37 @@ describe("restart health", () => {
     });
 
     expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("timeout");
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
     expect(inspectPortUsage).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports a bounded still-starting outcome only from fresh startup progress", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    hasFreshGatewayStartupProgress.mockReturnValue(true);
+    const startupProgress = {
+      pid: 4200,
+      processStartTime: 123,
+      requestedAtMs: 10_000,
+    };
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const result = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 2,
+      delayMs: 500,
+      startupProgress,
+    });
+
+    expect(result).toMatchObject({ healthy: false, waitOutcome: "still-starting" });
+    expect(hasFreshGatewayStartupProgress).toHaveBeenCalledOnce();
+    expect(hasFreshGatewayStartupProgress).toHaveBeenCalledWith(startupProgress);
+    expect(sleep).toHaveBeenCalledTimes(2);
   });
 });

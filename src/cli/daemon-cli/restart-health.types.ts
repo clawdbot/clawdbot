@@ -32,3 +32,9 @@ export type GatewayPortHealthSnapshot = {
   portUsage: PortUsage;
   healthy: boolean;
 };
+
+export type GatewayPortHealthWaitOutcome = "healthy" | "still-starting" | "timeout";
+
+export type GatewayPortHealthWaitResult = GatewayPortHealthSnapshot & {
+  waitOutcome: GatewayPortHealthWaitOutcome;
+};

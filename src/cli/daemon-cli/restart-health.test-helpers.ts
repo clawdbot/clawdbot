@@ -22,6 +22,7 @@ export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
 >(async () => ({ auth: {} }));
 const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
 export const readActiveGatewayLockIdentity = vi.fn();
+export const hasFreshGatewayStartupProgress = vi.fn<(_params: unknown) => boolean>(() => false);
 export const resolveGatewayServiceProbeHosts = vi.fn<
   (_params?: unknown) => Promise<readonly string[]>
 >(async () => ["127.0.0.1"]);
@@ -63,6 +64,10 @@ vi.mock("../../infra/gateway-lock.js", () => ({
       : previous.pid === current.pid &&
         previous.createdAt === current.createdAt &&
         previous.startTime === current.startTime,
+}));
+
+vi.mock("../../infra/gateway-startup-progress.js", () => ({
+  hasFreshGatewayStartupProgress: (params: unknown) => hasFreshGatewayStartupProgress(params),
 }));
 
 vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({
@@ -225,6 +230,8 @@ export function resetRestartHealthMocks() {
   hasActiveStartupMigrationLease.mockReturnValue(false);
   readActiveGatewayLockIdentity.mockReset();
   readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+  hasFreshGatewayStartupProgress.mockReset();
+  hasFreshGatewayStartupProgress.mockReturnValue(false);
   resolveGatewayServiceProbeHosts.mockReset();
   resolveGatewayServiceProbeHosts.mockResolvedValue(["127.0.0.1"]);
 }
