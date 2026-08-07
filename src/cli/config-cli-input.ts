@@ -24,6 +24,7 @@ import { formatCliCommand } from "./command-format.js";
 import {
   parseConfigSetPath,
   parseConfigSetValue,
+  rejectConfigNonFiniteNumbers,
   type PathSegment,
   toDotPath,
   validatePathSegments,
@@ -520,11 +521,14 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
       throw err;
     }
   }
+  let parsed: unknown;
   try {
-    return JSON5.parse(raw);
+    parsed = JSON5.parse(raw);
   } catch (err) {
     throw new Error(`Failed to parse ${sourceLabel} as JSON5: ${String(err)}`, { cause: err });
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {

@@ -157,20 +157,46 @@ export function parseConfigSetPath(path: string): string[] {
   return parsedPath;
 }
 
+export function rejectConfigNonFiniteNumbers(value: unknown): void {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`Value must be a finite number, got ${String(value)}`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      rejectConfigNonFiniteNumbers(entry);
+    }
+    return;
+  }
+  if (isPlainRecord(value)) {
+    for (const entry of Object.values(value)) {
+      rejectConfigNonFiniteNumbers(entry);
+    }
+  }
+}
+
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   const trimmed = raw.trim();
   if (strictJson) {
+    let parsed: unknown;
     try {
-      return JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
     } catch (err) {
       throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
     }
+    rejectConfigNonFiniteNumbers(parsed);
+    return parsed;
   }
+  let parsed: unknown;
   try {
-    return JSON5.parse(trimmed);
+    parsed = JSON5.parse(trimmed);
   } catch {
     return raw;
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 export function validatePathSegments(path: PathSegment[]): void {
