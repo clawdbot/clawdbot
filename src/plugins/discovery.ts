@@ -1048,6 +1048,10 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       diagnostics: params.diagnostics,
       rejectHardlinks,
     });
+    // Entry ids derive from basenames, so ./a/index.js and ./b/index.js would
+    // both become <pack>/index and one entry would silently vanish in the
+    // registry's same-id dedupe. Reject the colliding entries loudly instead.
+    const entryIdSources = new Map<string, string[]>();
     for (const source of resolvedRuntimeSources) {
       const idHint = deriveIdHint({
         filePath: source,
@@ -1056,7 +1060,29 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
         fallbackId: path.basename(dir),
         hasMultipleExtensions: extensions.length > 1,
       });
-      addPackageCandidate(source, idHint, extensions.length > 1 ? idHint : undefined);
+      const sources = entryIdSources.get(idHint);
+      if (sources) {
+        sources.push(source);
+      } else {
+        entryIdSources.set(idHint, [source]);
+      }
+    }
+    for (const [idHint, sources] of entryIdSources) {
+      if (extensions.length > 1 && sources.length > 1) {
+        params.diagnostics.push({
+          level: "error",
+          pluginId: idHint,
+          source: dir,
+          message:
+            `plugin package entries collide on derived id "${idHint}" ` +
+            `(${sources.map((s) => path.relative(dir, s)).join(", ")}); ` +
+            "rename the entry files to unique basenames",
+        });
+        continue;
+      }
+      for (const source of sources) {
+        addPackageCandidate(source, idHint, extensions.length > 1 ? idHint : undefined);
+      }
     }
     return true;
   }

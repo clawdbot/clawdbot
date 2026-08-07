@@ -947,6 +947,34 @@ describe("discoverOpenClawPlugins", () => {
     ]);
   });
 
+  it("rejects pack entries whose basenames collide on the same derived id", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "pack");
+    mkdirSafe(path.join(globalExt, "src", "a"));
+    mkdirSafe(path.join(globalExt, "src", "b"));
+    mkdirSafe(path.join(globalExt, "dist", "a"));
+    mkdirSafe(path.join(globalExt, "dist", "b"));
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "pack",
+      extensions: ["./src/a/index.ts", "./src/b/index.ts"],
+    });
+    writePluginManifest({ pluginDir: globalExt, id: "pack" });
+    writePluginEntry(path.join(globalExt, "src", "a", "index.ts"));
+    writePluginEntry(path.join(globalExt, "src", "b", "index.ts"));
+    writePluginEntry(path.join(globalExt, "dist", "a", "index.js"));
+    writePluginEntry(path.join(globalExt, "dist", "b", "index.js"));
+
+    const discovery = await discoverWithStateDir(stateDir, {});
+    // Neither colliding entry may silently win the shared id.
+    expect(discovery.candidates.filter((c) => c.idHint === "pack/index")).toHaveLength(0);
+    const collision = discovery.diagnostics.find((diag) =>
+      diag.message.includes('collide on derived id "pack/index"'),
+    );
+    expect(collision?.level).toBe("error");
+  });
+
   it("discovers untracked global package plugins that point at TypeScript source", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "local-source-pack");
