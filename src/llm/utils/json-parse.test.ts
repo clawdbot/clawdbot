@@ -161,7 +161,7 @@ describe("repairJsonChunk incremental/non-incremental equivalence (fuzz)", () =>
   });
 });
 
-describe("streaming JSON preview (incremental repair + time-bounded reparse)", () => {
+describe("streaming JSON preview (incremental repair + growth-gated reparse)", () => {
   it("resolves large multi-chunk arguments correctly via finalizeStreamingJsonPreview", () => {
     const content = "The quarterly value exchange report. ".repeat(1500); // ~57KB
     const expected = { filename: "report.docx", content };
@@ -170,56 +170,92 @@ describe("streaming JSON preview (incremental repair + time-bounded reparse)", (
     const state = createStreamingJsonPreviewState();
     const chunkSize = 40;
     for (let i = 0; i < fullJson.length; i += chunkSize) {
-      pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize), { now: i });
+      pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize));
     }
     const finalValue = finalizeStreamingJsonPreview(state);
     expect(finalValue).toEqual(expected);
   });
 
-  it("keeps the preview live (not frozen) across a large payload even though full reparse is time-capped", () => {
+  it("keeps the preview live (not frozen) across a large payload as it grows", () => {
     const content = "The quarterly value exchange report. ".repeat(1500);
     const fullJson = JSON.stringify({ filename: "report.docx", content });
 
     const state = createStreamingJsonPreviewState();
     const chunkSize = 40;
     const distinctContentLengths = new Set<number>();
-    // Advance `now` by 5ms per delta - some calls land inside the same
-    // 20ms window (exercising the cap) and some don't, mirroring bursty
-    // real-world network delivery.
-    let now = 0;
     for (let i = 0; i < fullJson.length; i += chunkSize) {
-      const value = pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize), { now });
+      const value = pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize));
       const previewContent = value.content;
       if (typeof previewContent === "string") {
         distinctContentLengths.add(previewContent.length);
       }
-      now += 5;
     }
     // The old size-threshold design froze after 8_000 chars and produced a
-    // single stale value for the rest of a ~57KB stream. The time-based cap
-    // must keep refreshing throughout, not just near the very start.
-    expect(distinctContentLengths.size).toBeGreaterThan(50);
+    // single stale value for the rest of a ~57KB stream. The growth gate
+    // must keep refreshing throughout (on a logarithmic cadence, not every
+    // delta - see the "bounds the number of full reparses" test below), not
+    // just near the very start.
+    expect(distinctContentLengths.size).toBeGreaterThan(10);
   });
 
-  it("reuses the last value when calls land within the reparse interval, and always refreshes when forced", () => {
+  it("bounds the number of full reparses to O(log n) regardless of delta granularity (cadence-independent cost)", () => {
+    const content = "The quarterly value exchange report. ".repeat(1500); // ~57KB
+    const fullJson = JSON.stringify({ filename: "report.docx", content });
+
+    // A per-delta full reparse (the O(n^2) bug this module exists to fix)
+    // would scale linearly with the number of deltas: ~1,425 deltas at
+    // chunkSize 40, or ~57,000 at chunkSize 1. An earlier, wall-clock-based
+    // version of this gate only bounded cost for deltas arriving faster
+    // than its interval - deltas spaced further apart (an entirely ordinary
+    // network cadence) still triggered a full reparse every time. This gate
+    // has no time input at all, so cadence can't affect it; the closest
+    // analog we can exercise deterministically is delta *granularity*
+    // (the same payload split into far more, far smaller deltas), which
+    // this must not multiply the reparse count for.
+    function countFullReparses(chunkSize: number): number {
+      const state = createStreamingJsonPreviewState();
+      let reparseCount = 0;
+      let previous: Record<string, unknown> | undefined;
+      for (let i = 0; i < fullJson.length; i += chunkSize) {
+        const value = pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize));
+        if (value !== previous) {
+          reparseCount += 1;
+          previous = value;
+        }
+      }
+      return reparseCount;
+    }
+
+    const reparsesAtChunk40 = countFullReparses(40);
+    const reparsesAtChunk1 = countFullReparses(1);
+
+    expect(reparsesAtChunk40).toBeLessThan(40);
+    expect(reparsesAtChunk1).toBeLessThan(40);
+    // Splitting the exact same ~57KB payload into ~57,000 one-character
+    // deltas instead of ~1,425 forty-character deltas must not multiply the
+    // reparse count - only the total accumulated size drives it.
+    expect(Math.abs(reparsesAtChunk1 - reparsesAtChunk40)).toBeLessThan(10);
+  });
+
+  it("reuses the last value below the growth threshold, and always refreshes when forced", () => {
     const state = createStreamingJsonPreviewState();
-    const first = pushStreamingJsonPreview(state, '{"a":"1', { now: 1000 });
-    const second = pushStreamingJsonPreview(state, "2", { now: 1005 }); // within 20ms
+    const first = pushStreamingJsonPreview(state, '{"a":"1');
+    const second = pushStreamingJsonPreview(state, "2"); // 1 byte of growth, well under the floor
     expect(second).toBe(first); // same cached value, no reparse triggered
 
-    const third = pushStreamingJsonPreview(state, '3"}', { now: 1005, force: true });
+    const third = pushStreamingJsonPreview(state, '3"}', { force: true });
     expect(third).not.toBe(first);
     expect(third).toEqual({ a: "123" });
 
-    const fourth = pushStreamingJsonPreview(state, "", { now: 1030 }); // past the interval
+    const fourth = pushStreamingJsonPreview(state, ""); // no new bytes at all
     expect(fourth).toEqual({ a: "123" });
   });
 
   it("finalizeStreamingJsonPreview definitively resolves a value ending mid-escape-sequence", () => {
     const state = createStreamingJsonPreviewState();
-    pushStreamingJsonPreview(state, '{"path":"C:\\Users\\bob', { now: 0 });
-    pushStreamingJsonPreview(state, "\\", { now: 1 }); // dangling backslash at chunk boundary
-    pushStreamingJsonPreview(state, 'temp"}', { now: 2 });
+    pushStreamingJsonPreview(state, '{"path":"C:\\Users\\bob');
+    pushStreamingJsonPreview(state, "\\"); // dangling backslash at chunk boundary
+    pushStreamingJsonPreview(state, 'temp"}');
     const finalValue = finalizeStreamingJsonPreview(state);
     expect(finalValue).toEqual({ path: "C:\\Users\\bob\\temp" });
   });

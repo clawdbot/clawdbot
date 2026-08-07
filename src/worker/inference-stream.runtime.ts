@@ -35,9 +35,10 @@ type StreamingToolCall = ToolCall & {
 // the shared fix - this adapter can receive the same raw per-delta stream
 // forwarded from that provider via Worker inference). `pushStreamingJsonPreview`
 // keeps the live preview refreshing on every delta via an incremental JSON
-// repair step, while capping the remaining (unavoidably O(buffer-size))
-// JSON.parse/partial-json fallback to at most once per 20ms of wall-clock
-// time - see packages/ai/src/utils/json-parse.ts for the full rationale.
+// repair step, while gating the remaining (unavoidably O(buffer-size))
+// JSON.parse/partial-json fallback on cumulative buffer growth rather than
+// elapsed time, so the cost bound holds regardless of delta cadence - see
+// packages/ai/src/utils/json-parse.ts for the full rationale.
 
 type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
@@ -203,7 +204,7 @@ function processInferenceEvent(
       }
       const streaming = content as StreamingToolCall;
       // Always force one final, unthrottled resolution from the complete
-      // buffer here, regardless of the reparse-interval cap applied to the
+      // buffer here, regardless of the reparse growth gate applied to the
       // live preview above - this guarantees correctness independent of
       // stream timing.
       content.arguments = streaming.jsonPreview

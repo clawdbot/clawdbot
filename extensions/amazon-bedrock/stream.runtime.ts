@@ -102,14 +102,15 @@ type BedrockEventSink = { push(event: AssistantMessageEvent): void };
  * genuinely incremental (O(delta) per call, proven byte-identical to the
  * non-incremental repair via a differential fuzz test), and the remaining
  * JSON.parse/partial-json fallback - which has no incremental API and must
- * still scan the whole buffer - is capped to at most once per
- * `MIN_STREAMING_JSON_REPARSE_INTERVAL_MS` (20ms) of wall-clock time rather
- * than once per delta. 20ms is far below anything perceptible as "stale" (a
- * 60fps frame is ~16ms), so the live preview keeps refreshing continuously
- * for arguments of any realistic size, unlike the previous design which
- * simply froze the preview once a size threshold was crossed.
- * `handleContentBlockStop` still forces one final, unthrottled resolution
- * (see below) so correctness never depends on the interval.
+ * still scan the whole buffer - only re-runs once the buffer has grown by
+ * `STREAMING_JSON_REPARSE_GROWTH_FACTOR` since the last full parse (a
+ * cumulative-work/amortized-doubling bound, not a wall-clock interval - see
+ * that constant's doc comment for why gating on elapsed time doesn't
+ * actually bound total cost regardless of delta cadence). The live preview
+ * keeps refreshing continuously for arguments of any realistic size, unlike
+ * the previous design which simply froze the preview once a size threshold
+ * was crossed. `handleContentBlockStop` still forces one final, unthrottled
+ * resolution (see below) so correctness never depends on the growth gate.
  */
 
 function getOrCreateJsonPreview(block: Block): StreamingJsonPreviewState {

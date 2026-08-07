@@ -337,25 +337,41 @@ function peekPendingRepairedTail(state: RepairJsonState): string {
 }
 
 /**
- * Below this interval, skip re-running the full JSON.parse/partial-json
- * fallback chain and reuse the last computed preview value. Incremental
- * repair (above) already makes the repair step itself O(delta), but
- * JSON.parse/partial-json have no incremental API and must still scan the
- * *entire* buffer on every call, so calling them once per (potentially
- * tiny, sub-millisecond-apart) delta is still O(n^2) in aggregate for very
- * large arguments. 20ms is far below anything a human or a downstream
- * consumer could perceive as "stale" (60fps rendering is ~16ms/frame), so
- * in practice this never visibly freezes the preview the way a size-based
- * cutoff would - it only bounds the worst case for pathologically large or
- * fast-arriving arguments.
+ * Gates the full JSON.parse/partial-json fallback chain by how much the
+ * repaired buffer has *grown* since the last full parse, not by elapsed
+ * wall-clock time. Incremental repair (above) already makes the repair step
+ * itself O(delta), but JSON.parse/partial-json have no incremental API and
+ * must still scan the *entire* buffer on every call.
+ *
+ * An earlier revision of this gate used a wall-clock interval instead (skip
+ * re-parsing if fewer than N ms have passed since the last parse). That only
+ * bounds cost for deltas arriving *faster* than the interval: a delta
+ * arriving N ms or later after the last parse - an entirely ordinary
+ * cadence for network-delivered streams, not a pathological edge case -
+ * would still trigger a full reparse of the *entire* accumulated buffer on
+ * every single such delta, leaving the O(n^2) behavior this module exists
+ * to remove fully intact for that (very realistic) cadence.
+ *
+ * Requiring the buffer to grow by at least `STREAMING_JSON_REPARSE_GROWTH_FACTOR`
+ * (a fraction of the size already parsed) before the *next* full reparse
+ * removes cadence from the cost bound entirely: it doesn't matter whether
+ * that growth arrives in one delta or ten thousand, or over a millisecond or
+ * a minute. Reparses then happen at sizes L, L*(1+f), L*(1+f)^2, ... up to
+ * n - the classic amortized-doubling series, whose *sum* is O(n) regardless
+ * of delta timing (same trade-off dynamic arrays make when growing by a
+ * multiple rather than a fixed increment). `STREAMING_JSON_REPARSE_MIN_GROWTH_BYTES`
+ * is just a floor so tiny buffers (where a full reparse is already
+ * effectively free) keep refreshing on every delta instead of waiting for a
+ * proportionally tiny amount of growth.
  */
-export const MIN_STREAMING_JSON_REPARSE_INTERVAL_MS = 20;
+export const STREAMING_JSON_REPARSE_GROWTH_FACTOR = 0.5;
+export const STREAMING_JSON_REPARSE_MIN_GROWTH_BYTES = 256;
 
 export interface StreamingJsonPreviewState {
   raw: string;
   repairedSoFar: string;
   repairState: RepairJsonState;
-  lastParseAt: number;
+  lastParsedLength: number;
   lastParsedValue: Record<string, unknown>;
 }
 
@@ -364,7 +380,7 @@ export function createStreamingJsonPreviewState(): StreamingJsonPreviewState {
     raw: "",
     repairedSoFar: "",
     repairState: createRepairJsonState(),
-    lastParseAt: 0,
+    lastParsedLength: 0,
     lastParsedValue: {},
   };
 }
@@ -373,32 +389,35 @@ export function createStreamingJsonPreviewState(): StreamingJsonPreviewState {
  * Incremental, always-live replacement for `buffer += delta;
  * parseStreamingJson(buffer)`. Every delta is incorporated into the repaired
  * buffer immediately (cheap - see `repairJsonChunk`); the full
- * JSON.parse/partial-json resolution is refreshed on every call unless one
- * already ran within the last `MIN_STREAMING_JSON_REPARSE_INTERVAL_MS`, in
- * which case the previous value is reused. Pass `force: true` (e.g. once
- * streaming for this value has ended) to bypass the interval and guarantee a
- * fresh parse.
+ * JSON.parse/partial-json resolution is refreshed once the repaired buffer
+ * has grown enough since the last full parse (see the growth-gate comment
+ * above), and the previous value is reused otherwise. Pass `force: true`
+ * (e.g. once streaming for this value has ended) to bypass the gate and
+ * guarantee a fresh parse.
  */
 export function pushStreamingJsonPreview(
   state: StreamingJsonPreviewState,
   delta: string,
-  options?: { force?: boolean; now?: number },
+  options?: { force?: boolean },
 ): Record<string, unknown> {
   state.raw += delta;
   state.repairedSoFar += repairJsonChunk(delta, state.repairState, false);
 
-  const now = options?.now ?? Date.now();
   const force = options?.force ?? false;
+  const previewRepaired = state.repairedSoFar + peekPendingRepairedTail(state.repairState);
+  const growthNeeded = Math.max(
+    STREAMING_JSON_REPARSE_MIN_GROWTH_BYTES,
+    Math.floor(state.lastParsedLength * STREAMING_JSON_REPARSE_GROWTH_FACTOR),
+  );
   if (
     !force &&
-    state.lastParseAt !== 0 &&
-    now - state.lastParseAt < MIN_STREAMING_JSON_REPARSE_INTERVAL_MS
+    state.lastParsedLength !== 0 &&
+    previewRepaired.length - state.lastParsedLength < growthNeeded
   ) {
     return state.lastParsedValue;
   }
 
-  state.lastParseAt = now;
-  const previewRepaired = state.repairedSoFar + peekPendingRepairedTail(state.repairState);
+  state.lastParsedLength = previewRepaired.length;
   state.lastParsedValue = parseStreamingJsonFromParts(state.raw, previewRepaired);
   return state.lastParsedValue;
 }
@@ -407,14 +426,14 @@ export function pushStreamingJsonPreview(
  * Forces a final, unthrottled resolution from the complete buffer,
  * definitively resolving any still-pending escape sequence. Call this once
  * streaming for the value has ended (e.g. at content-block-stop /
- * toolcall_end) to guarantee correctness regardless of the reparse-interval
- * cap in `pushStreamingJsonPreview`.
+ * toolcall_end) to guarantee correctness regardless of the reparse growth
+ * gate in `pushStreamingJsonPreview`.
  */
 export function finalizeStreamingJsonPreview(
   state: StreamingJsonPreviewState,
 ): Record<string, unknown> {
   state.repairedSoFar += repairJsonChunk("", state.repairState, true);
-  state.lastParseAt = Date.now();
+  state.lastParsedLength = state.repairedSoFar.length;
   state.lastParsedValue = parseStreamingJsonFromParts(state.raw, state.repairedSoFar);
   return state.lastParsedValue;
 }
