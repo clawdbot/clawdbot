@@ -779,7 +779,10 @@ protocol UpdaterProviding: AnyObject {
 
 extension UpdaterProviding {
     func start() {}
-    func startAfterResolvingGatewayUpdateChannel() { self.start() }
+
+    func startAfterResolvingGatewayUpdateChannel() {
+        self.start()
+    }
 }
 
 /// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
@@ -836,9 +839,8 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
             guard let data = try? await GatewayConnection.shared.requestRaw(
                 method: "update.status",
                 timeoutMs: 5000),
-                  let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data),
-                  let channel = OpenClawConfigFile.normalizedGatewayUpdateChannel(
-                      response.effectiveChannel)
+                let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data),
+                let channel = OpenClawConfigFile.normalizedGatewayUpdateChannel(response.effectiveChannel)
             else { return }
             self.gatewayUpdateChannel = channel
             self.start()
