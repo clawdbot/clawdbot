@@ -76,6 +76,10 @@ function normalizeCliBackendThinkingLevel(
   return level === "ultra" ? "max" : level;
 }
 
+function normalizeCliEnvKey(key: string): string {
+  return process.platform === "win32" ? key.toUpperCase() : key;
+}
+
 function exactToolAvailabilityError(params: {
   code: "unsupported" | "runtime-unavailable";
   isolatedCompletion: boolean;
@@ -404,10 +408,12 @@ export async function executePreparedCliRun(
         Boolean(context.preparedBackend.secretInput) ||
         [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
       const selectedClaudeClearEnv = hasSelectedClaudeAuth
-        ? new Set(backend.clearEnv ?? [])
+        ? new Set((backend.clearEnv ?? []).map(normalizeCliEnvKey))
         : undefined;
       const configuredBackendEnv = Object.fromEntries(
-        Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
+        Object.entries(backend.env ?? {}).filter(
+          ([key]) => !selectedClaudeClearEnv?.has(normalizeCliEnvKey(key)),
+        ),
       );
       const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
@@ -420,9 +426,18 @@ export async function executePreparedCliRun(
           }
         : undefined;
       const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
-      const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
-      for (const key of backend.clearEnv ?? []) {
-        if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
+      const preservedEnv = new Set(
+        [...parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV])].map(
+          normalizeCliEnvKey,
+        ),
+      );
+      const clearEnv = new Set((backend.clearEnv ?? []).map(normalizeCliEnvKey));
+      for (const key of Object.keys(env)) {
+        const normalizedKey = normalizeCliEnvKey(key);
+        if (
+          clearEnv.has(normalizedKey) &&
+          (!preservedEnv.has(normalizedKey) || selectedClaudeClearEnv?.has(normalizedKey))
+        ) {
           delete env[key];
         }
       }

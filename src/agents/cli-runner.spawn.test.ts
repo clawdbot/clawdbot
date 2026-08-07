@@ -5543,6 +5543,33 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("honors case-insensitive clearEnv keys on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    process.env.AI_AGENT = "inherited";
+    try {
+      mockSuccessfulCliRun();
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          backend: {
+            env: { SAFE_KEEP: "keep-me" },
+            clearEnv: ["ai_agent"],
+          },
+        }),
+        "thread-123",
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as {
+        env?: Record<string, string | undefined>;
+      };
+      expect(input.env?.AI_AGENT).toBeUndefined();
+      expect(input.env?.SAFE_KEEP).toBe("keep-me");
+    } finally {
+      delete process.env.AI_AGENT;
+    }
+  });
+
   it("collapses Windows AI agent aliases when applying backend env overrides", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     process.env.AI_AGENT = "inherited";
