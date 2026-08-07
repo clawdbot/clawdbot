@@ -132,6 +132,7 @@ const stopTimeoutMs = 30_000;
 const starts = [];
 let child;
 let stopping = false;
+let stoppingGroupPid;
 
 const finish = () => {
   try {
@@ -140,12 +141,48 @@ const finish = () => {
   process.exit(0);
 };
 
+const signalProcessGroup = (pid, signal) => {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      fs.writeSync(output, `[systemctl-shim] gateway process group ${signal} failed: ${String(error)}\n`);
+    }
+  }
+};
+
+const isProcessGroupRunning = (pid) => {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+};
+
 const stop = () => {
   if (stopping) return;
   stopping = true;
   if (!child) return finish();
-  child.kill("SIGTERM");
-  setTimeout(() => child?.kill("SIGKILL"), stopTimeoutMs).unref();
+  stoppingGroupPid = child.pid;
+  if (!stoppingGroupPid) {
+    child.kill("SIGTERM");
+    return;
+  }
+  signalProcessGroup(stoppingGroupPid, "SIGTERM");
+  const forceKill = setTimeout(() => {
+    signalProcessGroup(stoppingGroupPid, "SIGKILL");
+    finish();
+  }, stopTimeoutMs);
+  const finishWhenStopped = () => {
+    if (isProcessGroupRunning(stoppingGroupPid)) {
+      setTimeout(finishWhenStopped, 25);
+      return;
+    }
+    clearTimeout(forceKill);
+    finish();
+  };
+  finishWhenStopped();
 };
 
 const start = () => {
@@ -160,6 +197,7 @@ const start = () => {
   }
   starts.push(now);
   child = spawn("bash", ["-lc", `exec ${command}`], {
+    detached: true,
     env: childEnv,
     stdio: ["ignore", output, output],
   });
@@ -168,7 +206,10 @@ const start = () => {
   });
   child.once("close", (code) => {
     child = undefined;
-    if (stopping) return finish();
+    if (stopping) {
+      if (!stoppingGroupPid) return finish();
+      return;
+    }
     // Match the generated systemd unit's RestartPreventExitStatus contract.
     if (code === 78) return finish();
     setTimeout(start, restartDelayMs);

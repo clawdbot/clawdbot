@@ -94,9 +94,6 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "cron-scheduled-authority",
 ];
 
-// The representative OpenAI model route defaults to the version-bound Codex harness.
-const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
-
 const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
   ["reported-issues", UPGRADE_SURVIVOR_SCENARIOS],
   ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
@@ -679,12 +676,12 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
   const configuredChannelIds = new Set();
   const requiredPackages = new Set();
   for (const poolLane of poolLanes) {
+    for (const packageName of poolLane.prepublishPluginPackages ?? []) {
+      requiredPackages.add(packageName);
+    }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (!scenario) {
       continue;
-    }
-    for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
-      requiredPackages.add(packageName);
     }
     for (const channelId of configuredChannelIdsForLane(poolLane, scenario)) {
       configuredChannelIds.add(channelId);

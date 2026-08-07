@@ -200,6 +200,15 @@ async function waitForProcessExit(child: ChildProcess, timeoutMs = 5_000): Promi
   });
 }
 
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function cleanupSmokeLogTailHelpers(): string {
   const script = readFileSync(CLEANUP_SMOKE_RUN_PATH, "utf8");
   const match = script.match(
@@ -2651,7 +2660,10 @@ fi
         "delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;",
         'process.on("SIGTERM", stop);',
         "const stopTimeoutMs = 30_000;",
-        'setTimeout(() => child?.kill("SIGKILL"), stopTimeoutMs).unref();',
+        "process.kill(-pid, signal);",
+        'signalProcessGroup(stoppingGroupPid, "SIGTERM");',
+        'signalProcessGroup(stoppingGroupPid, "SIGKILL");',
+        "detached: true,",
         "if (code === 78) return finish();",
         "const restartDelayMs = 5_000;",
         "const restartWindowMs = 60_000;",
@@ -2749,6 +2761,98 @@ fi
       }
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates supervised gateway descendants at the systemd stop timeout",
+    async () => {
+      const workDir = tempDirs.make("openclaw-update-restart-process-group-");
+      const descendantPath = join(workDir, "descendant.mjs");
+      const gatewayPath = join(workDir, "gateway.mjs");
+      writeFileSync(
+        descendantPath,
+        `import fs from "node:fs";
+process.on("SIGTERM", () => {});
+fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid));
+setInterval(() => {}, 1_000);
+`,
+      );
+      writeFileSync(
+        gatewayPath,
+        `import fs from "node:fs";
+import { spawn } from "node:child_process";
+process.on("SIGTERM", () => {
+  setTimeout(() => {
+    fs.appendFileSync(process.env.STATE_FILE, "-graceful");
+    process.exit(0);
+  }, 50);
+});
+spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], { stdio: "ignore" });
+const ready = setInterval(() => {
+  if (!fs.existsSync(process.env.DESCENDANT_PID_FILE)) return;
+  clearInterval(ready);
+  fs.writeFileSync(process.env.STATE_FILE, "ready");
+}, 5);
+setInterval(() => {}, 1_000);
+`,
+      );
+      const scripts = [
+        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+      ];
+
+      for (const [index, script] of scripts.entries()) {
+        const supervisorPath = join(workDir, `process-group-supervisor-${index}.mjs`);
+        const statePath = join(workDir, `process-group-state-${index}`);
+        const descendantPidPath = join(workDir, `process-group-descendant-${index}.pid`);
+        const logPath = join(workDir, `process-group-daemon-${index}.log`);
+        const source = extractUpgradeSurvivorSupervisor(script).replace(
+          "const stopTimeoutMs = 30_000;",
+          "const stopTimeoutMs = 200;",
+        );
+        writeFileSync(supervisorPath, source);
+
+        const supervisor = spawn(process.execPath, [supervisorPath], {
+          env: {
+            ...process.env,
+            DESCENDANT_PID_FILE: descendantPidPath,
+            DESCENDANT_SCRIPT: descendantPath,
+            OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
+            STATE_FILE: statePath,
+          },
+          stdio: "ignore",
+        });
+        let descendantPid: number | undefined;
+        try {
+          for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt += 1) {
+            await delay(10);
+          }
+          expect(existsSync(statePath)).toBe(true);
+          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          expect(descendantPid).toBeGreaterThan(1);
+          expect(isProcessRunning(descendantPid)).toBe(true);
+
+          supervisor.kill("SIGTERM");
+          expect(await waitForProcessExit(supervisor)).toBe(0);
+          expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
+          for (let attempt = 0; attempt < 100 && isProcessRunning(descendantPid); attempt += 1) {
+            await delay(10);
+          }
+          expect(isProcessRunning(descendantPid)).toBe(false);
+        } finally {
+          if (supervisor.exitCode === null && supervisor.signalCode === null) {
+            supervisor.kill("SIGTERM");
+            await waitForProcessExit(supervisor).catch(() => undefined);
+          }
+          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
+            try {
+              process.kill(descendantPid, "SIGKILL");
+            } catch {}
+          }
+        }
+      }
+    },
+  );
 
   it.each([
     ["start budget", "OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", "90s"],
