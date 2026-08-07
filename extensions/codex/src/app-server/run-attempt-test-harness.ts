@@ -163,7 +163,7 @@ export function runCodexAppServerAttempt(
       options.agentHarnessCodingToolsFactory ??
       (async (_attempt, toolOptions) => {
         const factory = dynamicToolBuildState.openClawCodingToolsFactory;
-        return factory ? factory(toolOptions) : [];
+        return factory ? await factory(toolOptions) : [];
       }),
     bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
     ...(clientFactory ? { clientFactory } : {}),
