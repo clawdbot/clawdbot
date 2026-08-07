@@ -793,10 +793,11 @@ describe("node host invoke", () => {
             id: "invoke-suppress-notify-prepare",
             nodeId: "node-1",
             command: "system.run.prepare",
+            sessionKey: "agent:main:main",
             paramsJSON: JSON.stringify({
               command: [process.execPath, scriptPath],
               cwd: tempHome,
-              sessionKey: "agent:main:main",
+              sessionKey: "agent:forged:prepare",
             }),
           },
           { request } as unknown as GatewayClient,
@@ -816,12 +817,16 @@ describe("node host invoke", () => {
             id: "invoke-suppress-notify",
             nodeId: "node-1",
             command: "system.run",
+            sessionKey: "agent:main:main",
             paramsJSON: JSON.stringify({
               command: prepared.plan?.argv,
               rawCommand: prepared.plan?.commandText,
               cwd: prepared.plan?.cwd,
-              sessionKey: "agent:main:main",
-              systemRunPlan: prepared.plan,
+              sessionKey: "agent:forged:run",
+              systemRunPlan: {
+                ...prepared.plan,
+                sessionKey: "agent:forged:plan",
+              },
               approved: true,
               approvalDecision: "allow-once",
               suppressNotifyOnExit: true,
@@ -837,6 +842,7 @@ describe("node host invoke", () => {
             (params as { event?: string } | undefined)?.event === "exec.finished",
         )?.[1] as { payloadJSON?: string | null } | undefined;
         expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
+          sessionKey: "agent:main:main",
           suppressNotifyOnExit: true,
         });
       });

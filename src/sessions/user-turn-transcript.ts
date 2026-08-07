@@ -1,13 +1,16 @@
 // User turn transcript helpers extract user-turn text from session transcripts.
+import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
   persistSessionTranscriptTurn,
+  type TranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
+import { resolveUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
   buildLateResolvedMediaMessage,
   readUserTurnMessageMeta,
@@ -19,6 +22,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnMessagePersistenceParams,
   UserTurnInput,
+  UserTurnTranscriptAdmissionReceipt,
   UserTurnTranscriptPersistResult,
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -316,17 +320,23 @@ async function persistUserTurnTranscript(
   );
   const appended = turn.messages[0] as
     | {
+        anchor?: Omit<UserTurnTranscriptAdmissionReceipt, "logicalTurnId" | "role">;
         appended: boolean;
         messageId: string;
         message: PersistedUserTurnMessage;
       }
     | undefined;
-  if (!appended) {
+  if (!appended?.anchor || appended.message.role !== "user") {
     return undefined;
   }
 
   return {
     ...appended,
+    admission: {
+      ...appended.anchor,
+      logicalTurnId: params.logicalTurnId ?? randomUUID(),
+      role: "user",
+    },
     sessionEntry: turn.sessionEntry,
     sessionFile: params.sessionKey,
   };
@@ -341,11 +351,14 @@ async function resolveUserTurnTranscriptTarget(
 export function createUserTurnTranscriptRecorder(
   params: CreateUserTurnTranscriptRecorderParams,
 ): UserTurnTranscriptRecorder {
+  const logicalTurnId = randomUUID();
   let message = resolvePersistedUserTurnMessage(params);
   let blocked = false;
   let persisted = false;
   let runtimePersisted = false;
   let persistedResult: UserTurnTranscriptPersistResult | undefined;
+  let admissionReceipt: UserTurnTranscriptAdmissionReceipt | undefined;
+  let admittedMessage: PersistedUserTurnMessage | undefined;
   let runtimePersistencePromise: Promise<void> | undefined;
   let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
   let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
@@ -454,6 +467,17 @@ export function createUserTurnTranscriptRecorder(
     }
   };
 
+  const recordAdmission = (
+    receipt: TranscriptEntryAnchor | UserTurnTranscriptAdmissionReceipt,
+    persistedMessage: PersistedUserTurnMessage,
+  ) => {
+    if (admissionReceipt) {
+      return;
+    }
+    admissionReceipt = resolveUserTurnTranscriptAdmission({ logicalTurnId, receipt });
+    admittedMessage = persistedMessage;
+  };
+
   const waitForRuntimePersistence = async () => {
     if (!runtimePersistencePromise) {
       return;
@@ -516,6 +540,7 @@ export function createUserTurnTranscriptRecorder(
       ) =>
         await persistUserTurnTranscript({
           ...resolvedTarget,
+          logicalTurnId,
           message: candidate,
           ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
           ...((options.sessionLifecyclePatch ?? params.sessionLifecyclePatch)
@@ -547,6 +572,7 @@ export function createUserTurnTranscriptRecorder(
           if (admittedResult) {
             persisted = true;
             persistedResult = admittedResult;
+            recordAdmission(admittedResult.admission, admittedResult.message);
             notifyMessagePersisted(admittedResult.message);
           }
         }
@@ -567,6 +593,7 @@ export function createUserTurnTranscriptRecorder(
       if (result) {
         persisted = true;
         persistedResult = result;
+        recordAdmission(result.admission, result.message);
         notifyMessagePersisted(result.message);
       }
       return result;
@@ -596,7 +623,9 @@ export function createUserTurnTranscriptRecorder(
       message = applyReplacementText(message);
       resolvedMessagePromise = undefined;
     },
-    getPersistedMessage: () => runtimePersistedMessage ?? persistedResult?.message,
+    getPersistedMessage: () =>
+      admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
+    getAdmissionReceipt: () => admissionReceipt,
     replaceSessionDeliveryAckIds,
     markSentToProvider: () => {
       sentToProvider = true;
@@ -604,9 +633,12 @@ export function createUserTurnTranscriptRecorder(
     markRuntimePersistencePending: (pending) => {
       runtimePersistencePromise = pending;
     },
-    markRuntimePersisted: (persistedMessage) => {
+    markRuntimePersisted: (persistedMessage, receipt) => {
       runtimePersistedMessage = persistedMessage;
       runtimePersisted = true;
+      if (persistedMessage && receipt) {
+        recordAdmission(receipt, persistedMessage);
+      }
       if (persistedMessage && persistedResult) {
         persistedResult = {
           ...persistedResult,

@@ -5,6 +5,19 @@ export function resolveScenarioConfigSteps(scenario: string): Array<{
   intent: string;
   argv: string[];
 }>;
+export function resolveUpgradeSurvivorConfigSteps(scenario?: string): Array<{
+  id: string;
+  intent: string;
+  argv: string[];
+}>;
+export function resolveUpgradeSurvivorConfigStepsForBaseline(
+  scenario?: string,
+  baselineVersion?: string | null,
+): Array<{
+  id: string;
+  intent: string;
+  argv: string[];
+}>;
 export function resolveUpgradeSurvivorOpenClawCommand(
   argv: unknown,
   params?: Record<string, unknown>,

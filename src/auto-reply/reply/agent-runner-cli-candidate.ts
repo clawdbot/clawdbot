@@ -1,3 +1,4 @@
+import { rebindAgentExecutionAttribution } from "../../agents/agent-execution-attribution.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
@@ -7,6 +8,7 @@ import {
 } from "../../agents/cli-session.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
@@ -14,6 +16,15 @@ import {
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import {
+  assertAgentRunAttributionCompatible,
+  claimAgentRunContext,
+  getAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -59,12 +70,15 @@ export async function runCliFallbackCandidate(params: {
   candidateThinkLevel?: ThinkLevel;
   candidateFastMode: Pick<RunCliAgentParams, "fastMode" | "fastModeAutoOnSeconds">;
   runId: string;
-  lifecycleGeneration: string;
+  getLifecycleGeneration: () => string;
+  onLifecycleGeneration: (generation: string) => void;
   runAbortSignal?: AbortSignal;
   runLane: RunCliAgentParams["lane"];
   isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunCliAgentParams["userTurnTranscriptRecorder"];
+  contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
+  onContextEngineTurnCandidate: RunCliAgentParams["onContextEngineTurnCandidate"];
   notifyUserMessagePersisted: () => void;
   fastModeStartedAtMs: number;
   fastModeAutoProgressState: FastModeAutoProgressState;
@@ -93,7 +107,7 @@ export async function runCliFallbackCandidate(params: {
     runId: params.runId,
     sessionKey: turn.sessionKey,
     startedAt: cliLifecycleStartedAt,
-    getLifecycleGeneration: () => params.lifecycleGeneration,
+    getLifecycleGeneration: params.getLifecycleGeneration,
     resolveTerminationFields: (error) => ({
       ...resolveAgentRunErrorLifecycleFields(error, params.runAbortSignal),
       ...(isReplyOperationRestartAbort(turn.replyOperation)
@@ -158,6 +172,7 @@ export async function runCliFallbackCandidate(params: {
   const bridgeCliDurableCommentary =
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
+  const queuedLifecycleGeneration = params.getLifecycleGeneration();
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -167,12 +182,50 @@ export async function runCliFallbackCandidate(params: {
         runId: params.runId,
       },
       () => {
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        // Background admission is tied to the gateway generation that queued it.
+        // Only foreground work may rebind after placement waits across a restart.
+        if (turn.isHeartbeat && lifecycleGeneration !== queuedLifecycleGeneration) {
+          assertAgentRunLifecycleGenerationCurrent(queuedLifecycleGeneration);
+        }
         // Admission may wait behind another turn that starts detached media.
         // Snapshot only after this turn owns the session placement.
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
+        const attribution =
+          turn.attribution?.lifecycleGeneration === lifecycleGeneration
+            ? turn.attribution
+            : turn.attribution
+              ? rebindAgentExecutionAttribution(turn.attribution, lifecycleGeneration)
+              : undefined;
+        if (lifecycleGeneration !== params.getLifecycleGeneration()) {
+          params.onLifecycleGeneration(lifecycleGeneration);
+        }
+        const existingContext = getAgentRunContext(params.runId);
+        const existingAttribution =
+          existingContext?.lifecycleGeneration === lifecycleGeneration
+            ? existingContext.attribution
+            : undefined;
+        assertAgentRunAttributionCompatible(existingAttribution, attribution);
+        if (attribution !== turn.attribution) {
+          turn.attribution = attribution;
+        }
+        const {
+          attribution: _existingAttribution,
+          registeredAt: _registeredAt,
+          ...reboundRunContext
+        } = existingContext ?? {};
+        claimAgentRunContext(params.runId, {
+          // Re-admission starts a new TTL window after placement waits or rotation.
+          ...reboundRunContext,
+          ...(attribution ? { attribution } : {}),
+          sessionKey: turn.sessionKey,
+          sessionId: turn.followupRun.run.sessionId,
+          agentId: turn.followupRun.run.agentId,
+          lifecycleGeneration,
+        });
         return runCliAgentWithLifecycle({
           runId: params.runId,
-          lifecycleGeneration: params.lifecycleGeneration,
+          lifecycleGeneration,
           provider: params.cliExecutionProvider,
           startedAt: cliLifecycleStartedAt,
           emitLifecycleTerminal: false,
@@ -321,6 +374,7 @@ export async function runCliFallbackCandidate(params: {
                   })
               : undefined,
           runParams: {
+            ...(attribution ? { attribution } : {}),
             sessionId: turn.followupRun.run.sessionId,
             sessionKey: turn.sessionKey,
             chatType:
@@ -341,6 +395,8 @@ export async function runCliFallbackCandidate(params: {
             media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             onUserMessagePersisted: params.notifyUserMessagePersisted,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&
@@ -363,6 +419,7 @@ export async function runCliFallbackCandidate(params: {
             timeoutMs: turn.followupRun.run.timeoutMs,
             runTimeoutOverrideMs: turn.followupRun.run.runTimeoutOverrideMs,
             runId: params.runId,
+            lifecycleGeneration,
             lane: params.runLane,
             extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,

@@ -732,6 +732,9 @@ importers:
       '@opentelemetry/api-logs':
         specifier: 0.221.0
         version: 0.221.0
+      '@opentelemetry/context-async-hooks':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/core':
         specifier: 2.10.0
         version: 2.10.0(@opentelemetry/api@1.9.1)
@@ -744,6 +747,12 @@ importers:
       '@opentelemetry/exporter-trace-otlp-proto':
         specifier: 0.221.0
         version: 0.221.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/propagator-b3':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/propagator-jaeger':
+        specifier: 2.10.0
+        version: 2.10.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources':
         specifier: 2.10.0
         version: 2.10.0(@opentelemetry/api@1.9.1)

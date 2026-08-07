@@ -78,7 +78,21 @@ const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
+  // The plugin-facing API is a JavaScript boundary. Strip host-only fields even
+  // when an untyped caller adds them to the public params object.
+  const {
+    attribution: _attribution,
+    onExecutionAttributionChanged: _onExecutionAttributionChanged,
+    ...publicParams
+  } = paramsInput as RunEmbeddedAgentParams &
+    Pick<RunEmbeddedAgentInternalParams, "attribution" | "onExecutionAttributionChanged">;
+  return runEmbeddedAgentInternal(publicParams);
+}
+
+export function runEmbeddedAgentInternal(
+  paramsInput: RunEmbeddedAgentInternalParams,
+): Promise<EmbeddedAgentRunResult> {
+  const internalParamsInput = paramsInput;
   const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
   const requestedModel = normalizeOptionalString(internalParamsInput.model);
   const needsConfiguredDefault =
@@ -90,7 +104,7 @@ export function runEmbeddedAgent(
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runEmbeddedAgentInternal({
+    runEmbeddedAgentOrchestrated({
       ...internalParamsInput,
       config,
       lifecycleGeneration,
@@ -98,7 +112,7 @@ export function runEmbeddedAgent(
   );
 }
 
-async function runEmbeddedAgentInternal(
+async function runEmbeddedAgentOrchestrated(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
@@ -315,6 +329,10 @@ async function runEmbeddedAgentInternal(
             tracker: startupStages,
           });
           params.onExecutionStarted?.({ lifecycleGeneration });
+          params.onExecutionAttributionChanged?.({
+            lifecycleGeneration,
+            ...(params.attribution ? { attribution: params.attribution } : {}),
+          });
           notifyExecutionPhase("runner_entered");
           const canonicalWorkspace = resolveUserPath(
             resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),

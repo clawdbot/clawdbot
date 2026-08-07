@@ -3,7 +3,7 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import { createOpenClawCodingTools } from "../../agent-tools.js";
+import { createOpenClawCodingToolsForRuntime } from "../../agent-tools-internal.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
@@ -24,6 +24,7 @@ import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
 import type { CronCreatorToolAllowlistEntry } from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
+import { resolveEmbeddedAttemptExecutionAttribution } from "./attempt-execution-attribution.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -35,7 +36,9 @@ import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.j
 import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt.tool-search-run-plan.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type OpenClawCodingToolsOptions = NonNullable<
+  Parameters<typeof createOpenClawCodingToolsForRuntime>[0]
+>;
 type SkillUsagePaths = OpenClawCodingToolsOptions["skillUsagePaths"];
 
 export function prepareEmbeddedAttemptToolBase(params: {
@@ -57,6 +60,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  const attribution = resolveEmbeddedAttemptExecutionAttribution(attempt);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
   const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
     attempt.toolsAllow,
@@ -199,7 +203,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
   const constructedToolsRaw = !shouldConstructTools
     ? []
     : (() => {
-        const allTools = createOpenClawCodingTools({
+        const allTools = createOpenClawCodingToolsForRuntime({
+          ...(attribution ? { attribution } : {}),
           agentId: params.sessionAgentId,
           ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
           messageChannel: attempt.messageChannel,

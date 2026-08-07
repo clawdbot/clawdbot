@@ -5,7 +5,10 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { shouldPreserveSessionAuthProfileOverride } from "./auth-profile-preservation.js";
+import {
+  applyModelOverrideWithAuthProfileCompatibility,
+  shouldPreserveSessionAuthProfileOverride,
+} from "./auth-profile-preservation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -105,5 +108,52 @@ describe("shouldPreserveSessionAuthProfileOverride", () => {
         provider: "openai",
       }),
     ).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "retains a compatible auth profile when resetting to a same-provider default",
+      provider: "openai",
+      model: "gpt-5",
+      expectedProfile: "team:prod",
+      expectedSource: "user" as const,
+      expectedCompactionCount: 2,
+    },
+    {
+      name: "clears an incompatible auth profile when resetting to a cross-provider default",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      expectedProfile: undefined,
+      expectedSource: undefined,
+      expectedCompactionCount: undefined,
+    },
+  ])("$name", ({ provider, model, expectedProfile, expectedSource, expectedCompactionCount }) => {
+    const sessionEntry = {
+      ...entry,
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1",
+      modelOverrideSource: "user" as const,
+      authProfileOverride: "team:prod",
+      authProfileOverrideSource: "user" as const,
+      authProfileOverrideCompactionCount: 2,
+    };
+
+    const result = applyModelOverrideWithAuthProfileCompatibility({
+      cfg: {
+        auth: { profiles: { "team:prod": { provider: "openai", mode: "api_key" } } },
+      },
+      agentDir: tempDirs.make("openclaw-auth-profile-default-"),
+      entry: sessionEntry,
+      currentProvider: "openai",
+      selection: { provider, model, isDefault: true },
+    });
+
+    expect(result.updated).toBe(true);
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.authProfileOverride).toBe(expectedProfile);
+    expect(sessionEntry.authProfileOverrideSource).toBe(expectedSource);
+    expect(sessionEntry.authProfileOverrideCompactionCount).toBe(expectedCompactionCount);
   });
 });

@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -494,7 +495,7 @@ export async function accountFollowupTurn(params: {
       nextModel: accounting.modelUsed,
       nextModelOverrideSource: entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
-      nextAuthProfileIdSource: entry?.authProfileOverrideSource,
+      nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(entry),
     });
   }
   let compactionNotice: ReplyPayload | undefined;

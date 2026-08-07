@@ -178,6 +178,10 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
+vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
+  runEmbeddedAgentInternal: (params: unknown) => state.runEmbeddedAgentMock(params),
+}));
+
 vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),

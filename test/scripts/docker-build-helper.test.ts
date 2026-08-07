@@ -2233,6 +2233,35 @@ docker_e2e_docker_run_cmd run demo
     }
   });
 
+  it("starts the upgrade survivor plugin registry before updates without ambient Feishu config", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
+      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
+    );
+    expect(
+      publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
+    ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
+    expect(runner).toContain(
+      'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
+    );
+    expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
+    for (const script of [runner, publishedRunner]) {
+      const emptyRegistryGuardIndex = script.indexOf('if [ "${#registry_args[@]}" -eq 0 ]; then');
+      const fixtureDirectoryIndex = script.indexOf('mkdir -p "$fixture_root"');
+      const registryServerIndex = script.indexOf(
+        "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      );
+      expect(emptyRegistryGuardIndex).toBeGreaterThanOrEqual(0);
+      expect(fixtureDirectoryIndex).toBeGreaterThanOrEqual(0);
+      expect(registryServerIndex).toBeGreaterThanOrEqual(0);
+      expect(emptyRegistryGuardIndex).toBeLessThan(fixtureDirectoryIndex);
+      expect(fixtureDirectoryIndex).toBeLessThan(registryServerIndex);
+      expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
+    }
+  });
+
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
     const paths = [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,

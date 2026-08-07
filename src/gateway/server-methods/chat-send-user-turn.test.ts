@@ -137,6 +137,7 @@ describe("prepareChatSendUserTurn", () => {
     });
     expect(prepared.accountId).toBe("account-1");
     expect(prepared.isInternalTextSlashCommandTurn).toBe(true);
+    expect(prepared.ctx).not.toHaveProperty("CommandInterpretationSuppressed");
     expect(prepared.queuedFollowupOwnerKey).toBeUndefined();
     expect(prepared.replyOptionImages).toBeUndefined();
     await expect(prepared.pluginBoundMediaPromise).resolves.toEqual([]);
@@ -192,6 +193,7 @@ describe("prepareChatSendUserTurn", () => {
 
     expect(prepared.ctx).toMatchObject({
       CommandAuthorized: false,
+      CommandInterpretationSuppressed: true,
       CommandTurn: {
         kind: "normal",
         source: "message",

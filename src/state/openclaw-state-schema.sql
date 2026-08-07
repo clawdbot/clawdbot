@@ -189,6 +189,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
   ON audit_events(direction, sequence DESC);
 
+CREATE TABLE IF NOT EXISTS audit_event_source_adoptions (
+  legacy_source_id TEXT NOT NULL PRIMARY KEY,
+  adopted_source_id TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS audit_identity_keys (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   key_id TEXT NOT NULL,

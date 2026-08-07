@@ -228,10 +228,10 @@ paths.
 
 OpenClaw recognizes two plugin formats:
 
-| Format                 | How it loads                                                                 | Use when                                                               |
-| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Native OpenClaw plugin | `openclaw.plugin.json` plus a runtime module loaded in process               | You are installing or building OpenClaw-specific runtime capabilities  |
-| Compatible bundle      | Codex, Claude, or Cursor plugin layout mapped into OpenClaw plugin inventory | You are reusing compatible skills, commands, hooks, or bundle metadata |
+| Format                 | How it loads                                                                                | Use when                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Native OpenClaw plugin | `openclaw.plugin.json` plus a runtime module loaded in process                              | You are installing or building OpenClaw-specific runtime capabilities  |
+| Compatible bundle      | Agent Plugins, Codex, Claude, or Cursor plugin layout mapped into OpenClaw plugin inventory | You are reusing compatible skills, commands, hooks, or bundle metadata |
 
 Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
 `openclaw plugins enable`, and `openclaw plugins disable`. See

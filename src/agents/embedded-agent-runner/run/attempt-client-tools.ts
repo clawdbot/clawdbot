@@ -4,6 +4,7 @@ import {
   findClientToolNameConflicts,
   toClientToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
+import { inheritToolExecutionAttribution } from "../../agent-tools.before-tool-call.attribution.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-subscribe.tools.js";
@@ -100,6 +101,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
     throw createClientToolNameConflictError(clientToolNameConflicts);
   }
 
+  const clientToolHookContext = inheritToolExecutionAttribution(params.catalogToolHookContext, {
+    ...params.catalogToolHookContext,
+    agentId: params.sessionAgentId,
+    sessionKey: params.sandboxSessionKey,
+    config: params.toolSearchRuntimeConfig,
+    sessionId: params.attempt.sessionId,
+    runId: params.attempt.runId,
+    loopDetection: clientToolLoopDetection,
+    onToolOutcome: params.attempt.onToolOutcome,
+    allocateToolOutcomeOrdinal: params.attempt.allocateToolOutcomeOrdinal,
+  });
   let clientToolDefs = params.clientTools
     ? toClientToolDefinitions(
         params.clientTools,
@@ -131,16 +143,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
             }
           },
         },
-        {
-          agentId: params.sessionAgentId,
-          sessionKey: params.sandboxSessionKey,
-          config: params.toolSearchRuntimeConfig,
-          sessionId: params.attempt.sessionId,
-          runId: params.attempt.runId,
-          loopDetection: clientToolLoopDetection,
-          onToolOutcome: params.attempt.onToolOutcome,
-          allocateToolOutcomeOrdinal: params.attempt.allocateToolOutcomeOrdinal,
-        },
+        clientToolHookContext,
       )
     : [];
   const addClientToolsToCatalog = params.codeModeControlsEnabledForRun

@@ -169,10 +169,10 @@ openclaw models auth login --provider anthropic --force
 
 ### Per-session (chat command)
 
-- `/model <alias-or-id>@<profileId>` pins a specific provider credential for the current session (example profile ids: `anthropic:default`, `anthropic:work`).
+- `/model <alias-or-id>@<profileId> -s` pins a specific provider credential for the current session (example profile ids: `anthropic:default`, `anthropic:work`).
 - `/model` (or `/model list`) shows a compact picker; `/model status` shows the full view (candidates + next auth profile, plus provider endpoint details when configured).
 
-If you change auth order or profile pinning for a chat that's already running, send `/new` or `/reset` to start a fresh session — existing sessions keep their current model/profile selection until reset.
+Changes to `auth.order` affect automatic profile selection. `/new` and `/reset` clear auto-selected fallback/rotation state but preserve valid explicit user model/profile pins; choose another explicit `@profile` selection to replace a user profile pin.
 
 ### Per-agent (CLI override)
 
