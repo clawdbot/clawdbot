@@ -63,7 +63,7 @@ test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
 8. Update the running report when requested or when this thread is tracking one.
    Include before/after commands, artifacts, coverage notes, verification, and
    next attack order.
-9. Commit with `scripts/committer "<message>" <paths...>` and push when the
+9. Stage the intended paths, commit with standard Git, and push when the
    user asked for commits/pushes. Stage only files touched for this attack.
 
 ## Plugin-Suite Workflow
