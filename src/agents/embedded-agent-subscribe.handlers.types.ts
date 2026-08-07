@@ -284,6 +284,7 @@ export type EmbeddedAgentSubscribeContext = {
   consumeToolSendReceipt: (toolCallId: string) => unknown;
   ensureCompactionPromise: () => void;
   noteCompactionRetry: (deliveryGeneration?: number) => void;
+  noteCompactionReplacementActivity: (deliveryGeneration: number) => void;
   resolveCompactionRetry: (deliveryGeneration?: number) => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;

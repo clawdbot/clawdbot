@@ -61,7 +61,9 @@ function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined)
   return resolveAssistantMessagePhase(message) === "commentary";
 }
 
-function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
+export function isTranscriptOnlyOpenClawAssistantMessage(
+  message: AgentMessage | undefined,
+): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }

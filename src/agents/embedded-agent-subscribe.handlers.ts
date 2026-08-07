@@ -12,6 +12,7 @@ import {
   handleMessageEnd,
   handleMessageStart,
   handleMessageUpdate,
+  isTranscriptOnlyOpenClawAssistantMessage,
   preservePendingAssistantUsage,
   resetPendingAssistantUsage,
 } from "./embedded-agent-subscribe.handlers.messages.js";
@@ -87,6 +88,20 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     options?: { detach?: boolean },
   ): void | Promise<void> => {
     const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+    const message =
+      (evt.type === "message_start" ||
+        evt.type === "message_update" ||
+        evt.type === "message_end") &&
+      "message" in evt
+        ? (evt.message as AgentMessage | undefined)
+        : undefined;
+    const messageRole = message?.role;
+    if (
+      evt.type.startsWith("tool_execution_") ||
+      (messageRole === "assistant" && !isTranscriptOnlyOpenClawAssistantMessage(message))
+    ) {
+      ctx.noteCompactionReplacementActivity(deliveryGeneration);
+    }
     // Forward the scheduled task so terminal events stay awaitable even when the
     // fence drops a handler from a discarded compaction attempt.
     return scheduleEvent(

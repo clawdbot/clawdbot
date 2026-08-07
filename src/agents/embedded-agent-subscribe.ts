@@ -803,14 +803,35 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   let pendingCompactionRetryGeneration: number | undefined;
+  let compactionReplacementActivityGeneration: number | undefined;
   const noteCompactionRetry = (deliveryGeneration?: number) => {
     if (deliveryGeneration === undefined) {
       state.pendingCompactionRetry += 1;
     } else {
+      const replacementAttemptStarted =
+        pendingCompactionRetryGeneration !== undefined &&
+        compactionReplacementActivityGeneration === pendingCompactionRetryGeneration;
+      if (
+        pendingCompactionRetryGeneration === undefined ||
+        pendingCompactionRetryGeneration === deliveryGeneration ||
+        !replacementAttemptStarted
+      ) {
+        state.pendingCompactionRetry += 1;
+      }
       pendingCompactionRetryGeneration = deliveryGeneration;
-      state.pendingCompactionRetry = 1;
+      if (compactionReplacementActivityGeneration !== deliveryGeneration) {
+        compactionReplacementActivityGeneration = undefined;
+      }
     }
     ensureCompactionPromise();
+  };
+  const noteCompactionReplacementActivity = (deliveryGeneration: number) => {
+    if (
+      state.pendingCompactionRetry > 0 &&
+      deliveryGeneration === pendingCompactionRetryGeneration
+    ) {
+      compactionReplacementActivityGeneration = deliveryGeneration;
+    }
   };
 
   const resolveCompactionPromiseIfIdle = () => {
@@ -835,6 +856,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     state.pendingCompactionRetry -= 1;
+    compactionReplacementActivityGeneration = undefined;
     if (state.pendingCompactionRetry === 0) {
       pendingCompactionRetryGeneration = undefined;
     }
@@ -1716,6 +1738,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       consumeEmbeddedToolSendReceipt(params.session.sessionManager, toolCallId),
     ensureCompactionPromise,
     noteCompactionRetry,
+    noteCompactionReplacementActivity,
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,

@@ -498,6 +498,99 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     expect(subscription.isCompacting()).toBe(false);
   });
 
+  it("supersedes a pending compaction after streamed replacement activity", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-streamed-replacement",
+    });
+
+    emit({ type: "compaction_start" });
+    emit({
+      type: "compaction_end",
+      willRetry: true,
+      result: { summary: "retry one", tokensAfter: 100 },
+    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "partial replacement" });
+    await subscription.waitForPendingEvents();
+
+    emit({ type: "compaction_start" });
+    emit({
+      type: "compaction_end",
+      willRetry: true,
+      result: { summary: "retry two", tokensAfter: 80 },
+    });
+    emit({ type: "agent_end", messages: [], willRetry: false });
+
+    await subscription.waitForPendingEvents();
+    await subscription.waitForCompactionRetry();
+    expect(subscription.isCompacting()).toBe(false);
+  });
+
+  it("preserves older pending retries when an active latest retry is superseded", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-preserve-older-retry",
+    });
+
+    emit({ type: "compaction_end", willRetry: true });
+    emit({ type: "compaction_end", willRetry: true });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "replacement activity" });
+    await subscription.waitForPendingEvents();
+    emit({ type: "compaction_end", willRetry: true });
+
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+    expect(subscription.isCompacting()).toBe(true);
+
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+    await subscription.waitForCompactionRetry();
+    expect(subscription.isCompacting()).toBe(false);
+  });
+
+  it("does not treat user messages as compaction replacement activity", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-user-message-not-replacement",
+    });
+
+    emit({ type: "compaction_end", willRetry: true });
+    emit({ type: "message_start", message: { role: "user", content: "queued user input" } });
+    await subscription.waitForPendingEvents();
+    emit({ type: "compaction_end", willRetry: true });
+
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+    expect(subscription.isCompacting()).toBe(true);
+
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+    await subscription.waitForCompactionRetry();
+    expect(subscription.isCompacting()).toBe(false);
+  });
+
+  it("does not treat transcript-only assistant messages as replacement activity", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-transcript-message-not-replacement",
+    });
+
+    emit({ type: "compaction_end", willRetry: true });
+    emit({
+      type: "message_start",
+      message: { role: "assistant", provider: "openclaw", model: "delivery-mirror" },
+    });
+    await subscription.waitForPendingEvents();
+    emit({ type: "compaction_end", willRetry: true });
+
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+    expect(subscription.isCompacting()).toBe(true);
+
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+    await subscription.waitForCompactionRetry();
+    expect(subscription.isCompacting()).toBe(false);
+  });
+
   it("does not emit stale final metadata after a buffered message_end is invalidated", async () => {
     let resolveOldReply: (() => void) | undefined;
     const onBlockReply = vi
