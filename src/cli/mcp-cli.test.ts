@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     serveOpenClawChannelMcp: vi.fn(),
     clearMcpOAuthCredentials: vi.fn(),
     readMcpOAuthCredentialsStatus: vi.fn(),
+    resolveMcpOAuthEffectiveRedirectUrl: vi.fn(),
     runMcpOAuthLogin: vi.fn(),
     createSessionMcpRuntimeOverride: undefined as CreateSessionMcpRuntime | undefined,
   };
@@ -39,6 +40,7 @@ const mockError = defaultRuntime.error;
 const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
 const clearMcpOAuthCredentials = mocks.clearMcpOAuthCredentials;
 const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
+const resolveMcpOAuthEffectiveRedirectUrl = mocks.resolveMcpOAuthEffectiveRedirectUrl;
 const runMcpOAuthLogin = mocks.runMcpOAuthLogin;
 
 vi.mock("../runtime.js", () => ({
@@ -52,6 +54,7 @@ vi.mock("../mcp/channel-server.js", () => ({
 vi.mock("../agents/mcp-oauth.js", () => ({
   clearMcpOAuthCredentials: mocks.clearMcpOAuthCredentials,
   readMcpOAuthCredentialsStatus: mocks.readMcpOAuthCredentialsStatus,
+  resolveMcpOAuthEffectiveRedirectUrl: mocks.resolveMcpOAuthEffectiveRedirectUrl,
   runMcpOAuthLogin: mocks.runMcpOAuthLogin,
 }));
 
@@ -134,6 +137,30 @@ let sharedProgram: Command;
 
 async function runMcpCommand(args: string[]) {
   await sharedProgram.parseAsync(args, { from: "user" });
+}
+
+async function waitForLogContaining(text: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (mockLog.mock.calls.some((call) => String(call[0]).includes(text))) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for log containing: ${text}`);
+}
+
+async function findFreePort(): Promise<number> {
+  const net = await import("node:net");
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => (port > 0 ? resolve(port) : reject(new Error("No free port"))));
+    });
+  });
 }
 
 function lastLogLine(): string {
@@ -656,7 +683,6 @@ describe("mcp cli", () => {
         config: undefined,
         fetchFn: expect.any(Function),
         authorizationCode: "abc123",
-        onAuthorizationUrl: expect.any(Function),
       });
 
       mockLog.mockClear();
@@ -668,6 +694,127 @@ describe("mcp cli", () => {
         requestTimeoutMs: 9_000,
         auth: "oauth",
       });
+    });
+  });
+
+  it("completes login through the loopback callback server", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      const port = await findFreePort();
+      const redirectUrl = `http://127.0.0.1:${port}/oauth/callback`;
+      resolveMcpOAuthEffectiveRedirectUrl.mockReturnValue(redirectUrl);
+      runMcpOAuthLogin.mockImplementation(
+        async (params: {
+          authorizationCode?: string;
+          onAuthorizationUrl?: (url: URL) => void | Promise<void>;
+        }) => {
+          if (params.authorizationCode) {
+            return "authorized";
+          }
+          await params.onAuthorizationUrl?.(
+            new URL("https://auth.example.com/authorize?state=state-123"),
+          );
+          return "redirect";
+        },
+      );
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
+      ]);
+      mockLog.mockClear();
+
+      const commandPromise = runMcpCommand(["mcp", "login", "docs"]);
+      await waitForLogContaining("Waiting for the browser");
+      const response = await fetch(`${redirectUrl}?code=code-456&state=state-123`);
+      expect(response.ok).toBe(true);
+      await commandPromise;
+
+      expect(runMcpOAuthLogin).toHaveBeenCalledTimes(2);
+      expect(runMcpOAuthLogin).toHaveBeenLastCalledWith(
+        expect.objectContaining({ authorizationCode: "code-456" }),
+      );
+      expect(mockLog).toHaveBeenCalledWith('MCP OAuth credentials saved for "docs".');
+    });
+  });
+
+  it("rejects a loopback callback whose state does not match the authorization URL", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      const port = await findFreePort();
+      const redirectUrl = `http://127.0.0.1:${port}/oauth/callback`;
+      resolveMcpOAuthEffectiveRedirectUrl.mockReturnValue(redirectUrl);
+      runMcpOAuthLogin.mockImplementation(
+        async (params: {
+          authorizationCode?: string;
+          onAuthorizationUrl?: (url: URL) => void | Promise<void>;
+        }) => {
+          if (params.authorizationCode) {
+            return "authorized";
+          }
+          await params.onAuthorizationUrl?.(
+            new URL("https://auth.example.com/authorize?state=state-123"),
+          );
+          return "redirect";
+        },
+      );
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
+      ]);
+      mockLog.mockClear();
+
+      const commandPromise = runMcpCommand(["mcp", "login", "docs"]);
+      const commandOutcome = commandPromise.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await waitForLogContaining("Waiting for the browser");
+      await fetch(`${redirectUrl}?code=code-456&state=state-mismatch`);
+      const outcome = await commandOutcome;
+      expect(outcome).toBeInstanceOf(Error);
+      expect(String((outcome as Error).message)).toContain("__exit__:1");
+
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("state mismatch"));
+      expect(runMcpOAuthLogin).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("falls back to the manual code flow when the loopback port is unavailable", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      const net = await import("node:net");
+      const blocker = net.createServer();
+      await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+      const address = blocker.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      const redirectUrl = `http://127.0.0.1:${port}/oauth/callback`;
+      resolveMcpOAuthEffectiveRedirectUrl.mockReturnValue(redirectUrl);
+      runMcpOAuthLogin.mockResolvedValue("redirect");
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
+      ]);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "login", "docs"]);
+
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining("falling back to manual code flow"),
+      );
+      expect(runMcpOAuthLogin).toHaveBeenCalledTimes(1);
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
     });
   });
 

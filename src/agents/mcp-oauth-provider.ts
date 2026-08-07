@@ -21,19 +21,20 @@ export type McpOAuthConfig = {
 
 const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 
-function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
-  const expiresIn = tokens.expires_in;
-  return typeof expiresIn === "number" && Number.isFinite(expiresIn)
-    ? Date.now() + expiresIn * 1000
-    : undefined;
-}
-
-function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
+/** Resolves the redirect URI a login flow would register for the given config/store state. */
+export function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
   return (
     normalizeOptionalString(config.redirectUrl) ??
     normalizeOptionalString(store.redirectUrl) ??
     LEGACY_DEFAULT_REDIRECT_URL
   );
+}
+
+function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
+  const expiresIn = tokens.expires_in;
+  return typeof expiresIn === "number" && Number.isFinite(expiresIn)
+    ? Date.now() + expiresIn * 1000
+    : undefined;
 }
 
 function buildOAuthClientMetadata(

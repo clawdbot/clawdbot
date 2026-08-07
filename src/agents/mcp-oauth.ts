@@ -9,6 +9,7 @@ import {
 import {
   bindMcpOAuthLeaseAssertion,
   createMcpOAuthClientProvider,
+  resolveOAuthRedirectUrl,
   type McpOAuthConfig,
   withMcpOAuthLeaseSignal,
 } from "./mcp-oauth-provider.js";
@@ -37,6 +38,16 @@ const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
 const TOKEN_EXPIRY_SKEW_MS = 30_000;
 const MCP_OAUTH_LEASE_MS = 60_000;
 const MCP_OAUTH_LEASE_WAIT_MS = 30_000;
+
+/** Resolves the redirect URI the next login flow would register, before any flow runs. */
+export function resolveMcpOAuthEffectiveRedirectUrl(params: {
+  serverName: string;
+  serverUrl: string;
+  config?: McpOAuthConfig;
+}): string {
+  const storeKey = resolveMcpOAuthStoreKey(params.serverName, params.serverUrl);
+  return resolveOAuthRedirectUrl(params.config ?? {}, readMcpOAuthStoreReadOnly(storeKey));
+}
 
 function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
   return /invalid_client_metadata|redirect_uri/i.test(String(error));
