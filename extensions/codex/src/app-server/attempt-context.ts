@@ -20,6 +20,10 @@ import {
   prepareMemorySystemPromptAddition,
 } from "openclaw/plugin-sdk/core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import type {
+  SessionTranscriptTargetParams,
+  TranscriptTurnAdmission,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -78,8 +82,11 @@ export async function readMirroredSessionHistoryMessages(params: {
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: Partial<SessionTranscriptTargetParams>;
+  admission?: TranscriptTurnAdmission;
 }): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(params);
+  const { admission, ...target } = params;
+  const messages = await readCodexMirroredSessionHistoryMessages(target, admission);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,

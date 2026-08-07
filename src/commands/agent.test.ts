@@ -420,16 +420,20 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledOnce();
-      expect(agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: cfg,
-          provider: "openai",
-          modelId: "gpt-5.2",
-          agentId: "main",
-          workspaceDir: path.join(home, "openclaw"),
-        }),
-      );
+      expect(agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledTimes(2);
+      const expectedPreparation = expect.objectContaining({
+        config: cfg,
+        provider: "openai",
+        modelId: "gpt-5.2",
+        agentId: "main",
+        workspaceDir: path.join(home, "openclaw"),
+      });
+      for (const callIndex of [1, 2] as const) {
+        expect(agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin).toHaveBeenNthCalledWith(
+          callIndex,
+          expectedPreparation,
+        );
+      }
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
   });
@@ -447,7 +451,7 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
-  it("strips private execution attribution from runtime-shaped public ingress", async () => {
+  it("replaces private execution attribution on runtime-shaped public ingress", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
@@ -487,9 +491,11 @@ describe("agentCommand", () => {
           runtime,
         );
 
-        expect(record).toHaveBeenCalledWith(
-          expect.objectContaining({ attribution: undefined, runId: "public-ingress-run" }),
-        );
+        const recordedAttribution = record.mock.calls[0]?.[0].attribution;
+        expect(recordedAttribution).toMatchObject({ runId: "public-ingress-run" });
+        expect(recordedAttribution?.contextId).not.toBe("inherited-context");
+        expect(recordedAttribution?.contextId).not.toBe("forged-context");
+        expect(recordedAttribution).not.toHaveProperty("executionIdentityAdmission");
       } finally {
         record.mockRestore();
         if (priorDescriptor) {
@@ -1167,6 +1173,61 @@ describe("agentCommand", () => {
       expect(prepared).not.toHaveProperty("recoveryCandidateEntry");
       expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
       expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
+    });
+  });
+
+  it("keeps synthetic direct-DM delivery mode out of existing CLI binding facts", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:discord:direct:requester";
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "requester-session",
+          updatedAt: Date.now(),
+          chatType: "direct",
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "native-claude-session",
+              messageToolPolicyHash: "automatic-policy-hash",
+            },
+          },
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "user:requester" },
+            origin: { provider: "discord", chatType: "direct", to: "user:requester" },
+          }),
+        },
+      });
+      const cfg = mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+        },
+      });
+      cfg.messages = { visibleReplies: "automatic" };
+
+      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+        {
+          message: "child completed",
+          sessionKey,
+          sourceReplyDeliveryMode: "message_tool_only",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:child",
+            sourceTool: "subagent_announce",
+          },
+        },
+        runtime,
+      );
+
+      expect(prepared.opts.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(prepared.opts.cliSessionBindingFacts).toEqual({
+        sourceReplyDeliveryMode: "automatic",
+      });
+      expect(prepared.sessionEntry?.cliSessionBindings?.["claude-cli"]).toMatchObject({
+        sessionId: "native-claude-session",
+        messageToolPolicyHash: "automatic-policy-hash",
+      });
     });
   });
 

@@ -19,7 +19,7 @@ import { normalizeToolName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
-import type { RunEmbeddedAgentParams } from "./run/params.js";
+import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const log = createSubsystemLogger("agents/embedded-cli-dispatch");
@@ -36,7 +36,7 @@ type EmbeddedCliBackendDispatch = {
  * gate matches; returns undefined so the caller continues on the native path.
  */
 export async function runEmbeddedAgentViaCliBackendIfEligible(
-  params: RunEmbeddedAgentParams,
+  params: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult | undefined> {
   const dispatch = resolveEmbeddedCliBackendDispatch(params);
   return dispatch ? await runEmbeddedAgentViaCliBackend(params, dispatch) : undefined;
@@ -44,7 +44,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
 
 /** Applies the opt-in and transcript-path gates on top of shared eligibility. */
 function resolveEmbeddedCliBackendDispatch(
-  params: RunEmbeddedAgentParams,
+  params: RunEmbeddedAgentInternalParams,
 ): EmbeddedCliBackendDispatch | undefined {
   if (params.cliBackendDispatch !== "subscription-auth") {
     return undefined;
@@ -76,7 +76,9 @@ function resolveEmbeddedCliBackendDispatch(
  * passthrough so no closed state silently widens on the CLI surface; full
  * translation can arrive with the first caller that needs it (#57326).
  */
-function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[] | undefined {
+function resolveDispatchableToolsAllow(
+  params: RunEmbeddedAgentInternalParams,
+): string[] | undefined {
   if (params.disableTools || params.modelRun) {
     return undefined;
   }
@@ -92,7 +94,7 @@ function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[]
 
 /** Runs an opted-in embedded run through the CLI backend as a one-shot turn. */
 async function runEmbeddedAgentViaCliBackend(
-  params: RunEmbeddedAgentParams,
+  params: RunEmbeddedAgentInternalParams,
   dispatch: EmbeddedCliBackendDispatch,
 ): Promise<EmbeddedAgentRunResult> {
   const { runCliAgent } = await import("../cli-runner.runtime.js");
@@ -186,6 +188,12 @@ async function runEmbeddedAgentViaCliBackend(
       ? { lifecycleGeneration: params.lifecycleGeneration }
       : undefined,
   );
+  params.onExecutionAttributionChanged?.({
+    ...(params.lifecycleGeneration !== undefined
+      ? { lifecycleGeneration: params.lifecycleGeneration }
+      : {}),
+    ...(params.attribution ? { attribution: params.attribution } : {}),
+  });
   log.info(
     `dispatching embedded run through CLI backend: runId=${params.runId} provider=${dispatch.provider} model=${params.model ?? ""}`,
   );
@@ -211,6 +219,7 @@ async function runEmbeddedAgentViaCliBackend(
       runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
+      ...(params.attribution ? { attribution: params.attribution } : {}),
       lane: params.lane,
       extraSystemPrompt: params.extraSystemPrompt,
       messageChannel: params.messageChannel,

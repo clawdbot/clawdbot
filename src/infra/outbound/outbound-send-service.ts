@@ -52,6 +52,7 @@ type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
+  idempotencyKey?: string;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
   sessionKey?: string;
@@ -172,6 +173,7 @@ async function sendCoreMessage(params: {
     queuePolicy: params.queuePolicy,
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
+    idempotencyKey: params.ctx.idempotencyKey,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
@@ -516,6 +518,7 @@ export async function executePollAction(params: {
     isAnonymous: corePoll.isAnonymous ?? undefined,
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
+    idempotencyKey: params.ctx.idempotencyKey,
   });
 
   return {

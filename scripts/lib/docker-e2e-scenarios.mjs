@@ -16,12 +16,22 @@ const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
 const RELEASE_OPENWEBUI_COMMAND =
   "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
-const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
-const rootManagedVpsUpgradeCommand =
-  "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade";
-const updateRestartAuthCommand = liveDockerScriptCommand(
-  "e2e/upgrade-survivor-docker.sh",
-  'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}',
+const upgradeSurvivorCommand = upgradeSurvivorScriptCommand();
+const publishedUpgradeSurvivorCommand = upgradeSurvivorScriptCommand(
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+);
+const rootManagedVpsUpgradeCommand = upgradeSurvivorScriptCommand(
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+);
+const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+);
+const updateMigrationCommand = upgradeSurvivorScriptCommand(
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
 const updateRunPackageSelfUpgradeCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
@@ -38,8 +48,18 @@ const LIVE_RETRY_PATTERNS = [
 
 function liveDockerScriptCommand(script, envPrefix = "", options = {}) {
   const prefix = envPrefix ? `${envPrefix} ` : "";
+  const shellPrelude = options.shellPrelude ? `${options.shellPrelude}; ` : "";
   const skipBuild = options.skipBuild === false ? "" : "OPENCLAW_SKIP_DOCKER_BUILD=1 ";
-  return `${prefix}${skipBuild}bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
+  return `${prefix}${skipBuild}bash -c '${shellPrelude}harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-${LIVE_DOCKER_DEFAULT_HARNESS_DIR}}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
+}
+
+function upgradeSurvivorScriptCommand(envPrefix = "", shellPrelude = "") {
+  const rootPrefix = 'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}"';
+  return liveDockerScriptCommand(
+    "e2e/upgrade-survivor-docker.sh",
+    envPrefix ? `${rootPrefix} ${envPrefix}` : rootPrefix,
+    { shellPrelude },
+  );
 }
 
 function lane(name, command, options = {}) {
@@ -60,6 +80,7 @@ function lane(name, command, options = {}) {
     resources: options.resources ?? [],
     stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
+    upgradeSurvivorScenario: options.upgradeSurvivorScenario,
     weight: options.weight ?? 1,
   };
 }
@@ -161,25 +182,25 @@ function createPackageUpdateMaintenanceLanes() {
     npmLane("upgrade-survivor", upgradeSurvivorCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 20 * 60 * 1000,
+      upgradeSurvivorScenario: "base",
       weight: 3,
     }),
-    npmLane(
-      "published-upgrade-survivor",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
-      {
-        stateScenario: "upgrade-survivor",
-        timeoutMs: 25 * 60 * 1000,
-        weight: 3,
-      },
-    ),
+    npmLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      upgradeSurvivorScenario: "base",
+      weight: 3,
+    }),
     npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
+      upgradeSurvivorScenario: "base",
       weight: 3,
     }),
     npmLane("update-restart-auth", updateRestartAuthCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
+      upgradeSurvivorScenario: "base",
       weight: 3,
     }),
     npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
@@ -519,9 +540,10 @@ export const mainLanes = [
     { resources: ["npm"], stateScenario: "empty", weight: 3 },
   ),
   ...createPackageUpdateMaintenanceLanes(),
-  npmLane("update-migration", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-migration", {
+  npmLane("update-migration", updateMigrationCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 30 * 60 * 1000,
+    upgradeSurvivorScenario: "plugin-deps-cleanup",
     weight: 3,
   }),
   lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {

@@ -592,15 +592,17 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
+  it("uses raw explicit URLs for probes but redacts them from status diagnostics", async () => {
+    const rawUrl =
+      "wss://user:password@override.example:18790/ws?token=secret&key=api-key&X-Amz-Signature=signed";
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
-      url: "wss://override.example:18790",
+      url: rawUrl,
       error: "connect ECONNREFUSED override.example:18790",
     });
 
     const status = await gatherDaemonStatus({
-      rpc: { url: "wss://override.example:18790" },
+      rpc: { url: rawUrl },
       probe: true,
       deep: false,
     });
@@ -610,10 +612,18 @@ describe("gatherDaemonStatus", () => {
       url?: string;
       tlsFingerprint?: string;
     };
-    expect(probeInput.url).toBe("wss://override.example:18790");
+    expect(probeInput.url).toBe(rawUrl);
     expect(probeInput.tlsFingerprint).toBeUndefined();
-    expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
-    expect(status.rpc?.url).toBe("wss://override.example:18790");
+    const diagnosticUrls = JSON.stringify({
+      gateway: status.gateway?.probeUrl,
+      rpc: status.rpc?.url,
+    });
+    expect(diagnosticUrls).toContain("override.example:18790/ws");
+    expect(diagnosticUrls).not.toContain("user");
+    expect(diagnosticUrls).not.toContain("password");
+    expect(diagnosticUrls).not.toContain("secret");
+    expect(diagnosticUrls).not.toContain("api-key");
+    expect(diagnosticUrls).not.toContain("signed");
     expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(status.pluginVersionDrift).toBeUndefined();
     expect(status.service.targetRole).toBe("diagnostic-only");

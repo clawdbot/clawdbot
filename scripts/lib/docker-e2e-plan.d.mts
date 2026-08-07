@@ -43,12 +43,14 @@ export type DockerE2ePlan = {
   lanes: DockerE2ePlanLane[];
   mainLanes: DockerE2ePlanLane[];
   omittedUnsupportedLanes: string[];
+  requiredPrepublishPluginPackages: string[];
   needs: {
     bareImage: boolean;
     e2eImage: boolean;
     functionalImage: boolean;
     liveImage: boolean;
     package: boolean;
+    prepublishPluginRegistry: boolean;
   };
   profile: string;
   releaseProfile?: DockerE2eReleaseProfile;
@@ -79,6 +81,7 @@ export function lanesNeedE2eImageKind(
   kind: DockerE2eImageKind,
 ): boolean;
 export function lanesNeedOpenClawPackage(poolLanes: DockerE2eLane[]): boolean;
+export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLane[]): string[];
 export function findLaneByName(name: string): DockerE2eLane | undefined;
 export function resolveDockerE2ePlan(options: DockerE2ePlanOptions): {
   omittedUnsupportedLaneNames: string[];

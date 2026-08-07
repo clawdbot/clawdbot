@@ -450,6 +450,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (err instanceof OutboundDeliveryError && err.results.length > 0) {
       deliveredResults = err.results;
     }
+    const hasPlatformSendEvidence =
+      deliveredResults.length > 0 ||
+      queuedPreSendState === "marked" ||
+      queuedPostSendState === "marked" ||
+      (err instanceof OutboundDeliveryError && err.sentBeforeError) ||
+      stablePayloadOutcomes?.some((outcome) => outcome.status === "sent") === true;
     if (queueId) {
       if (queuedPreSendState === "acked") {
         // Best-effort fallback removed durable custody before provider I/O.
@@ -464,13 +470,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }),
         );
       } else if (isDeliveryAbortError(err)) {
-        const ambiguousStableAbort =
-          producerClaimId !== undefined &&
-          (deliveredResults.length > 0 ||
-            queuedPreSendState === "marked" ||
-            queuedPostSendState === "marked" ||
-            stablePayloadOutcomes?.some((outcome) => outcome.status === "sent"));
-        if (ambiguousStableAbort) {
+        if (hasPlatformSendEvidence) {
           if (queuedPostSendState !== "failed") {
             await recordOwnedQueueFailure(
               failDeliveryAfterPlatformSend,
@@ -483,6 +483,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               outcome: "unknown",
               failureStage: "platform_send",
             }),
+          );
+        } else if (params.abortSignal?.aborted !== true) {
+          await recordOwnedQueueFailure(failDelivery, formatErrorMessage(err)).catch(
+            (failErr: unknown) => {
+              log.warn(
+                `failed to preserve queued delivery ${queueId} after provider abort: ${formatErrorMessage(failErr)}`,
+              );
+            },
           );
         } else if (
           await (

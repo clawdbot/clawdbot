@@ -3,37 +3,36 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { handleAgentEvent, type ToolStreamEntry } from "./tool-stream.ts";
 
 type TestState = ChatState & Parameters<typeof handleAgentEvent>[0];
+type TestSessions = NonNullable<ChatState["sessions"]> &
+  Parameters<typeof handleAgentEvent>[0]["sessions"];
 
 function createState(result: ChatHistoryResult): TestState {
-  return {
-    client: { request: vi.fn().mockResolvedValue(result) } as unknown as GatewayBrowserClient,
-    connected: true,
-    connectionEpoch: 1,
+  const host = makeChatHost({
+    requestHandlers: { "chat.history": result },
     sessionKey: "main",
-    chatLoading: false,
-    chatMessages: [],
+  });
+  const sessions: TestSessions = {
+    setModelOverride: vi.fn(),
+    reconcileRunTerminal: vi.fn(),
+  };
+  return {
+    ...host,
+    chatToolMessages: host.chatToolMessages ?? [],
+    chatStreamSegments: host.chatStreamSegments ?? [],
+    connectionEpoch: 1,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
-    chatSending: false,
-    chatMessage: "",
-    chatAttachments: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatStream: null,
     chatStreamStartedAt: null,
-    chatStreamSegments: [],
-    toolStreamById: new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: [],
-    chatToolMessages: [],
-    toolStreamSyncTimer: null,
     planStatus: null,
-    lastError: null,
-    hello: null,
-    sessions: { setModelOverride: vi.fn(), reconcileRunTerminal: vi.fn() },
+    sessions,
+    toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
+    toolStreamOrder: host.toolStreamOrder ?? [],
+    toolStreamSyncTimer: host.toolStreamSyncTimer ?? null,
     requestUpdate: vi.fn(),
   };
 }

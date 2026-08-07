@@ -260,6 +260,7 @@ export async function runCopilotExecution(context: {
     if (!settledToolFinalization) {
       try {
         const toolBridge = await createToolBridge({
+          agentHarnessCodingToolsFactory: deps.createOpenClawCodingToolsForAgentHarness,
           allowModelTools: poolAcquire.provider.mode === "byok",
           modelProvider: modelRef.provider,
           modelId: modelRef.id,
@@ -272,7 +273,9 @@ export async function runCopilotExecution(context: {
           sandbox,
           spawnWorkspaceDir: sandboxAwareSpawnWorkspaceDir,
           abortSignal: params.abortSignal,
-          attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
+          admittedAttempt: input,
+          attemptParams: input,
+          observeToolTerminal,
           computerContextEpoch,
           sessionRef,
           onYieldDetected: () => {

@@ -10,8 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { buildNodeSystemRunInvoke } from "../agents/bash-tools.exec-host-node-phases.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { coerceNodeInvokePayload } from "../node-host/invoke-payload.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
@@ -1269,23 +1271,45 @@ describe("gateway/node-registry", () => {
     expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
-  it("forwards the agent session that owns a stateful node invoke", async () => {
+  it("preserves producer-owned session attribution through the node request envelope", async () => {
     const registry = createNodeRegistry();
     const frames = registerNode(registry);
-    const invoke = registry.invoke({
-      nodeId: "node-1",
-      command: "debug.ping",
-      timeoutMs: 0,
+    const producerEnvelope = buildNodeSystemRunInvoke({
+      target: {
+        nodeId: "node-1",
+        argv: ["echo", "ok"],
+        env: undefined,
+        invokeDeadlineMs: 30_000,
+        invokeWaitMs: 35_000,
+        runTimeoutSec: 30,
+        supportsSystemRunPrepare: true,
+      },
+      command: ["echo", "ok"],
+      rawCommand: "echo ok",
+      cwd: undefined,
+      agentId: "main",
       sessionKey: "agent:main:canvas",
     });
+    const invoke = registry.invoke({
+      nodeId: producerEnvelope.nodeId as string,
+      command: producerEnvelope.command as string,
+      params: producerEnvelope.params,
+      timeoutMs: 0,
+      sessionKey: producerEnvelope.sessionKey as string,
+    });
     const request = JSON.parse(frames[0] ?? "{}") as {
-      payload?: { id?: string; sessionKey?: string };
+      payload?: unknown;
     };
+    const decoded = coerceNodeInvokePayload(request.payload);
 
-    expect(request.payload?.sessionKey).toBe("agent:main:canvas");
+    expect(decoded).toMatchObject({
+      nodeId: "node-1",
+      command: "system.run",
+      sessionKey: "agent:main:canvas",
+    });
     expect(
       registry.handleInvokeResult({
-        id: request.payload?.id ?? "",
+        id: decoded?.id ?? "",
         nodeId: "node-1",
         connId: "conn-1",
         ok: true,
