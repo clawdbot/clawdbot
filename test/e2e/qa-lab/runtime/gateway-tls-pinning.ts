@@ -13,6 +13,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { normalizeFingerprint } from "../../../../src/infra/tls/fingerprint.js";
 import { loadGatewayTlsRuntime } from "../../../../src/infra/tls/gateway.js";
@@ -24,6 +25,7 @@ const DISCOVERY_PLUGIN_ID = "tls-discovery-proof";
 const CONNECTION_TIMEOUT_MS = 15_000;
 const ENV_KEYS = [
   "HOME",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "NODE_ENV",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_STATE_DIR",

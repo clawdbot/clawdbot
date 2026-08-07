@@ -109,84 +109,81 @@ describe("renderGatewayServiceCleanupHints", () => {
     expect(renderGatewayServiceCleanupHints([])).toEqual([]);
   });
 
-  it("targets the detected macOS LaunchAgent instead of the active gateway", () => {
+  it.each([
+    {
+      title: "targets the detected macOS LaunchAgent instead of the active gateway",
+      platform: "darwin",
+      serviceName: "com.example.openclaw-gateway",
+      source: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      scope: "user",
+      stopCommand: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      removeCommand: "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    },
+    {
+      title: "uses the system domain for a detected macOS LaunchDaemon",
+      platform: "darwin",
+      serviceName: "com.example.openclaw-gateway",
+      source: "plist: /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
+      scope: "system",
+      stopCommand: "sudo launchctl bootout system/com.example.openclaw-gateway",
+      removeCommand: "sudo rm /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
+    },
+    {
+      title: "keeps global macOS LaunchAgents in the GUI domain",
+      platform: "darwin",
+      serviceName: "com.example.openclaw-gateway",
+      source: "plist: /Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      scope: "system",
+      stopCommand: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      removeCommand: "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    },
+    {
+      title: "targets the detected user-level systemd unit",
+      platform: "linux",
+      serviceName: "custom-gateway.service",
+      source: "unit: /home/test/.config/systemd/user/custom-gateway.service",
+      scope: "user",
+      stopCommand: "systemctl --user disable --now -- custom-gateway.service",
+      removeCommand: "rm /home/test/.config/systemd/user/custom-gateway.service",
+    },
+    {
+      title: "targets the detected system-level systemd unit",
+      platform: "linux",
+      serviceName: "custom-gateway.service",
+      source: "unit: /etc/systemd/system/custom-gateway.service",
+      scope: "system",
+      stopCommand: "sudo systemctl disable --now -- custom-gateway.service",
+      removeCommand: "sudo rm /etc/systemd/system/custom-gateway.service",
+    },
+    {
+      title: "terminates systemctl options before a detected unit that begins with a dash",
+      platform: "linux",
+      serviceName: "-custom-gateway.service",
+      source: "unit: /home/test/.config/systemd/user/-custom-gateway.service",
+      scope: "user",
+      stopCommand: "systemctl --user disable --now -- -custom-gateway.service",
+      removeCommand: "rm /home/test/.config/systemd/user/-custom-gateway.service",
+    },
+    {
+      title: "shell-quotes detected POSIX service labels and paths",
+      platform: "darwin",
+      serviceName: "com.example.gateway; touch injected",
+      source: "plist: /Users/test/Launch Agents/example's gateway.plist",
+      scope: "user",
+      stopCommand: "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
+      removeCommand: "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
+    },
+  ] as const)("$title", ({ platform, serviceName, source, scope, stopCommand, removeCommand }) => {
     expect(
       renderGatewayServiceCleanupHints([
         {
-          platform: "darwin",
-          label: "com.example.openclaw-gateway",
-          detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-          scope: "user",
+          platform,
+          label: serviceName,
+          detail: source,
+          scope,
         },
       ]),
-    ).toEqual([
-      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ]);
-  });
-
-  it("uses the system domain for a detected macOS LaunchDaemon", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "darwin",
-          label: "com.example.openclaw-gateway",
-          detail: "plist: /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
-          scope: "system",
-        },
-      ]),
-    ).toEqual([
-      "sudo launchctl bootout system/com.example.openclaw-gateway",
-      "sudo rm /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
-    ]);
-  });
-
-  it("keeps global macOS LaunchAgents in the GUI domain", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "darwin",
-          label: "com.example.openclaw-gateway",
-          detail: "plist: /Library/LaunchAgents/com.example.openclaw-gateway.plist",
-          scope: "system",
-        },
-      ]),
-    ).toEqual([
-      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ]);
-  });
-
-  it("targets the detected user-level systemd unit", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "linux",
-          label: "custom-gateway.service",
-          detail: "unit: /home/test/.config/systemd/user/custom-gateway.service",
-          scope: "user",
-        },
-      ]),
-    ).toEqual([
-      "systemctl --user disable --now -- custom-gateway.service",
-      "rm /home/test/.config/systemd/user/custom-gateway.service",
-    ]);
-  });
-
-  it("targets the detected system-level systemd unit", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "linux",
-          label: "custom-gateway.service",
-          detail: "unit: /etc/systemd/system/custom-gateway.service",
-          scope: "system",
-        },
-      ]),
-    ).toEqual([
-      "sudo systemctl disable --now -- custom-gateway.service",
-      "sudo rm /etc/systemd/system/custom-gateway.service",
-    ]);
+    ).toEqual([stopCommand, removeCommand]);
   });
 
   it("targets the detected Windows scheduled task", () => {
@@ -217,38 +214,6 @@ describe("renderGatewayServiceCleanupHints", () => {
       ).toEqual([]);
     },
   );
-
-  it("terminates systemctl options before a detected unit that begins with a dash", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "linux",
-          label: "-custom-gateway.service",
-          detail: "unit: /home/test/.config/systemd/user/-custom-gateway.service",
-          scope: "user",
-        },
-      ]),
-    ).toEqual([
-      "systemctl --user disable --now -- -custom-gateway.service",
-      "rm /home/test/.config/systemd/user/-custom-gateway.service",
-    ]);
-  });
-
-  it("shell-quotes detected POSIX service labels and paths", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "darwin",
-          label: "com.example.gateway; touch injected",
-          detail: "plist: /Users/test/Launch Agents/example's gateway.plist",
-          scope: "user",
-        },
-      ]),
-    ).toEqual([
-      "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
-      "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
-    ]);
-  });
 
   it("does not invent a removal path when service metadata omits it", () => {
     expect(

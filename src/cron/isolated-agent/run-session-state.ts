@@ -4,6 +4,7 @@ import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -392,11 +393,15 @@ export function syncCronSessionLiveSelection(params: {
     delete params.entry.agentRuntimeOverride;
   }
   if (params.liveSelection.authProfileId) {
+    const source =
+      params.liveSelection.authProfileIdSource ??
+      (params.entry.authProfileOverride?.trim() === params.liveSelection.authProfileId.trim()
+        ? resolveSessionAuthProfileOverrideSource(params.entry)
+        : "user");
     params.entry.authProfileOverride = params.liveSelection.authProfileId;
-    params.entry.authProfileOverrideSource = params.liveSelection.authProfileIdSource;
-    if (params.liveSelection.authProfileIdSource === "auto") {
-      // Auto-selected profiles are tied to the compaction generation that
-      // resolved them; manual overrides should survive later compactions.
+    params.entry.authProfileOverrideSource = source;
+    if (source === "auto") {
+      // Auto pins track their compaction generation; manual pins do not.
       params.entry.authProfileOverrideCompactionCount = params.entry.compactionCount ?? 0;
     } else {
       delete params.entry.authProfileOverrideCompactionCount;

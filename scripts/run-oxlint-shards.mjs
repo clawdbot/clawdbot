@@ -250,15 +250,15 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
           })
         : () => {};
 
-  const shards = createOxlintShards({
-    cwd: process.cwd(),
-    env,
-    platform: process.platform,
-    splitCore: shardArgs.splitCore,
-  });
-  const selectedShards = filterOxlintShards(shards, shardArgs.only);
-
   try {
+    const shards = createOxlintShards({
+      cwd: process.cwd(),
+      env,
+      platform: process.platform,
+      splitCore: shardArgs.splitCore,
+    });
+    const selectedShards = filterOxlintShards(shards, shardArgs.only);
+
     ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
     const prepareResult = spawnSync(
       process.execPath,
@@ -331,18 +331,12 @@ export function parseShardRunnerArgs(args) {
       continue;
     }
     if (arg === "--only") {
-      const value = args[index + 1];
-      if (value) {
-        only.add(value);
-        index += 1;
-      }
+      only.add(requireShardSelector(args[index + 1]));
+      index += 1;
       continue;
     }
     if (arg.startsWith("--only=")) {
-      const value = arg.slice("--only=".length);
-      if (value) {
-        only.add(value);
-      }
+      only.add(requireShardSelector(arg.slice("--only=".length)));
       continue;
     }
     oxlintArgs.push(arg);
@@ -352,14 +346,37 @@ export function parseShardRunnerArgs(args) {
 }
 
 /**
- * Filters shards by an optional comma-separated shard name list.
+ * Filters shards by optional shard names and rejects unknown selectors.
  */
 export function filterOxlintShards(shards, only) {
   if (only.size === 0) {
     return shards;
   }
 
-  return shards.filter((shard) => only.has(shard.name) || only.has(shard.name.split(":")[0]));
+  const selectors = [...only];
+  const unknownSelectors = selectors.filter(
+    (selector) => !shards.some((shard) => matchesShardSelector(shard, selector)),
+  );
+  if (unknownSelectors.length > 0) {
+    throw new Error(
+      `Unknown oxlint shard selector${unknownSelectors.length === 1 ? "" : "s"}: ${unknownSelectors.join(", ")}`,
+    );
+  }
+
+  return shards.filter((shard) =>
+    selectors.some((selector) => matchesShardSelector(shard, selector)),
+  );
+}
+
+function requireShardSelector(value) {
+  if (!value || value.startsWith("-")) {
+    throw new Error("--only requires a shard name");
+  }
+  return value;
+}
+
+function matchesShardSelector(shard, selector) {
+  return selector === shard.name || selector === shard.name.split(":")[0];
 }
 
 /**

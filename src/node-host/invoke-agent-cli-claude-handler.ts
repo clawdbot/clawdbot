@@ -122,6 +122,16 @@ export async function handleClaudeCliNodeInvoke(params: {
     await params.deps.sendInvalidRequestResult(params.client, params.frame, error);
     return;
   }
+  if (Object.hasOwn(params.frame, "sessionKey")) {
+    const sessionKey = params.frame.sessionKey ?? null;
+    const requestWithoutSessionKey = { ...request };
+    delete requestWithoutSessionKey.sessionKey;
+    request = {
+      ...requestWithoutSessionKey,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(request.systemRunPlan ? { systemRunPlan: { ...request.systemRunPlan, sessionKey } } : {}),
+    };
+  }
   const approvalCommand = [claudePath, ...request.argv];
   const preparedApproval = buildSystemRunApprovalPlan({
     command: approvalCommand,

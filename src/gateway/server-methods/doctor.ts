@@ -392,16 +392,24 @@ type DreamingStoreStats = Pick<
 
 const DREAMING_ENTRY_LIST_LIMIT = 8;
 
+// Keep malformed persisted timestamps behind valid entries; returning NaN here
+// makes Array.sort preserve arbitrary input order and can hide valid diagnostics.
+function parseDreamingTimestampMs(value: string | undefined): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
 function compareDreamingEntryByRecency(
   a: DoctorMemoryDreamingEntryPayload,
   b: DoctorMemoryDreamingEntryPayload,
 ): number {
-  const aMs = a.lastRecalledAt ? Date.parse(a.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  const bMs = b.lastRecalledAt ? Date.parse(b.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+  const aMs = parseDreamingTimestampMs(a.lastRecalledAt);
+  const bMs = parseDreamingTimestampMs(b.lastRecalledAt);
+  if (bMs !== aMs) {
+    return bMs > aMs ? 1 : -1;
   }
   if (b.totalSignalCount !== a.totalSignalCount) {
     return b.totalSignalCount - a.totalSignalCount;
@@ -426,12 +434,10 @@ function compareDreamingEntryByPromotion(
   a: DoctorMemoryDreamingEntryPayload,
   b: DoctorMemoryDreamingEntryPayload,
 ): number {
-  const aMs = a.promotedAt ? Date.parse(a.promotedAt) : Number.NEGATIVE_INFINITY;
-  const bMs = b.promotedAt ? Date.parse(b.promotedAt) : Number.NEGATIVE_INFINITY;
-  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+  const aMs = parseDreamingTimestampMs(a.promotedAt);
+  const bMs = parseDreamingTimestampMs(b.promotedAt);
+  if (bMs !== aMs) {
+    return bMs > aMs ? 1 : -1;
   }
   return compareDreamingEntryBySignals(a, b);
 }

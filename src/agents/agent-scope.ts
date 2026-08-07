@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import {
@@ -198,9 +199,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
-  const fallbackAuthProfileIdSource =
-    entry.authProfileOverrideSource ??
-    (entry.authProfileOverrideCompactionCount !== undefined ? "auto" : undefined);
+  const fallbackAuthProfileIdSource = resolveSessionAuthProfileOverrideSource(entry);
   return {
     provider: originProvider,
     model: originModel,
@@ -286,11 +285,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
   delete entry.modelOverrideRouteResolution;
   delete entry.modelOverrideFallbackOriginProvider;
   delete entry.modelOverrideFallbackOriginModel;
-  if (
-    entry.authProfileOverrideSource === "auto" ||
-    (entry.authProfileOverrideSource === undefined &&
-      entry.authProfileOverrideCompactionCount !== undefined)
-  ) {
+  if (resolveSessionAuthProfileOverrideSource(entry) === "auto") {
     delete entry.authProfileOverride;
     delete entry.authProfileOverrideSource;
     delete entry.authProfileOverrideCompactionCount;
@@ -458,11 +453,12 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
+  // Keep cron and fallback routing aligned with native spawn: per-agent subagent,
+  // then the global subagent default, then agent-primary inheritance.
   const candidates: SubagentModelConfigSelectionResult[] = [
     ...(agentConfig?.subagents?.model
       ? [{ raw: agentConfig.subagents.model, source: "subagent" as const }]
       : []),
-    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
     ...(params.cfg.agents?.defaults?.subagents?.model
       ? [
           {
@@ -471,6 +467,7 @@ export function resolveSubagentModelConfigSelectionResult(params: {
           },
         ]
       : []),
+    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
   ];
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }

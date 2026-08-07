@@ -1,5 +1,6 @@
 // image_generate tool tests cover provider/model selection, edit inputs,
 // background task handling, media saving, and duplicate-generation guards.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -192,12 +193,7 @@ function mockCallArg(
   return call[argIndex] as Record<string, unknown>;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-capitalized");
 
 type ImageGenerateTool = NonNullable<ReturnType<typeof createImageGenerateTool>>;
 type ToolResult = Awaited<ReturnType<ImageGenerateTool["execute"]>>;

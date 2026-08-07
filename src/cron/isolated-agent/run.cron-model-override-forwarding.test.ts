@@ -1,4 +1,5 @@
 // Cron model override forwarding tests cover passing overrides into agent runs.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCliSessionMock,
@@ -111,12 +112,7 @@ function createDeferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   return requireRecord(mock.mock.calls[0]?.[0]);

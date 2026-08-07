@@ -43,7 +43,6 @@ const BROWSER_TOOL_ACTIONS = [
   "focus",
   "close",
   "snapshot",
-  "extract",
   "screenshot",
   "navigate",
   "console",
@@ -126,9 +125,6 @@ export const BrowserToolSchema = Type.Object({
   domains: Type.Optional(Type.Array(Type.String())),
   targetUrl: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
-  query: Type.Optional(Type.String()),
-  ignoreSelectors: Type.Optional(Type.Array(Type.String())),
-  schema: Type.Optional(Type.Object({}, { additionalProperties: true })),
   targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
   label: Type.Optional(Type.String()),
   limit: optionalPositiveIntegerSchema(),
@@ -213,9 +209,6 @@ export const BrowserToolOutputSchema = Type.Object(
     refs: Type.Optional(Type.Union([Type.Number(), Type.Record(Type.String(), Type.Unknown())])),
     stats: Type.Optional(BrowserSnapshotStatsSchema),
     truncated: Type.Optional(Type.Boolean()),
-    chars: Type.Optional(Type.Number()),
-    model: Type.Optional(Type.String()),
-    json: Type.Optional(Type.Unknown()),
     newElements: Type.Optional(Type.Number()),
     tabs: Type.Optional(
       Type.Array(

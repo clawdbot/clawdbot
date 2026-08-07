@@ -11,6 +11,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -363,8 +364,11 @@ function readSnapshotFromDatabase(params: {
   };
 }
 
-export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceStateSnapshot {
-  const database = openOpenClawStateDatabase();
+export function readWorkspaceStateSnapshot(
+  workspaceDir: string,
+  options: OpenClawStateDatabaseOptions = {},
+): WorkspaceStateSnapshot {
+  const database = openOpenClawStateDatabase(options);
   const initial = runSqliteDeferredTransactionSync(database.db, () => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     return {
@@ -374,6 +378,7 @@ export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceState
   });
   if (
     initial.resolution.missingAliasKeys.length === 0 ||
+    options.readOnly ||
     (!initial.snapshot.setupExists && !initial.snapshot.attestation)
   ) {
     return initial.snapshot;
@@ -408,13 +413,14 @@ export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceState
       });
     }
     return snapshot;
-  });
+  }, options);
 }
 
 export function mergeWorkspaceSetupState(
   workspaceDir: string,
   next: Partial<Omit<WorkspaceSetupState, "version">>,
   nowMs = Date.now(),
+  options: OpenClawStateDatabaseOptions = {},
 ): WorkspaceSetupState {
   assertCanonicalIntegerTimestamp(nowMs, "setup update");
   if (next.bootstrapSeededAt) {
@@ -464,7 +470,7 @@ export function mergeWorkspaceSetupState(
       updatedAtMs: nowMs,
     });
     return merged;
-  });
+  }, options);
 }
 
 export function replaceWorkspaceAttestation(params: {

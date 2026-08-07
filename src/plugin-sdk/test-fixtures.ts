@@ -25,6 +25,15 @@ export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { typedCases } from "../test-utils/typed-cases.js";
+export { createRequireRecord } from "../../test/helpers/record.js";
+export type { RecordRequirementKind, RecordRequirementMessage } from "../../test/helpers/record.js";
+export {
+  bufferedOversizedJsonResponse,
+  oversizedJsonResponse,
+  requireFirstPostJsonRecordRequest,
+  requireFirstPostJsonRequest,
+  streamedJsonResponse,
+} from "../../test/helpers/provider-http.js";
 export {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,

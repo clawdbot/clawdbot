@@ -75,13 +75,17 @@ const queueMocks = vi.hoisted(() => ({
       status: "pending" | "failed" | "completed";
     } | null
   >(() => null),
-  ackDelivery: vi.fn(async () => {}),
-  failDelivery: vi.fn(async () => {}),
-  failDeliveryAfterPlatformSend: vi.fn(async () => {}),
-  failDeliveryBeforePlatformSend: vi.fn(async () => {}),
-  markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {}),
-  markDeliveryPlatformSendDispatched: vi.fn(async () => {}),
-  markDeliveryPlatformSendAttemptStarted: vi.fn(async () => {}),
+  ackDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  failDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  failDeliveryAfterPlatformSend: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  failDeliveryBeforePlatformSend: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  markDeliveryPlatformOutcomeUnknown: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  markDeliveryPlatformSendDispatched: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
+  markDeliveryPlatformSendAttemptStarted: vi.fn<(...args: unknown[]) => Promise<void>>(
+    async () => {},
+  ),
+  claimReusableDeliveryPlatformSendAttempt: vi.fn(async () => "mock-producer-claim"),
+  renewDeliveryPlatformSendLease: vi.fn(async () => Date.now() + 30_000),
   withActiveDeliveryClaim: vi.fn<
     (
       entryId: string,
@@ -98,6 +102,29 @@ const completionMocks = vi.hoisted(() => ({
 const logMocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
+
+function withoutInitialProducerClaim(params: Record<string, unknown>): Record<string, unknown> {
+  const { initialProducerClaim: _initialProducerClaim, ...queuedParams } = params;
+  return queuedParams;
+}
+
+async function ackDeliveryMock(
+  id: string,
+  stateDir?: string,
+  options?: {
+    retainSpoolArtifacts?: boolean;
+    suppressCompletionReceipt?: boolean;
+    expectedPlatformSendAttemptId?: string | null;
+  },
+): Promise<void> {
+  const { expectedPlatformSendAttemptId: _expectedPlatformSendAttemptId, ...legacyOptions } =
+    options ?? {};
+  const hasOptions = Object.keys(legacyOptions).length > 0;
+  if (stateDir === undefined && !hasOptions) {
+    return queueMocks.ackDelivery(id);
+  }
+  return queueMocks.ackDelivery(id, stateDir, hasOptions ? legacyOptions : undefined);
+}
 
 vi.mock("../../config/sessions/transcript.runtime.js", async () => {
   const actual = await vi.importActual<
@@ -125,16 +152,30 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
   triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
 vi.mock("./delivery-queue-storage.js", () => ({
-  enqueueDelivery: queueMocks.enqueueDelivery,
-  enqueueDeliveryOnce: queueMocks.enqueueDeliveryOnce,
-  enqueuePreparedDeliveryOnce: queueMocks.enqueuePreparedDeliveryOnce,
-  ackDelivery: queueMocks.ackDelivery,
-  failDelivery: queueMocks.failDelivery,
-  failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend: queueMocks.failDeliveryBeforePlatformSend,
-  markDeliveryPlatformOutcomeUnknown: queueMocks.markDeliveryPlatformOutcomeUnknown,
-  markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
-  markDeliveryPlatformSendAttemptStarted: queueMocks.markDeliveryPlatformSendAttemptStarted,
+  enqueueDelivery: async (params: Record<string, unknown>) =>
+    queueMocks.enqueueDelivery(withoutInitialProducerClaim(params)),
+  enqueueDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
+    queueMocks.enqueueDeliveryOnce(withoutInitialProducerClaim(params), id),
+  enqueuePreparedDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
+    queueMocks.enqueuePreparedDeliveryOnce(withoutInitialProducerClaim(params), id),
+  ackDelivery: ackDeliveryMock,
+  failDelivery: async (id: string, error: string) => queueMocks.failDelivery(id, error),
+  failDeliveryAfterPlatformSend: async (id: string, error: string) =>
+    queueMocks.failDeliveryAfterPlatformSend(id, error),
+  failDeliveryBeforePlatformSend: async (id: string, error: string) =>
+    queueMocks.failDeliveryBeforePlatformSend(id, error),
+  markDeliveryPlatformOutcomeUnknown: async (id: string) =>
+    queueMocks.markDeliveryPlatformOutcomeUnknown(id),
+  markDeliveryPlatformSendDispatched: async (
+    id: string,
+    stateDir?: string,
+    route?: { replyToId?: string | null },
+  ) => queueMocks.markDeliveryPlatformSendDispatched(id, stateDir, route),
+  markDeliveryPlatformSendAttemptStarted: async (
+    id: string,
+    stateDir?: string,
+    route?: { replyToId?: string | null },
+  ) => queueMocks.markDeliveryPlatformSendAttemptStarted(id, stateDir, route),
   loadPendingDelivery: queueMocks.loadPendingDelivery,
   findDeliveryIntentOwner: queueMocks.findDeliveryIntentOwner,
 }));
@@ -143,14 +184,25 @@ vi.mock("./delivery-queue-preparation.js", () => ({
   withStableDeliveryPreparation: queueMocks.withStableDeliveryPreparation,
 }));
 vi.mock("./delivery-queue.js", () => ({
-  enqueueDelivery: queueMocks.enqueueDelivery,
-  enqueueDeliveryOnce: queueMocks.enqueueDeliveryOnce,
-  enqueuePreparedDeliveryOnce: queueMocks.enqueuePreparedDeliveryOnce,
-  ackDelivery: queueMocks.ackDelivery,
-  failDelivery: queueMocks.failDelivery,
-  failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend: queueMocks.failDeliveryBeforePlatformSend,
-  markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
+  enqueueDelivery: async (params: Record<string, unknown>) =>
+    queueMocks.enqueueDelivery(withoutInitialProducerClaim(params)),
+  enqueueDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
+    queueMocks.enqueueDeliveryOnce(withoutInitialProducerClaim(params), id),
+  enqueuePreparedDeliveryOnce: async (params: Record<string, unknown>, id: string) =>
+    queueMocks.enqueuePreparedDeliveryOnce(withoutInitialProducerClaim(params), id),
+  ackDelivery: ackDeliveryMock,
+  failDelivery: async (id: string, error: string) => queueMocks.failDelivery(id, error),
+  failDeliveryAfterPlatformSend: async (id: string, error: string) =>
+    queueMocks.failDeliveryAfterPlatformSend(id, error),
+  failDeliveryBeforePlatformSend: async (id: string, error: string) =>
+    queueMocks.failDeliveryBeforePlatformSend(id, error),
+  markDeliveryPlatformSendDispatched: async (
+    id: string,
+    stateDir?: string,
+    route?: { replyToId?: string | null },
+  ) => queueMocks.markDeliveryPlatformSendDispatched(id, stateDir, route),
+  claimReusableDeliveryPlatformSendAttempt: queueMocks.claimReusableDeliveryPlatformSendAttempt,
+  renewDeliveryPlatformSendLease: queueMocks.renewDeliveryPlatformSendLease,
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("./delivery-completion.js", () => ({
@@ -428,6 +480,10 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.loadPendingDelivery.mockResolvedValue(null);
     queueMocks.findDeliveryIntentOwner.mockClear();
     queueMocks.findDeliveryIntentOwner.mockReturnValue(null);
+    queueMocks.claimReusableDeliveryPlatformSendAttempt.mockClear();
+    queueMocks.claimReusableDeliveryPlatformSendAttempt.mockResolvedValue("mock-producer-claim");
+    queueMocks.renewDeliveryPlatformSendLease.mockClear();
+    queueMocks.renewDeliveryPlatformSendLease.mockImplementation(async () => Date.now() + 30_000);
     queueMocks.withStableDeliveryPreparation.mockReset();
     queueMocks.withStableDeliveryPreparation.mockImplementation(
       async (params: {
@@ -1093,7 +1149,7 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
   });
 
-  it("continues best-effort sends when the precise dispatch timestamp cannot be refreshed", async () => {
+  it("stops a claimed best-effort send when dispatch ownership cannot be refreshed", async () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockRejectedValueOnce(
       new Error("dispatch state unavailable"),
     );
@@ -1117,9 +1173,9 @@ describe("deliverOutboundPayloads", () => {
       deliverMatrix({
         queuePolicy: "best_effort",
       }),
-    ).resolves.toHaveLength(1);
+    ).rejects.toThrow("dispatch state unavailable");
     expect(messageSendText).toHaveBeenCalledOnce();
-    expect(logMocks.warn).toHaveBeenCalledWith(
+    expect(logMocks.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("continuing best-effort send: dispatch state unavailable"),
     );
   });
@@ -4303,7 +4359,7 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id", undefined);
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(

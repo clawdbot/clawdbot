@@ -2063,6 +2063,7 @@ function parseCliJsonl(
   let sessionId: string | undefined;
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
+  let diagnosticUsage: CliUsage | undefined;
   const texts: string[] = [];
   let streamJsonText = "";
   let pendingMessageSeparator = false;
@@ -2085,6 +2086,11 @@ function parseCliJsonl(
       resumeCheckpointId =
         pickCliResumeCheckpointId({ backend, providerId, parsed }) ?? resumeCheckpointId;
       const nextUsage = readCliUsage(parsed);
+      const isClaudeTerminalResult =
+        isClaudeStreamJsonDialect({ backend, providerId }) && parsed.type === "result";
+      if (isClaudeTerminalResult && nextUsage && usage) {
+        diagnosticUsage = nextUsage;
+      }
       const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
       if (shouldUseUsage) {
         usage = nextUsage ?? usage;
@@ -2161,6 +2167,7 @@ function parseCliJsonl(
           ...claudeResult,
           text,
           ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+          ...(diagnosticUsage ? { diagnosticUsage } : {}),
         };
         segmentStart = streamJsonText.length;
         currentMessageStart = segmentStart;

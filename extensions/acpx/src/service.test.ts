@@ -71,12 +71,6 @@ const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionSt
 
 vi.mock("../runtime-api.js", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
-  registerAcpRuntimeBackend: (entry: { id: string; runtime: unknown; healthy?: () => boolean }) => {
-    runtimeRegistry.set(entry.id, entry);
-  },
-  unregisterAcpRuntimeBackend: (id: string) => {
-    runtimeRegistry.delete(id);
-  },
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -173,10 +167,23 @@ function createOpenKeyedStore(ctx: OpenClawPluginServiceContext) {
 
 function createAcpxRuntimeService(
   ctx: OpenClawPluginServiceContext,
-  params: Parameters<typeof createRealAcpxRuntimeService>[0] = {},
+  params: Omit<Parameters<typeof createRealAcpxRuntimeService>[0], "backendLifecycle"> & {
+    backendLifecycle?: Parameters<typeof createRealAcpxRuntimeService>[0]["backendLifecycle"];
+  } = {},
 ) {
+  const backendLifecycle = params.backendLifecycle ?? {
+    publish(backend: { runtime: unknown; healthy?: () => boolean }) {
+      runtimeRegistry.set("acpx", backend);
+    },
+    retract(runtime: unknown) {
+      if (runtimeRegistry.get("acpx")?.runtime === runtime) {
+        runtimeRegistry.delete("acpx");
+      }
+    },
+  };
   return createRealAcpxRuntimeService({
     ...params,
+    backendLifecycle,
     openKeyedStore: params.openKeyedStore ?? createOpenKeyedStore(ctx),
   });
 }
@@ -203,6 +210,14 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
     doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
     ...overrides,
   };
+}
+
+function createDeferred() {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function createStartupTraceRecorder() {
@@ -264,6 +279,49 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
 
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
+  });
+
+  it("publishes before probing and retracts the exact runtime through the injected lifecycle", async () => {
+    delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const probeStarted = createDeferred();
+    const releaseProbe = createDeferred();
+    const events: string[] = [];
+    const runtime = createMockRuntime({
+      probeAvailability: vi.fn(async () => {
+        events.push("probe");
+        probeStarted.resolve();
+        await releaseProbe.promise;
+      }),
+    });
+    const publish = vi.fn((backend: { runtime: unknown; healthy?: () => boolean }) => {
+      events.push("publish");
+      expect(backend.runtime).toBe(runtime);
+      expect(backend.healthy?.()).toBe(true);
+    });
+    const retract = vi.fn((ownedRuntime: unknown) => {
+      events.push("retract");
+      expect(ownedRuntime).toBe(runtime);
+    });
+    const service = createAcpxRuntimeService(ctx, {
+      backendLifecycle: { publish, retract },
+      runtimeFactory: () => runtime as never,
+    });
+
+    const starting = service.start(ctx) as Promise<void>;
+    await probeStarted.promise;
+
+    expect(events).toEqual(["publish", "probe"]);
+    expect(publish).toHaveBeenCalledOnce();
+    expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
+
+    await service.stop?.(ctx);
+    expect(retract).toHaveBeenCalledWith(runtime);
+    expect(events).toEqual(["publish", "probe", "retract"]);
+
+    releaseProbe.resolve();
+    await starting;
   });
 
   it("skips the startup probe and does not advertise backend health when explicitly disabled", async () => {

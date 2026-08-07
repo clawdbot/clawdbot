@@ -402,6 +402,7 @@ struct MacNodeModeCoordinatorTests {
                 "nodeId": "test-node",
                 "command": "computer.act",
                 "paramsJSON": "{}",
+                "sessionKey": NSNull(),
                 "timeoutMs": 0,
             ],
         ])

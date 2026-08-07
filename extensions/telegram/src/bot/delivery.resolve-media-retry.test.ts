@@ -1,6 +1,7 @@
-// Telegram tests cover delivery.resolve media retry plugin behavior.
 import type { Message } from "grammy/types";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+// Telegram tests cover delivery.resolve media retry plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
@@ -195,12 +196,7 @@ function requireResolvedMedia(
   return result;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {

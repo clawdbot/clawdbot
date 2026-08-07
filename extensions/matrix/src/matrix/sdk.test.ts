@@ -1,6 +1,5 @@
-// Matrix tests cover sdk plugin behavior.
-import "fake-indexeddb/auto";
 import { EventEmitter } from "node:events";
+import "fake-indexeddb/auto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -12,6 +11,8 @@ import { type MatrixEvent, MsgType } from "matrix-js-sdk/lib/matrix.js";
 import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import { SyncApi, SyncState } from "matrix-js-sdk/lib/sync.js";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+// Matrix tests cover sdk plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { readMatrixRecoveryKeyStateForPath } from "./crypto-state-store.js";
@@ -32,12 +33,7 @@ function requestUrl(input: RequestInfo | URL | undefined): string {
   return input.url;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {

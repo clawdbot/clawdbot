@@ -681,6 +681,30 @@ test("sessions.list ignores hidden internal abortable runs", async () => {
   );
 });
 
+test("sessions.list leaves failed-first-turn dashboard sessions untitled instead of an id-prefix title", async () => {
+  const sessionKey = "agent:main:dashboard:fade729d-1111-2222-3333-444455556666";
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "dashboard:fade729d-1111-2222-3333-444455556666": sessionStoreEntry("sess-dash-untitled"),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: "sess-dash-untitled",
+    sessionKey,
+    storePath,
+    messages: [{ role: "assistant", content: "The first turn failed before a user message." }],
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-untitled-dashboard",
+    params: { includeDerivedTitles: true },
+  });
+
+  const session = findSession(expectRespondPayload(respond), sessionKey);
+  expect(session.derivedTitle).toBeUndefined();
+});
+
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
   const { storePath } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};

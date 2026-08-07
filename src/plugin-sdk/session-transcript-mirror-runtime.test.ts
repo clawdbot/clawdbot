@@ -7,10 +7,17 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
-import { readSessionTranscriptVisibleMessageDelta } from "./session-transcript-runtime.js";
+import {
+  readCodexSessionTranscriptEventsBeforeAdmission,
+  withCodexSessionTranscriptMirrorWriteLock,
+} from "./codex-session-transcript-runtime.js";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readSessionTranscriptVisibleMessageDelta,
+} from "./session-transcript-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -33,6 +40,7 @@ describe("private session transcript mirror runtime", () => {
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toEqual({
+        anchorsByIdempotencyKey: new Map(),
         existingIdempotencyKeys: new Set(),
         messagesByIdempotencyKey: new Map(),
       });
@@ -59,7 +67,7 @@ describe("private session transcript mirror runtime", () => {
         idempotencyLookup: "scan",
         message: {
           role: "user",
-          content: [{ type: "text", text: "must not replace persisted payload" }],
+          content: [{ type: "text", text: "persist once" }],
           idempotencyKey: "mirror-user",
           timestamp: 2,
         },
@@ -154,5 +162,42 @@ describe("private session transcript mirror runtime", () => {
       });
       expect(dirtyProjection.messageSeq).toBeUndefined();
     });
+  });
+
+  it("rejects an admission receipt for a different transcript target", async () => {
+    const admittedScope = {
+      agentId: "main",
+      sessionId: "admitted-session",
+      sessionKey: "agent:main:admitted-session",
+      storePath,
+    };
+    const requestedScope = {
+      ...admittedScope,
+      sessionId: "requested-session",
+      sessionKey: "agent:main:requested-session",
+    };
+    await upsertSessionEntry(admittedScope, {
+      sessionId: admittedScope.sessionId,
+      updatedAt: 1,
+    });
+    await upsertSessionEntry(requestedScope, {
+      sessionId: requestedScope.sessionId,
+      updatedAt: 1,
+    });
+    const admitted = await appendSessionTranscriptMessageByIdentity({
+      ...admittedScope,
+      message: { role: "user", content: "admitted elsewhere" },
+    });
+    if (!admitted?.anchor) {
+      throw new Error("expected admitted transcript anchor");
+    }
+
+    await expect(
+      readCodexSessionTranscriptEventsBeforeAdmission(requestedScope, {
+        ...admitted.anchor,
+        logicalTurnId: "admitted-turn",
+        role: "user",
+      }),
+    ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
   });
 });

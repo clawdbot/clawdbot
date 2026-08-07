@@ -186,6 +186,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-gateway-bind",
+      config: {},
       allowGatewaySubagentBinding: true,
     });
 

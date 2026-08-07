@@ -869,6 +869,20 @@ describe("SessionManager.open", () => {
       { sessionId: "replacement-session", updatedAt: 20 },
     );
 
+    try {
+      sessionManager.appendCompaction("late summary", assistant.messageId, 42);
+      throw new Error("expected rebound compaction persistence to fail");
+    } catch (error) {
+      expect(error).toMatchObject({
+        cause: {
+          actualSessionId: "replacement-session",
+          code: "session-rebound",
+          expectedSessionId: sessionId,
+          sessionKey,
+        },
+      });
+    }
+
     expect(() =>
       sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),
     ).toThrow("leaf control was not persisted");
