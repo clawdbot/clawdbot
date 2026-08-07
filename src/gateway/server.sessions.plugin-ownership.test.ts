@@ -344,7 +344,7 @@ test("sessions.abort allows a plugin to abort its own session", async () => {
 });
 
 test("sessions.abort rejects a plugin aborting a foreign active run via its own key + foreign runId", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const ownedKey = "agent:main:dreaming-narrative-owned";
   const foreignKey = "agent:main:dreaming-narrative-foreign";
   const runId = "run-foreign-active";
@@ -381,7 +381,7 @@ test("sessions.abort rejects a plugin aborting a foreign active run via its own 
 });
 
 test("sessions.abort allows a plugin to abort its own active run by runId", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const sessionKey = "agent:main:dreaming-narrative-owned";
   const runId = "run-own-active";
   await writeSessionStore({
