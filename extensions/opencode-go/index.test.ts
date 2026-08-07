@@ -1,3 +1,4 @@
+// Opencode Go tests cover index plugin behavior.
 import { clampThinkingLevel } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -7,8 +8,6 @@ import {
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
-// Opencode Go tests cover index plugin behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -18,7 +17,12 @@ import {
 } from "./provider-catalog.js";
 import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
-const requireRecord = createRequireRecord("record", "expected-label-record");
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
 
 function requireMapEntry<T>(map: Map<string, T>, id: string): T {
   const entry = map.get(id);
@@ -132,10 +136,14 @@ describe("opencode-go provider plugin", () => {
       "glm-5",
       "glm-5.1",
       "glm-5.2",
+      "gpt-5.6-luna",
+      "grok-4.5",
+      "hy3",
       "hy3-preview",
       "kimi-k2.5",
       "kimi-k2.6",
       "kimi-k2.7-code",
+      "kimi-k3",
       "mimo-v2.5",
       "mimo-v2.5-pro",
       "minimax-m2.5",
@@ -145,6 +153,7 @@ describe("opencode-go provider plugin", () => {
       "qwen3.6-plus",
       "qwen3.7-max",
       "qwen3.7-plus",
+      "qwen3.8-max",
     ];
     const models = new Map<string, ProviderRuntimeModel>();
     for (const modelId of expectedModelIds) {
@@ -226,8 +235,63 @@ describe("opencode-go provider plugin", () => {
     expect(minimaxM3.api).toBe("anthropic-messages");
     expect(minimaxM3.baseUrl).toBe("https://opencode.ai/zen/go");
     expect(minimaxM3.reasoning).toBe(true);
-    expect(minimaxM3.contextWindow).toBe(204_800);
+    expect(minimaxM3.contextWindow).toBe(1_000_000);
     expect(minimaxM3.maxTokens).toBe(131_072);
+    expect(minimaxM3.cost).toMatchObject({
+      input: 0.3,
+      output: 1.2,
+      cacheRead: 0.06,
+      cacheWrite: 0,
+      tieredPricing: [
+        { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0, range: [0, 512_000] },
+        { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0, range: [512_000] },
+      ],
+    });
+
+    const kimiK3 = requireMapEntry(models, "kimi-k3");
+    expect(kimiK3.api).toBe("openai-completions");
+    expect(kimiK3.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+    expect(kimiK3.input).toEqual(["text", "image"]);
+    expect(kimiK3.reasoning).toBe(true);
+    expect(kimiK3.contextWindow).toBe(1_048_576);
+    expect(kimiK3.maxTokens).toBe(131_072);
+    expect(kimiK3.cost).toEqual({
+      input: 3,
+      output: 15,
+      cacheRead: 0.3,
+      cacheWrite: 0,
+    });
+
+    const hy3 = requireMapEntry(models, "hy3");
+    expect(hy3).toMatchObject({
+      name: "Hy3",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      input: ["text"],
+      contextWindow: 256_000,
+      maxTokens: 64_000,
+      cost: { input: 0.14, output: 0.58, cacheRead: 0.035, cacheWrite: 0 },
+    });
+
+    const grok45 = requireMapEntry(models, "grok-4.5");
+    expect(grok45).toMatchObject({
+      name: "Grok 4.5",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      input: ["text", "image"],
+      contextWindow: 500_000,
+      maxTokens: 500_000,
+      cost: {
+        input: 2,
+        output: 6,
+        cacheRead: 0.5,
+        cacheWrite: 0,
+        tieredPricing: [
+          { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0, range: [0, 200_000] },
+          { input: 4, output: 12, cacheRead: 1, cacheWrite: 0, range: [200_000] },
+        ],
+      },
+    });
 
     const mimoPro = requireMapEntry(models, "mimo-v2.5-pro");
     expect(mimoPro.api).toBe("openai-completions");
@@ -236,12 +300,24 @@ describe("opencode-go provider plugin", () => {
     expect(mimoPro.reasoning).toBe(true);
     expect(mimoPro.contextWindow).toBe(1_048_576);
     expect(mimoPro.maxTokens).toBe(128_000);
+    expect(mimoPro.cost).toEqual({
+      input: 0.435,
+      output: 0.87,
+      cacheRead: 0.003625,
+      cacheWrite: 0,
+    });
 
     const mimo = requireMapEntry(models, "mimo-v2.5");
     expect(mimo.input).toEqual(["text", "image"]);
     expect(mimo.reasoning).toBe(true);
     expect(mimo.contextWindow).toBe(1_000_000);
     expect(mimo.maxTokens).toBe(128_000);
+    expect(mimo.cost).toEqual({
+      input: 0.14,
+      output: 0.28,
+      cacheRead: 0.0028,
+      cacheWrite: 0,
+    });
 
     const qwenMax = requireMapEntry(models, "qwen3.7-max");
     expect(qwenMax.api).toBe("anthropic-messages");
@@ -257,6 +333,30 @@ describe("opencode-go provider plugin", () => {
     const qwenPlus = requireMapEntry(models, "qwen3.6-plus");
     expect(qwenPlus.api).toBe("anthropic-messages");
     expect(qwenPlus.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwenPlus.contextWindow).toBe(1_000_000);
+    expect(qwenPlus.maxTokens).toBe(65_536);
+    expect(qwenPlus.cost).toMatchObject({
+      input: 0.5,
+      output: 3,
+      cacheRead: 0.05,
+      cacheWrite: 0.625,
+      tieredPricing: [
+        {
+          input: 0.5,
+          output: 3,
+          cacheRead: 0.05,
+          cacheWrite: 0.625,
+          range: [0, 256_000],
+        },
+        {
+          input: 2,
+          output: 6,
+          cacheRead: 0.2,
+          cacheWrite: 2.5,
+          range: [256_000],
+        },
+      ],
+    });
 
     const qwen37Plus = requireMapEntry(models, "qwen3.7-plus");
     expect(qwen37Plus.api).toBe("anthropic-messages");
@@ -270,6 +370,48 @@ describe("opencode-go provider plugin", () => {
       output: 1.6,
       cacheRead: 0.04,
       cacheWrite: 0.5,
+    });
+
+    const gpt56Luna = requireMapEntry(models, "gpt-5.6-luna");
+    expect(gpt56Luna).toMatchObject({
+      name: "GPT-5.6 Luna",
+      api: "openai-responses",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      input: ["text", "image"],
+      reasoning: true,
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      cost: {
+        input: 0.1,
+        output: 0.6,
+        cacheRead: 0.01,
+        cacheWrite: 0.125,
+        tieredPricing: [
+          { input: 0.1, output: 0.6, cacheRead: 0.01, cacheWrite: 0.125, range: [0, 272_000] },
+          { input: 0.2, output: 0.9, cacheRead: 0.02, cacheWrite: 0.25, range: [272_000] },
+        ],
+      },
+    });
+    expect(gpt56Luna.compat).toMatchObject({
+      supportsUsageInStreaming: true,
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      maxTokensField: "max_tokens",
+    });
+
+    const qwen38Max = requireMapEntry(models, "qwen3.8-max");
+    expect(qwen38Max).toMatchObject({
+      name: "Qwen3.8 Max",
+      api: "anthropic-messages",
+      baseUrl: "https://opencode.ai/zen/go",
+      input: ["text", "image"],
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      cost: { input: 2, output: 6, cacheRead: 0.25, cacheWrite: 2.5 },
+    });
+    expect(requireRecord(qwen38Max.compat, "Qwen3.8 compat")).toMatchObject({
+      thinkingFormat: "qwen",
     });
 
     const dynamicModel = requireRecord(
@@ -291,7 +433,7 @@ describe("opencode-go provider plugin", () => {
     expect(compat.maxTokensField).toBe("max_tokens");
   });
 
-  it("loads OpenCode Go model discovery through the provider runtime", () => {
+  it("loads OpenCode Go model discovery through the provider runtime", async () => {
     expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
     const manifestProvider = requireRecord(
@@ -302,11 +444,29 @@ describe("opencode-go provider plugin", () => {
       throw new Error("expected manifest models");
     }
     expect(
+      manifestProvider.models.map((model) => requireRecord(model, "manifest model").id),
+    ).toEqual(["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "hy3", "grok-4.5"]);
+    expect(
       requireCatalogEntry(manifestProvider.models, "deepseek-v4-pro").thinkingLevelMap,
     ).toEqual(deepSeekV4ThinkingLevelMap);
     expect(
       requireCatalogEntry(manifestProvider.models, "deepseek-v4-flash").thinkingLevelMap,
     ).toEqual(deepSeekV4ThinkingLevelMap);
+
+    const provider = await registerSingleProviderPlugin(plugin);
+    for (const modelId of ["deepseek-v4-pro", "deepseek-v4-flash", "kimi-k3", "hy3", "grok-4.5"]) {
+      const manifestModel = requireRecord(
+        manifestProvider.models.find((model) => requireRecord(model, "m").id === modelId),
+        `manifest ${modelId}`,
+      );
+      const runtimeModel = requireRecord(
+        provider.resolveDynamicModel?.({ modelId } as never),
+        `runtime ${modelId}`,
+      );
+      expect(manifestModel.cost).toEqual(runtimeModel.cost);
+      expect(manifestModel.contextWindow).toBe(runtimeModel.contextWindow);
+      expect(manifestModel.maxTokens).toBe(runtimeModel.maxTokens);
+    }
   });
 
   it("exposes the complete offline catalog through provider discovery", async () => {
@@ -318,7 +478,7 @@ describe("opencode-go provider plugin", () => {
     const deepSeekFlash = result.provider.models.find((model) => model.id === "deepseek-v4-flash");
     const glm52 = result.provider.models.find((model) => model.id === "glm-5.2");
 
-    expect(result.provider.models).toHaveLength(18);
+    expect(result.provider.models).toHaveLength(23);
     expect(deepSeekPro).toMatchObject({
       provider: "opencode-go",
       contextWindow: 1_000_000,

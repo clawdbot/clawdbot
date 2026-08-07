@@ -86,19 +86,24 @@ Current rows:
 | `opencode-go/glm-5`             | GLM-5             | 202,752   | 32,768     | No          |
 | `opencode-go/glm-5.1`           | GLM-5.1           | 202,752   | 32,768     | No          |
 | `opencode-go/glm-5.2`           | GLM-5.2           | 1M        | 131,072    | No          |
+| `opencode-go/gpt-5.6-luna`      | GPT-5.6 Luna      | 1,050,000 | 128,000    | Yes         |
+| `opencode-go/grok-4.5`          | Grok 4.5          | 500,000   | 500,000    | Yes         |
+| `opencode-go/hy3`               | Hy3               | 256,000   | 64,000     | No          |
 | `opencode-go/hy3-preview`       | HY3 Preview       | 262,144   | 32,768     | No          |
 | `opencode-go/kimi-k2.5`         | Kimi K2.5         | 262,144   | 65,536     | Yes         |
 | `opencode-go/kimi-k2.6`         | Kimi K2.6         | 262,144   | 65,536     | Yes         |
 | `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code    | 262,144   | 262,144    | Yes         |
+| `opencode-go/kimi-k3`           | Kimi K3           | 1,048,576 | 131,072    | Yes         |
 | `opencode-go/mimo-v2.5`         | MiMo V2.5         | 1M        | 128,000    | Yes         |
 | `opencode-go/mimo-v2.5-pro`     | MiMo V2.5 Pro     | 1,048,576 | 128,000    | No          |
 | `opencode-go/minimax-m2.5`      | MiniMax M2.5      | 204,800   | 65,536     | No          |
 | `opencode-go/minimax-m2.7`      | MiniMax M2.7      | 204,800   | 131,072    | No          |
-| `opencode-go/minimax-m3`        | MiniMax M3        | 204,800   | 131,072    | No          |
+| `opencode-go/minimax-m3`        | MiniMax M3        | 1M        | 131,072    | Yes         |
 | `opencode-go/qwen3.5-plus`      | Qwen3.5 Plus      | 262,144   | 65,536     | Yes         |
-| `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus      | 262,144   | 65,536     | Yes         |
+| `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus      | 1M        | 65,536     | Yes         |
 | `opencode-go/qwen3.7-max`       | Qwen3.7 Max       | 1M        | 65,536     | No          |
 | `opencode-go/qwen3.7-plus`      | Qwen3.7 Plus      | 1M        | 65,536     | Yes         |
+| `opencode-go/qwen3.8-max`       | Qwen3.8 Max       | 1M        | 131,072    | Yes         |
 
 ## Advanced configuration
 

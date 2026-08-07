@@ -28,25 +28,56 @@ const FREE_COST: ModelDefinitionConfig["cost"] = {
 };
 
 // Zen publishes route-specific limits that differ from the family defaults below.
+// Free tiers and route-specific rows must be listed here: family-name heuristics
+// (deepseek→1M, gpt→400k, claude→200k, default→128k) cannot represent free routes
+// or models.dev overrides. Authority: models.dev `opencode` limit.context/output.
 const MODEL_LIMITS: Record<string, { contextWindow: number; maxTokens: number }> = {
+  "big-pickle": { contextWindow: 200_000, maxTokens: 32_000 },
+  "claude-fable-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "claude-haiku-4-5": { contextWindow: 200_000, maxTokens: 64_000 },
+  "claude-opus-4-1": { contextWindow: 200_000, maxTokens: 32_000 },
+  "claude-opus-4-5": { contextWindow: 200_000, maxTokens: 64_000 },
+  "claude-opus-4-6": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "claude-opus-4-7": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "claude-opus-4-8": { contextWindow: 1_000_000, maxTokens: 128_000 },
   "claude-opus-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "claude-sonnet-4": { contextWindow: 1_000_000, maxTokens: 64_000 },
+  "claude-sonnet-4-5": { contextWindow: 1_000_000, maxTokens: 64_000 },
+  "claude-sonnet-4-6": { contextWindow: 1_000_000, maxTokens: 64_000 },
   "claude-sonnet-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "deepseek-v4-flash-free": { contextWindow: 200_000, maxTokens: 128_000 },
+  "gpt-5.3-codex-spark": { contextWindow: 128_000, maxTokens: 128_000 },
+  "gpt-5.4": { contextWindow: 1_050_000, maxTokens: 128_000 },
+  "gpt-5.4-pro": { contextWindow: 1_050_000, maxTokens: 128_000 },
+  "gpt-5.5": { contextWindow: 1_050_000, maxTokens: 128_000 },
+  "gpt-5.5-pro": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "gpt-5.6-luna": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "gpt-5.6-sol": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "gpt-5.6-terra": { contextWindow: 1_050_000, maxTokens: 128_000 },
   "glm-5.2": { contextWindow: 1_000_000, maxTokens: 131_072 },
   "grok-4.5": { contextWindow: 500_000, maxTokens: 500_000 },
+  "grok-build-0.1": { contextWindow: 256_000, maxTokens: 256_000 },
   "kimi-k2.7-code": { contextWindow: 262_144, maxTokens: 262_144 },
+  "kimi-k3": { contextWindow: 1_048_576, maxTokens: 131_072 },
   "laguna-s-2.1-free": { contextWindow: 256_000, maxTokens: 32_000 },
   "ling-3.0-flash-free": { contextWindow: 262_144, maxTokens: 32_768 },
+  "mimo-v2.5-free": { contextWindow: 200_000, maxTokens: 32_000 },
   "minimax-m3": { contextWindow: 512_000, maxTokens: 128_000 },
+  "nemotron-3-ultra-free": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "north-mini-code-free": { contextWindow: 256_000, maxTokens: 64_000 },
 };
 
 // These rows are the inverse of their family's usual image-input capability.
 const MODEL_IMAGE_INPUT_OVERRIDES = new Map<string, boolean>([
+  ["big-pickle", false],
+  ["gpt-5.3-codex-spark", false],
   ["laguna-s-2.1-free", false],
   ["ling-3.0-flash-free", false],
   ["minimax-m3", true],
+  ["nemotron-3-ultra-free", false],
+  ["north-mini-code-free", false],
+  ["qwen3.5-plus", true],
+  ["qwen3.6-plus", true],
 ]);
 
 const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
@@ -83,7 +114,7 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
   "deepseek-v4-flash-free": FREE_COST,
-  "deepseek-v4-pro": { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+  "deepseek-v4-pro": { input: 1.74, output: 3.84, cacheRead: 0.145, cacheWrite: 0 },
   "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
   "gemini-3.1-pro": {
     input: 2,
@@ -99,13 +130,13 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "gemini-3.5-flash-lite": { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
   "gemini-3.6-flash": { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
   "gpt-5.6-luna": {
-    input: 1,
-    output: 6,
-    cacheRead: 0.1,
-    cacheWrite: 1.25,
+    input: 0.2,
+    output: 1.2,
+    cacheRead: 0.02,
+    cacheWrite: 0.25,
     tieredPricing: [
-      { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25, range: [0, 272_000] },
-      { input: 2, output: 9, cacheRead: 0.2, cacheWrite: 2.5, range: [272_000] },
+      { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25, range: [0, 272_000] },
+      { input: 0.4, output: 1.8, cacheRead: 0.04, cacheWrite: 0.5, range: [272_000] },
     ],
   },
   "gpt-5.6-sol": {
@@ -177,9 +208,10 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
       { input: 4, output: 12, cacheRead: 1, cacheWrite: 0, range: [200_000] },
     ],
   },
-  "kimi-k2.5": { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
+  "kimi-k2.5": { input: 0.6, output: 3, cacheRead: 0.08, cacheWrite: 0 },
   "kimi-k2.6": { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
   "kimi-k2.7-code": { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+  "kimi-k3": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
   "laguna-s-2.1-free": FREE_COST,
   "ling-3.0-flash-free": FREE_COST,
   "mimo-v2.5-free": FREE_COST,
@@ -242,6 +274,7 @@ const MODEL_NAMES: Record<string, string> = {
   "kimi-k2.5": "Kimi K2.5",
   "kimi-k2.6": "Kimi K2.6",
   "kimi-k2.7-code": "Kimi K2.7 Code",
+  "kimi-k3": "Kimi K3",
   "laguna-s-2.1-free": "Laguna S 2.1 Free",
   "ling-3.0-flash-free": "Ling-3.0-flash Free",
   "mimo-v2.5-free": "MiMo V2.5 Free",
@@ -450,6 +483,7 @@ const OPENCODE_ZEN_MODELS = [
   "minimax-m2.7",
   "minimax-m2.5",
   "kimi-k2.7-code",
+  "kimi-k3",
   "kimi-k2.6",
   "kimi-k2.5",
   "qwen3.6-plus",

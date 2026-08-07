@@ -100,10 +100,10 @@ one OpenCode setup.
 
 ### Zen
 
-| Property         | Value                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                                                        |
-| Example models   | `opencode/gpt-5.6-sol`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle` |
+| Property         | Value                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Runtime provider | `opencode`                                                                                                               |
+| Example models   | `opencode/claude-opus-5`, `opencode/gpt-5.6-sol`, `opencode/gemini-3.6-flash`, `opencode/kimi-k3`, `opencode/minimax-m3` |
 
 Run `openclaw models list --provider opencode` for the full current list, which
 also includes the currently promoted free-tier rows `opencode/big-pickle`,
@@ -113,10 +113,10 @@ also includes the currently promoted free-tier rows `opencode/big-pickle`,
 
 ### Go
 
-| Property         | Value                                                                    |
-| ---------------- | ------------------------------------------------------------------------ |
-| Runtime provider | `opencode-go`                                                            |
-| Example models   | `opencode-go/kimi-k2.6`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
+| Property         | Value                                                                   |
+| ---------------- | ----------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                           |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/grok-4.5`, `opencode-go/minimax-m3` |
 
 See [OpenCode Go](/providers/opencode-go) for the full Go model table.
 

@@ -81,6 +81,80 @@
               "maxTokensField": "max_tokens",
               "codeMode": "capable"
             }
+          },
+          {
+            "id": "kimi-k3",
+            "name": "Kimi K3",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "cost": {
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "hy3",
+            "name": "Hy3",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0.14,
+              "output": 0.58,
+              "cacheRead": 0.035,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "grok-4.5",
+            "name": "Grok 4.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 500000,
+            "maxTokens": 500000,
+            "cost": {
+              "input": 2,
+              "output": 6,
+              "cacheRead": 0.5,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 2,
+                  "output": 6,
+                  "cacheRead": 0.5,
+                  "cacheWrite": 0,
+                  "range": [0, 200000]
+                },
+                {
+                  "input": 4,
+                  "output": 12,
+                  "cacheRead": 1,
+                  "cacheWrite": 0,
+                  "range": [200000]
+                }
+              ]
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens"
+            }
           }
         ]
       }

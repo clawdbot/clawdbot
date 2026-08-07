@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -62,34 +61,15 @@ describe("doctor-contract-registry module loader", () => {
     clearPluginDoctorContractRegistryCache();
   });
 
-  it("preserves source artifact precedence across root and dist candidates", () => {
-    const pluginRoot = makeTempDir();
-    const distRoot = path.join(pluginRoot, "dist");
-    fs.mkdirSync(distRoot);
-    const rootDoctorTypeScript = path.join(pluginRoot, "doctor-contract-api.ts");
-    const distDoctorTypeScript = path.join(distRoot, "doctor-contract-api.ts");
-    const rootDoctorJavaScript = path.join(pluginRoot, "doctor-contract-api.js");
-    const rootContractTypeScript = path.join(pluginRoot, "contract-api.ts");
-    for (const filePath of [
-      rootDoctorTypeScript,
-      distDoctorTypeScript,
-      rootDoctorJavaScript,
-      rootContractTypeScript,
-    ]) {
-      fs.writeFileSync(filePath, "export {};\n", "utf-8");
-    }
-
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorTypeScript);
-    fs.rmSync(rootDoctorTypeScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(distDoctorTypeScript);
-    fs.rmSync(distDoctorTypeScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootDoctorJavaScript);
-    fs.rmSync(rootDoctorJavaScript);
-    expect(resolvePluginDoctorContractArtifactPath(pluginRoot)).toBe(rootContractTypeScript);
-  });
-
   it("uses native require on Windows for compatible JavaScript contract-api modules", () => {
     const pluginRoot = makeTempDir();
+    // Anchor the fixture scope to CJS so `.js` contract files stay loadable
+    // even when an ancestor package.json declares "type": "module".
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ type: "commonjs" }, null, 2) + "\n",
+      "utf-8",
+    );
     fs.writeFileSync(
       path.join(pluginRoot, "contract-api.js"),
       "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'legacy'], message: 'legacy demo key' }] };\n",
@@ -418,6 +398,155 @@ describe("doctor-contract-registry module loader", () => {
         },
       }),
     ).toEqual(["ollama-cloud"]);
+  });
+
+  it("collects provider ids from agent-only model refs", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "opencode/hy3-free",
+            fallbacks: ["opencode-go/kimi-k3@work"],
+          },
+          models: {
+            "opencode/laguna-s-2.1-free": {},
+          },
+          subagents: {
+            model: "openai/gpt-5.6-sol",
+          },
+        },
+        list: [{ id: "main", model: "anthropic/claude-opus-5" }],
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual([
+      "anthropic",
+      "openai",
+      "opencode",
+      "opencode-go",
+    ]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+      }),
+    ).toEqual(["anthropic", "openai", "opencode", "opencode-go"]);
+  });
+
+  // Each selector gets a distinct provider id so a dropped selector fails on its
+  // own row instead of hiding behind a sibling that resolves the same id.
+  it.each([
+    ["utilityModel", { utilityModel: "sel-utility/m" }, "sel-utility"],
+    ["imageModel", { imageModel: "sel-image/m" }, "sel-image"],
+    ["voiceModel", { voiceModel: "sel-voice/m" }, "sel-voice"],
+    ["pdfModel", { pdfModel: "sel-pdf/m" }, "sel-pdf"],
+    ["mediaModels.image", { mediaModels: { image: "sel-media-image/m" } }, "sel-media-image"],
+    ["mediaModels.video", { mediaModels: { video: "sel-media-video/m" } }, "sel-media-video"],
+    ["mediaModels.music", { mediaModels: { music: "sel-media-music/m" } }, "sel-media-music"],
+    ["heartbeat.model", { heartbeat: { model: "sel-heartbeat/m" } }, "sel-heartbeat"],
+    ["compaction.model", { compaction: { model: "sel-compaction/m" } }, "sel-compaction"],
+    [
+      "compaction.memoryFlush.model",
+      { compaction: { memoryFlush: { model: "sel-flush/m" } } },
+      "sel-flush",
+    ],
+    ["subagents.model", { subagents: { model: "sel-subagents/m" } }, "sel-subagents"],
+  ])(
+    "loads the doctor contract for a config whose only model ref is agents.defaults.%s",
+    (_selector, defaults, expectedProviderId) => {
+      expect(collectRelevantDoctorPluginIds({ agents: { defaults } })).toEqual([
+        expectedProviderId,
+      ]);
+    },
+  );
+
+  it("collects provider ids from keyed agents.entries without agents.list", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: { default: true, model: "opencode/hy3-free" },
+          worker: { model: { primary: "opencode-go/kimi-k3" } },
+        },
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["opencode", "opencode-go"]);
+  });
+
+  it("collects provider ids from modelPolicy.allow (omitted by canonical traversal)", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["opencode/hy3-free"] },
+        },
+        entries: {
+          main: { modelPolicy: { allow: ["opencode-go/kimi-k3"] } },
+        },
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw).toSorted()).toEqual(["opencode", "opencode-go"]);
+  });
+
+  it("harvests modelPolicy.allow from the agents.list projection", () => {
+    const raw = {
+      agents: {
+        list: [{ id: "main", modelPolicy: { allow: ["opencode/hy3-free@work"] } }],
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["opencode"]);
+  });
+
+  it("returns no plugin ids for configs without model references", () => {
+    expect(collectRelevantDoctorPluginIds({})).toEqual([]);
+    expect(collectRelevantDoctorPluginIds({ agents: {} })).toEqual([]);
+    expect(collectRelevantDoctorPluginIds({ agents: { defaults: {} } })).toEqual([]);
+  });
+
+  it("skips non-string agent model values instead of inventing provider ids", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          model: 42,
+          utilityModel: null,
+          imageModel: true,
+          heartbeat: { model: [] },
+        },
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual([]);
+  });
+
+  it("loads agent provider ids when only agents paths are touched", () => {
+    const raw = {
+      agents: {
+        defaults: { utilityModel: "opencode/kimi-k3" },
+      },
+    };
+
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: [["agents", "defaults", "utilityModel"]],
+      }),
+    ).toEqual(["opencode"]);
+  });
+
+  it("harvests non-agent configured model refs so their contracts still load", () => {
+    // The canonical traversal also owns tts/hooks/channel-override refs. Loading
+    // an extra contract is safe (its rules are filtered by touched paths), while
+    // missing one leaves a retired ref unrepaired.
+    const raw = { tts: { summaryModel: "opencode/hy3-free" } };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["opencode"]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: [["agents", "defaults", "model"]],
+      }),
+    ).toEqual(["opencode"]);
   });
 
   it("collects provider ids from media model entries", () => {

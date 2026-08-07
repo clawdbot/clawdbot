@@ -1,4 +1,8 @@
 // Loads plugin doctor contracts from manifest-owned metadata.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -8,12 +12,17 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
-import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+
+const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
+const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
+const RUNNING_FROM_BUILT_ARTIFACT =
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
 type PluginDoctorContractModule = {
   legacyConfigRules?: unknown;
@@ -102,6 +111,23 @@ function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContrac
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
       : {}),
   })(modulePath) as PluginDoctorContractModule;
+}
+
+function resolveContractApiPath(rootDir: string): string | null {
+  const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
+    ? CONTRACT_API_EXTENSIONS
+    : ([...CONTRACT_API_EXTENSIONS.slice(3), ...CONTRACT_API_EXTENSIONS.slice(0, 3)] as const);
+  for (const basename of ["doctor-contract-api", "contract-api"]) {
+    for (const extension of orderedExtensions) {
+      for (const baseDir of [rootDir, path.join(rootDir, "dist")]) {
+        const candidate = path.join(baseDir, `${basename}${extension}`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function coerceLegacyConfigRules(value: unknown): LegacyConfigRule[] {
@@ -242,6 +268,65 @@ function collectMediaProviderIds(root: Record<string, unknown>, ids: Set<string>
   }
 }
 
+function addProviderIdFromModelRef(value: unknown, ids: Set<string>): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  // Drop trailing auth profile (`provider/model@profile`) before splitting.
+  const withoutProfile = trimmed.includes("@")
+    ? trimmed.slice(0, trimmed.lastIndexOf("@"))
+    : trimmed;
+  const slash = withoutProfile.indexOf("/");
+  if (slash <= 0) {
+    return;
+  }
+  const provider = withoutProfile.slice(0, slash).trim();
+  if (provider) {
+    ids.add(normalizeProviderId(provider));
+  }
+}
+
+function harvestModelPolicyAllow(value: unknown, ids: Set<string>): void {
+  const allow = asNullableRecord(asNullableRecord(value)?.modelPolicy)?.allow;
+  if (Array.isArray(allow)) {
+    for (const entry of allow) {
+      addProviderIdFromModelRef(entry, ids);
+    }
+  }
+}
+
+// Configured model refs are a common sole owner of a provider plugin (no
+// models.providers.<id> block), so a missed ref means the plugin doctor
+// contract never loads and doctor --fix leaves the retired ref in place.
+function collectConfiguredModelProviderIds(root: Record<string, unknown>, ids: Set<string>): void {
+  // Canonical traversal owns the selector inventory (agents, channel overrides,
+  // hooks, TTS, Discord voice) so new selectors propagate without drift here.
+  for (const ref of collectConfiguredModelRefs(root)) {
+    addProviderIdFromModelRef(ref.value, ids);
+  }
+  // Canonical omits modelPolicy.allow (policy, not selection) but contracts
+  // rewrite it, so harvest it explicitly on the same roster precedence.
+  const agents = asNullableRecord(root.agents);
+  if (!agents) {
+    return;
+  }
+  harvestModelPolicyAllow(agents.defaults, ids);
+  const entries = asNullableRecord(agents.entries);
+  if (entries) {
+    for (const agent of Object.values(entries)) {
+      harvestModelPolicyAllow(agent, ids);
+    }
+  } else if (Array.isArray(agents.list)) {
+    for (const agent of agents.list) {
+      harvestModelPolicyAllow(agent, ids);
+    }
+  }
+}
+
 export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   const ids = new Set<string>();
   const root = asNullableRecord(raw);
@@ -273,6 +358,7 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   }
 
   collectMediaProviderIds(root, ids);
+  collectConfiguredModelProviderIds(root, ids);
 
   if (hasLegacyElevenLabsTalkFields(root)) {
     ids.add("elevenlabs");
@@ -291,6 +377,9 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
   }
 
   const ids = new Set<string>();
+  // The configured-model harvest walks the whole config; run it once after the
+  // loop instead of per touched agents path.
+  let harvestConfiguredModels = false;
   for (const touchedPath of params.touchedPaths) {
     const [first, second, third] = touchedPath;
     if (first === "channels") {
@@ -320,9 +409,17 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
       collectMediaProviderIds(root, ids);
       continue;
     }
+    if (first === "agents") {
+      harvestConfiguredModels = true;
+      continue;
+    }
     if (first === "talk" && hasLegacyElevenLabsTalkFields(root)) {
       ids.add("elevenlabs");
     }
+  }
+
+  if (harvestConfiguredModels) {
+    collectConfiguredModelProviderIds(root, ids);
   }
 
   return [...ids].toSorted();
@@ -331,7 +428,7 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
 function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
 ): PluginDoctorContractEntry | null {
-  const contractSource = resolvePluginDoctorContractArtifactPath(record.rootDir);
+  const contractSource = resolveContractApiPath(record.rootDir);
   if (!contractSource) {
     return null;
   }

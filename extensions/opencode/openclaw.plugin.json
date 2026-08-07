@@ -315,6 +315,34 @@
             "replacedBy": "minimax-m3"
           },
           {
+            "id": "kimi-k3",
+            "name": "Kimi K3",
+            "api": "openai-completions",
+            "provider": "opencode",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "supportsDeveloperRole": false,
+              "supportsStrictMode": false,
+              "codeMode": "capable"
+            }
+          },
+          {
             "id": "big-pickle",
             "name": "Big Pickle",
             "api": "openai-completions",
