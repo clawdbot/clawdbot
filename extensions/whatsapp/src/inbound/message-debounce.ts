@@ -86,6 +86,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
 
   const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage>({
     debounceMs,
+    serializeImmediate: true,
     buildKey: (msg) => msg.debounceKey ?? buildKey(msg),
     shouldDebounce,
     resolveDebounceMs,
