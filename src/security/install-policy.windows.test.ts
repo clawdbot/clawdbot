@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PermissionCheck } from "./audit-fs.js";
 import { validateInstallPolicyStatic } from "./install-policy.js";
 
@@ -17,7 +17,7 @@ vi.mock("./audit-fs.js", async (importOriginal) => {
   };
 });
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function permissions(source: PermissionCheck["source"]): PermissionCheck {
   return {
@@ -39,10 +39,9 @@ beforeEach(() => {
   auditMocks.inspectPathPermissions.mockResolvedValue(permissions("windows-acl"));
 });
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
   auditMocks.inspectPathPermissions.mockReset();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("install policy Windows ACL diagnostics", () => {
@@ -50,8 +49,7 @@ describe("install policy Windows ACL diagnostics", () => {
     { kind: "file", unavailablePath: (scriptPath: string) => scriptPath },
     { kind: "parent directory", unavailablePath: (scriptPath: string) => path.dirname(scriptPath) },
   ])("identifies the interpreter script when its $kind ACL is unavailable", async (fixture) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-policy-windows-"));
-    tempDirs.push(dir);
+    const dir = tempDirs.make("openclaw-install-policy-windows-");
     const scriptPath = path.join(dir, "policy.cjs");
     await fs.writeFile(scriptPath, "export {};\n", "utf8");
     const unavailablePath = fixture.unavailablePath(scriptPath);
