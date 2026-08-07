@@ -631,7 +631,10 @@ export function createApplicationGateway(
       // A stopped gateway stays on the login gate; the cleared credential
       // simply won't be offered on the next explicit connect.
       if (!stopped) {
-        connect();
+        // Connection auth selects shared/bootstrap tokens ahead of stored
+        // device auth, so this tab's session credentials must go too or the
+        // reconnect silently resumes the old session instead of fresh auth.
+        connect({ token: "", bootstrapToken: "", password: "" });
       }
       return true;
     },

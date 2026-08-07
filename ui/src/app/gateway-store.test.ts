@@ -1180,6 +1180,33 @@ describe("createApplicationGateway stored device credential", () => {
     expect(clients.length).toBe(clientsBefore);
   });
 
+  it("drops this tab's shared credentials so forget cannot resume the old session", () => {
+    // Regression (review P1): connection auth prefers shared/bootstrap tokens
+    // over stored device auth, so a token-bearing tab must lose them too or
+    // the reconnect silently reuses the old session.
+    const { gateway, current } = createStore();
+    gateway.start();
+    gateway.connect({ token: "page-shared-token", password: "gate-password" });
+    expect(current().opts.token).toBe("page-shared-token");
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    seedDeviceIdentity();
+    storeDeviceAuthToken({
+      deviceId: DEVICE_ID,
+      gatewayUrl,
+      role: "operator",
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+
+    expect(gateway.forgetDeviceToken?.()).toBe(true);
+
+    expect(current().opts.token).toBeUndefined();
+    expect(current().opts.bootstrapToken).toBeUndefined();
+    expect(current().opts.password).toBeUndefined();
+    expect(gateway.connection.token).toBe("");
+    expect(loadDeviceAuthToken({ deviceId: DEVICE_ID, gatewayUrl, role: "operator" })).toBeNull();
+  });
+
   it("forgets a credential persisted only under a role alias", () => {
     // Regression: an alias-keyed entry (" operator ") is accepted by the
     // reader, so Forget must actually delete it instead of reporting success

@@ -394,4 +394,69 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     );
     expect(identityAfter).toBe(identityBefore);
   });
+
+  it("forgetting in a token-bearing tab drops the shared credential too", async () => {
+    // Review P1 regression: shared auth outranks stored device auth, so the
+    // same tab that signed in with #token=… must not resume the old session.
+    const context = await createContext();
+    const { gateway, page } = await openGatewayPage({
+      appBaseUrl: server.baseUrl,
+      context,
+      deviceToken: WILFRED_DEVICE_TOKEN,
+      gatewayUrl: WILFRED_GATEWAY_URL,
+      sharedToken: "shared-wilfred",
+    });
+    const seededConnect = await gateway.waitForRequest("connect");
+    expect(requireConnectAuth(seededConnect).token).toBe("shared-wilfred");
+    const storeKey =
+      `openclaw.device.auth.v1:` + normalizeGatewayCredentialScope(WILFRED_GATEWAY_URL);
+    await expect
+      .poll(() =>
+        page.evaluate((key) => {
+          const raw = localStorage.getItem(key);
+          if (!raw) {
+            return undefined;
+          }
+          const store = JSON.parse(raw) as { tokens?: Record<string, unknown> };
+          return store.tokens?.operator;
+        }, storeKey),
+      )
+      .toBeDefined();
+
+    await page.locator(".sidebar-identity-card").click();
+    const forgetRow = page.locator('wa-dropdown-item[value="command:forget-device"]');
+    await forgetRow.waitFor({ state: "visible" });
+    await forgetRow.click();
+    const confirmButton = page.getByRole("button", { name: "Forget", exact: true });
+    await confirmButton.waitFor({ state: "visible" });
+    await confirmButton.click();
+
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const mock = (
+            window as Window & {
+              openclawControlUiE2eGateway?: { requests: Array<{ method: string }> };
+            }
+          ).openclawControlUiE2eGateway;
+          return mock?.requests.filter((request) => request.method === "connect").length ?? 0;
+        }),
+      )
+      .toBeGreaterThanOrEqual(2);
+    const reconnect = await gateway.waitForRequest("connect");
+    expect(readConnectAuth(reconnect)?.token).toBeUndefined();
+    expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
+
+    // The tab-scoped shared token is gone from session storage as well.
+    const sessionToken = await page.evaluate((gatewayUrl) => {
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const key = sessionStorage.key(i);
+        if (key?.includes("token") && sessionStorage.getItem(key)?.trim()) {
+          return { key, present: true };
+        }
+      }
+      return null;
+    }, WILFRED_GATEWAY_URL);
+    expect(sessionToken).toBeNull();
+  });
 });
