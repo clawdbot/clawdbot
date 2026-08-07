@@ -315,6 +315,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     shouldSuppressTyping: state.shouldSuppressTyping,
     messageToolAvailable,
     defaultVisibleReplies: harnessDefaultVisibleReplies,
+    isHeartbeat: params.replyOptions?.isHeartbeat,
   });
   const {
     sourceReplyDeliveryMode,

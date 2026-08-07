@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveGatewayLockDir } from "../config/paths.js";
+import { resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
@@ -39,10 +39,7 @@ function canonicalizeDatabasePath(databasePath: string): string {
   }
 }
 
-function resolveDeviceIdentityCoordinatorPath(
-  databasePath: string,
-  lockDir = resolveGatewayLockDir(),
-): string {
+function resolveDeviceIdentityCoordinatorPath(databasePath: string, lockDir: string): string {
   const canonicalPath = canonicalizeDatabasePath(databasePath);
   const databaseHash = crypto.createHash("sha256").update(canonicalPath).digest("hex").slice(0, 8);
   return path.join(lockDir, `device-identity.${databaseHash}.lock.sqlite`);
@@ -57,7 +54,7 @@ function ensurePrivateCoordinatorDirectory(lockDir: string): void {
       throw error;
     }
     try {
-      fs.mkdirSync(lockDir, { mode: 0o700 });
+      fs.mkdirSync(lockDir, { mode: 0o700, recursive: true });
     } catch (mkdirError) {
       if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
         throw mkdirError;
@@ -90,9 +87,12 @@ function ensurePrivateCoordinatorDirectory(lockDir: string): void {
 export function acquireDeviceIdentityCoordinator(params: {
   databasePath: string;
   busyTimeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
   lockDir?: string;
 }): { release: () => void } {
-  const coordinatorPath = resolveDeviceIdentityCoordinatorPath(params.databasePath, params.lockDir);
+  const lockDir =
+    params.lockDir ?? resolveGatewayLockDir(resolveStateDir(params.env ?? process.env));
+  const coordinatorPath = resolveDeviceIdentityCoordinatorPath(params.databasePath, lockDir);
   ensurePrivateCoordinatorDirectory(path.dirname(coordinatorPath));
   const database = openNodeSqliteDatabase(coordinatorPath);
   try {

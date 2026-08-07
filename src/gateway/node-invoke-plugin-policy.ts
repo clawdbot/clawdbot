@@ -182,6 +182,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   nodeSession: NodeSession;
   command: string;
   params: unknown;
+  sessionKey?: string;
   turnSource?: {
     channel?: unknown;
     to?: unknown;
@@ -293,6 +294,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       onDispatchReady: () => {
         // Only the registry knows that the transport send succeeded. Preserve
         // pre-send failures as retry-safe while making later failures ambiguous.

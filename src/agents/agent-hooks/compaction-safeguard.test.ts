@@ -1,10 +1,11 @@
-/** Tests compaction safeguard summaries, quality audit, providers, and runtime settings. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+/** Tests compaction safeguard summaries, quality audit, providers, and runtime settings. */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -230,12 +231,7 @@ function latestMockCallArg(
   return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-record");
 
 function requireArray(value: unknown): unknown[] {
   if (!Array.isArray(value)) {

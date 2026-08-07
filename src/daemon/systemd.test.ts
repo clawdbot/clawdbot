@@ -98,6 +98,7 @@ import {
   readSystemdServiceRuntime,
   readSystemdServiceExecStart,
   restartSystemdService,
+  resolveSystemdUserServiceAccount,
   resolveSystemdUserUnitPath,
   startSystemdService,
   stageSystemdService,
@@ -339,6 +340,25 @@ describe("systemd availability", () => {
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the sudo caller as the systemd user service account", () => {
+    mockEffectiveUid(0);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "root",
+      uid: 0,
+      gid: 0,
+      shell: "/bin/bash",
+      homedir: "/root",
+    });
+
+    expect(
+      resolveSystemdUserServiceAccount({
+        SUDO_USER: "debian",
+        USER: "root",
+        LOGNAME: "root",
+      }),
+    ).toBe("debian");
+  });
+
   it("keeps root user scope when stale SUDO_USER is paired with root bus environment", async () => {
     mockEffectiveUid(0);
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -359,6 +379,28 @@ describe("systemd availability", () => {
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves root for a real root user-manager environment", () => {
+    mockEffectiveUid(0);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "root",
+      uid: 0,
+      gid: 0,
+      shell: "/bin/bash",
+      homedir: "/root",
+    });
+
+    expect(
+      resolveSystemdUserServiceAccount({
+        HOME: "/root",
+        USER: "root",
+        LOGNAME: "root",
+        SUDO_USER: "debian",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      }),
+    ).toBe("root");
+  });
+
   it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
     mockEffectiveUid(1000);
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -370,6 +412,21 @@ describe("systemd availability", () => {
       isSystemdUserServiceAvailable({ USER: "openclaw", SUDO_USER: "admin" }),
     ).resolves.toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the effective non-root account instead of stale SUDO_USER", () => {
+    mockEffectiveUid(1000);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "openclaw",
+      uid: 1000,
+      gid: 1000,
+      shell: "/bin/bash",
+      homedir: "/home/openclaw",
+    });
+
+    expect(resolveSystemdUserServiceAccount({ USER: "openclaw", SUDO_USER: "admin" })).toBe(
+      "openclaw",
+    );
   });
 });
 

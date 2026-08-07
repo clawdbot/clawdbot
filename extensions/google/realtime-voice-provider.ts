@@ -18,7 +18,6 @@ import {
   type ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -52,6 +51,7 @@ import {
   asFiniteNumber,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
 import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
 
@@ -950,7 +950,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     for (const part of content.modelTurn?.parts ?? []) {
       if (part.inlineData?.data) {
-        const canonicalAudio = canonicalizeBase64(part.inlineData.data);
+        const canonicalAudio = canonicalizeGoogleProviderBase64(part.inlineData.data);
         if (!canonicalAudio) {
           this.failConnection(new Error("Google Live stream returned malformed base64 audio data"));
           return;

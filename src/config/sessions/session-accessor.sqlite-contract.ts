@@ -80,6 +80,19 @@ export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
 };
 
+export type TranscriptEventAppendError =
+  | {
+      actualSessionId: string;
+      code: "session-rebound";
+      expectedSessionId: string;
+      sessionKey: string;
+    }
+  | {
+      code: "session-entry-missing";
+      expectedSessionId: string;
+      sessionKey: string;
+    };
+
 export type SessionTranscriptStats = {
   eventCount: number;
   lastMutationAtMs?: number;

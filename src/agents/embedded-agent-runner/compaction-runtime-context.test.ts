@@ -903,7 +903,7 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("uses the marker session id when its store has no mapped key yet", () => {
+  it("leaves the key absent when a marker store has no mapped row", () => {
     const storePath = path.join(compactionTempDirs.make("compaction-marker-"), "sessions.json");
     const sessionId = "legacy-unmapped-session";
 
@@ -912,6 +912,6 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
         sessionId,
       }),
-    ).toMatchObject({ agentId: "main", sessionId, sessionKey: sessionId, storePath });
+    ).toEqual({ agentId: "main", sessionId, storePath });
   });
 });

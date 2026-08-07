@@ -1,9 +1,10 @@
-// Telegram tests cover action runtime plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
+// Telegram tests cover action runtime plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -256,12 +257,7 @@ type MockCallSource = {
   };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockCall(source: MockCallSource, callIndex: number, label: string) {
   const call = source.mock.calls[callIndex];

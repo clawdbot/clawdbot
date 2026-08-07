@@ -240,7 +240,7 @@ type ReplyRunRegistry = {
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
   isStreaming(sessionKey: string): boolean;
-  isStreamingFromOriginatingLeaf(
+  isMessageInjectableFromOriginatingLeaf(
     sessionKey: string,
     originatingLeafEntryId: string | null,
   ): boolean;
@@ -427,6 +427,15 @@ function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
   } catch {
     return false;
   }
+}
+
+function isReplyOperationMessageInjectable(
+  operation: ReplyOperation,
+  backend: ReplyBackendHandle,
+): boolean {
+  // Admission and delivery must share freshness or a stale owner can waive the
+  // transcript-leaf fence and then reject the same steer during injection.
+  return !isReplyRunEvidenceStale(operation) && isReplyBackendMessageInjectable(backend);
 }
 
 /** Run work after an operation no longer owns its session lane. */
@@ -1176,7 +1185,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return getAttachedBackend(operation)?.isStreaming() ?? false;
   },
-  isStreamingFromOriginatingLeaf(sessionKey, originatingLeafEntryId) {
+  isMessageInjectableFromOriginatingLeaf(sessionKey, originatingLeafEntryId) {
     const operation = this.get(sessionKey);
     if (
       !operation ||
@@ -1185,7 +1194,8 @@ export const replyRunRegistry: ReplyRunRegistry = {
     ) {
       return false;
     }
-    return getAttachedBackend(operation)?.isStreaming() ?? false;
+    const backend = getAttachedBackend(operation);
+    return backend ? isReplyOperationMessageInjectable(operation, backend) : false;
   },
   abort(sessionKey) {
     const operation = this.get(sessionKey);
@@ -1294,12 +1304,7 @@ export function queueReplyRunMessage(
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  // Steering into an evidence-dead run swallows the human message that would
-  // otherwise trigger stale takeover through normal reply admission.
-  if (isReplyRunEvidenceStale(operation)) {
-    return false;
-  }
-  if (!isReplyBackendMessageInjectable(backend)) {
+  if (!isReplyOperationMessageInjectable(operation, backend)) {
     return false;
   }
   if (resolveReplyBackendQueueMessageMismatch(backend, options)) {

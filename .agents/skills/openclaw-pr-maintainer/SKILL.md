@@ -356,7 +356,7 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - Before landing any PR with non-trivial code changes, run fresh `$autoreview` until no accepted/actionable findings remain; prior CI, ClawSweeper, or manual review is not a substitute. Skip only for truly trivial/docs-only changes or when the user explicitly opts out.
 - When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full `pnpm` gates locally. Do not rebase only because `main` advanced; behind-main drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts.
-- Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
+- Use standard Git commands and stage only the files intended for each commit.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.
 - Use `.github/pull_request_template.md` for PR submissions and `.github/ISSUE_TEMPLATE/` for issues.

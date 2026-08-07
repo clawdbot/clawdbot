@@ -574,6 +574,13 @@ jobs:
       package_source_sha: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha || '' }}
       package_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 || '' }}
       package_version: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packageVersion || '' }}
+      enable_prepublish_plugin_registry: true
+      prepublish_plugin_registry_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
       shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
       shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}

@@ -270,12 +270,13 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("keeps Fish Audio's legacy plugin id migration-only", () => {
+  it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
     const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
     expect(entry).toBeDefined();
     expect(resolveOfficialExternalPluginId(entry!)).toBe("fish-audio-speech");
     expect(resolveOfficialExternalPluginLegacyIds(entry!)).toEqual(["fish-audio"]);
     expect(resolveOfficialExternalPluginInstall(entry!)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/fish-audio-speech",
       npmSpec: "@openclaw/fish-audio-speech",
       defaultChoice: "npm",
       minHostVersion: ">=2026.7.2",
