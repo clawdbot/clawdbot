@@ -2629,6 +2629,7 @@ fi
     }
     for (const script of [runner, publishedRunner]) {
       expect(script).toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG"');
+      expect(script).toContain("plugin-state-diagnostic.mjs");
       expect(script).toContain("systemctl --user stop openclaw-gateway.service");
     }
   });
