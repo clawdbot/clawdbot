@@ -18,8 +18,6 @@ import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
 import { getDefaultLocalRoots } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
-import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import {
@@ -33,10 +31,6 @@ import {
   readStringParam,
 } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
-import {
-  getCurrentCapabilityMetadataSnapshot,
-  hasSnapshotCapabilityAvailability,
-} from "./manifest-capability-availability.js";
 import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
@@ -181,11 +175,6 @@ type CapabilityProvider = {
 };
 
 type CapabilityProviderSource = CapabilityProvider[] | (() => CapabilityProvider[]);
-
-type GenerationCapabilityProviderKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders";
 
 function parseCapabilityModelRefForProviders(params: {
   providers: CapabilityProvider[];
@@ -394,71 +383,6 @@ export function resolveCapabilityModelConfigForTool(params: {
         authStore: params.authStore,
       }),
   });
-}
-
-/**
- * Reports whether a generation tool should be offered for the current config and auth state.
- */
-export function hasGenerationToolAvailability(params: {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  authStore?: AuthProfileStore;
-  modelConfig?: AgentModelConfig;
-  providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
-  providerKey: GenerationCapabilityProviderKey;
-}): boolean {
-  if (params.cfg?.plugins?.enabled === false) {
-    return false;
-  }
-  if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
-    return true;
-  }
-  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
-  if (providers) {
-    return providers.some((provider) =>
-      isCapabilityProviderConfigured({
-        providers,
-        provider,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-      }),
-    );
-  }
-  const snapshot =
-    getCurrentCapabilityMetadataSnapshot({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-    }) ??
-    loadCapabilityManifestSnapshot({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-    });
-  if (
-    hasSnapshotCapabilityAvailability({
-      snapshot,
-      key: params.providerKey,
-      config: params.cfg,
-      authStore: params.authStore,
-    })
-  ) {
-    return true;
-  }
-  return listAvailableManifestContractValues({
-    snapshot,
-    contract: params.providerKey,
-    config: params.cfg,
-  }).some((providerId) =>
-    hasProviderAuthForTool({
-      provider: providerId,
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      authStore: params.authStore,
-    }),
-  );
 }
 
 function formatQuotedList(values: readonly string[]): string {

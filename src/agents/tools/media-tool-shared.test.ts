@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
-  hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
   readBooleanToolParam,
   resolveMediaToolInboundRoots,
@@ -181,29 +180,7 @@ describe("resolveModelFromRegistry", () => {
   }, 180_000);
 });
 
-describe("hasGenerationToolAvailability", () => {
-  it("accepts config-backed custom provider auth for generation providers", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "custom-image": {
-            baseUrl: "https://example.com/v1",
-            apiKey: "sk-configured", // pragma: allowlist secret
-            models: [],
-          },
-        },
-      },
-    };
-
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        cfg,
-        providers: [{ id: "custom-image", defaultModel: "workflow" }],
-      }),
-    ).toBe(true);
-  });
-
+describe("isCapabilityProviderConfigured", () => {
   it("preserves a provider-specific not-configured result over generic config auth", () => {
     const cfg = {
       models: {
@@ -235,67 +212,5 @@ describe("hasGenerationToolAvailability", () => {
         providers: [provider],
       }),
     ).toBeNull();
-  });
-
-  it("allows generation tools for runtime providers configured without auth", () => {
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        providers: [
-          {
-            id: "local-image",
-            defaultModel: "workflow",
-            isConfigured: () => true,
-          },
-        ],
-      }),
-    ).toBe(true);
-  });
-
-  it("omits generation tools when runtime providers are not configured", () => {
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        providers: [
-          {
-            id: "local-image",
-            defaultModel: "workflow",
-            isConfigured: () => false,
-          },
-        ],
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps explicit model config sufficient for generation tool registration", () => {
-    const loadProviders = vi.fn(() => []);
-
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        modelConfig: { primary: "local-image/workflow" },
-        providers: loadProviders,
-      }),
-    ).toBe(true);
-    expect(loadProviders).not.toHaveBeenCalled();
-  });
-
-  it("checks configured runtime providers against the supplied auth store", () => {
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        authStore: {
-          version: 1,
-          profiles: {
-            "local-image:default": {
-              provider: "local-image",
-              type: "api_key",
-              key: "test",
-            },
-          },
-        },
-        providers: [{ id: "local-image", defaultModel: "workflow" }],
-      }),
-    ).toBe(true);
   });
 });
