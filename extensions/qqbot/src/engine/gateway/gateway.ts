@@ -1,6 +1,7 @@
 // Qqbot plugin module implements gateway behavior.
 import path from "node:path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isQQBotTokenAuthenticationFailure } from "../api/auth-errors.js";
 import {
   classifyCoreCommandForGroup,
   PRIVATE_CHAT_ONLY_TEXT,
@@ -23,6 +24,7 @@ import {
   sendText as senderSendText,
 } from "../messaging/sender.js";
 import { setRefIndex } from "../ref/store.js";
+import { ApiError } from "../types.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { runWithRequestContext } from "../utils/request-context.js";
 import { GatewayConnection } from "./gateway-connection.js";
@@ -316,8 +318,14 @@ async function startTypingForEvent(
     try {
       return await sendNotifyAndStartKeepAlive();
     } catch (notifyErr) {
+      const isStructuredAuthFailure =
+        notifyErr instanceof ApiError &&
+        isQQBotTokenAuthenticationFailure(notifyErr.httpStatus, notifyErr.bizCode);
       const errMsg = String(notifyErr);
-      if (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244")) {
+      const isSyntheticAuthFailure =
+        !(notifyErr instanceof ApiError) &&
+        (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244"));
+      if (isStructuredAuthFailure || isSyntheticAuthFailure) {
         clearTokenCache(account.appId);
         return await sendNotifyAndStartKeepAlive();
       }
