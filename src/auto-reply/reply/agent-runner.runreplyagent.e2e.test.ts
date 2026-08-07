@@ -50,7 +50,7 @@ import { createMockTypingController } from "./test-helpers.js";
 type AgentRunParams = {
   sessionId?: string;
   sessionFile?: string;
-  onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+  onPartialReply?: (payload: { text?: string }) => Promise<boolean | void> | boolean | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: {
@@ -1178,24 +1178,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it.each([
-    { label: "direct chat", sessionCtx: {} },
+    { label: "legacy void in a direct chat", callbackResult: undefined, sessionCtx: {} },
+    { label: "explicit acceptance in a direct chat", callbackResult: true, sessionCtx: {} },
+    { label: "explicit rejection in a direct chat", callbackResult: false, sessionCtx: {} },
     {
-      label: "group chat",
+      label: "legacy void in a group chat",
+      callbackResult: undefined,
       sessionCtx: {
         ChatType: "group" as const,
         SessionKey: "agent:test:telegram:group:-100123",
       },
     },
   ])(
-    "returns a terminal failure in a $label after a delivered partial with block streaming disabled",
-    async ({ sessionCtx }) => {
+    "preserves $label through terminal failure with block streaming disabled",
+    async ({ callbackResult, sessionCtx }) => {
       const accounting = await import("./session-run-accounting.js");
       const persistSpy = vi
         .spyOn(accounting, "persistRunSessionUsage")
         .mockRejectedValueOnce(new Error("persist exploded"));
-      const onPartialReply = vi.fn();
+      const onPartialReply = vi.fn(async () => callbackResult);
+      let observedCallbackResult: boolean | void = undefined;
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-        await params.onPartialReply?.({ text: "partial answer" });
+        observedCallbackResult = await params.onPartialReply?.({ text: "partial answer" });
         return {
           payloads: [{ text: "final answer" }],
           meta: { agentMeta: { usage: { input: 1, output: 1 } } },
@@ -1205,20 +1209,24 @@ describe("runReplyAgent heartbeat followup guard", () => {
       try {
         const { run } = createMinimalRun({
           blockStreamingEnabled: false,
-          opts: { onPartialReply },
+          opts: { onPartialReply, preserveProgressCallbackStartOrder: true },
           sessionCtx,
         });
-        const result = await run();
-        const payload = Array.isArray(result) ? result[0] : result;
-
+        if (callbackResult === false) {
+          await expect(run()).rejects.toThrow("persist exploded");
+        } else {
+          const result = await run();
+          const payload = Array.isArray(result) ? result[0] : result;
+          expect(payload).toMatchObject({
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            isError: true,
+          });
+        }
         expect(onPartialReply).toHaveBeenCalledWith({
           text: "partial answer",
           mediaUrls: undefined,
         });
-        expect(payload).toMatchObject({
-          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-          isError: true,
-        });
+        expect(observedCallbackResult).toBe(callbackResult);
       } finally {
         persistSpy.mockRestore();
       }

@@ -278,7 +278,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         onPartialReply: async (payload) => {
           const classified = params.presentation.classifyStreamingPartial(payload);
           if (classified.skip || !classified.text) {
-            return;
+            return false;
           }
           const textForTyping = classified.text;
           let didMaterialize = false;
@@ -294,19 +294,21 @@ export async function runEmbeddedFallbackCandidate(params: {
             },
             mediaUrls: payload.mediaUrls,
           };
+          const onPartialReply = turn.opts?.onPartialReply;
           if (!params.preserveProgressCallbackStartOrder) {
             await turn.typingSignals.signalTextDelta(textForTyping);
-            if (!turn.opts?.onPartialReply) {
-              return;
+            if (!onPartialReply) {
+              return false;
             }
-            await turn.opts.onPartialReply(partialPayload);
-            return;
+            return await onPartialReply(partialPayload);
           }
-          await params.presentation.startPresentationWhileTyping(
+          if (!onPartialReply) {
+            await turn.typingSignals.signalTextDelta(textForTyping);
+            return false;
+          }
+          return await params.presentation.startPresentationWhileTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            async () => {
-              await turn.opts?.onPartialReply?.(partialPayload);
-            },
+            () => onPartialReply(partialPayload),
           );
         },
         onAssistantMessageStart: async () => {

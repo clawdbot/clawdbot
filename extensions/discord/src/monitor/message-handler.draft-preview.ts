@@ -172,8 +172,9 @@ export function createDiscordDraftPreviewController(params: {
 
   const pushPreambleHeadline = async (text?: string, options?: { itemId?: string }) => {
     if (discordStreamMode === "progress") {
-      await progressDraft.pushPreambleHeadline(text, options);
+      return await progressDraft.pushPreambleHeadline(text, options);
     }
+    return false;
   };
 
   const beginNewProgressTurn = (options?: { force?: boolean }) => {
@@ -289,17 +290,20 @@ export function createDiscordDraftPreviewController(params: {
       payload: { itemId?: string; progressText?: string },
       noteCommentary: (itemId?: string, text?: string) => void,
     ) {
-      await pushPreambleHeadline(payload.progressText, { itemId: payload.itemId });
+      const headlineAccepted = await pushPreambleHeadline(payload.progressText, {
+        itemId: payload.itemId,
+      });
       if (!progressDraft.commentaryProgressEnabled) {
-        return;
+        return headlineAccepted;
       }
-      const accepted = await progressDraft.pushCommentaryProgress(payload.progressText, {
+      const commentaryAccepted = await progressDraft.pushCommentaryProgress(payload.progressText, {
         itemId: payload.itemId,
       });
       // Count only sanitized commentary that actually streamed to the window.
-      if (accepted) {
+      if (commentaryAccepted) {
         noteCommentary(payload.itemId, payload.progressText);
       }
+      return headlineAccepted || commentaryAccepted;
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
       return await progressDraft.pushCommentaryProgress(text, options);
