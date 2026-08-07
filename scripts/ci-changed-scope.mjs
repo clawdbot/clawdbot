@@ -53,6 +53,10 @@ const WINDOWS_SCOPE_RE =
   /^(extensions\/mxc\/|src\/agents\/(?:bash-tools\.exec-script-(?:preflight|target)|bash-tools\.exec\.script-preflight\.test)\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive(?:\.worker(?:\.test)?)?|store\.session-lifecycle-mutation\.test)\.ts$|src\/process\/|src\/infra\/(?:(?:exec-allowlist-pattern|fs-safe-remove)(?:\.test)?|ssh-client(?:\.windows\.test)?|update-managed-service-handoff(?:-(?:command|lifecycle)\.test)?|windows-install-roots)\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|src\/test-utils\/openclaw-test-state(?:\.test)?\.ts$|scripts\/(?:android-(?:app-i18n|pin-version)\.ts|ci-run-timings\.mjs|e2e\/lib\/package-compat\.mjs|generate-bundled-channel-config-metadata\.ts|install\.ps1|openclaw-cross-os-release-checks\.ts|plan-release-workflow-matrix\.mjs|run-additional-boundary-checks\.mjs|verify-docker-attestations\.mjs|github\/run-openclaw-cross-os-release-checks\.sh|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/(?:direct-run\.mjs|format-generated-module\.mjs|cross-os-release-checks\/[^/]+\.ts))$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|install-ps1|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/(?:ci|openclaw-cross-os-release-checks-reusable)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
   /^(extensions\/mxc\/test\/(?:mxc-backend|sandbox-policy-loader)\.test\.ts$|src\/agents\/bash-tools\.exec\.script-preflight\.test\.ts$|src\/config\/sessions\/(?:session-accessor\.sqlite-archive\.worker|store\.session-lifecycle-mutation)\.test\.ts$|src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/(?:exec-allowlist-pattern|fs-safe-remove|ssh-client\.windows|update-managed-service-handoff-(?:command|lifecycle)|windows-install-roots)\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|src\/state\/openclaw-database-paths\.windows\.test\.ts$|src\/test-utils\/openclaw-test-state\.test\.ts$|test\/scripts\/(?:direct-run-entrypoints|format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+const WINDOWS_SECRETREF_SCOPE_RE =
+  /^(?:src\/commands\/doctor-gateway-auth-token(?:\.windows\.test)?\.ts|src\/flows\/(?:doctor-core-checks|doctor-health-contributions)\.ts|src\/gateway\/(?:auth-token-resolution|resolve-configured-secret-input-string)\.ts|src\/infra\/(?:fs-safe|fs-safe-defaults|permissions)\.ts|src\/secrets\/(?:resolve|resolve-errors|test-node-command\.test-support)\.ts|src\/security\/audit-fs\.ts|src\/test-utils\/vitest-spies\.ts|test\/e2e\/qa-lab\/runtime\/doctor-auth-secretref-checks\.e2e\.test\.ts|test\/fixtures\/windows-acl-tools-unavailable\.mjs)$/;
+const WINDOWS_SECRETREF_TEST_SCOPE_RE =
+  /^(?:src\/commands\/doctor-gateway-auth-token\.windows\.test\.ts|src\/secrets\/test-node-command\.test-support\.ts|test\/e2e\/qa-lab\/runtime\/doctor-auth-secretref-checks\.e2e\.test\.ts|test\/fixtures\/windows-acl-tools-unavailable\.mjs)$/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
@@ -158,8 +162,12 @@ export function detectChangedScope(changedPaths) {
     if (
       (WINDOWS_SCOPE_RE.test(path) ||
         WINDOWS_SQLITE_SCOPE_RE.test(path) ||
+        WINDOWS_SECRETREF_SCOPE_RE.test(path) ||
         WINDOWS_DAEMON_SCOPE_RE.test(path)) &&
-      (!facts.isTestOnly || WINDOWS_TEST_SCOPE_RE.test(path) || WINDOWS_DAEMON_SCOPE_RE.test(path))
+      (!facts.isTestOnly ||
+        WINDOWS_TEST_SCOPE_RE.test(path) ||
+        WINDOWS_SECRETREF_TEST_SCOPE_RE.test(path) ||
+        WINDOWS_DAEMON_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }
