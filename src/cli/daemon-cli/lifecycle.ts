@@ -643,10 +643,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             unmanagedRestartPid,
             unmanagedRestartWaitSeconds,
           );
-          if (!jsonOutput) {
-            defaultRuntime.log(theme.info(stillStartingLine));
-          } else {
-            warnings.push(stillStartingLine);
+          if (stillStartingLine !== undefined) {
+            if (!jsonOutput) {
+              defaultRuntime.log(theme.info(stillStartingLine));
+            } else {
+              warnings.push(stillStartingLine);
+            }
           }
           return undefined;
         }
