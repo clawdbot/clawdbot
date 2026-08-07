@@ -223,10 +223,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
           : nothing}
       `;
     }
-    // The Gateway lifecycle owns unresolved first-connect state across every
-    // auth mode. Failures publish lastError before the gate returns; reconnects
-    // keep the shell mounted, and loginGatePinned protects manual submissions.
+    // In the normal Control UI document, the Gateway lifecycle owns unresolved
+    // first-connect state across every auth mode. Failures publish lastError
+    // before the gate returns; reconnects keep the shell mounted, and
+    // loginGatePinned protects manual submissions.
     const initialConnectPending =
+      runtime.documentMode === null &&
       gatewaySnapshot.phase === "connecting" &&
       !this.loginGatePinned &&
       gatewaySnapshot.lastError === null;
