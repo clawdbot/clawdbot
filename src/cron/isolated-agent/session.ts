@@ -162,8 +162,14 @@ export function resolveCronSession(params: {
   const targetEntry = store[params.sessionKey];
   const entry = store[sourceSessionKey || params.sessionKey];
   // Guard the run's target row: archived sessions stay read-only even when a
-  // differing source session seeds the carried preferences.
-  const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
+  // differing source session seeds the carried preferences. The one exception
+  // is an isolated heartbeat row that forceNew will replace with a fresh
+  // synthetic run; maintenance may archive that row between heartbeat ticks.
+  const canRollArchivedHeartbeat =
+    params.forceNew === true && Boolean(targetEntry?.heartbeatIsolatedBaseSessionKey?.trim());
+  const archivedSessionError = canRollArchivedHeartbeat
+    ? undefined
+    : resolveSessionWorkStartError(params.sessionKey, targetEntry);
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
   }
