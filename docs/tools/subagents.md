@@ -297,6 +297,15 @@ it. Some minimal or custom tool profiles may expose `sessions_spawn` and
 `subagents` without exposing `sessions_yield`; in that case, do not invent
 a polling loop just to wait for completion.
 
+A sub-agent can also yield on its own behalf to wait for external work, such
+as a remote job or a long-running task it does not drive itself. That pauses
+the child run instead of completing it, so the requester receives no
+completion event yet and keeps waiting. When a later follow-up targets the
+paused child session — for example a plugin calling `runtime.subagent.run`
+with the same `sessionKey` — it continues that same run rather than starting a
+sibling. The requester is announced once such a follow-up finishes normally;
+a follow-up that yields again leaves the run paused and the requester waiting.
+
 When active children exist, OpenClaw injects a compact runtime-generated
 `Active Subagents` prompt block into normal turns so the requester can see
 the current child sessions, run ids, statuses, labels, tasks, and

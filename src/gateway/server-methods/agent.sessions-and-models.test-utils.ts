@@ -5,6 +5,7 @@ import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
+  addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.test-helpers.js";
@@ -366,6 +367,99 @@ describe("gateway agent handler", () => {
       });
       expectRecordFields(run.completion, { required: true });
     });
+  });
+
+  it("adopts a sessions_yield-paused run when a plugin follow-up targets its session", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-adopt-" }, async (root) => {
+      useTestStateDir(root);
+      resetSubagentRegistryForTests({ persist: false });
+      const childSessionKey = "agent:work:subagent:plugin-yield-followup";
+      const originalRequester = "agent:main:telegram:direct:777";
+      addSubagentRunForTests({
+        runId: "plugin-subagent-paused",
+        childSessionKey,
+        requesterSessionKey: originalRequester,
+        requesterDisplayKey: originalRequester,
+        task: "wait for the remote job",
+        endedAt: 2_000,
+        pauseReason: "sessions_yield",
+        expectsCompletionMessage: true,
+      });
+
+      await registerPluginSubagentRunFromGateway({
+        cfg: {
+          session: { mainKey: "main", scope: "per-sender" },
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        },
+        runId: "plugin-subagent-followup",
+        childSessionKey,
+        task: "the remote job finished",
+        pluginId: "memory-core",
+      });
+
+      const run = requireValue(
+        getSubagentRunByChildSessionKey(childSessionKey),
+        "expected adopted plugin subagent run",
+      );
+      // A follow-up without requester context would otherwise register a sibling
+      // row owned by the child's own agent session, stranding the requester that
+      // is still parked behind its yield.
+      expectRecordFields(run, {
+        runId: "plugin-subagent-followup",
+        requesterSessionKey: originalRequester,
+        task: "the remote job finished",
+        pauseReason: undefined,
+      });
+    });
+  });
+
+  it("registers normally when a follow-up to a paused session names its own requester", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-plugin-subagent-own-requester-" },
+      async (root) => {
+        useTestStateDir(root);
+        resetSubagentRegistryForTests({ persist: false });
+        const childSessionKey = "agent:work:subagent:plugin-yield-own-requester";
+        const followUpRequester = {
+          sessionKey: "agent:main:telegram:direct:555",
+          origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
+        } as const;
+        addSubagentRunForTests({
+          runId: "plugin-subagent-paused",
+          childSessionKey,
+          requesterSessionKey: "agent:main:telegram:direct:777",
+          requesterDisplayKey: "agent:main:telegram:direct:777",
+          task: "wait for the remote job",
+          endedAt: 2_000,
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+
+        await registerPluginSubagentRunFromGateway({
+          cfg: {
+            session: { mainKey: "main", scope: "per-sender" },
+            agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          },
+          runId: "plugin-subagent-own-requester",
+          childSessionKey,
+          task: "deliver to me instead",
+          requester: followUpRequester,
+          pluginId: "memory-core",
+        });
+
+        // An explicit requester is a delivery opt-in. Adopting the paused row here
+        // would drop that audience with nothing recording why, so the follow-up
+        // gets its own row and the paused run keeps its original requester.
+        const run = requireValue(
+          getSubagentRunByChildSessionKey(childSessionKey),
+          "expected separately registered plugin subagent run",
+        );
+        expectRecordFields(run, {
+          runId: "plugin-subagent-own-requester",
+          requesterSessionKey: followUpRequester.sessionKey,
+        });
+      },
+    );
   });
 
   it("rejects plugin SDK subagent runs and releases admission when registry persistence fails", async () => {

@@ -52,6 +52,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type {
+  RequesterSettleWakeState,
   SubagentCompletionRequest,
   SubagentProgressOrigin,
   SubagentRestartRecoveryReceipt,
@@ -673,6 +674,12 @@ export function createSubagentRunManager(params: {
     runTimeoutSeconds?: number;
     allowEndedSource?: boolean;
     preserveFrozenResultFallback?: boolean;
+    // A follow-up that continues a paused run inherits the original requester's
+    // wake credential. An operator steer intentionally drops it: the operator is
+    // already the live audience, so re-arming would wake a requester that is no
+    // longer waiting. Without this the yielded parent loses its only wake path
+    // and its settle batch defers with nothing recording why.
+    preserveRequesterSettleWake?: boolean;
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
     restartRecovery?: SubagentRestartRecoveryReceipt;
@@ -747,6 +754,25 @@ export function createSubagentRunManager(params: {
       typeof replaceParams.task === "string" && replaceParams.task.length > 0
         ? replaceParams.task
         : source.task;
+    // The frozen batch is addressed by runId. Adoption retires the previous id,
+    // so an unmapped membership list would drop this row from its own batch and
+    // let the wave complete without ever waking the requester.
+    const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
+      ? source.requesterSettleWake
+      : undefined;
+    const inheritedRequesterSettleWake: RequesterSettleWakeState | undefined =
+      sourceRequesterSettleWake
+        ? {
+            ...sourceRequesterSettleWake,
+            ...(sourceRequesterSettleWake.batchRunIds
+              ? {
+                  batchRunIds: sourceRequesterSettleWake.batchRunIds
+                    .map((runId) => (runId === previousRunId ? nextRunId : runId))
+                    .toSorted(),
+                }
+              : {}),
+          }
+        : undefined;
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
@@ -765,7 +791,7 @@ export function createSubagentRunManager(params: {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
-      requesterSettleWake: undefined,
+      requesterSettleWake: inheritedRequesterSettleWake,
       execution: {
         status: "running",
         startedAt: now,
