@@ -3,7 +3,7 @@ import "./fs-safe-defaults.js";
 import path from "node:path";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
 
-/** Returns a canonical existing path or an absolute lexical path for a missing target. */
+/** Returns a canonical path when resolvable, otherwise an absolute lexical path. */
 export function resolveRealpathOrAbsolute(value: string): string {
   return safeRealpathSync(value) ?? path.resolve(value);
 }

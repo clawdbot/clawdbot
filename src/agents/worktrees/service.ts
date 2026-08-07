@@ -339,8 +339,8 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
 
 /**
  * Sums file sizes without following symlinks, so a link cannot inflate or escape
- * the worktree. Only ENOENT is tolerated (cleanup races with removals); other
- * failures propagate so an unreadable tree is never measured as zero bytes.
+ * the worktree. Missing paths are tolerated because cleanup races with removals;
+ * other failures propagate so an unreadable tree is never measured as zero bytes.
  */
 async function directorySizeBytes(root: string): Promise<number> {
   let entries: Dirent[];
