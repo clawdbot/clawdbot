@@ -43,7 +43,18 @@ function resolveWikimediaOriginalUrl(url: string): string | undefined {
   if (sourceFile === undefined || rendition === undefined) {
     return undefined;
   }
-  if (!/\d+px-/.test(rendition) || !rendition.includes(sourceFile)) {
+  // The width token must be ANCHORED at the start of the rendition, and the source
+  // filename must be the rendition's tail (exact, or the source name plus an added
+  // rendition extension such as ".png" for SVG rasterization). This rejects malformed
+  // layouts like "not-a-800px-Foo.jpg" (unanchored width) and renditions whose filename
+  // doesn't match the source ("800px-Bar.jpg"), so a 400 on a malformed thumbnail-shaped
+  // URL never triggers a rewrite to an unrelated original file.
+  const renditionMatch = /^\d+px-(.+)$/.exec(rendition);
+  if (renditionMatch === null) {
+    return undefined;
+  }
+  const renditionFile = renditionMatch[1];
+  if (renditionFile !== sourceFile && !renditionFile.startsWith(`${sourceFile}.`)) {
     return undefined;
   }
   const rest = parts.slice(0, 2).concat(parts.slice(3, -1));

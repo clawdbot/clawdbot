@@ -83,6 +83,38 @@ describe("withWikimediaOriginalFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not rewrite a malformed rendition with an unanchored width token (not-a-800px-Foo.jpg)", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Foo.jpg/not-a-800px-Foo.jpg",
+        () => true,
+        run,
+      ),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("rewrites an SVG rasterization rendition (Foo.svg -> 800px-Foo.svg.png)", async () => {
+    const run = vi.fn(async (url: string) => {
+      if (url.includes("/thumb/")) {
+        throw new Error("400");
+      }
+      return url;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Foo.svg/800px-Foo.svg.png",
+        () => true,
+        run,
+      ),
+    ).resolves.toBe("https://upload.wikimedia.org/wikipedia/commons/a/ab/Foo.svg");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces the ORIGINAL error when the fallback fetch also fails", async () => {
     const firstErr = new Error("thumbnail 400");
     const run = vi.fn(async (url: string) => {
