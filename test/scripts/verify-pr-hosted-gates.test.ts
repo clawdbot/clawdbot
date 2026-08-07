@@ -4,6 +4,7 @@ import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
   compareCommitPageCount,
   HOSTED_GATE_MAX_AGE_HOURS,
+  notApplicableScheduledHostedWorkflows,
   parseArgs,
   parseWorkflowRunPage,
   SCHEDULED_HOSTED_WORKFLOWS,
@@ -173,6 +174,82 @@ function patchReuseOptions(
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("derives hosted-gate applicability from declared workflow path filters", () => {
+    expect(notApplicableScheduledHostedWorkflows([".github/workflows/ci.yml"])).toEqual([]);
+    expect(
+      notApplicableScheduledHostedWorkflows(["test/e2e/qa-lab/runtime/script-evidence.ts"]),
+    ).toEqual([
+      "Blacksmith Testbox",
+      "Blacksmith ARM Testbox",
+      "Blacksmith Build Artifacts Testbox",
+    ]);
+    expect(notApplicableScheduledHostedWorkflows(["CHANGELOG.md"])).toEqual(
+      SCHEDULED_HOSTED_WORKFLOWS,
+    );
+  });
+
+  it("requires an authoritative ARM run when declared workflow paths apply", () => {
+    const workflowRuns = [
+      successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+      successfulRun("Blacksmith Testbox", 2, "2026-06-17T10:48:00Z"),
+      successfulRun("Blacksmith Build Artifacts Testbox", 3, "2026-06-17T10:49:00Z"),
+      successfulRun("Workflow Sanity", 4, "2026-06-17T10:50:00Z"),
+    ];
+
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns,
+        notApplicableScheduledWorkflows: [],
+      }),
+    ).toThrow(`Missing successful recent Blacksmith ARM Testbox workflow for ${sha}`);
+  });
+
+  it("records path-filtered hosted gates as not applicable for QA-only changes", () => {
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [
+        successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+        successfulRun("Workflow Sanity", 2, "2026-06-17T10:48:00Z"),
+      ],
+      notApplicableScheduledWorkflows: [
+        "Blacksmith Testbox",
+        "Blacksmith ARM Testbox",
+        "Blacksmith Build Artifacts Testbox",
+      ],
+    });
+
+    expect(evidence.workflows).toEqual([
+      expect.objectContaining({ name: "CI", id: 1 }),
+      expect.objectContaining({ name: "Workflow Sanity", id: 2 }),
+    ]);
+    expect(evidence.notApplicableWorkflows).toEqual([
+      "Blacksmith Testbox",
+      "Blacksmith ARM Testbox",
+      "Blacksmith Build Artifacts Testbox",
+    ]);
+  });
+
+  it("does not require path-inapplicable ARM proof for queued artifact fallback", () => {
+    const workflowRuns = queuedBuildArtifactFallbackRuns().filter(
+      (run) => run.name !== "Blacksmith ARM Testbox",
+    );
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns,
+      notApplicableScheduledWorkflows: ["Blacksmith ARM Testbox"],
+    });
+
+    expect(evidence.fallbackCoveredWorkflows).toEqual([
+      {
+        name: BUILD_ARTIFACTS_WORKFLOW,
+        coveredBy: "CI release gate",
+        reason: "scheduled workflow is queued",
+      },
+    ]);
+    expect(evidence.notApplicableWorkflows).toEqual(["Blacksmith ARM Testbox"]);
+  });
+
   it("reuses successful recent CI from a patch-identical pre-rebase head", () => {
     const candidate = priorSuccessfulCiRun();
     const evidence = collectHostedGateEvidence({

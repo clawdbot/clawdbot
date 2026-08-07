@@ -1302,6 +1302,25 @@ NODE
     });
   });
 
+  it("keeps every path-filtered hosted gate runnable on landing-relevant events", () => {
+    const workflows = [
+      [".github/workflows/ci-check-testbox.yml", "check"],
+      [".github/workflows/ci-check-arm-testbox.yml", "check-arm"],
+      [".github/workflows/ci-build-artifacts-testbox.yml", "build-artifacts"],
+    ] as const;
+
+    for (const [workflowPath, jobName] of workflows) {
+      const workflow = readWorkflow(workflowPath);
+      expect(workflow.on.pull_request).toEqual({
+        types: ["opened", "reopened", "synchronize", "ready_for_review"],
+        paths: [".github/workflows/**"],
+      });
+      expect(workflow.jobs[jobName].if).toBe(
+        "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
+      );
+    }
+  });
+
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
