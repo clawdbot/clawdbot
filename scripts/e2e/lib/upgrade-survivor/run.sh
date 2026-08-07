@@ -815,9 +815,12 @@ command="${filtered[0]:-status}"
 is_running() {
   [ -s "$pid_file" ] || return 1
   local pid
+  local process_state
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  process_state="$(awk '{ print $3 }' "/proc/$pid/stat" 2>/dev/null || true)"
+  [ "$process_state" != "Z" ]
 }
 
 stop_gateway() {
@@ -1166,6 +1169,8 @@ update_candidate() {
     echo "openclaw update failed" >&2
     openclaw_e2e_print_log "$UPDATE_ERR" >&2
     openclaw_e2e_print_log "$UPDATE_JSON" >&2
+    openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG" >&2
+    openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2
     return 1
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then

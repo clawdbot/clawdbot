@@ -41,9 +41,12 @@ command="${filtered[0]:-status}"
 is_running() {
   [ -s "$pid_file" ] || return 1
   local pid
+  local process_state
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1
+  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  process_state="$(awk '{ print $3 }' "/proc/$pid/stat" 2>/dev/null || true)"
+  [ "$process_state" != "Z" ]
 }
 
 stop_gateway() {
