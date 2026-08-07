@@ -41,9 +41,13 @@ function terminalReceipt(params: {
 async function runFollowUp(params?: {
   alternateModel?: string;
   alternateReceiptRunId?: string;
+  primaryReplyText?: string;
+  primaryOutboundText?: string;
+  primaryDelivery?: { status: string; resultCount: number } | null;
   alternateReplyText?: string;
   alternateOutboundText?: string;
   alternateDelivery?: { status: string; resultCount: number } | null;
+  unrelatedPrimaryOutboundText?: string;
   unrelatedLaterOutboundText?: string;
   onRun?: () => void;
 }) {
@@ -58,16 +62,23 @@ async function runFollowUp(params?: {
       const model = prompt.model ?? "primary-model";
       const replyText =
         call === 1
-          ? "hello from the primary model"
+          ? (params?.primaryReplyText ?? "hello from the primary model")
           : (params?.alternateReplyText ?? "the model switch handoff completed");
       state.addOutboundMessage({
         accountId: "qa-channel",
         to: "dm:qa-operator",
         text:
-          call === 2
-            ? (params?.alternateOutboundText ?? replyText)
-            : "hello from the primary model",
+          call === 1
+            ? (params?.primaryOutboundText ?? replyText)
+            : (params?.alternateOutboundText ?? replyText),
       });
+      if (call === 1 && params?.unrelatedPrimaryOutboundText) {
+        state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "dm:qa-operator",
+          text: params.unrelatedPrimaryOutboundText,
+        });
+      }
       if (call === 2 && params?.unrelatedLaterOutboundText) {
         state.addOutboundMessage({
           accountId: "qa-channel",
@@ -75,17 +86,15 @@ async function runFollowUp(params?: {
           text: params.unrelatedLaterOutboundText,
         });
       }
+      const terminalDelivery = call === 1 ? params?.primaryDelivery : params?.alternateDelivery;
       return {
         started: { runId },
         waited: {
           status: "ok",
-          ...(call === 2 && params?.alternateDelivery === null
+          ...(terminalDelivery === null
             ? {}
             : {
-                terminalDelivery:
-                  call === 2
-                    ? (params?.alternateDelivery ?? { status: "sent", resultCount: 1 })
-                    : { status: "sent", resultCount: 1 },
+                terminalDelivery: terminalDelivery ?? { status: "sent", resultCount: 1 },
               }),
           terminalReply: { disposition: "visible", text: replyText },
           terminalReceipt: terminalReceipt({
@@ -120,6 +129,8 @@ async function runFollowUp(params?: {
 describe("model-switch follow-up terminal evidence", () => {
   it("invokes the canonical alias target and records exact run-owned evidence", async () => {
     const { result, runAgentPrompt } = await runFollowUp({
+      primaryReplyText: "hello **from the primary model**",
+      primaryOutboundText: "hello from the primary model",
       alternateReplyText: "the **model switch** handoff completed",
       alternateOutboundText: "the model switch handoff completed",
     });
@@ -138,6 +149,7 @@ describe("model-switch follow-up terminal evidence", () => {
       },
       terminalDelivery: { status: "sent", resultCount: 1 },
     });
+    expect(result.steps[0]?.details).toBe("hello **from the primary model**");
     expect(result.steps[1]?.details).toBe("the **model switch** handoff completed");
   });
 
@@ -163,6 +175,23 @@ describe("model-switch follow-up terminal evidence", () => {
       }),
     ).rejects.toThrow("alternate-model terminal reply missed switch continuity");
   });
+
+  it.each([
+    ["missing", null],
+    ["suppressed", { status: "suppressed", resultCount: 0 }],
+    ["zero-count", { status: "sent", resultCount: 0 }],
+  ] as const)(
+    "rejects %s primary delivery evidence despite identical and unrelated bus messages",
+    async (_, evidence) => {
+      await expect(
+        runFollowUp({
+          primaryDelivery: evidence,
+          primaryOutboundText: "hello from the primary model",
+          unrelatedPrimaryOutboundText: "an unrelated run also replied",
+        }),
+      ).rejects.toThrow("default-model run did not return owned sent delivery evidence");
+    },
+  );
 
   it.each([
     ["missing", null],

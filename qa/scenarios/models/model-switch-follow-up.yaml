@@ -48,14 +48,13 @@ flow:
         - assert:
             expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean'; })()"
             message: default-model run did not return an exact owned terminal receipt
-        - call: waitForOutboundMessage
-          saveAs: outbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator'"
-      detailsExpr: outbound.text
+        - assert:
+            expr: "primaryRun?.waited?.terminalReply?.disposition === 'visible'"
+            message: default-model run did not return an owned visible terminal reply
+        - assert:
+            expr: "primaryRun?.waited?.terminalDelivery?.status === 'sent' && typeof primaryRun.waited.terminalDelivery.resultCount === 'number' && primaryRun.waited.terminalDelivery.resultCount > 0"
+            message: default-model run did not return owned sent delivery evidence
+      detailsExpr: primaryRun.waited.terminalReply.text
     - name: switches to the alternate model and continues
       actions:
         - call: runAgentPrompt

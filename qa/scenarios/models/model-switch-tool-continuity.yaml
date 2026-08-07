@@ -55,6 +55,9 @@ flow:
         - assert:
             expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible'; })()"
             message: default-model run did not return owned successful read evidence
+        - assert:
+            expr: "primaryRun?.waited?.terminalDelivery?.status === 'sent' && typeof primaryRun.waited.terminalDelivery.resultCount === 'number' && primaryRun.waited.terminalDelivery.resultCount > 0"
+            message: default-model run did not return owned sent delivery evidence
         - call: runAgentPrompt
           saveAs: alternateRun
           args:

@@ -23,9 +23,12 @@ function normalizeModelRef(raw: string) {
 async function runToolContinuity(
   alternateTools: string[],
   params?: {
+    primaryOutboundText?: string;
+    primaryDelivery?: { status: string; resultCount: number } | null;
     alternateReplyText?: string;
     alternateOutboundText?: string;
     alternateDelivery?: { status: string; resultCount: number } | null;
+    unrelatedPrimaryOutboundText?: string;
     unrelatedLaterOutboundText?: string;
   },
 ) {
@@ -45,8 +48,18 @@ async function runToolContinuity(
       state.addOutboundMessage({
         accountId: "qa-channel",
         to: "dm:qa-operator",
-        text: call === 2 ? (params?.alternateOutboundText ?? replyText) : replyText,
+        text:
+          call === 1
+            ? (params?.primaryOutboundText ?? replyText)
+            : (params?.alternateOutboundText ?? replyText),
       });
+      if (call === 1 && params?.unrelatedPrimaryOutboundText) {
+        state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "dm:qa-operator",
+          text: params.unrelatedPrimaryOutboundText,
+        });
+      }
       if (call === 2 && params?.unrelatedLaterOutboundText) {
         state.addOutboundMessage({
           accountId: "qa-channel",
@@ -54,17 +67,15 @@ async function runToolContinuity(
           text: params.unrelatedLaterOutboundText,
         });
       }
+      const terminalDelivery = call === 1 ? params?.primaryDelivery : params?.alternateDelivery;
       return {
         started: { runId },
         waited: {
           status: "ok",
-          ...(call === 2 && params?.alternateDelivery === null
+          ...(terminalDelivery === null
             ? {}
             : {
-                terminalDelivery:
-                  call === 2
-                    ? (params?.alternateDelivery ?? { status: "sent", resultCount: 1 })
-                    : { status: "sent", resultCount: 1 },
+                terminalDelivery: terminalDelivery ?? { status: "sent", resultCount: 1 },
               }),
           terminalReply: { disposition: "visible", text: replyText },
           terminalReceipt: {
@@ -145,6 +156,23 @@ describe("model-switch tool continuity terminal evidence", () => {
       }),
     ).rejects.toThrow("alternate-model terminal reply missed kickoff continuity");
   });
+
+  it.each([
+    ["missing", null],
+    ["suppressed", { status: "suppressed", resultCount: 0 }],
+    ["zero-count", { status: "sent", resultCount: 0 }],
+  ] as const)(
+    "rejects %s primary delivery evidence despite identical and unrelated bus messages",
+    async (_, evidence) => {
+      await expect(
+        runToolContinuity(["read"], {
+          primaryDelivery: evidence,
+          primaryOutboundText: "the QA scenario pack verifies source and docs",
+          unrelatedPrimaryOutboundText: "an unrelated tool run also replied",
+        }),
+      ).rejects.toThrow("default-model run did not return owned sent delivery evidence");
+    },
+  );
 
   it.each([
     ["missing", null],
