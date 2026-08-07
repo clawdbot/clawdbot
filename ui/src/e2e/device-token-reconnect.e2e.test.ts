@@ -448,7 +448,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
     expect(readConnectAuth(reconnect)?.deviceToken).toBeUndefined();
 
     // The tab-scoped shared token is gone from session storage as well.
-    const sessionToken = await page.evaluate((gatewayUrl) => {
+    const sessionToken = await page.evaluate(() => {
       for (let i = 0; i < sessionStorage.length; i += 1) {
         const key = sessionStorage.key(i);
         if (key?.includes("token") && sessionStorage.getItem(key)?.trim()) {
@@ -456,7 +456,7 @@ describeControlUiE2e("Control UI device-token reconnect E2E", () => {
         }
       }
       return null;
-    }, WILFRED_GATEWAY_URL);
+    });
     expect(sessionToken).toBeNull();
   });
 });
