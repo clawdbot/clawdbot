@@ -94,6 +94,17 @@ describe("session transcript reader facade", () => {
     return scope;
   }
 
+  function markProjectionNeedsRebuild(sessionId: string): void {
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    })
+      .db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      )
+      .run(sessionId);
+  }
+
   function extractReferenceText(message: unknown): string | null {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return null;
@@ -447,6 +458,58 @@ describe("session transcript reader facade", () => {
     ]);
   });
 
+  test("degrades batch title fields per rebuilding projection and restores them afterward", async () => {
+    const healthyScope = await writeSqliteMessages("reader-title-batch-healthy", [
+      { role: "user", content: "healthy prompt" },
+      { role: "assistant", content: "healthy reply" },
+    ]);
+    const rebuildingScope = await writeSqliteMessages("reader-title-batch-rebuilding", [
+      { role: "user", content: "rebuilding prompt" },
+      { role: "assistant", content: "rebuilding reply" },
+    ]);
+    markProjectionNeedsRebuild(rebuildingScope.sessionId);
+
+    let fields: ReturnType<typeof readSessionTitleFieldsFromTranscriptBatch> | undefined;
+    try {
+      fields = readSessionTitleFieldsFromTranscriptBatch([healthyScope, rebuildingScope]);
+    } finally {
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(tempDir, "openclaw-agent.sqlite"),
+      });
+    }
+    expect(fields).toEqual([
+      { firstUserMessage: "healthy prompt", lastMessagePreview: "healthy reply" },
+      { firstUserMessage: null, lastMessagePreview: null },
+    ]);
+    expect(readSessionTitleFieldsFromTranscript(rebuildingScope)).toEqual({
+      firstUserMessage: "rebuilding prompt",
+      lastMessagePreview: "rebuilding reply",
+    });
+  });
+
+  test("degrades single title reads while the projection rebuilds", async () => {
+    const scope = await writeSqliteMessages("reader-title-single-rebuilding", [
+      { role: "user", content: "single prompt" },
+      { role: "assistant", content: "single reply" },
+    ]);
+    markProjectionNeedsRebuild(scope.sessionId);
+
+    let fields: ReturnType<typeof readSessionTitleFieldsFromTranscript> | undefined;
+    try {
+      fields = readSessionTitleFieldsFromTranscript(scope);
+    } finally {
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(tempDir, "openclaw-agent.sqlite"),
+      });
+    }
+    expect(fields).toEqual({
+      firstUserMessage: null,
+      lastMessagePreview: null,
+    });
+  });
+
   test("bounds title probe reads independently of transcript length", async () => {
     const probeReadCount = async (sessionId: string, messageCount: number) => {
       const scope = await writeSqliteMessages(
@@ -721,13 +784,7 @@ describe("session transcript reader facade", () => {
       ],
       touchSessionEntry: false,
     });
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-    database.db
-      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-      .run(sessionId);
+    markProjectionNeedsRebuild(sessionId);
 
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
