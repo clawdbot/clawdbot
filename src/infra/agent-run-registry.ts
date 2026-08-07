@@ -53,8 +53,6 @@ type AgentRunRegistryState = {
 
 const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state");
 
-export class AgentRunAttributionCollisionError extends TypeError {}
-
 function getAgentRunRegistryState(): AgentRunRegistryState {
   return resolveGlobalSingleton<AgentRunRegistryState>(AGENT_RUN_REGISTRY_STATE_KEY, () => ({
     contexts: new Map<string, AgentRunContext>(),
@@ -89,9 +87,7 @@ export function assertAgentRunAttributionCompatible(
   attribution: AgentExecutionAttribution | undefined,
 ): void {
   if (existingAttribution && !attribution) {
-    throw new AgentRunAttributionCollisionError(
-      "Agent run ID is already bound to host-owned execution attribution.",
-    );
+    throw new TypeError("Agent run ID is already bound to host-owned execution attribution.");
   }
   if (
     existingAttribution &&
@@ -100,23 +96,8 @@ export function assertAgentRunAttributionCompatible(
       existingAttribution.executionId !== attribution.executionId ||
       existingAttribution.createdAt !== attribution.createdAt)
   ) {
-    throw new AgentRunAttributionCollisionError(
-      "Agent run ID is already bound to different execution attribution.",
-    );
+    throw new TypeError("Agent run ID is already bound to different execution attribution.");
   }
-}
-
-/** Rejects attribution collisions before admission-owned audit capture can observe them. */
-export function assertAgentRunAttributionAdmissionCompatible(
-  runId: string,
-  lifecycleGeneration: string,
-  attribution: AgentExecutionAttribution | undefined,
-): void {
-  const existing = getAgentRunRegistryState().contexts.get(runId);
-  if (existing?.lifecycleGeneration !== lifecycleGeneration) {
-    return;
-  }
-  assertAgentRunAttributionCompatible(existing.attribution, attribution);
 }
 
 function createAgentRunContext(

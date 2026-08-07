@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createAgentExecutionAttribution } from "../../agents/agent-execution-attribution.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
-import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -14,7 +13,6 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
-  GENERIC_RUN_FAILURE_TEXT,
   requireRecord,
   requireMockCall,
   expectMockCallArgFields,
@@ -322,58 +320,12 @@ describe("executeAgentTurn: runtime selection", () => {
       kind: "final",
       payload: {
         isError: true,
-        text: GENERIC_RUN_FAILURE_TEXT,
+        text: "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
       },
     });
 
     expect(state.runCliAgentMock).not.toHaveBeenCalled();
     expect(agentRunRegistry.getAgentRunContext(runId)?.attribution).toBe(existingAttribution);
-    agentRunRegistry.resetAgentRunRegistryForTest();
-  });
-
-  it("rejects a fresh auto-reply run id collision before recording execution identity", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const runId = "fresh-auto-reply-attribution-collision";
-    const existingAttribution = createAgentExecutionAttribution({
-      runId,
-      lifecycleGeneration,
-    });
-    agentRunRegistry.claimAgentRunContext(runId, {
-      attribution: existingAttribution,
-      lifecycleGeneration,
-    });
-    const sink = vi.fn(() => true);
-    const restoreSink = configureExecutionIdentityAdmissionSink(sink);
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      logging: { audit: { enabled: true, executionIdentity: true } },
-    };
-
-    try {
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      await expect(
-        executeAgentTurn(
-          createMinimalRunAgentTurnParams({
-            followupRun,
-            opts: { runId },
-          }),
-        ),
-      ).resolves.toEqual({
-        kind: "final",
-        payload: {
-          isError: true,
-          text: GENERIC_RUN_FAILURE_TEXT,
-        },
-      });
-
-      expect(sink).not.toHaveBeenCalled();
-      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(agentRunRegistry.getAgentRunContext(runId)?.attribution).toBe(existingAttribution);
-    } finally {
-      restoreSink();
-      agentRunRegistry.resetAgentRunRegistryForTest();
-    }
   });
 
   it("rejects queued heartbeat CLI fallback after placement crosses a lifecycle rotation", async () => {

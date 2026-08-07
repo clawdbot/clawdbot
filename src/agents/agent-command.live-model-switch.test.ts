@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import * as agentRunRegistry from "../infra/agent-run-registry.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   deliveryContextFromSession,
@@ -388,10 +387,7 @@ vi.mock("../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
 }));
-vi.mock("../infra/agent-run-registry.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/agent-run-registry.js")>(
-    "../infra/agent-run-registry.js",
-  )),
+vi.mock("../infra/agent-run-registry.js", () => ({
   clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
 }));
@@ -1047,7 +1043,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   afterEach(() => {
-    agentRunRegistry.resetAgentRunRegistryForTest();
     vi.restoreAllMocks();
   });
 
@@ -4614,31 +4609,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "session-1",
       expect.not.objectContaining({ attribution: forgedAttribution }),
     );
-  });
-
-  it("rejects a colliding public ACP run id before recording execution identity", async () => {
-    setupAcpSession();
-    const runId = "session-1";
-    agentRunRegistry.claimAgentRunContext(runId, {
-      attribution: createAgentExecutionAttribution({
-        runId,
-        lifecycleGeneration: "test-generation",
-      }),
-      lifecycleGeneration: "test-generation",
-    });
-
-    await expect(
-      agentCommandFromIngress({
-        message: "colliding public ACP turn",
-        sessionKey: "agent:main:main",
-        runId,
-        allowModelOverride: false,
-      }),
-    ).rejects.toThrow("Agent run ID is already bound to host-owned execution attribution.");
-
-    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).not.toHaveBeenCalled();
-    expect(state.registerAgentRunContextMock).not.toHaveBeenCalled();
-    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
   });
 
   it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {
