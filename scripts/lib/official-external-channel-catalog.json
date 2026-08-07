@@ -2056,6 +2056,10 @@
           "id": "synology-chat",
           "configuredState": {
             "env": {
+              "allOf": [
+                "SYNOLOGY_CHAT_TOKEN",
+                "SYNOLOGY_CHAT_INCOMING_URL"
+              ],
               "anyOf": [
                 "SYNOLOGY_CHAT_TOKEN",
                 "SYNOLOGY_CHAT_INCOMING_URL",
