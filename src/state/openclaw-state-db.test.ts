@@ -68,6 +68,16 @@ function createInitialStateSchemaShape() {
   return shape;
 }
 
+function expectFirstUseStateTablesAbsent(database: DatabaseSync): void {
+  for (const tableName of FIRST_USE_STATE_TABLES) {
+    expect(
+      database
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(tableName),
+    ).toBeUndefined();
+  }
+}
+
 function expectStateSchemaMigrationRequired(
   run: () => unknown,
   expected: {
@@ -1091,11 +1101,7 @@ describe("openclaw state database", () => {
     });
 
     expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
-    expect(
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
+    expectFirstUseStateTablesAbsent(database.db);
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     expect(
       database.db
@@ -3324,6 +3330,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           requester_agent_id: "main",
         });
         expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+        expectFirstUseStateTablesAbsent(db);
       } finally {
         db.close();
       }
@@ -3349,6 +3356,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
         ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
         expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+        expectFirstUseStateTablesAbsent(db);
       } finally {
         db.close();
       }

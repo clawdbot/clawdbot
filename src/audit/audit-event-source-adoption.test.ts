@@ -9,9 +9,18 @@ import type { AuditEventInput } from "./audit-event-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const AUDIT_EVENT_RETENTION_MS_CONTRACT = 30 * 24 * 60 * 60_000;
+const ADOPTION_TABLE_QUERY =
+  "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'audit_event_source_adoptions'";
 
 function createDatabaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-audit-adoption-") } };
+}
+
+function expectAdoptionTableAbsent(database: ReturnType<typeof createDatabaseOptions>): void {
+  expect(
+    openOpenClawStateDatabase(database).db.prepare(ADOPTION_TABLE_QUERY).get(),
+  ).toBeUndefined();
+  closeOpenClawStateDatabaseForTest();
 }
 
 function auditInput(overrides: Partial<AuditEventInput> = {}): AuditEventInput {
@@ -52,9 +61,7 @@ describe("audit event source adoption", () => {
         database,
       ),
     ).toBeDefined();
-    const { db: legacyDb } = openOpenClawStateDatabase(database);
-    legacyDb.exec("DROP TABLE audit_event_source_adoptions");
-    closeOpenClawStateDatabaseForTest();
+    expectAdoptionTableAbsent(database);
 
     expect(
       recordAuditEvent(
@@ -123,9 +130,7 @@ describe("audit event source adoption", () => {
       toolCallId: "call-1",
     });
     expect(recordAuditEvent(legacyInput, database)).toBeDefined();
-    const { db: legacyDb } = openOpenClawStateDatabase(database);
-    legacyDb.exec("DROP TABLE audit_event_source_adoptions");
-    closeOpenClawStateDatabaseForTest();
+    expectAdoptionTableAbsent(database);
 
     const replayInput = {
       ...legacyInput,
@@ -151,9 +156,7 @@ describe("audit event source adoption", () => {
         database,
       ),
     ).toBeDefined();
-    const { db: legacyDb } = openOpenClawStateDatabase(database);
-    legacyDb.exec("DROP TABLE audit_event_source_adoptions");
-    closeOpenClawStateDatabaseForTest();
+    expectAdoptionTableAbsent(database);
 
     const firstVersionedSourceId = `lifecycle:generation-1:${legacySourceId}`;
     expect(
@@ -232,16 +235,10 @@ describe("audit event source adoption", () => {
 
   it("does not materialize the lazy adoption table during cleanup", () => {
     const database = createDatabaseOptions();
-    const tableQuery =
-      "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'audit_event_source_adoptions'";
-    const { db } = openOpenClawStateDatabase(database);
-    db.exec("DROP TABLE audit_event_source_adoptions");
-    closeOpenClawStateDatabaseForTest();
-    expect(openOpenClawStateDatabase(database).db.prepare(tableQuery).get()).toBeUndefined();
-    closeOpenClawStateDatabaseForTest();
+    expectAdoptionTableAbsent(database);
 
     pruneExpiredAuditEvents({ database });
 
-    expect(openOpenClawStateDatabase(database).db.prepare(tableQuery).get()).toBeUndefined();
+    expectAdoptionTableAbsent(database);
   });
 });
