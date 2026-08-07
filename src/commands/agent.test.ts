@@ -1170,6 +1170,61 @@ describe("agentCommand", () => {
     });
   });
 
+  it("keeps synthetic direct-DM delivery mode out of existing CLI binding facts", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:discord:direct:requester";
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "requester-session",
+          updatedAt: Date.now(),
+          chatType: "direct",
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "native-claude-session",
+              messageToolPolicyHash: "automatic-policy-hash",
+            },
+          },
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "discord", to: "user:requester" },
+            origin: { provider: "discord", chatType: "direct", to: "user:requester" },
+          }),
+        },
+      });
+      const cfg = mockConfig(home, store, {
+        models: {
+          "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+        },
+      });
+      cfg.messages = { visibleReplies: "automatic" };
+
+      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+        {
+          message: "child completed",
+          sessionKey,
+          sourceReplyDeliveryMode: "message_tool_only",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:child",
+            sourceTool: "subagent_announce",
+          },
+        },
+        runtime,
+      );
+
+      expect(prepared.opts.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(prepared.opts.cliSessionBindingFacts).toEqual({
+        sourceReplyDeliveryMode: "automatic",
+      });
+      expect(prepared.sessionEntry?.cliSessionBindings?.["claude-cli"]).toMatchObject({
+        sessionId: "native-claude-session",
+        messageToolPolicyHash: "automatic-policy-hash",
+      });
+    });
+  });
+
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");

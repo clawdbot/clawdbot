@@ -105,13 +105,15 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
 
+const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(
+  async () => undefined,
+);
 const mockRecoveryRuntime = {
   dispatchAgent: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
     (await callGateway({ method: "agent", params, timeoutMs })) as T,
   waitForAgent: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
     (await callGateway({ method: "agent.wait", params, timeoutMs })) as T,
-  sendRecoveryNotice: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
-    (await callGateway({ method: "message.action", params, timeoutMs })) as T,
+  sendRecoveryNotice,
 };
 
 type RecoveryParams<T extends { gatewayRuntime: unknown }> = Omit<T, "gatewayRuntime"> &
@@ -1820,9 +1822,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, {});
 
     expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
-    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
-      method: "message.action",
-    });
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
 
@@ -3031,14 +3031,8 @@ describe("main-session-restart-recovery", () => {
     });
 
     await expectRecovery({ recovered: 0, failed: 0, skipped: 1 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "message.action",
-        params: expect.objectContaining({
-          params: expect.objectContaining({ message: expect.stringContaining("/new or /reset") }),
-        }),
-      }),
+    expect(sendRecoveryNotice).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("/new or /reset") }),
     );
     expect(
       loadSessionEntry({ sessionKey: "agent:main:discord:direct:123", storePath }),
@@ -3250,17 +3244,14 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    const [gatewayRequest] = vi.mocked(callGateway).mock.calls[0] ?? [];
-    expect(gatewayRequest?.method).toBe("message.action");
-    expect(gatewayRequest?.params).toMatchObject({
-      action: "send",
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledWith({
       accountId: "work",
       channel: "discord",
-      params: {
-        to: "discord:dm:main",
-        message: expect.stringContaining("couldn't safely resume"),
-      },
+      to: "discord:dm:main",
+      threadId: undefined,
+      idempotencyKey: "main-session-restart-recovery:recovery-main:failed-notice",
+      text: expect.stringContaining("couldn't safely resume"),
     });
     const failedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     expect(failedEntry).toMatchObject({
@@ -3626,9 +3617,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 }, {});
 
     expect(runtimePluginMocks.findRestartRecoveryUnsafeReplyHook).toHaveBeenCalledOnce();
-    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
-      method: "message.action",
-    });
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
   it("resumes a Control UI turn after proving the current runtime is hookless", async () => {
@@ -3781,9 +3770,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
 
-    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
-      method: "message.action",
-    });
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     const failed = loadSessionEntry({ sessionKey, storePath });
     expect(failed?.status).toBe("failed");
     expect(failed?.restartRecoveryDeliveryReceiptState).toBeUndefined();
@@ -3934,7 +3921,7 @@ describe("main-session-restart-recovery", () => {
         expected,
       );
 
-      expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(gatewayCalls);
       expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe(expectedStatus);
       const transcript = await loadTestTranscript(sessionKey, storePath);
       expect(
@@ -4001,7 +3988,7 @@ describe("main-session-restart-recovery", () => {
               "restart-recovery:message-tool-result:discord-message-1:message-call-1",
           ),
       ).toBe(false);
-      expect(callGateway).toHaveBeenCalledOnce();
+      expect(sendRecoveryNotice).toHaveBeenCalledOnce();
       expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
     },
   );
@@ -4021,7 +4008,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
 
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
     const transcript = await loadTranscriptEvents({
       sessionId: "main-session",
@@ -4057,9 +4044,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
 
-    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
-      method: "message.action",
-    });
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       status: "failed",
       abortedLastRun: true,
@@ -4144,7 +4129,7 @@ describe("main-session-restart-recovery", () => {
             "restart-recovery:message-tool-result:discord-message-current:message-call-reused",
         ),
     ).toBe(false);
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
 
@@ -4188,7 +4173,7 @@ describe("main-session-restart-recovery", () => {
             message?.role === "toolResult" && message.toolCallId === "message-call-current",
         ),
     ).toHaveLength(1);
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
 
@@ -4236,7 +4221,7 @@ describe("main-session-restart-recovery", () => {
             message?.role === "toolResult" && message.toolCallId === "message-call-current",
         ),
     ).toHaveLength(1);
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
 
@@ -4280,7 +4265,7 @@ describe("main-session-restart-recovery", () => {
             message?.role === "toolResult" && message.toolCallId === "message-call-current",
         ),
     ).toHaveLength(1);
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
 
@@ -4340,7 +4325,7 @@ describe("main-session-restart-recovery", () => {
         expected,
       );
 
-      expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(gatewayCalls);
       expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe(expectedStatus);
     },
   );
@@ -4415,7 +4400,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
 
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
   });
 
@@ -4434,7 +4419,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
 
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     const failed = loadSessionEntry({ sessionKey, storePath });
     expect(failed).toMatchObject({ status: "failed", abortedLastRun: true });
     expect(failed?.restartRecoveryDeliveryRunId).toBeUndefined();
@@ -4463,9 +4448,7 @@ describe("main-session-restart-recovery", () => {
 
       await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
 
-      expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
-        method: "message.action",
-      });
+      expect(sendRecoveryNotice).toHaveBeenCalledOnce();
       expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
     },
   );
@@ -4499,7 +4482,7 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -4771,7 +4754,7 @@ describe("main-session-restart-recovery", () => {
       unresumableAssistantMessage(),
     ]);
     let entryAtExternalSend: SessionEntry | undefined;
-    vi.mocked(callGateway).mockImplementationOnce(async () => {
+    sendRecoveryNotice.mockImplementationOnce(async () => {
       entryAtExternalSend = loadSessionEntry({ sessionKey, storePath });
       await replaceSessionEntry(
         { sessionKey, storePath },
@@ -4784,11 +4767,11 @@ describe("main-session-restart-recovery", () => {
           restartRecoveryDeliverySourceRunId: "replacement-source",
         },
       );
-      return { status: "ok" };
     });
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
 
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     expect(entryAtExternalSend).toMatchObject({
       sessionId: "interrupted-session",
       status: "failed",
@@ -4825,29 +4808,18 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
-      | {
-          method?: string;
-          params?: Record<string, unknown>;
-        }
-      | undefined;
-    expect(gatewayCall?.method).toBe("message.action");
-    expect(gatewayCall?.params).toMatchObject({
+    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
+    const notice = sendRecoveryNotice.mock.calls[0]?.[0];
+    expect(notice).toMatchObject({
       channel: "discord",
-      action: "send",
       accountId: "default",
-      sessionKey: "agent:main:demo-channel:room-1",
-      sessionId: "main-session",
-    });
-    expect(gatewayCall?.params?.params).toMatchObject({
       to: "discord:channel:room-1",
       threadId: "thread-1",
-      bestEffort: true,
+      idempotencyKey: "main-session-restart-recovery:main-session:failed-notice",
+      text: expect.stringContaining("couldn't safely resume"),
     });
-    expect(String((gatewayCall?.params?.params as Record<string, unknown>)?.message)).toContain(
-      "couldn't safely resume",
-    );
+    expect(notice).not.toHaveProperty("sessionKey");
+    expect(notice).not.toHaveProperty("sessionId");
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
