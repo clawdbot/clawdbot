@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mjs";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
   entry?: Record<string, string> | string[];
+  name?: string;
   outDir?: string;
 };
 
@@ -30,6 +32,8 @@ describe("native hook relay tsdown config", () => {
       entry: "src/cli/native-hook-relay-entry.ts",
     });
     expect(unifiedGraph).toBeDefined();
+    expect(relayGraph?.name).toBe(TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(configs.indexOf(unifiedGraph ?? {})).toBeLessThan(configs.indexOf(relayGraph ?? {}));
     expect(Object.values(entrySources(unifiedGraph ?? {}))).not.toContain(
       "src/cli/native-hook-relay-entry.ts",
     );
