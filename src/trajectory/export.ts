@@ -1191,9 +1191,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       projectionTransforms,
     ),
     traceId: projectedSessionId,
-  }).map((event) =>
-    provenanceSanitizer.sanitizeExportValue(event, projectionTransforms, event.type),
-  );
+  }).map((event) => provenanceSanitizer.sanitizeExportValue(event, projectionTransforms));
   const maxTotalEvents = params.maxTotalEvents ?? MAX_TRAJECTORY_TOTAL_EVENTS;
   const totalEventCount = sanitizedRuntimeEvents.length + transcriptEvents.length;
   if (totalEventCount > maxTotalEvents) {

@@ -1032,6 +1032,25 @@ describe("exportTrajectoryBundle", () => {
           targetSessionHash: canonicalTargetHash,
         },
       },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "tool.result",
+        ts: "2026-04-22T08:00:01.000Z",
+        seq: 2,
+        sourceSeq: 2,
+        sessionId: "session-1",
+        data: {
+          toolCallId: "call-target",
+          targetSessionHash: canonicalTargetHash,
+          result: {
+            targetSessionHash: canonicalTargetHash,
+            sessionKey: "legacy-target-session-credential",
+          },
+        },
+      },
       ...origins.map(
         (origin, index): TrajectoryEvent => ({
           traceSchema: "openclaw-trajectory",
@@ -1039,9 +1058,9 @@ describe("exportTrajectoryBundle", () => {
           traceId: "session-1",
           source: "runtime",
           type: "prompt.submitted",
-          ts: `2026-04-22T08:00:0${index + 1}.000Z`,
-          seq: index + 2,
-          sourceSeq: index + 2,
+          ts: `2026-04-22T08:00:0${index + 2}.000Z`,
+          seq: index + 3,
+          sourceSeq: index + 3,
           sessionId: "session-1",
           data: { prompt: `prompt-${index}`, origin },
         }),
@@ -1067,7 +1086,12 @@ describe("exportTrajectoryBundle", () => {
     );
     expect(
       bundle.events.find((event) => event.type === "context.compiled")?.data?.targetSessionHash,
-    ).toBe(canonicalTargetHash);
+    ).toBeUndefined();
+    expect(bundle.events.find((event) => event.type === "tool.result")?.data).toEqual({
+      toolCallId: "call-target",
+      targetSessionHash: canonicalTargetHash,
+      result: {},
+    });
     expect(exportedPrompts[0]?.data?.origin).toEqual({
       kind: "inter_session",
       sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
@@ -1094,6 +1118,7 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedText).not.toContain("drop-me");
     expect(exportedText).not.toContain("legacy-opaque-session-credential");
     expect(exportedText).not.toContain("legacy-opaque-source-session-credential");
+    expect(exportedText).not.toContain("legacy-target-session-credential");
     expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionBytes);
     expect(fs.readFileSync(runtimeFile, "utf8")).toBe(runtimeBytes);
     expect(sessionBytes).toContain(rawSessionKey);

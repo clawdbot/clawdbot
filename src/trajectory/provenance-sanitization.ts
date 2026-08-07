@@ -46,7 +46,7 @@ type PersistedOrigin = {
 };
 type Mode = "live" | "export";
 type UnsafeReason = "count" | "long" | "short";
-type EventLike = { type: string; data?: Record<string, unknown> };
+type EventLike = { source?: unknown; type: string; data?: Record<string, unknown> };
 type TranscriptEntryLike = { type?: unknown; message?: unknown };
 type Transforms = {
   transformKey?: (value: string) => string;
@@ -173,7 +173,7 @@ function isSessionKeyField(key: string): boolean {
 }
 
 function isDiagnosticContext(context: DiagnosticPayloadProjectionContext, scope: Scope): boolean {
-  if (scope.kind === "diagnostic" || scope.kind === "data") {
+  if (scope.kind === "diagnostic" || scope.kind === "data" || scope.kind === "value") {
     return true;
   }
   const root = pathParts(context.path)[0];
@@ -249,14 +249,10 @@ export class TrajectoryProvenanceSanitizer {
     };
   }
 
-  sanitizeExportValue<T>(value: T, transforms: Transforms = {}, eventType?: string): T {
+  sanitizeExportValue<T>(value: T, transforms: Transforms = {}): T {
     this.requireExport();
     this.throwIfUnsafe();
-    return this.project(
-      value,
-      eventType ? { kind: "event", type: eventType } : { kind: "value" },
-      transforms,
-    ) as T;
+    return this.project(value, { kind: "value" }, transforms) as T;
   }
 
   private requireExport(): void {
@@ -364,8 +360,14 @@ export class TrajectoryProvenanceSanitizer {
         : undefined;
     return projectTrajectoryValue(value, scope, {
       omitField: (key, record, context) => {
-        if (key === "targetSessionHash" && isDiagnosticContext(context, scope)) {
-          return this.params.mode === "live" || canonicalHash(record[key]) === undefined;
+        if (key === "targetSessionHash") {
+          return !(
+            scope.kind === "event" &&
+            scope.type === "tool.result" &&
+            pathParts(context.path).join(".") === "data" &&
+            (context.parent as EventLike | undefined)?.source === "runtime" &&
+            canonicalHash(record[key]) !== undefined
+          );
         }
         if (isSessionKeyField(key) && isDiagnosticContext(context, scope)) {
           return true;
