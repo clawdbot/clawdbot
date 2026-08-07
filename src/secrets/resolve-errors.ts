@@ -9,6 +9,7 @@ type SecretRefResolutionCode =
   | "SECRET_REF_PROVIDER_CONTRACT";
 
 type SecretProviderResolutionCode =
+  | "SECRET_PROVIDER_ACL_UNVERIFIABLE"
   | "SECRET_PROVIDER_INVALID"
   | "SECRET_PROVIDER_NOT_CONFIGURED"
   | "SECRET_PROVIDER_UNAVAILABLE";
@@ -86,7 +87,10 @@ export function describeSecretResolutionError(
   value: unknown,
 ): SecretResolutionFailureReason | undefined {
   if (value instanceof SecretProviderResolutionError) {
-    return value.code === "SECRET_PROVIDER_UNAVAILABLE" ? "secret provider failed" : undefined;
+    return value.code === "SECRET_PROVIDER_UNAVAILABLE" ||
+      value.code === "SECRET_PROVIDER_ACL_UNVERIFIABLE"
+      ? "secret provider failed"
+      : undefined;
   }
   if (!(value instanceof SecretRefResolutionError)) {
     return undefined;
@@ -104,6 +108,30 @@ export function describeSecretResolutionError(
       return undefined;
   }
   return undefined;
+}
+
+/** Sanitized provider detail suitable for operator-facing diagnostics. */
+export function describeSecretResolutionOperatorDiagnostic(value: unknown): string | undefined {
+  if (
+    value instanceof SecretProviderResolutionError &&
+    value.code === "SECRET_PROVIDER_ACL_UNVERIFIABLE"
+  ) {
+    return "ACL verification unavailable on Windows";
+  }
+  return undefined;
+}
+
+/** Sanitized recovery action suitable for operator-facing diagnostics. */
+export function describeSecretResolutionOperatorRecovery(value: unknown): string | undefined {
+  if (
+    !(value instanceof SecretProviderResolutionError) ||
+    value.code !== "SECRET_PROVIDER_ACL_UNVERIFIABLE"
+  ) {
+    return undefined;
+  }
+  return value.source === "exec"
+    ? "Use a provider command path whose ACLs OpenClaw can verify"
+    : "Use a secret file path whose ACLs OpenClaw can verify";
 }
 
 export function providerResolutionError(params: {

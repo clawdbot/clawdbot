@@ -146,8 +146,10 @@ describe("doctor auth and SecretRef product proof", () => {
         const execAllowedOutput = normalizedOutputOf(execAllowed);
         if (process.platform === "win32") {
           expect(execAllowedOutput).toMatch(
-            /Gateway token SecretRef could not be resolved: .*ACL verification unavailable on Windows/,
+            /Gateway token SecretRef could not be resolved: .*ACL verification unavailable on Windows\. Use a provider command path whose ACLs OpenClaw can verify\./,
           );
+          expect(execAllowedOutput).not.toContain(command);
+          expect(execAllowedOutput).not.toContain(execMarker);
           await expect(fs.access(execMarker)).rejects.toThrow();
         } else {
           await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
