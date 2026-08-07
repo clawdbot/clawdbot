@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import {
+  GATEWAY_STARTUP_MUTATED_ENV_KEYS,
+  snapshotGatewayStartupEnv,
+} from "../gateway/test-helpers.env.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -32,9 +35,7 @@ describe("openclaw test state", () => {
     const previousOpenClawHome = process.env.OPENCLAW_HOME;
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-    const previousGatewayStartupEnv = Object.fromEntries(
-      GATEWAY_STARTUP_MUTATED_ENV_KEYS.map((key) => [key, process.env[key]]),
-    );
+    const previousGatewayStartupEnv = snapshotGatewayStartupEnv();
 
     const state = await createOpenClawTestState({
       label: "unit",
@@ -64,9 +65,7 @@ describe("openclaw test state", () => {
     expect(process.env.OPENCLAW_HOME).toBe(previousOpenClawHome);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
     expect(process.env.OPENCLAW_CONFIG_PATH).toBe(previousConfigPath);
-    expect(
-      Object.fromEntries(GATEWAY_STARTUP_MUTATED_ENV_KEYS.map((key) => [key, process.env[key]])),
-    ).toEqual(previousGatewayStartupEnv);
+    expect(snapshotGatewayStartupEnv()).toEqual(previousGatewayStartupEnv);
     await expectPathMissing(state.root);
   });
 

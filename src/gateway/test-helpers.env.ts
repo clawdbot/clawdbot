@@ -5,3 +5,8 @@ export const GATEWAY_STARTUP_MUTATED_ENV_KEYS = [
   "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_PATH_BOOTSTRAPPED",
 ] as const;
+
+/** Captures values that in-process Gateway startup can mutate. */
+export function snapshotGatewayStartupEnv(): Record<string, string | undefined> {
+  return Object.fromEntries(GATEWAY_STARTUP_MUTATED_ENV_KEYS.map((key) => [key, process.env[key]]));
+}
