@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache, defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -2302,6 +2303,119 @@ describe("Codex plugin thread config", () => {
     expect(config.diagnostics[0]?.message).toBe(
       "Codex plugin runtime refresh failed after install: skills/list unavailable",
     );
+  });
+
+  it("isolates an admin-disabled remote plugin and keeps unaffected plugin apps available", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) =>
+        codexAppInventoryResponse(
+          method,
+          [appInfo("calendar-app", true), appInfo("github-app", true)],
+          params,
+        ),
+    });
+    const calendar = pluginSummary("calendar@openai-curated-remote", {
+      name: "calendar",
+      remotePluginId: "plugins~Plugin_calendar",
+      installed: false,
+      enabled: false,
+      availability: "DISABLED_BY_ADMIN",
+    });
+    const github = pluginSummary("github@openai-curated-remote", {
+      name: "github",
+      remotePluginId: "plugins~Plugin_github",
+      installed: true,
+      enabled: true,
+    });
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "plugin/installed" || method === "plugin/list") {
+        return method === "plugin/installed"
+          ? pluginInstalled([calendar, github], { name: "openai-curated-remote", path: null })
+          : pluginList([calendar, github], { name: "openai-curated-remote", path: null });
+      }
+      if (method === "plugin/read") {
+        const pluginName = (params as v2.PluginReadParams).pluginName;
+        return pluginName === "plugins~Plugin_calendar"
+          ? pluginDetail("calendar", [appSummary("calendar-app")], [], {
+              marketplaceName: "openai-curated-remote",
+              marketplacePath: null,
+            })
+          : pluginDetail("github", [appSummary("github-app")], ["github"], {
+              marketplaceName: "openai-curated-remote",
+              marketplacePath: null,
+            });
+      }
+      if (method === "plugin/install") {
+        expect(params).toEqual({
+          remoteMarketplaceName: "openai-curated-remote",
+          pluginName: "plugins~Plugin_calendar",
+        });
+        throw new CodexAppServerRpcError(
+          {
+            code: -32600,
+            message: "remote plugin plugins~Plugin_calendar is disabled by admin",
+          },
+          "plugin/install",
+        );
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            calendar: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "calendar",
+              allow_destructive_actions: false,
+            },
+            github: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "github",
+              allow_destructive_actions: "ask",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+        "github-app": {
+          enabled: true,
+          destructive_enabled: true,
+          open_world_enabled: true,
+          default_tools_approval_mode: "auto",
+          approvals_reviewer: "user",
+        },
+      },
+    });
+    expect(config.provisionalAppIds).toEqual(["github-app"]);
+    expect(config.policyContext.pluginAppIds).toEqual({ github: ["github-app"] });
+    expect(config.policyContext.apps).not.toHaveProperty("calendar-app");
+    expect(config.diagnostics).toContainEqual({
+      code: "plugin_activation_failed",
+      plugin: expect.objectContaining({ configKey: "calendar", pluginName: "calendar" }),
+      message:
+        "Codex plugin install failed: remote plugin plugins~Plugin_calendar is disabled by admin",
+    });
   });
 
   it("fails closed when the initial app inventory refresh fails", async () => {

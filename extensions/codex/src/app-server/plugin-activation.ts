@@ -3,6 +3,7 @@
  * marketplaces outside OpenClaw's install authority.
  */
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -25,6 +26,7 @@ type CodexPluginActivationReason =
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
+  | "install_failed"
   | "auth_required"
   | "refresh_failed";
 
@@ -104,15 +106,38 @@ export async function ensureCodexPluginActivation(
     };
   }
 
-  const installResponse = (await params.request(
-    "plugin/install",
-    pluginReadParams(
-      resolved.marketplace,
-      resolved.marketplace.remoteMarketplaceName && resolved.summary.remotePluginId
-        ? resolved.summary.remotePluginId
-        : params.identity.pluginName,
-    ) satisfies v2.PluginInstallParams,
-  )) as v2.PluginInstallResponse;
+  let installResponse: v2.PluginInstallResponse;
+  try {
+    installResponse = (await params.request(
+      "plugin/install",
+      pluginReadParams(
+        resolved.marketplace,
+        resolved.marketplace.remoteMarketplaceName && resolved.summary.remotePluginId
+          ? resolved.summary.remotePluginId
+          : params.identity.pluginName,
+      ) satisfies v2.PluginInstallParams,
+    )) as v2.PluginInstallResponse;
+  } catch (error) {
+    if (!(error instanceof CodexAppServerRpcError)) {
+      throw error;
+    }
+    // An application-level install rejection belongs to this plugin. Keep the
+    // plugin fail-closed without aborting setup for the thread's other apps.
+    return {
+      identity: params.identity,
+      ok: false,
+      reason: "install_failed",
+      installAttempted: true,
+      marketplace: resolved.marketplace,
+      diagnostics: [
+        {
+          message: `Codex plugin install failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        },
+      ],
+    };
+  }
   if (params.metadataCache && params.appCacheKey) {
     params.metadataCache.invalidate(params.appCacheKey);
   }
