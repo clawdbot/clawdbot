@@ -201,7 +201,18 @@ export async function activateCodexAttemptTurn(
         }
       }
       try {
-        await activeSteeringQueue.queue(text, optionsLocal);
+        const outcome = await activeSteeringQueue.queue(text, optionsLocal);
+        if (outcome.kind === "steered") {
+          trajectoryRecorder?.recordPromptSubmitted(
+            {
+              threadId: resourceState.thread.threadId,
+              turnId: activeTurnId,
+              prompt: text,
+              imagesCount: optionsLocal?.images?.length ?? 0,
+            },
+            optionsLocal?.inputProvenance,
+          );
+        }
       } catch (error) {
         if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
           return {

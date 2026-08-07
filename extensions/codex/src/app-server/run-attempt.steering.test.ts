@@ -93,6 +93,29 @@ function createSteeringParams() {
   return params;
 }
 
+type SteeringTrajectoryEvent = {
+  data?: Record<string, unknown>;
+  type: string;
+};
+
+function captureSteeringTrajectory(params: ReturnType<typeof createSteeringParams>) {
+  vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+  const events: SteeringTrajectoryEvent[] = [];
+  Object.assign(params, {
+    trajectoryRecorder: {
+      recordEvent: (type: string, data?: Record<string, unknown>) => {
+        events.push({ type, data });
+      },
+      flush: async () => undefined,
+    },
+  });
+  return events;
+}
+
+function promptSubmittedEvents(events: SteeringTrajectoryEvent[]) {
+  return events.filter((event) => event.type === "prompt.submitted");
+}
+
 async function waitAndQueueActiveRunMessage(
   sessionId: string,
   text: string,
@@ -140,6 +163,52 @@ describe("runCodexAppServerAttempt steering", () => {
       method: "turn/interrupt",
       params: { threadId: "thread-1", turnId: "turn-1" },
     });
+  });
+
+  it("does not record accepted steering that aborts before matched consumption", async () => {
+    const { requests, waitForMethod } = createStartedThreadHarness();
+    const params = createSteeringParams();
+    const trajectoryEvents = captureSteeringTrajectory(params);
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:abort",
+      sourceTool: "sessions_send",
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    let handle:
+      | {
+          abort: () => void;
+          queueMessage: (
+            text: string,
+            options?: Parameters<typeof queueActiveRunMessageForTest>[2],
+          ) => Promise<void | { transcriptCommit: "unconfirmed"; errorMessage: string }>;
+        }
+      | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+
+    const delivered = handle!.queueMessage("unconfirmed steer", {
+      debounceMs: 0,
+      inputProvenance,
+    });
+    await vi.waitFor(
+      () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
+      fastWait,
+    );
+    handle!.abort();
+
+    await expect(delivered).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    expect(promptSubmittedEvents(trajectoryEvents).map((event) => event.data?.prompt)).toEqual([
+      "hello",
+    ]);
+    expect(readAttemptTerminal(await run).aborted).toBe(true);
   });
 
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
@@ -190,6 +259,13 @@ describe("runCodexAppServerAttempt steering", () => {
   it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
+    const trajectoryEvents = captureSteeringTrajectory(params);
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:images",
+      sourceChannel: "webchat",
+      sourceTool: "sessions_send",
+    };
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
@@ -213,6 +289,7 @@ describe("runCodexAppServerAttempt steering", () => {
     const delivered = handle!.queueMessage("more context", {
       debounceMs: 0,
       images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+      inputProvenance,
     });
     let deliverySettled = false;
     void delivered.finally(() => {
@@ -230,6 +307,9 @@ describe("runCodexAppServerAttempt steering", () => {
       throw new Error("turn/steer clientUserMessageId missing");
     }
     expect(deliverySettled).toBe(false);
+    expect(promptSubmittedEvents(trajectoryEvents).map((event) => event.data?.prompt)).toEqual([
+      "hello",
+    ]);
     await notify({
       method: "item/completed",
       params: {
@@ -239,6 +319,9 @@ describe("runCodexAppServerAttempt steering", () => {
       },
     });
     expect(deliverySettled).toBe(false);
+    expect(promptSubmittedEvents(trajectoryEvents).map((event) => event.data?.prompt)).toEqual([
+      "hello",
+    ]);
     await notify({
       method: "item/completed",
       params: {
@@ -248,6 +331,20 @@ describe("runCodexAppServerAttempt steering", () => {
       },
     });
     await delivered;
+    expect(promptSubmittedEvents(trajectoryEvents)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ prompt: "hello" }),
+      }),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          prompt: "more context",
+          imagesCount: 1,
+          origin: inputProvenance,
+        }),
+      }),
+    ]);
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -275,6 +372,93 @@ describe("runCodexAppServerAttempt steering", () => {
       ],
       clientUserMessageId: "openclaw:turn-1:steer:1",
     });
+  });
+
+  it("records each logical caller in a confirmed identical-text steering batch", async () => {
+    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
+    const params = createSteeringParams();
+    const trajectoryEvents = captureSteeringTrajectory(params);
+    const firstOrigin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:first",
+      sourceTool: "sessions_send",
+    };
+    const secondOrigin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:second",
+      sourceTool: "sessions_send",
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    let handle:
+      | {
+          queueMessage: (
+            text: string,
+            options?: Parameters<typeof queueActiveRunMessageForTest>[2],
+          ) => Promise<void>;
+        }
+      | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+
+    const first = handle!.queueMessage("same text", {
+      debounceMs: 5,
+      inputProvenance: firstOrigin,
+    });
+    const second = handle!.queueMessage("same text", {
+      debounceMs: 5,
+      inputProvenance: secondOrigin,
+    });
+    await vi.waitFor(
+      () => expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1),
+      fastWait,
+    );
+    const steer = requests.find((entry) => entry.method === "turn/steer");
+    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
+    expect(steer?.params).toMatchObject({
+      input: [
+        { type: "text", text: "same text" },
+        { type: "text", text: "same text" },
+      ],
+    });
+    expect(promptSubmittedEvents(trajectoryEvents).map((event) => event.data?.prompt)).toEqual([
+      "hello",
+    ]);
+
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
+      },
+    });
+    await Promise.all([first, second]);
+
+    const submitted = promptSubmittedEvents(trajectoryEvents);
+    expect(submitted.map((event) => event.data?.prompt)).toEqual([
+      "hello",
+      "same text",
+      "same text",
+    ]);
+    expect(submitted.slice(1).map((event) => event.data?.origin)).toEqual([
+      firstOrigin,
+      secondOrigin,
+    ]);
+    expect(submitted.some((event) => event.data?.prompt === "same text\nsame text")).toBe(false);
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("still steers an image when gateway question cancellation fails", async () => {
@@ -539,6 +723,12 @@ describe("runCodexAppServerAttempt steering", () => {
     );
 
     const params = createSteeringParams();
+    const trajectoryEvents = captureSteeringTrajectory(params);
+    const answerProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:pending-answer",
+      sourceTool: "sessions_send",
+    };
     params.onBlockReply = vi.fn();
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -590,11 +780,18 @@ describe("runCodexAppServerAttempt steering", () => {
         item: { id: "source-message", type: "userMessage", clientId: sourceMessageId },
       },
     });
-    await waitAndQueueActiveRunMessage(params.sessionId, "2", { isInboundUserMessage: true });
+    await waitAndQueueActiveRunMessage(params.sessionId, "2", {
+      inputProvenance: answerProvenance,
+      isInboundUserMessage: true,
+    });
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });
     expect(request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
+    expect(promptSubmittedEvents(trajectoryEvents).map((event) => event.data?.prompt)).toEqual([
+      "hello",
+      "tool progress",
+    ]);
 
     await notify({
       method: "turn/completed",

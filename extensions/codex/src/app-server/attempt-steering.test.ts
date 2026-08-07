@@ -55,7 +55,7 @@ describe("Codex app-server steering queue", () => {
     expect(settled).toBe(false);
     expect(queue.confirmConsumed("unrelated-user-message")).toBe(false);
     expect(queue.confirmConsumed(requestParams.clientUserMessageId ?? "")).toBe(true);
-    await queued;
+    await expect(queued).resolves.toEqual({ kind: "steered" });
     expect(request).toHaveBeenCalledWith(
       "turn/steer",
       {
@@ -142,7 +142,7 @@ describe("Codex app-server steering queue", () => {
     const queued = queue.queue("consumed first", { debounceMs: 0 });
     await vi.advanceTimersByTimeAsync(0);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await queued;
+    await expect(queued).resolves.toEqual({ kind: "steered" });
 
     acceptSteer?.();
     await vi.advanceTimersByTimeAsync(0);
@@ -163,7 +163,10 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await Promise.all([first, second]);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { kind: "steered" },
+      { kind: "steered" },
+    ]);
     expect(request).toHaveBeenCalledWith(
       "turn/steer",
       {
@@ -295,9 +298,30 @@ describe("Codex app-server steering queue", () => {
       }),
     });
 
-    await queue.queue("answer locally", { debounceMs: 0 });
+    await expect(queue.queue("answer locally", { debounceMs: 0 })).resolves.toEqual({
+      kind: "answered-pending-input",
+    });
     expect(answerPendingUserInput).toHaveBeenCalledWith("answer locally");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("falls through to steering when a claimed pending answer loses its race", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const answerPendingUserInput = vi.fn(() => false);
+    const queue = createQueue(request, {
+      claimPendingUserInput: () => ({
+        answer: answerPendingUserInput,
+        cancel: vi.fn(() => false),
+      }),
+    });
+
+    const queued = queue.queue("steer after race", { debounceMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(answerPendingUserInput).toHaveBeenCalledWith("steer after race");
+    expect(request).toHaveBeenCalledOnce();
+    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
+    await expect(queued).resolves.toEqual({ kind: "steered" });
   });
 
   it("steers a complete image reply before releasing pending input", async () => {
@@ -339,7 +363,7 @@ describe("Codex app-server steering queue", () => {
       cancelPendingUserInput.mock.invocationCallOrder[0]!,
     );
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await queued;
+    await expect(queued).resolves.toEqual({ kind: "steered" });
   });
 
   it("claims pending input before a later queued message can answer it", async () => {
@@ -379,7 +403,10 @@ describe("Codex app-server steering queue", () => {
     expect(cancelPendingUserInput).toHaveBeenCalledOnce();
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
-    await Promise.all([imageQueued, laterQueued]);
+    await expect(Promise.all([imageQueued, laterQueued])).resolves.toEqual([
+      { kind: "steered" },
+      { kind: "steered" },
+    ]);
     expect(request.mock.calls[0]?.[1]).toMatchObject({
       input: [
         { type: "text", text: "image reply" },

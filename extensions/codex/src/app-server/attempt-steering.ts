@@ -26,8 +26,16 @@ export class CodexSteeringAcceptedUnconfirmedError extends Error {
 export type CodexSteeringQueueOptions = {
   debounceMs?: number;
   images?: EmbeddedRunAttemptParams["images"];
+  inputProvenance?: EmbeddedRunAttemptParams["inputProvenance"];
   isInboundUserMessage?: boolean;
 };
+
+export type CodexSteeringQueueOutcome = { kind: "answered-pending-input" } | { kind: "steered" };
+
+const ANSWERED_PENDING_INPUT_OUTCOME: CodexSteeringQueueOutcome = {
+  kind: "answered-pending-input",
+};
+const STEERED_OUTCOME: CodexSteeringQueueOutcome = { kind: "steered" };
 
 /**
  * Creates a queue that batches steer messages while still serializing
@@ -50,7 +58,7 @@ export function createCodexSteeringQueue(params: {
     accepted: boolean;
     text: string;
     images?: EmbeddedRunAttemptParams["images"];
-    resolve: () => void;
+    resolve: (outcome: CodexSteeringQueueOutcome) => void;
     reject: (error: unknown) => void;
     settled: boolean;
   };
@@ -72,13 +80,13 @@ export function createCodexSteeringQueue(params: {
     }
   };
 
-  const resolveItem = (item: PendingSteerMessage) => {
+  const resolveItem = (item: PendingSteerMessage, outcome: CodexSteeringQueueOutcome) => {
     if (item.settled) {
       return;
     }
     item.settled = true;
     pendingMessages.delete(item);
-    item.resolve();
+    item.resolve(outcome);
   };
 
   const rejectItem = (item: PendingSteerMessage, error: unknown) => {
@@ -203,10 +211,10 @@ export function createCodexSteeringQueue(params: {
   const createPendingMessage = (
     text: string,
     images?: EmbeddedRunAttemptParams["images"],
-  ): { item: PendingSteerMessage; delivery: Promise<void> } => {
-    let resolveDelivery!: () => void;
+  ): { item: PendingSteerMessage; delivery: Promise<CodexSteeringQueueOutcome> } => {
+    let resolveDelivery!: (outcome: CodexSteeringQueueOutcome) => void;
     let rejectDelivery!: (error: unknown) => void;
-    const delivery = new Promise<void>((resolve, reject) => {
+    const delivery = new Promise<CodexSteeringQueueOutcome>((resolve, reject) => {
       resolveDelivery = resolve;
       rejectDelivery = reject;
     });
@@ -229,24 +237,29 @@ export function createCodexSteeringQueue(params: {
 
   return {
     async queue(text: string, options?: CodexSteeringQueueOptions) {
-      const pendingUserInput = params.claimPendingUserInput();
-      if (pendingUserInput) {
-        if (!options?.images?.length) {
-          pendingUserInput.answer(text);
-          return;
-        }
-        // request_user_input cannot carry images. Submit the complete message
-        // before releasing the prompt so no partial text answer can win the race.
-        void flushBatch().catch(() => undefined);
-        const { item, delivery } = createPendingMessage(text, options.images);
-        await Promise.all([enqueueSend([item]).finally(() => pendingUserInput.cancel()), delivery]);
-        return;
-      }
       if (closedError) {
         throw closedError;
       }
       if (params.signal.aborted) {
         throw new Error("codex app-server steering queue aborted");
+      }
+      const pendingUserInput = params.claimPendingUserInput();
+      if (pendingUserInput) {
+        if (!options?.images?.length) {
+          if (pendingUserInput.answer(text)) {
+            return ANSWERED_PENDING_INPUT_OUTCOME;
+          }
+        } else {
+          // request_user_input cannot carry images. Submit the complete message
+          // before releasing the prompt so no partial text answer can win the race.
+          void flushBatch().catch(() => undefined);
+          const { item, delivery } = createPendingMessage(text, options.images);
+          const [, outcome] = await Promise.all([
+            enqueueSend([item]).finally(() => pendingUserInput.cancel()),
+            delivery,
+          ]);
+          return outcome;
+        }
       }
       const { item, delivery } = createPendingMessage(text, options?.images);
       batchedMessages.push(item);
@@ -275,7 +288,7 @@ export function createCodexSteeringQueue(params: {
       }
       dispatchedBatches.delete(clientUserMessageId);
       for (const item of batch.items) {
-        resolveItem(item);
+        resolveItem(item, STEERED_OUTCOME);
       }
       return true;
     },
