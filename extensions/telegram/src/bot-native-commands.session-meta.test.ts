@@ -9,6 +9,19 @@ import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
+
+const logVerboseMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+  };
+});
+
 import {
   createDeferred,
   createTelegramGroupCommandContext,
@@ -704,6 +717,7 @@ function resetSessionMetaMocks() {
   sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();
   deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
+  logVerboseMock.mockClear();
 }
 
 describe("registerTelegramNativeCommands — session metadata", () => {
@@ -864,6 +878,45 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       label: "thinking menu",
     });
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("gracefully degrades the native command menu when the session store throws", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.getSessionEntry.mockImplementationOnce(() => {
+      throw new Error("session store corrupt");
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    // Must not crash: the native command menu should still be sent
+    // even when model context resolution fails.
+    expectSendMessageCall({
+      sendMessage,
+      chatId: 100,
+      textIncludes: "Choose level for /think.",
+      requireReplyMarkup: true,
+      label: "fallback thinking menu",
+    });
+    expect(logVerboseMock).toHaveBeenCalledTimes(1);
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "telegram: failed to resolve native command menu model context for agent=main",
+      ),
+    );
+    expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining("session store corrupt"));
   });
 
   it.each([

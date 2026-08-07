@@ -37,6 +37,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -366,7 +367,10 @@ function resolveTelegramCommandMenuModelContext(params: {
         sessionEntry: entry,
       }),
     };
-  } catch {
+  } catch (err) {
+    logVerbose(
+      `telegram: failed to resolve native command menu model context for agent=${params.agentId}: ${formatErrorMessage(err)}`,
+    );
     return {};
   }
 }
