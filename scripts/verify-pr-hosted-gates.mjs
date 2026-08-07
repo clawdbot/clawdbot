@@ -120,8 +120,10 @@ function matchingAuthoritativeRuns(runs, workflowName, sha, allowManual = true) 
 }
 
 function latestRun(runs) {
-  return runs.toSorted((left, right) =>
-    String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? "")),
+  // GitHub run_number is creation order; updated_at moves as jobs finish.
+  return runs.toSorted(
+    (left, right) =>
+      Number(right.run_number ?? right.id ?? 0) - Number(left.run_number ?? left.id ?? 0),
   )[0];
 }
 
@@ -327,6 +329,9 @@ function preferredCiRun(runs, nowMs) {
   // never an unresolved terminal non-success.
   if (latestDecision && latestDecision.conclusion !== "success") {
     return latestDecision;
+  }
+  if (latestScheduledRun && latestScheduledRun.status !== "completed") {
+    return latestRun([latestScheduledRun, latestManualRun].filter(Boolean));
   }
   if (latestScheduledRun?.status === "completed" && isSuccessfulRecentRun(latestDecision, nowMs)) {
     return latestDecision;

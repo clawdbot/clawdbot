@@ -30,6 +30,7 @@ const requiredCliArgs = [
 
 type WorkflowRunFixture = {
   id: number;
+  run_number: number;
   name: string;
   event: string;
   status: string;
@@ -48,6 +49,7 @@ type WorkflowRunFixture = {
 function successfulRun(name: string, id: number, updatedAt: string): WorkflowRunFixture {
   return {
     id,
+    run_number: id,
     name,
     event: "pull_request",
     status: "completed",
@@ -69,6 +71,10 @@ function releaseGateRun(id: number, updatedAt: string) {
     event: "workflow_dispatch",
     display_title: `CI release gate ${sha}`,
   };
+}
+
+function pendingCiRun(id: number, updatedAt: string, status = "queued") {
+  return { ...successfulRun("CI", id, updatedAt), status, conclusion: null };
 }
 
 function queuedBuildArtifactFallbackRuns() {
@@ -983,14 +989,6 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it.each([
-    [
-      "queued",
-      {
-        ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
-        status: "queued",
-        conclusion: null,
-      },
-    ],
     ["stale", successfulRun("CI", 1, "2026-06-16T10:54:59Z")],
     ["cancelled", { ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"), conclusion: "cancelled" }],
     ["skipped", { ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"), conclusion: "skipped" }],
@@ -1031,6 +1029,60 @@ describe("verify-pr-hosted-gates", () => {
       }
     },
   );
+
+  it.each([
+    [
+      "queued over older manual",
+      [releaseGateRun(1, "2026-06-17T10:49:00Z"), pendingCiRun(2, "2026-06-17T10:50:00Z")],
+      null,
+    ],
+    [
+      "in-progress over older manual",
+      [
+        releaseGateRun(1, "2026-06-17T10:49:00Z"),
+        pendingCiRun(2, "2026-06-17T10:50:00Z", "in_progress"),
+      ],
+      null,
+    ],
+    [
+      "pending over neutral and manual",
+      [
+        { ...successfulRun("CI", 1, "2026-06-17T10:48:00Z"), conclusion: "skipped" },
+        releaseGateRun(2, "2026-06-17T10:49:00Z"),
+        pendingCiRun(3, "2026-06-17T10:50:00Z"),
+      ],
+      null,
+    ],
+    [
+      "newer manual over older pending",
+      [
+        pendingCiRun(1, "2026-06-17T10:48:00Z", "in_progress"),
+        releaseGateRun(2, "2026-06-17T10:49:00Z"),
+      ],
+      2,
+    ],
+  ])("applies the %s policy", (_case, workflowRuns, expectedId) => {
+    const collect = () => collectHostedGateEvidence({ sha, workflowRuns });
+    if (expectedId === null) {
+      expect(collect).toThrow("Missing successful recent CI workflow");
+      return;
+    }
+    expect(collect()).toEqual({
+      headSha: sha,
+      workflows: [expect.objectContaining({ name: `CI release gate ${sha}`, id: expectedId })],
+    });
+  });
+
+  it("orders runs by creation sequence when completion updates invert", () => {
+    const olderSuccess = successfulRun("CI", 1, "2026-06-17T10:54:00Z");
+    const newerFailure = {
+      ...successfulRun("CI", 2, "2026-06-17T10:49:00Z"),
+      conclusion: "failure",
+    };
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [olderSuccess, newerFailure] }),
+    ).toThrow("Missing successful recent CI workflow");
+  });
 
   it("rejects a completed scheduled CI failure even when a fallback passed", () => {
     expect(() =>
