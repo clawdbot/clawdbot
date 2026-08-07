@@ -5106,7 +5106,7 @@ describe("chat model controls", () => {
     );
 
     expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
-      "1.1M context",
+      "1M context",
     );
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
