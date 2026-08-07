@@ -105,6 +105,7 @@ export async function handleChatSend(
     finishAbortedChatSend,
     gatewayWorkAdmission,
     lifecycleGeneration,
+    messageInjectionTarget,
     retainGatewayWorkAdmission,
     restartSafeAdmission,
     setReleaseGatewayRootContinuation,
@@ -418,6 +419,7 @@ export async function handleChatSend(
                   ...(expectedLeafEntryId !== undefined
                     ? { originatingLeafEntryId: expectedLeafEntryId }
                     : {}),
+                  ...(messageInjectionTarget ? { messageInjectionTarget } : {}),
                   ownerKey: queuedFollowupOwnerKey,
                   onAdopted: async () => {},
                   onDeferred: () => {

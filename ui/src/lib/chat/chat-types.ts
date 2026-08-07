@@ -37,6 +37,10 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
+  /** Immutable active run selected when this row first became a steer. */
+  steerTargetRunId?: string;
+  /** Immutable transcript leaf paired with steerTargetRunId; null is an empty transcript. */
+  steerTargetLeafEntryId?: string | null;
   sendState?:
     | "waiting-model"
     | "waiting-idle"

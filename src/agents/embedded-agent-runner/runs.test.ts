@@ -51,6 +51,7 @@ function createRunHandle(
     isCompacting?: boolean;
     isStreaming?: boolean;
     isStopped?: () => boolean;
+    messageInjection?: RunHandle["messageInjection"];
     runId?: string;
     queueMessage?: RunHandle["queueMessage"];
     supportsQueueMessageImages?: boolean;
@@ -63,6 +64,7 @@ function createRunHandle(
   return {
     runId: overrides.runId,
     queueMessage: overrides.queueMessage ?? (async () => {}),
+    ...(overrides.messageInjection ? { messageInjection: overrides.messageInjection } : {}),
     isStreaming: () => overrides.isStreaming ?? true,
     ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
     ...(overrides.isAbortable !== undefined
@@ -708,16 +710,39 @@ describe("embedded-agent runner run registry", () => {
     );
   });
 
-  it("returns structured queue failures for inactive active-run states", () => {
-    setActiveEmbeddedRun("session-not-streaming", createRunHandle({ isStreaming: false }));
+  it("uses queue capability instead of token streaming for legacy handles", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-not-streaming",
+      createRunHandle({ isStreaming: false, queueMessage }),
+    );
+
+    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
+      {
+        queued: true,
+        target: "embedded_run",
+      },
+    );
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("returns structured queue failures for unavailable or compacting active runs", () => {
+    const unavailableQueue = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-unavailable",
+      createRunHandle({
+        messageInjection: { isAvailable: () => false, queueMessage: unavailableQueue },
+      }),
+    );
     setActiveEmbeddedRun("session-compacting", createRunHandle({ isCompacting: true }));
 
-    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toEqual({
+    expect(queueEmbeddedAgentMessageWithOutcome("session-unavailable", "continue")).toEqual({
       queued: false,
-      sessionId: "session-not-streaming",
+      sessionId: "session-unavailable",
       reason: "not_streaming",
       gatewayHealth: "live",
     });
+    expect(unavailableQueue).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome("session-compacting", "continue")).toEqual({
       queued: false,
       sessionId: "session-compacting",

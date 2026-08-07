@@ -6,6 +6,7 @@ import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
+import type { ReplyMessageInjectionTarget } from "./reply/reply-run-registry.js";
 import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
@@ -66,6 +67,8 @@ export type TurnAdoptionLifecycle = {
   admission?: TurnAdoptionAdmission;
   /** Transcript branch leaf from which this turn was admitted. */
   originatingLeafEntryId?: string | null;
+  /** Exact active operation captured while Gateway owned lifecycle admission. */
+  messageInjectionTarget?: ReplyMessageInjectionTarget;
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;

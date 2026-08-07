@@ -22,7 +22,7 @@ import {
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
   clearReplyRunForResetBySessionId,
-  queueReplyRunMessage,
+  queueReplyMessageInjectionTarget,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
@@ -30,6 +30,7 @@ import {
   markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
+  resolveActiveReplyOperationForSessionId,
   resolveReplyRunPhaseForSessionId,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
@@ -47,6 +48,23 @@ function createTestReplyOperation(
     resetTriggered: false,
     ...overrides,
   });
+}
+
+async function queueCurrentReplyRunMessage(
+  sessionId: string,
+  text: string,
+  options?: Parameters<typeof queueReplyMessageInjectionTarget>[2],
+) {
+  const operation = resolveActiveReplyOperationForSessionId(sessionId);
+  const target = operation
+    ? replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: operation.originatingLeafEntryId,
+      })
+    : undefined;
+  return target
+    ? await queueReplyMessageInjectionTarget(target, text, options)
+    : { status: "rejected" as const, reason: "injection_unavailable" as const };
 }
 
 describe("reply run registry", () => {
@@ -107,32 +125,40 @@ describe("reply run registry", () => {
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
-  it("matches injectable owners only to their immutable originating leaf", () => {
+  it("matches injectable owners only to their immutable originating leaf", async () => {
     const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
     let stopped = false;
     const queueMessage = vi.fn(async () => {});
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
+      runId: "run-a",
       cancel: () => {},
-      isStreaming: () => false,
-      isStopped: () => stopped,
-      queueMessage,
+      messageInjection: { isAvailable: () => !stopped, queueMessage },
     });
 
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: "agent:main:main",
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    });
+    expect(target).toBeDefined();
     expect(
-      replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
-    ).toBe(true);
-    expect(
-      replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-b"),
-    ).toBe(false);
-    expect(queueReplyRunMessage(operation.sessionId, "steer during tool work")).toBe(true);
+      replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: "agent:main:main",
+        originatingLeafEntryId: "leaf-b",
+        expectedRunId: "run-a",
+      }),
+    ).toBeUndefined();
+    await expect(
+      queueReplyMessageInjectionTarget(target!, "steer during tool work"),
+    ).resolves.toEqual({ status: "accepted" });
     expect(queueMessage).toHaveBeenCalledWith("steer during tool work");
     stopped = true;
-    expect(
-      replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
-    ).toBe(false);
-    expect(queueReplyRunMessage(operation.sessionId, "late steer")).toBe(false);
+    await expect(queueReplyMessageInjectionTarget(target!, "late steer")).resolves.toEqual({
+      status: "rejected",
+      reason: "injection_unavailable",
+    });
   });
 
   it("records reply-operation progress without claiming embedded-run activity", () => {
@@ -1115,7 +1141,7 @@ describe("reply run registry", () => {
     }
   });
 
-  it("queues messages only through the active running backend", () => {
+  it("queues messages only through the active running backend", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1128,15 +1154,19 @@ describe("reply run registry", () => {
       queueMessage,
     });
 
-    expect(queueReplyRunMessage("session-running", "before running")).toBe(false);
+    await expect(
+      queueCurrentReplyRunMessage("session-running", "before running"),
+    ).resolves.toMatchObject({ status: "rejected" });
 
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toEqual({
+      status: "accepted",
+    });
     expect(queueMessage).toHaveBeenCalledWith("hello");
   });
 
-  it("queues messages only when the task-suggestion tool surface matches", () => {
+  it("queues messages only when the task-suggestion tool surface matches", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-task-suggestions",
@@ -1150,17 +1180,19 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(
-      queueReplyRunMessage("session-task-suggestions", "legacy client", {
+    await expect(
+      queueCurrentReplyRunMessage("session-task-suggestions", "legacy client", {
         taskSuggestionDeliveryMode: undefined,
       }),
-    ).toBe(false);
-    expect(
-      queueReplyRunMessage("session-task-suggestions", "capable client", {
+    ).resolves.toMatchObject({ status: "rejected" });
+    await expect(
+      queueCurrentReplyRunMessage("session-task-suggestions", "capable client", {
         taskSuggestionDeliveryMode: "gateway",
       }),
-    ).toBe(true);
-    expect(queueReplyRunMessage("session-task-suggestions", "internal completion")).toBe(true);
+    ).resolves.toEqual({ status: "accepted" });
+    await expect(
+      queueCurrentReplyRunMessage("session-task-suggestions", "internal completion"),
+    ).resolves.toEqual({ status: "accepted" });
     expect(queueMessage).toHaveBeenCalledTimes(2);
     expect(queueMessage).toHaveBeenNthCalledWith(1, "capable client", {
       taskSuggestionDeliveryMode: "gateway",
@@ -1168,7 +1200,7 @@ describe("reply run registry", () => {
     expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
   });
 
-  it("queues images only through backends that preserve them", () => {
+  it("queues images only through backends that preserve them", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-images",
@@ -1182,7 +1214,9 @@ describe("reply run registry", () => {
     operation.setPhase("running");
     const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
 
-    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(false);
+    await expect(
+      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "image_input_unsupported" });
     expect(queueMessage).not.toHaveBeenCalled();
 
     operation.attachBackend({
@@ -1193,11 +1227,13 @@ describe("reply run registry", () => {
       supportsQueueMessageImages: true,
     });
 
-    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(true);
+    await expect(
+      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
+    ).resolves.toEqual({ status: "accepted" });
     expect(queueMessage).toHaveBeenCalledWith("inspect", { images });
   });
 
-  it("queues messages through active non-streaming backends with live stopped state", () => {
+  it("queues messages through queue-first legacy backends while token streaming is idle", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1207,16 +1243,17 @@ describe("reply run registry", () => {
       kind: "embedded",
       cancel: vi.fn(),
       isStreaming: () => false,
-      isStopped: () => false,
       queueMessage,
     });
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toEqual({
+      status: "accepted",
+    });
     expect(queueMessage).toHaveBeenCalledWith("hello");
   });
 
-  it("refuses stale injectable owners for admission and delivery until activity resumes", () => {
+  it("refuses stale injectable owners for admission and delivery until activity resumes", async () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
@@ -1233,31 +1270,44 @@ describe("reply run registry", () => {
       });
       operation.setPhase("running");
 
-      expect(
-        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
-      ).toBe(true);
+      const target = replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: "agent:main:main",
+        originatingLeafEntryId: "leaf-a",
+      });
+      expect(target).toBeDefined();
 
       vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
 
       expect(
-        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
-      ).toBe(false);
-      expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
+        replyRunRegistry.resolveMessageInjectionTarget({
+          sessionKey: "agent:main:main",
+          originatingLeafEntryId: "leaf-a",
+        }),
+      ).toBeUndefined();
+      await expect(queueReplyMessageInjectionTarget(target!, "stale")).resolves.toMatchObject({
+        status: "rejected",
+        reason: "stale_run",
+      });
       expect(queueMessage).not.toHaveBeenCalled();
 
       operation.recordActivity();
 
       expect(
-        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
-      ).toBe(true);
-      expect(queueReplyRunMessage("session-running", "fresh")).toBe(true);
+        replyRunRegistry.resolveMessageInjectionTarget({
+          sessionKey: "agent:main:main",
+          originatingLeafEntryId: "leaf-a",
+        }),
+      ).toBeDefined();
+      await expect(queueReplyMessageInjectionTarget(target!, "fresh")).resolves.toEqual({
+        status: "accepted",
+      });
       expect(queueMessage).toHaveBeenCalledWith("fresh");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("does not queue messages through stopped backends", () => {
+  it("does not queue messages through stopped backends", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1272,11 +1322,14 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(false);
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "injection_unavailable",
+    });
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("fails closed when backend stopped state checks throw", () => {
+  it("fails closed when backend stopped state checks throw", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-running",
@@ -1293,8 +1346,173 @@ describe("reply run registry", () => {
     });
     operation.setPhase("running");
 
-    expect(queueReplyRunMessage("session-running", "hello")).toBe(false);
+    await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "injection_unavailable",
+    });
     expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("requires a real injection capability", () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({ kind: "cli", runId: "run-a", cancel: vi.fn() });
+
+    expect(
+      replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: "leaf-a",
+        expectedRunId: "run-a",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a different expected run id", () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+
+    expect(
+      replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: "leaf-a",
+        expectedRunId: "run-b",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns synchronous and asynchronous queue failures as typed rejections", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    const synchronous = vi.fn(() => {
+      throw new Error("sync rejection");
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: synchronous },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+
+    await expect(queueReplyMessageInjectionTarget(target, "first")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "runtime_rejected",
+      errorMessage: "Error: sync rejection",
+    });
+
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: vi.fn(async () => {
+          throw new Error("async rejection");
+        }),
+      },
+    });
+    await expect(queueReplyMessageInjectionTarget(target, "second")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "runtime_rejected",
+      errorMessage: "Error: async rejection",
+    });
+  });
+
+  it("rejects an ABA successor even when key and leaf are reused", async () => {
+    const first = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    first.setPhase("running");
+    first.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: first.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    first.complete();
+    const successorQueue = vi.fn(async () => {});
+    const successor = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    successor.setPhase("running");
+    successor.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+    });
+
+    await expect(queueReplyMessageInjectionTarget(target, "must not move")).resolves.toMatchObject({
+      status: "rejected",
+      reason: "no_active_run",
+    });
+    expect(successorQueue).not.toHaveBeenCalled();
+  });
+
+  it("uses a replacement backend on the same operation", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    const firstQueue = vi.fn(async () => {});
+    const first = {
+      kind: "embedded" as const,
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: firstQueue },
+    };
+    operation.attachBackend(first);
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+    const replacementQueue = vi.fn(async () => {});
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: replacementQueue },
+    });
+
+    await expect(queueReplyMessageInjectionTarget(target, "replacement")).resolves.toEqual({
+      status: "accepted",
+    });
+    expect(firstQueue).not.toHaveBeenCalled();
+    expect(replacementQueue).toHaveBeenCalledWith("replacement");
+  });
+
+  it("keeps an invoked queue authoritative when the owner clears synchronously", async () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    operation.setPhase("running");
+    const queueMessage = vi.fn(async () => {
+      operation.complete();
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+    const target = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: operation.key,
+      originatingLeafEntryId: "leaf-a",
+      expectedRunId: "run-a",
+    })!;
+
+    await expect(queueReplyMessageInjectionTarget(target, "last input")).resolves.toEqual({
+      status: "accepted",
+    });
+    expect(replyRunRegistry.isActive(operation.key)).toBe(false);
   });
 
   it("aborts compacting runs through the registry compatibility helper", () => {

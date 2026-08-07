@@ -49,6 +49,7 @@ describe("ChatSendParamsSchema", () => {
       true,
     );
     expect(Value.Check(ChatSendParamsSchema, { ...send, expectedLeafEntryId: null })).toBe(true);
+    expect(Value.Check(ChatSendParamsSchema, { ...send, expectedRunId: "run-1" })).toBe(true);
     expect(Value.Check(ChatSendParamsSchema, { ...send, unknown: true })).toBe(false);
   });
 });

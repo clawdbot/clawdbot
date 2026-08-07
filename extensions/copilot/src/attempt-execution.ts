@@ -542,6 +542,7 @@ export async function runCopilotExecution(context: {
     }
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
+      input.replyOperation?.detachBackend(activeRunHandleRef);
       clearActiveEmbeddedRun(
         input.sessionId,
         activeRunHandleRef,

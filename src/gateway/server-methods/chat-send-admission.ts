@@ -33,7 +33,9 @@ import {
 } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
+  ACTIVE_RUN_CHANGED_ERROR_REASON,
   respondChatActiveLeafChanged,
+  respondChatActiveRunChanged,
   respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -74,6 +76,7 @@ export async function admitChatSend(params: {
     now,
     restartSafeRequest,
     expectedLeafEntryId,
+    expectedRunId,
   } = session;
   const chatSendTraceAttributes = {
     runId: clientRunId,
@@ -134,6 +137,7 @@ export async function admitChatSend(params: {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
+  let messageInjectionTarget: ReturnType<typeof replyRunRegistry.resolveMessageInjectionTarget>;
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
@@ -200,14 +204,21 @@ export async function admitChatSend(params: {
     // An active owner can advance this branch while a steer is being composed.
     // The lifecycle admission keeps branch identity fixed after this check; if
     // the owner clears, acceptance-aware dispatch preserves this turn as follow-up.
-    const hasActiveSteeringOwner =
-      p.queueMode === "steer" &&
-      expectedLeafEntryId !== undefined &&
-      replyRunRegistry.isMessageInjectableFromOriginatingLeaf(
-        activeRunScopeKey,
-        expectedLeafEntryId,
-      );
-    if (commitOutcome && expectedLeafEntryId !== undefined && !hasActiveSteeringOwner) {
+    const resolvedInjectionTarget =
+      p.queueMode === "steer"
+        ? replyRunRegistry.resolveMessageInjectionTarget({
+            sessionKey: activeRunScopeKey,
+            originatingLeafEntryId: expectedLeafEntryId,
+            expectedRunId,
+          })
+        : undefined;
+    if (commitOutcome && resolvedInjectionTarget) {
+      messageInjectionTarget = resolvedInjectionTarget;
+    }
+    if (commitOutcome && expectedRunId && !resolvedInjectionTarget) {
+      throw new Error(ACTIVE_RUN_CHANGED_ERROR_REASON);
+    }
+    if (commitOutcome && expectedLeafEntryId !== undefined && !resolvedInjectionTarget) {
       // Runtime session identity resolves through the canonical SQLite accessor;
       // legacy/reset-archive files are read-only history fallbacks, never send targets.
       const currentLeafEntryId = latestEntry?.sessionId
@@ -323,6 +334,10 @@ export async function admitChatSend(params: {
     }
     if (err instanceof Error && err.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
       respondChatActiveLeafChanged(respond);
+      return { ok: false as const };
+    }
+    if (err instanceof Error && err.message === ACTIVE_RUN_CHANGED_ERROR_REASON) {
+      respondChatActiveRunChanged(respond);
       return { ok: false as const };
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
@@ -476,6 +491,7 @@ export async function admitChatSend(params: {
       finishAbortedChatSend,
       gatewayWorkAdmission,
       lifecycleGeneration,
+      messageInjectionTarget,
       originatingRoute,
       retainGatewayWorkAdmission,
       restartSafeAdmission,

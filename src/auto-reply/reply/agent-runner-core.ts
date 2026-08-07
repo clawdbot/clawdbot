@@ -529,7 +529,6 @@ export type RunReplyAgentParams = {
   shouldFollowup: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
-  isStreaming: boolean;
   opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;

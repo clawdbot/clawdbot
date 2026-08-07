@@ -60,7 +60,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldSteer,
     shouldFollowup,
     isActive,
-    isStreaming,
     authProfileId,
     authProfileIdSource,
   } = state;
@@ -461,7 +460,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         latestSessionState.sessionId;
       return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
     },
-    isStreaming,
     opts,
     typing,
     sessionEntry: preparedSessionState.sessionEntry,

@@ -22,6 +22,7 @@ export async function requestChatSend(
     queueMode?: QueueMode;
     replyToId?: string;
     expectedLeafEntryId?: string | null;
+    expectedRunId?: string;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -42,6 +43,7 @@ export async function requestChatSend(
     ...(params.expectedLeafEntryId !== undefined
       ? { expectedLeafEntryId: params.expectedLeafEntryId }
       : {}),
+    ...(params.expectedRunId ? { expectedRunId: params.expectedRunId } : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
   });

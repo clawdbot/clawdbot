@@ -319,7 +319,6 @@ function makeRunReplyAgentParams(
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing: createMockTypingController(),
     sessionCtx: {
       Provider: provider,
@@ -449,7 +448,6 @@ describe("runReplyAgent media path normalization", () => {
         shouldSteer: true,
         shouldFollowup: true,
         isActive: true,
-        isStreaming: false,
         followupRun,
       }),
     );
@@ -584,7 +582,6 @@ describe("runReplyAgent media path normalization", () => {
         shouldFollowup: true,
         isActive: true,
         isRunActive: () => true,
-        isStreaming: true,
       }),
     );
 
@@ -609,7 +606,6 @@ describe("runReplyAgent media path normalization", () => {
         shouldFollowup: true,
         isActive: true,
         isRunActive: () => true,
-        isStreaming: true,
       }),
     );
 

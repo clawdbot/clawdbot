@@ -1377,10 +1377,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
+      runId: "active-run",
       cancel: () => {},
-      isStreaming: () => false,
-      isStopped: () => false,
-      queueMessage: async () => {},
+      messageInjection: { isAvailable: () => true, queueMessage: async () => {} },
     });
 
     try {
@@ -1388,6 +1387,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-steer-moving-leaf",
         requestParams: {
           expectedLeafEntryId: "leaf-before-active-run-output",
+          expectedRunId: "active-run",
           queueMode: "steer",
         },
       });
@@ -1403,6 +1403,45 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
     expect(mockState.lastDispatchOriginatingLeafEntryId).toBe("leaf-before-active-run-output");
+  });
+
+  it("rejects a steer after the expected active run changes", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-run-changed-");
+    const { context, respond, send } = createChatRequestFixture();
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "leaf-before-active-run-output",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "successor-run",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage: async () => {} },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-run-changed",
+        requestParams: {
+          expectedLeafEntryId: "leaf-before-active-run-output",
+          expectedRunId: "original-run",
+          queueMode: "steer",
+        },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-run-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
   });
 
   it("rejects a moved-leaf steer when the non-streaming owner evidence is stale", async () => {

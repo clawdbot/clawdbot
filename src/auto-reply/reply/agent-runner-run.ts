@@ -310,6 +310,7 @@ export async function runReplyAgent(
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
           : {}),
       },
+      turnAdoptionLifecycle?.messageInjectionTarget,
     );
     if (steerOutcome.queued) {
       const adoptionDisposition = await finalizeAcceptedSteer({

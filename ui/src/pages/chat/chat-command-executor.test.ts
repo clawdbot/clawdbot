@@ -85,11 +85,19 @@ function restrictedSnapshot(
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
+  const active = overrides?.status === "running" || overrides?.hasActiveRun === true;
   return {
     key,
     spawnedBy: overrides?.spawnedBy,
     kind: "direct",
     updatedAt: null,
+    ...(active
+      ? {
+          hasActiveRun: true,
+          activeRunIds: ["active-run"],
+          activeLeafEntryId: "leaf-active",
+        }
+      : {}),
     ...overrides,
   };
 }

@@ -818,8 +818,15 @@ async function resolveSteerTarget(
   };
 }
 
-function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
-  return Boolean(session && isSessionRunActive(session));
+function isActiveSteerSession(
+  session: GatewaySessionRow | undefined,
+): session is GatewaySessionRow & { activeRunIds: [string]; activeLeafEntryId: string | null } {
+  return Boolean(
+    session &&
+    isSessionRunActive(session) &&
+    session.activeRunIds?.length === 1 &&
+    session.activeLeafEntryId !== undefined,
+  );
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -885,6 +892,8 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
+        expectedRunId: targetSession.activeRunIds[0],
+        expectedLeafEntryId: targetSession.activeLeafEntryId,
         idempotencyKey: generateUUID(),
       }),
     );
