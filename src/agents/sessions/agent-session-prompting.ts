@@ -14,7 +14,8 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
-import { AgentSessionBase, type AgentSessionSteerReceipt } from "./agent-session-base.js";
+import { AgentSessionBase } from "./agent-session-base.js";
+import type { AgentSessionSteerReceipt } from "./agent-session-steering.js";
 import type { PromptOptions } from "./agent-session-types.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
 import type { CustomMessage } from "./messages.js";
@@ -372,16 +373,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       inputProvenance,
     );
     const queueReceipt = this.agent.steerWithReceipt(prepared.message);
-    const receipt = this.trackSteeringMessage(prepared.text, prepared.message, queueReceipt);
-    if (!receipt) {
-      throw new Error("failed to create steering receipt");
-    }
-    return receipt;
+    return this.steering.add(prepared.text, prepared.message, queueReceipt);
   }
 
   private enqueuePreparedSteer(prepared: { text: string; message: AgentMessage }): void {
     this.agent.steer(prepared.message);
-    this.trackSteeringMessage(prepared.text, prepared.message);
+    this.steering.add(prepared.text, prepared.message);
   }
 
   /**
@@ -560,9 +557,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @returns Object with steering and followUp arrays
    */
   clearQueue(): { steering: string[]; followUp: string[] } {
-    const steering = this.clearPendingSteeringItems();
     const followUp = [...this.followUpMessages];
     this.followUpMessages = [];
+    const steering = this.steering.clear();
     this.agent.clearAllQueues();
     this.emitQueueUpdate();
     return { steering, followUp };
@@ -570,12 +567,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /** Number of pending messages (includes both steering and follow-up) */
   get pendingMessageCount(): number {
-    return this.steeringItems.filter((item) => !item.started).length + this.followUpMessages.length;
+    return this.steering.pendingCount + this.followUpMessages.length;
   }
 
   /** Get pending steering messages (read-only) */
   getSteeringMessages(): readonly string[] {
-    return this.steeringItems.filter((item) => !item.started).map((item) => item.text);
+    return this.steering.pendingTexts;
   }
 
   /** Get pending follow-up messages (read-only) */
