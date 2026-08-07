@@ -167,6 +167,22 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(true);
   });
 
+  it("does not match persisted text when both message ids differ", () => {
+    // Outbound "ok" recorded with its GUID; a user later sends "ok" with a new
+    // GUID. Same text, conflicting ids — a NEW message, not a reconnect echo.
+    const scope = "acct:imessage:+1555";
+    rememberPersistedIMessageEcho({ scope, text: "ok", messageId: "guid-agent-text" });
+
+    expect(hasPersistedIMessageEcho({ scope, text: "ok", messageId: "guid-user-text" })).toBe(
+      false,
+    );
+    // Genuine echo still matches by id, and id-less probes still match by text.
+    expect(hasPersistedIMessageEcho({ scope, text: "ok", messageId: "guid-agent-text" })).toBe(
+      true,
+    );
+    expect(hasPersistedIMessageEcho({ scope, text: "ok" })).toBe(true);
+  });
+
   it("matches persisted media through the primary sent-message cache", () => {
     const scope = "acct:imessage:+1555";
     const media = { contentType: "image/png", kind: "image" as const };

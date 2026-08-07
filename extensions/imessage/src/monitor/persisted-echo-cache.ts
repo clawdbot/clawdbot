@@ -225,7 +225,15 @@ export function hasPersistedIMessageEcho(params: {
     const hasConflictingMessageIds = Boolean(
       messageId && entry.messageId && messageId !== entry.messageId,
     );
-    if (text && entry.text === text && (!entry.pending || params.includePendingText)) {
+    // Same-id echoes match on the messageId branch above; an inbound message
+    // whose GUID differs from the recorded outbound GUID is a NEW message even
+    // when the text collides ("ok", "done"), never a reconnect echo.
+    if (
+      text &&
+      !hasConflictingMessageIds &&
+      entry.text === text &&
+      (!entry.pending || params.includePendingText)
+    ) {
       return true;
     }
     if (
