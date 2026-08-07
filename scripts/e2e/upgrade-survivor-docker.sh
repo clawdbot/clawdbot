@@ -439,8 +439,6 @@ if [ "$update_status" -ne 0 ]; then
   echo "openclaw update failed" >&2
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.err >&2
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
-  openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG" >&2
-  openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2
   exit "$update_status"
 fi
 

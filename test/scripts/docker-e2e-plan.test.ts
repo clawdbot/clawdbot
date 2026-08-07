@@ -1672,9 +1672,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(
       planFor({ selectedLaneNames: ["update-migration"] }).requiredPrepublishPluginPackages,
     ).toEqual(["@openclaw/discord"]);
-    expect(
-      planFor({ selectedLaneNames: ["update-restart-auth"] }).requiredPrepublishPluginPackages,
-    ).toEqual(["@openclaw/codex", "@openclaw/discord"]);
+    const updateRestartLane = findLaneByName("update-restart-auth");
+    expect(updateRestartLane?.prepublishPluginPackages).toEqual(["@openclaw/codex"]);
+    expect(requiredPrepublishPluginPackagesForLanes([updateRestartLane!])).toEqual([
+      "@openclaw/codex",
+      "@openclaw/discord",
+    ]);
     const legacyFeishuPlan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
       upgradeSurvivorBaselines: "2026.3.13",

@@ -908,8 +908,9 @@ const restartBurst = 5;
 const stopTimeoutMs = 30_000;
 const starts = [];
 let child;
+let activeGroupPid;
+let drainingGroupPid;
 let stopping = false;
-let stoppingGroupPid;
 
 const finish = () => {
   try {
@@ -937,29 +938,48 @@ const isProcessGroupRunning = (pid) => {
   }
 };
 
-const stop = () => {
-  if (stopping) return;
-  stopping = true;
-  if (!child) return finish();
-  stoppingGroupPid = child.pid;
-  if (!stoppingGroupPid) {
-    child.kill("SIGTERM");
-    return;
-  }
-  signalProcessGroup(stoppingGroupPid, "SIGTERM");
+const drainProcessGroup = (pid, onStopped) => {
+  if (!pid) return onStopped();
+  if (drainingGroupPid === pid) return;
+  drainingGroupPid = pid;
+  let completed = false;
+  const complete = () => {
+    if (completed) return;
+    completed = true;
+    if (drainingGroupPid === pid) drainingGroupPid = undefined;
+    if (activeGroupPid === pid) activeGroupPid = undefined;
+    onStopped();
+  };
+  signalProcessGroup(pid, "SIGTERM");
   const forceKill = setTimeout(() => {
-    signalProcessGroup(stoppingGroupPid, "SIGKILL");
-    finish();
+    signalProcessGroup(pid, "SIGKILL");
+    complete();
   }, stopTimeoutMs);
   const finishWhenStopped = () => {
-    if (isProcessGroupRunning(stoppingGroupPid)) {
+    if (completed) return;
+    if (isProcessGroupRunning(pid)) {
       setTimeout(finishWhenStopped, 25);
       return;
     }
     clearTimeout(forceKill);
-    finish();
+    complete();
   };
   finishWhenStopped();
+};
+
+const stop = () => {
+  if (stopping) return;
+  stopping = true;
+  if (drainingGroupPid) return;
+  if (activeGroupPid) {
+    drainProcessGroup(activeGroupPid, finish);
+    return;
+  }
+  if (child) {
+    child.kill("SIGTERM");
+    return;
+  }
+  finish();
 };
 
 const start = () => {
@@ -978,18 +998,19 @@ const start = () => {
     env: childEnv,
     stdio: ["ignore", output, output],
   });
+  activeGroupPid = child.pid;
+  const childGroupPid = activeGroupPid;
   child.on("error", (error) => {
     fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);
   });
   child.once("close", (code) => {
     child = undefined;
-    if (stopping) {
-      if (!stoppingGroupPid) return finish();
-      return;
-    }
-    // Match the generated systemd unit's RestartPreventExitStatus contract.
-    if (code === 78) return finish();
-    setTimeout(start, restartDelayMs);
+    drainProcessGroup(childGroupPid, () => {
+      if (stopping) return finish();
+      // Match the generated systemd unit's RestartPreventExitStatus contract.
+      if (code === 78) return finish();
+      setTimeout(start, restartDelayMs);
+    });
   });
 };
 
@@ -1292,8 +1313,6 @@ update_candidate() {
     echo "openclaw update failed" >&2
     openclaw_e2e_print_log "$UPDATE_ERR" >&2
     openclaw_e2e_print_log "$UPDATE_JSON" >&2
-    openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG" >&2
-    openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2
     return 1
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then

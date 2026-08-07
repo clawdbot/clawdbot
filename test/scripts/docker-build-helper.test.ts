@@ -209,6 +209,19 @@ function isProcessRunning(pid: number): boolean {
   }
 }
 
+function writeTermIgnoringDescendant(workDir: string): string {
+  const descendantPath = join(workDir, "descendant.mjs");
+  writeFileSync(
+    descendantPath,
+    `import fs from "node:fs";
+process.on("SIGTERM", () => {});
+fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid));
+setInterval(() => {}, 1_000);
+`,
+  );
+  return descendantPath;
+}
+
 function cleanupSmokeLogTailHelpers(): string {
   const script = readFileSync(CLEANUP_SMOKE_RUN_PATH, "utf8");
   const match = script.match(
@@ -2661,8 +2674,9 @@ fi
         'process.on("SIGTERM", stop);',
         "const stopTimeoutMs = 30_000;",
         "process.kill(-pid, signal);",
-        'signalProcessGroup(stoppingGroupPid, "SIGTERM");',
-        'signalProcessGroup(stoppingGroupPid, "SIGKILL");',
+        'signalProcessGroup(pid, "SIGTERM");',
+        'signalProcessGroup(pid, "SIGKILL");',
+        "drainProcessGroup(childGroupPid, () => {",
         "detached: true,",
         "if (code === 78) return finish();",
         "const restartDelayMs = 5_000;",
@@ -2674,7 +2688,6 @@ fi
       ]);
     }
     for (const script of [runner, publishedRunner]) {
-      expect(script).toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG"');
       expect(script).toContain("systemctl --user stop openclaw-gateway.service");
     }
   });
@@ -2766,16 +2779,8 @@ fi
     "terminates supervised gateway descendants at the systemd stop timeout",
     async () => {
       const workDir = tempDirs.make("openclaw-update-restart-process-group-");
-      const descendantPath = join(workDir, "descendant.mjs");
+      const descendantPath = writeTermIgnoringDescendant(workDir);
       const gatewayPath = join(workDir, "gateway.mjs");
-      writeFileSync(
-        descendantPath,
-        `import fs from "node:fs";
-process.on("SIGTERM", () => {});
-fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid));
-setInterval(() => {}, 1_000);
-`,
-      );
       writeFileSync(
         gatewayPath,
         `import fs from "node:fs";
@@ -2854,6 +2859,90 @@ setInterval(() => {}, 1_000);
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "drains the previous gateway process group before restarting",
+    async () => {
+      const workDir = tempDirs.make("openclaw-update-restart-process-group-restart-");
+      const descendantPath = writeTermIgnoringDescendant(workDir);
+      const gatewayPath = join(workDir, "restart-gateway.mjs");
+      writeFileSync(
+        gatewayPath,
+        `import fs from "node:fs";
+import { spawn } from "node:child_process";
+fs.appendFileSync(process.env.STARTS_FILE, "x");
+const starts = fs.readFileSync(process.env.STARTS_FILE, "utf8").length;
+if (starts === 1) {
+  spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], { stdio: "ignore" });
+  const ready = setInterval(() => {
+    if (!fs.existsSync(process.env.DESCENDANT_PID_FILE)) return;
+    clearInterval(ready);
+    process.exit(1);
+  }, 5);
+  setInterval(() => {}, 1_000);
+} else {
+  const pid = Number.parseInt(fs.readFileSync(process.env.DESCENDANT_PID_FILE, "utf8"), 10);
+  let running = false;
+  try {
+    process.kill(pid, 0);
+    running = true;
+    const statPath = "/proc/" + pid + "/stat";
+    if (fs.existsSync(statPath)) running = fs.readFileSync(statPath, "utf8").split(" ")[2] !== "Z";
+  } catch {}
+  fs.writeFileSync(process.env.REPLACEMENT_FILE, running ? "overlap" : "drained");
+  process.exit(78);
+}
+`,
+      );
+      const scripts = [
+        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+      ];
+
+      for (const [index, script] of scripts.entries()) {
+        const supervisorPath = join(workDir, `restart-group-supervisor-${index}.mjs`);
+        const startsPath = join(workDir, `restart-group-starts-${index}`);
+        const descendantPidPath = join(workDir, `restart-group-descendant-${index}.pid`);
+        const replacementPath = join(workDir, `restart-group-replacement-${index}`);
+        const logPath = join(workDir, `restart-group-daemon-${index}.log`);
+        const source = extractUpgradeSurvivorSupervisor(script)
+          .replace("const restartDelayMs = 5_000;", "const restartDelayMs = 5;")
+          .replace("const stopTimeoutMs = 30_000;", "const stopTimeoutMs = 200;");
+        writeFileSync(supervisorPath, source);
+
+        const supervisor = spawn(process.execPath, [supervisorPath], {
+          env: {
+            ...process.env,
+            DESCENDANT_PID_FILE: descendantPidPath,
+            DESCENDANT_SCRIPT: descendantPath,
+            OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
+            REPLACEMENT_FILE: replacementPath,
+            STARTS_FILE: startsPath,
+          },
+          stdio: "ignore",
+        });
+        let descendantPid: number | undefined;
+        try {
+          expect(await waitForProcessExit(supervisor)).toBe(0);
+          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+          expect(descendantPid).toBeGreaterThan(1);
+          expect(readFileSync(startsPath, "utf8")).toBe("xx");
+          expect(readFileSync(replacementPath, "utf8")).toBe("drained");
+        } finally {
+          if (supervisor.exitCode === null && supervisor.signalCode === null) {
+            supervisor.kill("SIGTERM");
+            await waitForProcessExit(supervisor).catch(() => undefined);
+          }
+          if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
+            try {
+              process.kill(descendantPid, "SIGKILL");
+            } catch {}
+          }
+        }
+      }
+    },
+  );
+
   it.each([
     ["start budget", "OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", "90s"],
     ["status budget", "OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS", "30s"],
@@ -2898,6 +2987,7 @@ setInterval(() => {}, 1_000);
     expect(runner).not.toContain('cat "$GATEWAY_LOG"');
     expect(runner).not.toContain('cat "$SYSTEMCTL_SHIM_DAEMON_LOG"');
     expect(runner).not.toContain('cat "$log_file"');
+    expect(runner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG"');
 
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_CONFIG_VALIDATE_LOG"');
@@ -2921,6 +3011,8 @@ setInterval(() => {}, 1_000);
     expect(publishedRunner).not.toContain('cat "$STATUS_ERR"');
     expect(publishedRunner).not.toContain('cat "$STATUS_JSON"');
     expect(publishedRunner).not.toContain('cat "$log_file"');
+    expect(publishedRunner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG"');
+    expect(publishedRunner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG"');
   });
 
   it("preserves caller-owned file descriptors around harness runs", () => {
