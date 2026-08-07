@@ -4,7 +4,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
@@ -258,10 +258,13 @@ export function resolveCronPayloadOutcome(params: {
   );
   // A silent reply (NO_REPLY) is not a recovery signal — the agent chose to
   // emit nothing, which does not prove an earlier error was overcome. Treat
-  // it as absent so a preceding error payload stays fatal. (#116731)
+  // it as absent so a preceding error payload stays fatal. Use the canonical
+  // payload-text classifier (not the token-only one) so JSON/envelope and
+  // reasoning-wrapped silent replies also stay non-recovery, matching the
+  // cron finalization classifier for the same terminal field. (#116731)
   const hasRecoveringFinalAssistantText =
     normalizedFinalAssistantVisibleText !== undefined &&
-    !isSilentReplyText(normalizedFinalAssistantVisibleText, SILENT_REPLY_TOKEN);
+    !isSilentReplyPayloadText(normalizedFinalAssistantVisibleText, SILENT_REPLY_TOKEN);
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&

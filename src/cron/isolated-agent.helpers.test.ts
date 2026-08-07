@@ -50,27 +50,37 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
-  it("does not let a NO_REPLY silent final reply recover a preceding error", () => {
-    // A silent reply is the agent choosing to emit nothing after an error, not
-    // proof the run recovered. Keeping the error fatal preserves the error
-    // streak so failureAlert can fire. (#116731)
-    const result = resolveCronPayloadOutcome({
-      payloads: [
-        {
-          text: "⚠️ 🛠️ Exec failed: ENOENT /mnt/d unreachable",
-          isError: true,
-        },
-      ],
-      finalAssistantVisibleText: "NO_REPLY",
-      preferFinalAssistantVisibleText: true,
-    });
+  it.each([
+    ["token-only", "NO_REPLY"],
+    ["json string", '"NO_REPLY"'],
+    ["action envelope", '{"action":"NO_REPLY"}'],
+    ["reasoning-prefixed", "<thinking>considered</thinking>NO_REPLY"],
+  ])(
+    "does not let a %s silent final reply recover a preceding error (#116731)",
+    (form, silentText) => {
+      // A silent reply is the agent choosing to emit nothing after an error, not
+      // proof the run recovered. The canonical payload-text classifier covers
+      // token-only, JSON-string, action-envelope, and reasoning-prefixed silent
+      // forms — all must keep a preceding error fatal so the error streak
+      // survives and failureAlert can fire. (#116731)
+      const result = resolveCronPayloadOutcome({
+        payloads: [
+          {
+            text: "⚠️ 🛠️ Exec failed: ENOENT /mnt/d unreachable",
+            isError: true,
+          },
+        ],
+        finalAssistantVisibleText: silentText,
+        preferFinalAssistantVisibleText: true,
+      });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toContain("Exec failed");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "⚠️ 🛠️ Exec failed: ENOENT /mnt/d unreachable", isError: true },
-    ]);
-  });
+      expect(result.hasFatalErrorPayload).toBe(true);
+      expect(result.embeddedRunError).toContain("Exec failed");
+      expect(result.deliveryPayloads).toEqual([
+        { text: "⚠️ 🛠️ Exec failed: ENOENT /mnt/d unreachable", isError: true },
+      ]);
+    },
+  );
 
   it("lets final assistant text recover multiple plain tool warnings globally", () => {
     const result = resolveCronPayloadOutcome({
