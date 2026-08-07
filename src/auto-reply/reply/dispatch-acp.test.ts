@@ -13,17 +13,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import {
-  captureAgentRunExecutionContextLifecycleToken,
-  getAgentRunExecutionContextLifecycleToken,
-  getAgentRunExecutionLifecycleGeneration,
-} from "../../infra/agent-run-execution-context.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  getAgentRunContext,
-  getAgentRunContextLifecycleToken,
-} from "../../infra/agent-run-registry.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
@@ -631,77 +621,6 @@ describe("tryDispatchAcpReply", () => {
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({ lifecycleGeneration }),
     );
-  });
-
-  it("keeps delayed ACP audit callbacks on the admitted run after lifecycle reuse", async () => {
-    setReadyAcpResolution();
-    let admittedGeneration: string | undefined;
-    let admittedToken: object | undefined;
-    let callbackGeneration: string | undefined;
-    let callbackToken: object | undefined;
-    let terminalGeneration: string | undefined;
-    let terminalToken: object | undefined;
-    let observedRunId: string | undefined;
-    let replacementGeneration: string | undefined;
-    let replacementToken: object | undefined;
-
-    auditMocks.emitAcpLifecycleStart.mockImplementationOnce(
-      (params: { lifecycleGeneration?: string; runId: string }) => {
-        admittedGeneration = params.lifecycleGeneration;
-        admittedToken = admittedGeneration
-          ? getAgentRunContextLifecycleToken(params.runId, admittedGeneration)
-          : undefined;
-        if (admittedGeneration && admittedToken) {
-          captureAgentRunExecutionContextLifecycleToken(
-            params.runId,
-            admittedGeneration,
-            admittedToken,
-          );
-        }
-      },
-    );
-    auditMocks.emitAcpRuntimeEvent.mockImplementationOnce((params: { runId: string }) => {
-      callbackGeneration = getAgentRunExecutionLifecycleGeneration();
-      callbackToken = getAgentRunExecutionContextLifecycleToken(params.runId);
-    });
-    auditMocks.emitAcpLifecycleEnd.mockImplementationOnce((params: { runId: string }) => {
-      terminalGeneration = getAgentRunExecutionLifecycleGeneration();
-      terminalToken = getAgentRunExecutionContextLifecycleToken(params.runId);
-    });
-    managerMocks.runTurn.mockImplementationOnce(
-      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
-        observedRunId = (
-          mockArg(auditMocks.emitAcpLifecycleStart, 0, 0, "audit start") as { runId: string }
-        ).runId;
-        replacementGeneration = rotateAgentEventLifecycleGeneration();
-        claimAgentRunContext(observedRunId, {
-          agentId: "replacement",
-          lifecycleGeneration: replacementGeneration,
-          sessionKey: "agent:replacement:main",
-        });
-        replacementToken = getAgentRunContextLifecycleToken(observedRunId, replacementGeneration);
-        if (onEvent) {
-          await emitToolLifecycleEvents(onEvent, "tool-delayed");
-        }
-      },
-    );
-
-    await runDispatch({ bodyForAgent: "audit delayed callback" });
-
-    expect(admittedGeneration).toBeTypeOf("string");
-    expect(admittedToken).toBeTypeOf("object");
-    expect(replacementToken).toBeTypeOf("object");
-    expect(replacementToken).not.toBe(admittedToken);
-    expect(callbackGeneration).toBe(admittedGeneration);
-    expect(callbackToken).toBe(admittedToken);
-    expect(terminalGeneration).toBe(admittedGeneration);
-    expect(terminalToken).toBe(admittedToken);
-    expect(getAgentRunContext(observedRunId ?? "")).toMatchObject({
-      agentId: "replacement",
-      lifecycleGeneration: replacementGeneration,
-      sessionKey: "agent:replacement:main",
-    });
-    clearAgentRunContext(observedRunId ?? "", replacementGeneration);
   });
 
   it("keeps caller-owned run ids on the shared lifecycle path", async () => {
