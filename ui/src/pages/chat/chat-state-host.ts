@@ -138,7 +138,7 @@ export type ChatPageHost = ChatHost &
       options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
     ) => void;
     loadAssistantIdentity: () => Promise<void>;
-    applySettings: (next: UiSettings) => void;
+    applySettings: (patch: Partial<UiSettings>) => void;
     handleChatScroll: (event: Event) => void;
     handleChatDraftChange: (next: string) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;

@@ -34,21 +34,32 @@ import {
 const {
   enqueueSystemEventMock,
   logVerboseMock,
-  sendDurableMessageBatchMock,
+  sendTranscriptEchoMock,
   shouldLogVerboseMock,
   transcribeFirstAudioMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   logVerboseMock: vi.fn(),
-  sendDurableMessageBatchMock: vi.fn(),
+  sendTranscriptEchoMock: vi.fn(),
   shouldLogVerboseMock: vi.fn(() => false),
   transcribeFirstAudioMock: vi.fn(),
 }));
 
-vi.mock("./preflight-audio.runtime.js", () => ({
-  sendDurableMessageBatch: sendDurableMessageBatchMock,
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        sendTranscriptEcho: sendTranscriptEchoMock,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -79,8 +90,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     clearSlackThreadParticipationCache();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
-    sendDurableMessageBatchMock.mockReset();
-    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent", messageIds: ["1"] });
+    sendTranscriptEchoMock.mockReset();
+    sendTranscriptEchoMock.mockResolvedValue(undefined);
     shouldLogVerboseMock.mockReset();
     shouldLogVerboseMock.mockReturnValue(false);
     transcribeFirstAudioMock.mockReset();
