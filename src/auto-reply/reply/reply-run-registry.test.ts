@@ -179,9 +179,8 @@ describe("reply run registry", () => {
   });
 
   it("keeps repeated request evidence across reply-operation progress", () => {
-    vi.useFakeTimers();
     const startedAt = Date.parse("2026-08-06T08:00:00Z");
-    vi.setSystemTime(startedAt);
+    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     const ref = {
       sessionKey: "agent:main:telegram:direct:retry-bridge",
       sessionId: "session-retry-bridge",
@@ -196,7 +195,7 @@ describe("reply run registry", () => {
       model: "request-model",
       observationUnit: "request",
     });
-    vi.setSystemTime(startedAt + 30_000);
+    now.mockReturnValue(startedAt + 30_000);
     markDiagnosticModelStartedForTest({
       ...ref,
       runId,
