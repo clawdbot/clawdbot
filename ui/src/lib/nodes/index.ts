@@ -876,10 +876,13 @@ export function clearDeviceAuthToken(params: {
     return;
   }
   const role = normalizeDeviceAuthRole(params.role);
-  if (!store.tokens[role]) {
+  // Canonicalize before the presence check: loadDeviceAuthToken reads
+  // alias-keyed entries (e.g. " operator "), so an alias-only credential must
+  // also be clearable — a raw-key check here would leave it readable forever.
+  const tokens = canonicalDeviceAuthTokens(store.tokens);
+  if (!tokens[role]) {
     return;
   }
-  const tokens = canonicalDeviceAuthTokens(store.tokens);
   delete tokens[role];
   writeStore(params.gatewayUrl, { ...store, tokens });
 }

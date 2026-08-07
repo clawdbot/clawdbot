@@ -1180,6 +1180,37 @@ describe("createApplicationGateway stored device credential", () => {
     expect(clients.length).toBe(clientsBefore);
   });
 
+  it("forgets a credential persisted only under a role alias", () => {
+    // Regression: an alias-keyed entry (" operator ") is accepted by the
+    // reader, so Forget must actually delete it instead of reporting success
+    // while the stale credential stays selectable.
+    const { gateway } = createStore();
+    gateway.start();
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    seedDeviceIdentity();
+    storeDeviceAuthToken({
+      deviceId: DEVICE_ID,
+      gatewayUrl,
+      role: "operator",
+      token: "alias-token",
+      scopes: ["operator.read"],
+    });
+    const storageKey = Array.from({ length: localStorage.length }, (_, index) =>
+      localStorage.key(index),
+    ).find((candidate) => candidate?.startsWith("openclaw.device.auth.v1:"));
+    if (!storageKey) {
+      throw new Error("missing device-auth storage key");
+    }
+    const store = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+    store.tokens = { " operator ": store.tokens.operator };
+    localStorage.setItem(storageKey, JSON.stringify(store));
+
+    expect(gateway.hasStoredDeviceToken?.()).toBe(true);
+    expect(gateway.forgetDeviceToken?.()).toBe(true);
+    expect(loadDeviceAuthToken({ deviceId: DEVICE_ID, gatewayUrl, role: "operator" })).toBeNull();
+    expect(gateway.hasStoredDeviceToken?.()).toBe(false);
+  });
+
   it("clears the credential without auto-connecting a stopped gateway", () => {
     const { gateway, clients } = createStore();
     const gatewayUrl = gateway.connection.gatewayUrl;

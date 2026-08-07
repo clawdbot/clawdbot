@@ -124,7 +124,8 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
   return renderSidebarIdentityMenu({
     position,
     canPairDevice: host.canPairDevice,
-    canForgetDevice: gateway?.hasStoredDeviceToken?.() ?? false,
+    // Probe browser storage only while the menu is actually open.
+    canForgetDevice: position !== null && (gateway?.hasStoredDeviceToken?.() ?? false),
     basePath: host.basePath,
     gatewayVersion: host.gatewayVersion,
     selfName: selfUser?.name ?? undefined,

@@ -283,4 +283,19 @@ describe("device token request lifecycle", () => {
 
     expect(loadDeviceAuthToken(tokenParams)).toBeNull();
   });
+
+  it("clears a token persisted only under a role alias", () => {
+    // Regression: an alias-only entry is readable via loadDeviceAuthToken, so
+    // the clearer must not miss it with a raw-key presence check.
+    storeDeviceAuthToken({ ...tokenParams, token: "operator-token", scopes: [] });
+    const key = storedTokenKey();
+    const store = JSON.parse(localStorage.getItem(key) ?? "null");
+    store.tokens = { " operator ": store.tokens.operator };
+    localStorage.setItem(key, JSON.stringify(store));
+    expect(loadDeviceAuthToken(tokenParams)?.token).toBe("operator-token");
+
+    clearDeviceAuthToken(tokenParams);
+
+    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
+  });
 });
