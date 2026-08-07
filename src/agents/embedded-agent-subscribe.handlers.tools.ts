@@ -1529,7 +1529,7 @@ export async function handleToolExecutionEnd(
     toolName,
     meta,
     replaySafe: callSummary.replaySafe,
-    ...(isToolError ? { isError: true } : {}),
+    isError: observerIsError,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =

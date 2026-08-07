@@ -67,8 +67,9 @@ import {
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { resolveCodexSyntheticUsageAuthProfileId } from "./status-codex-auth-profile.js";
 import { formatStatusTextContinuationLine } from "./status-continuation-line.js";
+import type { StatusMessageParts } from "./status-message.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
-import { appendSessionCostLine, buildStatusUptimeLine } from "./status-runtime-lines.js";
+import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
 export { formatStatusTextContinuationLine };
@@ -107,7 +108,7 @@ function resolveStatusChannelFeatureLine(params: {
   );
   const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
   if (richMessagesSetting === true) {
-    return "Telegram rich messages: on · Bot API 10.1 sendRichMessage enabled";
+    return "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled";
   }
   return accountConfig?.richMessages === false
     ? "Telegram rich messages: off · enable richMessages for this Telegram account"
@@ -284,6 +285,14 @@ async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
 // Public status text builder for CLI/chat status commands. It resolves dynamic
 // runtime details just-in-time and returns the formatted multiline status body.
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
+  return (await buildStatusReplyParts(params)).text;
+}
+
+// Status body plus its structured presentation mirror, for chat replies whose
+// channel can render native tables; plain channels keep the text verbatim.
+export async function buildStatusReplyParts(
+  params: BuildStatusTextParams,
+): Promise<StatusMessageParts> {
   const {
     cfg,
     sessionEntry,
@@ -578,7 +587,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     statusAccountId: params.statusAccountId,
     sessionEntry,
   });
-  const { buildStatusMessage } = await loadStatusMessageRuntime();
+  const { buildStatusMessageParts } = await loadStatusMessageRuntime();
   await waitForContextWindowCacheLoad();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
@@ -654,7 +663,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
               ? "active-or-bundled"
               : "active",
         });
-  return buildStatusMessage({
+  return buildStatusMessageParts({
     config: cfg,
     agent: {
       ...agentDefaults,
@@ -689,7 +698,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,
-    uptimeLine: buildStatusUptimeLine(),
+    uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

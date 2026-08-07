@@ -437,8 +437,7 @@ export class GatewayBrowserClient {
     const explicitPassword = this.opts.password?.trim() || undefined;
 
     // crypto.subtle is only available in secure contexts (HTTPS, localhost).
-    // Over plain HTTP, we skip device identity and fall back to token-only auth.
-    // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
+    // Token/password auth cannot replace browser device identity over plain HTTP.
     const isSecureContext = typeof crypto !== "undefined" && Boolean(crypto.subtle);
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let selectedAuth: GatewayConnectAuthSelection = {

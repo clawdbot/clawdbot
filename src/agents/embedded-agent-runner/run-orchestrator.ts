@@ -57,6 +57,7 @@ import {
   createEmbeddedRunStageTracker,
 } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
+import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import type {
   RunEmbeddedAgentInternalParams,
@@ -150,7 +151,11 @@ async function runEmbeddedAgentOrchestrated(
   // candidate remains. Direct and final-candidate runs suspend normally.
   const failureSuspension = resolveSessionSuspensionTarget();
   const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
-    const suspension = { ...suspensionParams, laneId: globalLane };
+    const suspension = buildEmbeddedFailureSuspension({
+      suspension: suspensionParams,
+      runAgentId: params.agentId,
+      laneId: globalLane,
+    });
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);
       return;

@@ -141,9 +141,10 @@ describe("fenced output and compaction retries", () => {
     expect(subscription.isCompacting()).toBe(false);
   });
 
-  it("resets assistant usage to a zero snapshot after compaction without retry", () => {
-    // When compaction ends the active assistant message is synthetic, so usage
-    // should reset to a zero snapshot instead of carrying stale token totals.
+  it("resets assistant usage to a zero snapshot after a completed compaction without retry", () => {
+    // A completed compaction rewrites history, so the surviving assistant usage
+    // refers to the old context and must reset to a zero snapshot. Only a
+    // completed end does this; a failed/aborted end keeps live usage intact.
     const listeners: SessionEventHandler[] = [];
     const session = {
       messages: [
@@ -172,7 +173,7 @@ describe("fenced output and compaction retries", () => {
     });
 
     for (const listener of listeners) {
-      listener({ type: "compaction_end", willRetry: false });
+      listener({ type: "compaction_end", result: { kept: 1 }, aborted: false, willRetry: false });
     }
 
     const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;

@@ -206,6 +206,7 @@ export async function buildClawUpdatePlan(params: {
     const targetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
       clawMarkdownBody: params.targetClawMarkdownBody,
+      includePackageBootstrap: false,
       openClawProfile: params.targetOpenClawProfile,
       source: params.targetSource,
       diagnostics: params.diagnostics,

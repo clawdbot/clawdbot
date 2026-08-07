@@ -279,6 +279,8 @@ export interface ClawInstalls {
   agent_config_digest: string;
   agent_id: string;
   agent_owned_paths_json: string;
+  bootstrap_content_digest: string | null;
+  bootstrap_source_path: string | null;
   claw_name: string;
   claw_version: string;
   integrity: string;

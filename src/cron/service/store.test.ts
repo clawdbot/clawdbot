@@ -233,7 +233,9 @@ describe("cron service store seam coverage", () => {
     expect(notify).toHaveBeenCalledOnce();
   });
 
-  it("does not restore speculative state after a post-persist notification throws", async () => {
+  it("contains a throwing post-persist notification without dropping siblings or the write", async () => {
+    // A notification failure happens after the durable commit: it must not
+    // reject the persist, skip sibling notifications, or roll back the store.
     const { storePath } = await makeStorePath();
     const nextRunAtMs = STORE_TEST_NOW + 120_000;
     await writeSingleJobStore(storePath, createReloadCronJob());
@@ -242,17 +244,18 @@ describe("cron service store seam coverage", () => {
     const snapshot = snapshotStoreForRollback(state);
     const job = findJobOrThrow(state, "reload-cron-expr-job");
     job.state.nextRunAtMs = nextRunAtMs;
+    const siblingNotify = vi.fn();
 
-    await expect(
-      persistOrRestore(state, snapshot, {
-        postPersistNotifications: [
-          () => {
-            throw new Error("notification failed");
-          },
-        ],
-      }),
-    ).rejects.toThrow("notification failed");
+    await persistOrRestore(state, snapshot, {
+      postPersistNotifications: [
+        () => {
+          throw new Error("notification failed");
+        },
+        siblingNotify,
+      ],
+    });
 
+    expect(siblingNotify).toHaveBeenCalledOnce();
     expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
   });

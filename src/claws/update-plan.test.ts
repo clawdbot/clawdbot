@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -130,6 +131,38 @@ function targetSource(root: string, version: string, integrity: string): ClawSou
 }
 
 describe("buildClawUpdatePlan", () => {
+  it("reads pre-bootstrap-column v6 state without mutating it", async () => {
+    const current = await fixture();
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = resolveOpenClawStateSqlitePath(current.env);
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(databasePath);
+    try {
+      database.exec(`
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+      `);
+    } finally {
+      database.close();
+    }
+    const beforeBytes = await readFile(databasePath);
+    const beforeStat = await stat(databasePath);
+
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: current.manifest,
+      targetSource: current.source,
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: { env: current.env },
+      packagePreflight,
+    });
+
+    expect(plan).toMatchObject({ found: true, agentId: "worker", blockers: [] });
+    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
+    expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
+  });
+
   it("plans missing package restoration without mutating state", async () => {
     const current = await fixture();
     const beforeConfig = structuredClone(current.config);
