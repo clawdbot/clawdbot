@@ -9,6 +9,7 @@ import {
   type ExecutionIdentityAdmissionFacts,
 } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertAgentRunAttributionAdmissionCompatible } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 
 type AutoReplyExecutionIdentityContext = {
@@ -133,6 +134,11 @@ export function admitAutoReplyExecutionAttribution(params: {
   lifecycleGeneration: string;
   runId: string;
 }): AgentExecutionAttribution {
+  assertAgentRunAttributionAdmissionCompatible(
+    params.runId,
+    params.lifecycleGeneration,
+    params.attribution,
+  );
   if (params.attribution) {
     return params.attribution;
   }

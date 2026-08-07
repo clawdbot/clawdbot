@@ -25,7 +25,11 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  AgentRunAttributionCollisionError,
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -49,6 +53,7 @@ import type {
   AgentTurnParams,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
@@ -505,13 +510,28 @@ function resolveAgentTurnRunId(params: AgentTurnParams): string {
   return attributedRunId ?? requestedRunId ?? crypto.randomUUID();
 }
 
+function tryAdmitAgentTurnExecutionAttribution(
+  params: Parameters<typeof admitAutoReplyExecutionAttribution>[0],
+):
+  | { kind: "admitted"; attribution: ReturnType<typeof admitAutoReplyExecutionAttribution> }
+  | { kind: "collision" } {
+  try {
+    return { kind: "admitted", attribution: admitAutoReplyExecutionAttribution(params) };
+  } catch (error) {
+    if (error instanceof AgentRunAttributionCollisionError) {
+      return { kind: "collision" };
+    }
+    throw error;
+  }
+}
+
 /** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
   const runId = resolveAgentTurnRunId(params);
   const baseExecutionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
-  const attribution = admitAutoReplyExecutionAttribution({
+  const attributionAdmission = tryAdmitAgentTurnExecutionAttribution({
     attribution: baseExecutionParams.attribution,
     config: resolveQueuedReplyRuntimeConfig(baseExecutionParams.followupRun.run.config),
     lifecycleGeneration,
@@ -542,6 +562,16 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
         baseExecutionParams.sessionCtx.MessageThreadId,
     },
   });
+  if (attributionAdmission.kind === "collision") {
+    return {
+      runId,
+      outcome: {
+        kind: "rejected",
+        payload: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true },
+      },
+    };
+  }
+  const attribution = attributionAdmission.attribution;
   const executionParams =
     baseExecutionParams.attribution === attribution
       ? baseExecutionParams
