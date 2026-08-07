@@ -22,7 +22,6 @@ import {
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { consumeSubagentTraceparentHandoff } from "../../agents/subagent-traceparent-handoff.js";
-import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,

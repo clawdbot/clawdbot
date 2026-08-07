@@ -159,7 +159,9 @@ describe("isCompactionSkipCode", () => {
     "unknown_model",
     "below_threshold",
     "already_compacted",
+    "deferred_background",
     "live_context_still_exceeds_target",
+    "transcript_persistence_failed",
     "guard_blocked",
     "summary_failed",
     "timeout",
@@ -172,6 +174,7 @@ describe("isCompactionSkipCode", () => {
     "no_real_conversation_messages",
     "below_threshold",
     "already_compacted",
+    "deferred_background",
   ]);
 
   it.each(ALL_CODES)("classifies %s correctly as skip vs non-skip", (code) => {
