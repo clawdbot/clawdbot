@@ -8,8 +8,8 @@ type DiagnosticModelStartedActivityEvent = Pick<
 
 type DiagnosticRunProgressActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
-  "runId" | "sessionId" | "sessionKey" | "reason" | "progressKind"
->;
+  "runId" | "sessionId" | "sessionKey" | "reason"
+> & { progressKind?: "semantic" | "liveness" };
 
 type DiagnosticRunActivityTestApi = {
   markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void;

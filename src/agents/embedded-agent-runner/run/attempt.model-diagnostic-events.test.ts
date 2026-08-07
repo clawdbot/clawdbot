@@ -674,11 +674,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       expect(snapshot.lastProgressReason).toBe("model_call:stream_progress");
       expect(snapshot.lastProgressAgeMs).toBe(0);
       expect(runProgressEvents).toHaveLength(2);
-      expect(
-        runProgressEvents.every(
-          (event) => event.type === "run.progress" && event.progressKind === "liveness",
-        ),
-      ).toBe(true);
+      expect(runProgressEvents.every((event) => event.type === "run.progress")).toBe(true);
+      expect(runProgressEvents.every((event) => !("progressKind" in event))).toBe(true);
     } finally {
       await iterator.return?.();
       await waitForDiagnosticEventsDrained();

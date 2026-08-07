@@ -76,10 +76,10 @@ type ModelStartedActivityEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "observationUnit"
 > & { seq?: number };
 
-type DiagnosticRunProgressActivityEvent = Pick<
+type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
-  "runId" | "sessionId" | "sessionKey" | "reason" | "progressKind"
->;
+  "runId" | "sessionId" | "sessionKey" | "reason"
+> & { progressKind?: "semantic" | "liveness" };
 
 // Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
 // truly silent children within its own deadline. This floor bounds every
@@ -325,8 +325,8 @@ function recordModelEnded(
   touchSessionActivity(activity, "model_call:ended");
 }
 
-function recordRunProgress(event: DiagnosticRunProgressActivityEvent, coreSemantic: boolean): void {
-  markDiagnosticRunProgress(coreSemantic ? event : { ...event, progressKind: "liveness" });
+function recordRunProgress(event: RunProgressEvent, coreSemantic: boolean): void {
+  applyRunProgress(event, coreSemantic);
 }
 
 export function markDiagnosticArgumentChurnObservation(
@@ -338,14 +338,16 @@ export function markDiagnosticArgumentChurnObservation(
   }
 }
 
-export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
+export const markDiagnosticRunProgress: (params: RunProgressEvent) => void = applyRunProgress;
+
+function applyRunProgress(params: RunProgressEvent, semantic = false): void {
   const runId = params.runId?.trim() || undefined;
   const activity = resolveSessionActivity({ ...params, runId, create: true });
   if (!activity) {
     return;
   }
   // Only an explicit fact from the current owner may clear its recovery evidence.
-  if (params.progressKind !== "semantic" || !runId) {
+  if (!semantic || !runId) {
     touchSessionActivity(activity, params.reason);
     return;
   }
@@ -694,8 +696,8 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
   return embeddedRunSequence;
 }
 
-function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
-  markDiagnosticRunProgress(params);
+function markDiagnosticRunProgressForTest(params: RunProgressEvent): void {
+  applyRunProgress(params, params.progressKind === "semantic");
 }
 
 function markDiagnosticToolStartedForTest(params: {

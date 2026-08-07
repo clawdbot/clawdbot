@@ -385,8 +385,6 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   sessionId?: string;
   runId?: string;
   reason: string;
-  /** Semantic progress resets evidence only for its matching runId; other progress is liveness. */
-  progressKind?: "semantic" | "liveness";
 };
 
 /**

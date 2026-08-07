@@ -385,7 +385,6 @@ function maybeEmitModelCallStreamProgress(
     ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
     ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
     reason: MODEL_CALL_STREAM_PROGRESS_REASON,
-    progressKind: "liveness" as const,
   };
   markDiagnosticRunProgress(progressFields);
   if (

@@ -29,7 +29,10 @@ import {
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
-import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
+import {
+  markDiagnosticModelStartedForTest,
+  markDiagnosticRunProgressForTest,
+} from "./diagnostic-run-activity.test-support.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -462,7 +465,7 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: expect.any(Number),
     });
 
-    markDiagnosticRunProgress({
+    markDiagnosticRunProgressForTest({
       ...ref,
       runId,
       reason: "assistant:progress",
@@ -506,7 +509,6 @@ describe("repeated request liveness", () => {
         ...ref,
         runId,
         reason: "model_call:stream_progress",
-        progressKind: "liveness",
       });
     }
 
@@ -516,7 +518,7 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: 5 * 60_000,
     });
 
-    markDiagnosticRunProgress({
+    markDiagnosticRunProgressForTest({
       ...ref,
       runId,
       reason: "assistant:progress",
@@ -646,7 +648,7 @@ describe("repeated request liveness", () => {
       observationUnit: "request",
     });
     vi.setSystemTime(startedAt + 7 * 60_000);
-    markDiagnosticRunProgress({
+    markDiagnosticRunProgressForTest({
       ...ref,
       runId: "first-owner",
       reason: "delayed-old-owner-output",
@@ -716,7 +718,7 @@ describe("repeated request liveness", () => {
       runId,
       reason: "plugin:semantic",
       progressKind: "semantic",
-    });
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
     await waitForDiagnosticEventsDrained();
 
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
@@ -803,13 +805,13 @@ describe("repeated request liveness", () => {
         observationUnit: "request",
       });
     }
-    markDiagnosticRunProgress({
+    markDiagnosticRunProgressForTest({
       sessionId,
       sessionKey,
       reason: "ownerless:semantic",
       progressKind: "semantic",
     });
-    markDiagnosticRunProgress({
+    markDiagnosticRunProgressForTest({
       sessionId,
       sessionKey,
       runId: "   ",
@@ -823,7 +825,7 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: 6 * 60_000,
     });
 
-    markDiagnosticRunProgress({
+    markDiagnosticRunProgressForTest({
       sessionKey,
       runId: `  ${runId}  `,
       reason: "owned:semantic",

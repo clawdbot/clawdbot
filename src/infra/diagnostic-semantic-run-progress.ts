@@ -10,7 +10,7 @@ import {
 
 type CoreSemanticRunProgressEventInput = Omit<
   Extract<DiagnosticEventInput, { type: "run.progress" }>,
-  "progressKind" | "runId" | "type"
+  "runId" | "type"
 > & { runId: string };
 
 type CoreSemanticRunProgressMetadata = DiagnosticEventMetadata &
@@ -26,7 +26,6 @@ export function emitCoreSemanticRunProgressDiagnosticEvent(
     markCoreSemanticRunProgressDiagnosticEvent({
       ...event,
       type: "run.progress",
-      progressKind: "semantic" as const,
     }),
   );
 }
