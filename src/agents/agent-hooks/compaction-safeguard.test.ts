@@ -768,16 +768,12 @@ describe("compaction-safeguard summary budgets", () => {
     expect(after).toContain("- Assistant: turn-199\n");
   });
 
-  it("keeps the newest message's tail when that message alone overruns the budget", () => {
-    // Message text is capped at MAX_RECENT_TURN_TEXT_CHARS, so text alone can
-    // never fill the section. The role prefix is not capped: toolName is used
-    // as given, which is the one way a single rendered message exceeds the cap.
+  it("bounds an oversized tool name so a rendered message stays whole", () => {
+    // Message text is capped at MAX_RECENT_TURN_TEXT_CHARS, but toolName is
+    // caller-supplied. Left unbounded it was the one way a single rendered
+    // message outgrew the section budget, which then forced a trim to cut
+    // inside the label and strip the role prefix off the content.
     const messages = [
-      {
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: "older" }],
-        timestamp: 0,
-      },
       {
         role: "toolResult" as const,
         toolName: `${"t".repeat(MAX_CONTEXT_SECTION_CHARS)}-endmark`,
@@ -791,11 +787,37 @@ describe("compaction-safeguard summary budgets", () => {
     expect(section.length).toBeLessThanOrEqual(
       MAX_CONTEXT_SECTION_CHARS + "**Turn Context (split turn):**\n\n".length,
     );
-    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
-    // The newest content survives even though its message cannot be kept whole;
-    // returning nothing here would lose the latest execution state entirely.
+    // The whole message survives, prefix included, and no trim was needed.
+    expect(section).toContain("- Tool result (");
     expect(section).toContain("newest tool output");
-    expect(section).not.toContain("- Assistant: older");
+    expect(section).not.toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // The label is bounded rather than passed through.
+    expect(section).not.toContain("-endmark");
+    expect(section).toMatch(/^- Tool result \(t{1,120}\.{3}\): /mu);
+  });
+
+  it("never emits split-turn content without its role prefix", () => {
+    // Whatever the trim does, every line of content it keeps must be
+    // attributable. A tail slice of a single rendered message would drop the
+    // "- Role: " head and hand the next run unattributed text.
+    const messages = Array.from({ length: 40 }, (_unused, i) => ({
+      role: "toolResult" as const,
+      toolName: "t".repeat(4_000),
+      content: [{ type: "text" as const, text: `out-${i} ${"z".repeat(600)}` }],
+      timestamp: i,
+    }));
+
+    const section: string = formatSplitTurnContextSection(messages);
+    const body = section.slice(section.indexOf("**Turn Context (split turn):**"));
+
+    for (const line of body.split("\n").slice(1).filter(Boolean)) {
+      if (line.startsWith("[Compaction context truncated")) {
+        continue;
+      }
+      expect(line, `unattributed line: ${line.slice(0, 48)}`).toMatch(
+        /^- (Tool result \(|User: |Assistant: )/u,
+      );
+    }
   });
 
   it("never exceeds the cap, down to a one-character budget", () => {

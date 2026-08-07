@@ -83,6 +83,10 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+// Bounds the tool name inside a rendered message's "- Tool result (x): " label.
+// With the text bound above, this is what makes a whole rendered message
+// bounded, so no section trim ever has to cut one in half.
+const MAX_ROLE_LABEL_NAME_CHARS = 80;
 const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
@@ -807,7 +811,11 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
       } else if (message.role === "toolResult") {
         const toolName = (message as { toolName?: unknown }).toolName;
         const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-        roleLabel = `Tool result (${safeToolName})`;
+        // Message text is bounded below, but the label was not: toolName is
+        // caller-supplied and arbitrarily long, which is the only way a single
+        // rendered message could outgrow a section budget and force a trim to
+        // cut inside the label itself.
+        roleLabel = `Tool result (${capWithMarker(safeToolName, MAX_ROLE_LABEL_NAME_CHARS, "...")})`;
       } else {
         return null;
       }
@@ -879,10 +887,15 @@ function boundRawSplitTurn(renderedMessages: string[]): string {
     firstKept = i;
   }
   if (firstKept === renderedMessages.length) {
-    // Even the newest message alone overruns the budget. It is the one thing
-    // here nothing else reproduces, so keep its tail and mark the cut; a raw
-    // slice is safe because a single message has no boundary left to respect.
-    return `${SUFFIX_TRUNCATED_MARKER}${sliceUtf16Safe(renderedMessages.at(-1) ?? "", -budget)}`;
+    // Even the newest message alone overruns the budget. Unreachable while a
+    // rendered message is bounded by MAX_RECENT_TURN_TEXT_CHARS plus a label
+    // bounded by MAX_ROLE_LABEL_NAME_CHARS, both far below this budget, but a
+    // change to either would make it live.
+    //
+    // Truncate from the end so the "- Role: " prefix always survives. Slicing
+    // the tail instead would drop the prefix and hand the next run a run of
+    // text that reads as content with no attribution.
+    return `${SUFFIX_TRUNCATED_MARKER}${capWithMarker(renderedMessages.at(-1) ?? "", budget, "...")}`;
   }
   return `${SUFFIX_TRUNCATED_MARKER}${renderedMessages.slice(firstKept).join("\n")}`;
 }
