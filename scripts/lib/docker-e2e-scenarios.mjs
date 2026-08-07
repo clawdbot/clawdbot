@@ -73,7 +73,6 @@ function lane(name, command, options = {}) {
     estimateSeconds: options.estimateSeconds,
     live: options.live === true,
     noOutputTimeoutMs: options.noOutputTimeoutMs,
-    prepublishPluginPackages: options.prepublishPluginPackages ?? [],
     name,
     needsLiveImage: options.needsLiveImage,
     retryPatterns: options.retryPatterns ?? [],
@@ -83,6 +82,9 @@ function lane(name, command, options = {}) {
     timeoutMs: options.timeoutMs,
     upgradeSurvivorScenario: options.upgradeSurvivorScenario,
     weight: options.weight ?? 1,
+    ...(options.prepublishPluginPackages
+      ? { prepublishPluginPackages: options.prepublishPluginPackages }
+      : {}),
   };
 }
 
