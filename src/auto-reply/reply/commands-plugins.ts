@@ -42,20 +42,22 @@ const CHAT_AGENT_TEMPLATE_LIMIT = 2;
 const CHAT_AGENT_TEMPLATE_TEXT_LIMIT = 80;
 
 function truncateChatMetadata(value: string): string {
-  const characters = Array.from(value);
-  return characters.length <= CHAT_AGENT_TEMPLATE_TEXT_LIMIT
-    ? value
-    : `${characters.slice(0, CHAT_AGENT_TEMPLATE_TEXT_LIMIT - 1).join("")}…`;
+  const prefix: string[] = [];
+  for (const character of value) {
+    if (prefix.length === CHAT_AGENT_TEMPLATE_TEXT_LIMIT) {
+      return `${prefix.slice(0, -1).join("")}…`;
+    }
+    prefix.push(character);
+  }
+  return value;
 }
 
 function buildChatSafePluginInspect(
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
 ) {
   const templates = inspect.bundleAgentTemplates ?? [];
-  const { bundleAgentTemplates: _nestedTemplates, ...plugin } = inspect.plugin;
   return {
     ...inspect,
-    plugin,
     bundleAgentTemplates: templates.slice(0, CHAT_AGENT_TEMPLATE_LIMIT).map((template) => ({
       id: truncateChatMetadata(template.id),
       sourceFormat: template.sourceFormat,

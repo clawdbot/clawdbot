@@ -21,6 +21,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { BundledChannelConfigCollector } from "./manifest-registry.js";
+import { isTransientPluginDiagnostic } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -569,7 +570,9 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           diagnostics: [
             ...diagnostics,
             ...params.manifestRegistry.diagnostics.filter(
-              (diagnostic) => diagnostic.code === "bundle-agent-metadata",
+              (diagnostic) =>
+                isTransientPluginDiagnostic(diagnostic) &&
+                (!pluginIdSet || !diagnostic.pluginId || pluginIdSet.has(diagnostic.pluginId)),
             ),
           ],
         };

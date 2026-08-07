@@ -70,7 +70,7 @@ export type PluginCompatibilitySummary = {
 
 export type PluginInspectReport = {
   workspaceDir?: string;
-  plugin: PluginRegistry["plugins"][number];
+  plugin: Omit<PluginRegistry["plugins"][number], "bundleAgentTemplates">;
   shape: PluginInspectShape;
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;
@@ -471,9 +471,10 @@ export function buildPluginInspectReport(params: {
     diagnostics,
     hasRuntimeMemoryEmbeddingProviderRegistration,
   });
+  const { bundleAgentTemplates, ...inspectPlugin } = plugin;
   return {
     workspaceDir: report.workspaceDir,
-    plugin,
+    plugin: inspectPlugin,
     shape,
     capabilityMode: shapeSummary.capabilityMode,
     capabilityCount: shapeSummary.capabilityCount,
@@ -490,7 +491,7 @@ export function buildPluginInspectReport(params: {
     lspServers,
     httpRouteCount: plugin.httpRoutes,
     bundleCapabilities: plugin.bundleCapabilities ?? [],
-    bundleAgentTemplates: structuredClone(plugin.bundleAgentTemplates ?? []),
+    bundleAgentTemplates: structuredClone(bundleAgentTemplates ?? []),
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,

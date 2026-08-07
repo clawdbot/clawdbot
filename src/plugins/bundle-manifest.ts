@@ -453,7 +453,6 @@ function loadCompatibleAgentTemplates(params: {
     contributions.push({ format, raw: loaded.raw });
   }
 
-  const contributionConflictingIds = new Set<string>();
   const agentTemplates = contributions.flatMap(({ format, raw }) => {
     const loaded = loadBundleAgentTemplates({
       rootDir: params.rootDir,
@@ -466,9 +465,6 @@ function loadCompatibleAgentTemplates(params: {
       rejectHardlinks: params.rejectHardlinks,
     });
     diagnostics.push(...loaded.diagnostics);
-    for (const id of loaded.conflictingIds) {
-      contributionConflictingIds.add(id);
-    }
     return loaded.agentTemplates;
   });
   const conflicts = filterConflictingBundleAgentTemplates(agentTemplates);
@@ -481,9 +477,7 @@ function loadCompatibleAgentTemplates(params: {
     });
   }
   return {
-    agentTemplates: conflicts.agentTemplates.filter(
-      (entry) => !contributionConflictingIds.has(entry.id),
-    ),
+    agentTemplates: conflicts.agentTemplates,
     diagnostics,
   };
 }
@@ -528,7 +522,7 @@ export function loadBundleManifest(params: {
   const version = normalizeOptionalString(raw.version);
   const id = slugifyPluginId(name, params.rootDir);
   const agents =
-    params.bundleFormat === "agent" || params.loadAgentTemplates === false
+    params.bundleFormat === "agent" || params.loadAgentTemplates !== true
       ? { agentTemplates: [], diagnostics: [] }
       : loadCompatibleAgentTemplates({
           rootDir: params.rootDir,

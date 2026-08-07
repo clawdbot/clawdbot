@@ -1061,6 +1061,7 @@ export function loadPluginManifestRegistry(
               rootDir: candidate.rootDir,
               bundleFormat: candidate.bundleFormat,
               rejectHardlinks,
+              loadAgentTemplates: true,
             })
           : isManifestlessConfiguredFile
             ? {

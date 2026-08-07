@@ -1,8 +1,9 @@
 /** Parses compatible-bundle agent files into cold, non-executable metadata. */
 import fs from "node:fs";
 import path from "node:path";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import JSON5 from "json5";
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   parseFrontmatterBlockResult,
   stripFrontmatterBlock,
@@ -46,7 +47,6 @@ const CURSOR_FIELDS = new Set(["is_background", "readonly"]);
 
 type BundleAgentTemplateLoadResult = {
   agentTemplates: BundleAgentTemplate[];
-  conflictingIds: string[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -101,8 +101,8 @@ function listAgentFiles(params: {
   pluginId: string;
   diagnostics: PluginDiagnostic[];
 }): BundleAgentFile[] {
-  const uniqueRoots = [...new Set(params.agentRoots.map((entry) => entry.trim()).filter(Boolean))];
-  const roots = uniqueRoots.toSorted().slice(0, MAX_AGENT_ROOTS);
+  const uniqueRoots = normalizeSortedUniqueTrimmedStringList(params.agentRoots);
+  const roots = uniqueRoots.slice(0, MAX_AGENT_ROOTS);
   if (uniqueRoots.length > MAX_AGENT_ROOTS) {
     addDiagnostic({
       ...params,
@@ -272,7 +272,7 @@ function parseListField(params: {
   let input: unknown = params.value;
   if (params.structured) {
     try {
-      input = JSON5.parse(params.value);
+      input = JSON.parse(params.value);
     } catch {
       params.unsupported.set(params.field, "expected a list of strings; field ignored");
       return undefined;
@@ -418,11 +418,8 @@ function parseAgentTemplate(params: {
     structuredFields.has("maxTurns"),
     invalid,
   );
-  const maxTurnsNumber = maxTurnsRaw === undefined ? undefined : Number(maxTurnsRaw);
   const maxTurns =
-    maxTurnsNumber !== undefined && Number.isSafeInteger(maxTurnsNumber) && maxTurnsNumber > 0
-      ? maxTurnsNumber
-      : undefined;
+    maxTurnsRaw === undefined ? undefined : asPositiveSafeInteger(Number(maxTurnsRaw));
   if (maxTurnsRaw !== undefined && maxTurns === undefined) {
     invalid.set("maxTurns", "expected a positive integer; field ignored");
   }
@@ -509,7 +506,7 @@ export function loadBundleAgentTemplates(params: {
       source: rootDir,
       message: "bundle agent metadata plugin root could not be inspected",
     });
-    return { agentTemplates: [], conflictingIds: [], diagnostics };
+    return { agentTemplates: [], diagnostics };
   }
 
   const templates: BundleAgentTemplate[] = [];
@@ -559,18 +556,8 @@ export function loadBundleAgentTemplates(params: {
     }
   }
 
-  const conflicts = filterConflictingBundleAgentTemplates(templates);
-  for (const id of conflicts.conflictingIds) {
-    addDiagnostic({
-      diagnostics,
-      pluginId: params.pluginId,
-      source: rootDir,
-      message: `agent-template "${id}" has conflicting compatible definitions; entries ignored`,
-    });
-  }
   return {
-    agentTemplates: conflicts.agentTemplates,
-    conflictingIds: conflicts.conflictingIds,
+    agentTemplates: templates,
     diagnostics,
   };
 }

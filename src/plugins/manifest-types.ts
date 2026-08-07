@@ -76,6 +76,11 @@ export type PluginDiagnostic = {
   code?: PluginDiagnosticCode;
 };
 
+/** Diagnostics derived from mutable plugin payloads rather than the installed index itself. */
+export function isTransientPluginDiagnostic(diagnostic: PluginDiagnostic): boolean {
+  return diagnostic.code === "bundle-agent-metadata";
+}
+
 export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;

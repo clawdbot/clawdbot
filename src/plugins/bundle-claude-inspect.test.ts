@@ -93,7 +93,11 @@ describe("Claude bundle plugin inspect integration", () => {
   }
 
   function expectLoadedClaudeManifest() {
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
+    const result = loadBundleManifest({
+      rootDir,
+      bundleFormat: "claude",
+      loadAgentTemplates: true,
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error("expected Claude bundle manifest to load");

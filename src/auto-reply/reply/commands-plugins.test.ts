@@ -287,13 +287,13 @@ describe("handlePluginsCommand", () => {
       sourceFilePath: `agents/${"z".repeat(120)}-${index}.md`,
     }));
     buildPluginInspectReportMock.mockReturnValue({
-      plugin: { id: "superpowers", bundleAgentTemplates: templates },
+      plugin: { id: "superpowers" },
       compatibility: [],
       bundleAgentTemplates: templates,
     });
     buildAllPluginInspectReportsMock.mockReturnValue([
       {
-        plugin: { id: "superpowers", bundleAgentTemplates: templates },
+        plugin: { id: "superpowers" },
         compatibility: [],
         bundleAgentTemplates: templates,
       },

@@ -199,7 +199,11 @@ describe("loadBundleAgentTemplates", () => {
       ].join("\n"),
     );
 
-    const result = loadBundleManifest({ rootDir, bundleFormat: "cursor" });
+    const result = loadBundleManifest({
+      rootDir,
+      bundleFormat: "cursor",
+      loadAgentTemplates: true,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -226,7 +230,11 @@ describe("loadBundleAgentTemplates", () => {
       ),
     );
 
-    const result = loadBundleManifest({ rootDir, bundleFormat: "codex" });
+    const result = loadBundleManifest({
+      rootDir,
+      bundleFormat: "codex",
+      loadAgentTemplates: true,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -238,7 +246,7 @@ describe("loadBundleAgentTemplates", () => {
     ]);
   });
 
-  it("allows discovery to skip the full agent metadata scan", () => {
+  it("keeps the general manifest load shallow unless metadata is requested", () => {
     const rootDir = makeBundleRoot();
     writeAgent(rootDir, ".claude-plugin/plugin.json", JSON.stringify({ name: "discovery-pack" }));
     writeAgent(
@@ -250,7 +258,6 @@ describe("loadBundleAgentTemplates", () => {
     const result = loadBundleManifest({
       rootDir,
       bundleFormat: "claude",
-      loadAgentTemplates: false,
     });
 
     expect(result.ok).toBe(true);
@@ -399,7 +406,11 @@ describe("loadBundleAgentTemplates", () => {
       ["---", "name: reviewer", "description: Cursor reviewer", "---", "Explore."].join("\n"),
     );
 
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
+    const result = loadBundleManifest({
+      rootDir,
+      bundleFormat: "claude",
+      loadAgentTemplates: true,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
@@ -451,7 +462,11 @@ describe("loadBundleAgentTemplates", () => {
       ["---", "name: reviewer", "description: Default agent", "---", "Review."].join("\n"),
     );
 
-    const result = loadBundleManifest({ rootDir, bundleFormat: "codex" });
+    const result = loadBundleManifest({
+      rootDir,
+      bundleFormat: "codex",
+      loadAgentTemplates: true,
+    });
 
     expect(result.ok).toBe(true);
     if (!result.ok) {
