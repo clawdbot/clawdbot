@@ -20,7 +20,7 @@ import {
 } from "./sdk-alias.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-export type PluginModuleLoadAuthority = {
+type PluginModuleLoadAuthority = {
   trustedInstalledPrivateSdkOwner?: string;
 };
 
