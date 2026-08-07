@@ -1,32 +1,32 @@
 /**
- * Frozen CUA Driver 0.14.1 desktop contract fixtures used by the CUA fulfiller tests.
+ * Frozen CUA Driver 0.19.0 desktop contract fixtures used by the CUA fulfiller tests.
  *
- * Evidence: cua-driver-rs-v0.14.1 (41ae29b44b49b68c6e01c934fffbbe74d22e26fb)
- * and @trycua/cua-driver@0.14.1. The SDK declarations name these methods with
+ * Evidence: cua-driver-rs-v0.19.0 (bb8efbfe6caadbccba54221096d959607ed9f574)
+ * and @trycua/cua-driver@0.19.0. The SDK declarations name these methods with
  * camelCase and encode DesktopScope.Desktop as 0; MCP uses the snake_case tool
  * names and the "desktop" scope string below.
  */
-export const CUA_DRIVER_0141_CONTRACT = {
-  version: "0.14.1",
-  releaseTag: "cua-driver-rs-v0.14.1",
-  releaseCommit: "41ae29b44b49b68c6e01c934fffbbe74d22e26fb",
+export const CUA_DRIVER_0190_CONTRACT = {
+  version: "0.19.0",
+  releaseTag: "cua-driver-rs-v0.19.0",
+  releaseCommit: "bb8efbfe6caadbccba54221096d959607ed9f574",
   npmIntegrity:
-    "sha512-/o16k+vcTbdqwmvQqgFCKzrYksSQHz282qO8RkpD67GQoY4Vp3pyDndQexRJ8AbzNQpUt1bIXSAAaFBaMad6rg==",
+    "sha512-IyQ+yWQdgumtxWSSO1ueQQQGi7lqhecawwo2JrXhV88I2y62LhGaAzUDcdyg3TNTSCw3hsovMQrkj+sYhEy9jw==",
   serverName: "cua-driver",
   capabilityVersion: "1",
   schemaVersion: "1",
 } as const;
 
-export const CUA_DRIVER_0141_SDK_DESKTOP_SCOPE = 0 as const;
+export const CUA_DRIVER_0190_SDK_DESKTOP_SCOPE = 0 as const;
 
-export const CUA_DRIVER_0141_SDK_FIXTURES = {
+export const CUA_DRIVER_0190_SDK_FIXTURES = {
   getDesktopState: {},
   getScreenSize: {},
   getCursorPosition: {},
   click: {
     x: 960,
     y: 540,
-    scope: CUA_DRIVER_0141_SDK_DESKTOP_SCOPE,
+    scope: CUA_DRIVER_0190_SDK_DESKTOP_SCOPE,
     button: 0,
     count: 1,
   },
@@ -35,35 +35,35 @@ export const CUA_DRIVER_0141_SDK_FIXTURES = {
     fromY: 200,
     toX: 960,
     toY: 540,
-    scope: CUA_DRIVER_0141_SDK_DESKTOP_SCOPE,
+    scope: CUA_DRIVER_0190_SDK_DESKTOP_SCOPE,
     durationMs: 500n,
   },
-  moveCursor: { x: 960, y: 540, scope: CUA_DRIVER_0141_SDK_DESKTOP_SCOPE },
+  moveCursor: { x: 960, y: 540, scope: CUA_DRIVER_0190_SDK_DESKTOP_SCOPE },
   scroll: {
     x: 960,
     y: 540,
     direction: 1,
-    scope: CUA_DRIVER_0141_SDK_DESKTOP_SCOPE,
+    scope: CUA_DRIVER_0190_SDK_DESKTOP_SCOPE,
     by: 0,
     amount: 3n,
   },
-  typeText: { text: "hello", scope: CUA_DRIVER_0141_SDK_DESKTOP_SCOPE },
+  typeText: { text: "hello", scope: CUA_DRIVER_0190_SDK_DESKTOP_SCOPE },
   pressKey: {
     key: "enter",
-    scope: CUA_DRIVER_0141_SDK_DESKTOP_SCOPE,
+    scope: CUA_DRIVER_0190_SDK_DESKTOP_SCOPE,
     modifiers: ["shift"],
   },
-  hotkey: { keys: ["ctrl", "c"], scope: CUA_DRIVER_0141_SDK_DESKTOP_SCOPE },
+  hotkey: { keys: ["ctrl", "c"], scope: CUA_DRIVER_0190_SDK_DESKTOP_SCOPE },
 } as const;
 
-export const CUA_DRIVER_0141_MCP_FIXTURES = {
+export const CUA_DRIVER_0190_MCP_FIXTURES = {
   serverInfo: {
-    name: CUA_DRIVER_0141_CONTRACT.serverName,
-    version: CUA_DRIVER_0141_CONTRACT.version,
+    name: CUA_DRIVER_0190_CONTRACT.serverName,
+    version: CUA_DRIVER_0190_CONTRACT.version,
   },
   toolsList: {
-    capability_version: CUA_DRIVER_0141_CONTRACT.capabilityVersion,
-    schema_version: CUA_DRIVER_0141_CONTRACT.schemaVersion,
+    capability_version: CUA_DRIVER_0190_CONTRACT.capabilityVersion,
+    schema_version: CUA_DRIVER_0190_CONTRACT.schemaVersion,
   },
   desktopState: {
     platform: "linux",
@@ -78,7 +78,7 @@ export const CUA_DRIVER_0141_MCP_FIXTURES = {
   screenSize: { width: 3840, height: 2160, scale_factor: 1 },
 } as const;
 
-export const CUA_DRIVER_0141_FAILURE_FIXTURES = {
+export const CUA_DRIVER_0190_FAILURE_FIXTURES = {
   invalidArguments: {
     isError: true,
     content: [{ type: "text", text: "click: invalid arguments: missing field `x`" }],
@@ -91,12 +91,12 @@ export const CUA_DRIVER_0141_FAILURE_FIXTURES = {
   },
 } as const;
 
-export const CUA_DRIVER_0141_GENERATION_FIXTURE = {
+export const CUA_DRIVER_0190_GENERATION_FIXTURE = {
   initial: "connection-e8dcf30c",
   reconnected: "connection-7857c486",
 } as const;
 
-export const CUA_DRIVER_0141_DESKTOP_OPERATIONS = [
+export const CUA_DRIVER_0190_DESKTOP_OPERATIONS = [
   "get_desktop_state",
   "get_screen_size",
   "get_cursor_position",
@@ -109,10 +109,10 @@ export const CUA_DRIVER_0141_DESKTOP_OPERATIONS = [
   "hotkey",
 ] as const;
 
-type CuaDriver0141DesktopOperation = (typeof CUA_DRIVER_0141_DESKTOP_OPERATIONS)[number];
-type CuaDriver0141SdkMethod = keyof typeof CUA_DRIVER_0141_SDK_FIXTURES;
+type CuaDriver0190DesktopOperation = (typeof CUA_DRIVER_0190_DESKTOP_OPERATIONS)[number];
+type CuaDriver0190SdkMethod = keyof typeof CUA_DRIVER_0190_SDK_FIXTURES;
 
-export const CUA_DRIVER_0141_COMPUTER_ACT_PARITY = [
+export const CUA_DRIVER_0190_COMPUTER_ACT_PARITY = [
   {
     operation: "get_desktop_state",
     sdkMethod: "getDesktopState",
@@ -174,8 +174,8 @@ export const CUA_DRIVER_0141_COMPUTER_ACT_PARITY = [
     computerActions: [],
   },
 ] as const satisfies readonly {
-  operation: CuaDriver0141DesktopOperation;
-  sdkMethod: CuaDriver0141SdkMethod;
+  operation: CuaDriver0190DesktopOperation;
+  sdkMethod: CuaDriver0190SdkMethod;
   disposition: "screen.snapshot" | "frame verification" | "computer.act" | "not projected";
   computerActions: readonly string[];
 }[];
@@ -198,10 +198,10 @@ export const COMPUTER_ACT_ACTION_FIXTURES = [
   "wait",
 ] as const;
 
-export const CUA_DRIVER_0141_UNSUPPORTED_COMPUTER_ACT_ACTIONS = [
+export const CUA_DRIVER_0190_UNSUPPORTED_COMPUTER_ACT_ACTIONS = [
   "hold_key",
   "left_mouse_down",
   "left_mouse_up",
 ] as const;
 
-export const CUA_DRIVER_0141_CORE_LOCAL_COMPUTER_ACT_ACTIONS = ["wait"] as const;
+export const CUA_DRIVER_0190_CORE_LOCAL_COMPUTER_ACT_ACTIONS = ["wait"] as const;
