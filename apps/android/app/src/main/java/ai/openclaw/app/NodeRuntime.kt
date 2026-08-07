@@ -180,6 +180,8 @@ private const val CRON_JOBS_PAGE_SIZE = 200
 private const val CRON_JOBS_MAX_PAGES = 100
 private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
 private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
+private const val USAGE_INCOMPLETE_RETRY_DELAY_MS = 5_000L
+private const val USAGE_INCOMPLETE_RETRY_LIMIT = 3
 private const val OperatorAdminScope = "operator.admin"
 private const val OperatorPairingScope = "operator.pairing"
 
@@ -1243,6 +1245,7 @@ class NodeRuntime private constructor(
   val usageRefreshing: StateFlow<Boolean> = _usageRefreshing.asStateFlow()
   private val _usageErrorText = MutableStateFlow<NativeText?>(null)
   val usageErrorText: StateFlow<String?> = _usageErrorText.resolveOptionalNativeText()
+  private var usageIncompleteRetryJob: Job? = null
   private val _skillsSummary = MutableStateFlow(GatewaySkillsSummary(skills = emptyList()))
   val skillsSummary: StateFlow<GatewaySkillsSummary> = _skillsSummary.asStateFlow()
   private val _skillsRefreshing = MutableStateFlow(false)
@@ -1321,6 +1324,8 @@ class NodeRuntime private constructor(
   @Volatile internal var gatewayDataRequestTimeoutObserverForTests: ((method: String, timeoutMs: Long) -> Unit)? = null
 
   @Volatile internal var clawHubSkillInstallBeforeClaimObserverForTests: (() -> Unit)? = null
+
+  @Volatile internal var usageIncompleteRetryDelayMsForTests: Long? = null
   private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
   val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
   private val _channelsRefreshing = MutableStateFlow(false)
@@ -1631,6 +1636,7 @@ class NodeRuntime private constructor(
     if (retirePendingCronRuns) {
       pendingCronRunRegistry.clear { _pendingCronRunJobIds.value = it }
     }
+    usageIncompleteRetryJob?.cancel()
     _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
     _usageRefreshing.value = false
     _usageErrorText.value = null
@@ -6160,7 +6166,17 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun refreshUsageFromGateway() =
+  private suspend fun refreshUsageFromGateway() {
+    // A fresh refresh cycle owns the incomplete-payload retry budget; the previous
+    // chain must not keep polling beside it.
+    usageIncompleteRetryJob?.cancel()
+    val gatewayScope = captureGatewayDataScope() ?: return
+    if (refreshUsageOnceFromGateway() && _usageSummary.value.refreshing) {
+      scheduleIncompleteUsageRetry(gatewayScope)
+    }
+  }
+
+  private suspend fun refreshUsageOnceFromGateway(): Boolean =
     refreshGatewaySummary(
       summary = _usageSummary,
       refreshing = _usageRefreshing,
@@ -6172,8 +6188,26 @@ class NodeRuntime private constructor(
       GatewayUsageSummary(
         updatedAtMs = root.long("updatedAt"),
         providers = parseUsageProviders(root?.get("providers") as? JsonArray),
+        refreshing = root.boolean("refreshing"),
       )
     }
+
+  private fun scheduleIncompleteUsageRetry(gatewayScope: GatewayDataScope) {
+    // usage.status answers a cold cache with an empty refreshing=true placeholder
+    // while the gateway fetches provider usage in the background. Bounded refetch
+    // fills the panel in; a failure or gateway switch ends the chain. Mirrors
+    // ui/src/lib/incomplete-usage-retry.ts (5s x 3).
+    usageIncompleteRetryJob?.cancel()
+    usageIncompleteRetryJob =
+      scope.launch {
+        repeat(USAGE_INCOMPLETE_RETRY_LIMIT) {
+          delay(usageIncompleteRetryDelayMsForTests ?: USAGE_INCOMPLETE_RETRY_DELAY_MS)
+          if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
+          if (!refreshUsageOnceFromGateway()) return@launch
+          if (!_usageSummary.value.refreshing) return@launch
+        }
+      }
+  }
 
   private suspend fun refreshSkillsFromGateway(): Boolean =
     refreshGatewaySummary(
@@ -8590,6 +8624,9 @@ data class GatewayCronJobSummary(
 data class GatewayUsageSummary(
   val updatedAtMs: Long?,
   val providers: List<GatewayUsageProviderSummary>,
+  // Gateway cold-cache marker: the provider list is a placeholder while the gateway
+  // refreshes in the background. Distinct from the app-side in-flight flag.
+  val refreshing: Boolean = false,
 )
 
 data class GatewayUsageProviderSummary(

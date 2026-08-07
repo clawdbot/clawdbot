@@ -274,6 +274,10 @@ private fun UsageSettingsScreen(
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load usage."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
+      usageSummary.providers.isEmpty() && usageSummary.refreshing ->
+        ClawPanel {
+          Text(text = nativeString("Fetching usage from providers…"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
       usageSummary.providers.isEmpty() ->
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {

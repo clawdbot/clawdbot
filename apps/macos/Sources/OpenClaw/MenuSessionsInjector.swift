@@ -29,6 +29,13 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cachedUsageSummary: GatewayUsageSummary?
     private var usageCacheUpdatedAt: Date?
     private let usageRefreshIntervalSeconds: TimeInterval = 30
+    // Bounded refetch while the gateway marks the usage payload refreshing (cold
+    // cache), mirroring ui/src/lib/incomplete-usage-retry.ts: the menu fills itself
+    // in without becoming a poller when the refresh never lands.
+    private var usageRetryTask: Task<Void, Never>?
+    private var usageRetryAttempts = 0
+    private var usageRetryIntervalSeconds: TimeInterval = 5
+    private let usageRetryLimit = 3
     private var cachedCostSummary: GatewayCostUsageSummary?
     private var cachedCostErrorText: String?
     private var costCacheUpdatedAt: Date?
@@ -36,6 +43,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private let nodesStore = NodesStore.shared
     #if DEBUG
     private var testControlChannelConnected: Bool?
+    private var testUsageLoad: (() async throws -> GatewayUsageSummary)?
     #endif
 
     func install(into statusItem: NSStatusItem) {
@@ -773,12 +781,55 @@ extension MenuSessionsInjector {
             return
         }
 
+        // A fresh cycle (menu open, reconnect) owns the incomplete-payload retry budget.
+        self.usageRetryTask?.cancel()
+        self.usageRetryTask = nil
+        self.usageRetryAttempts = 0
+        await self.loadUsageSummaryOnce()
+    }
+
+    private func loadUsageSummaryOnce() async {
         do {
-            self.cachedUsageSummary = try await UsageLoader.loadSummary()
+            let summary = try await self.loadUsageSummary()
+            self.cachedUsageSummary = summary
+            if summary.refreshing == true {
+                // Cold gateway cache: an empty refreshing payload must not start the
+                // TTL, or the menu shows blank usage for the whole window. Keep the
+                // cache cold and refetch a bounded number of times.
+                self.usageCacheUpdatedAt = nil
+                self.scheduleUsageRetry()
+                return
+            }
         } catch {
+            // A failure is not an incomplete payload; retrying would poll a gateway
+            // nobody reached. The next menu open or reconnect refetches.
             self.cachedUsageSummary = nil
         }
         self.usageCacheUpdatedAt = Date()
+    }
+
+    private func scheduleUsageRetry() {
+        guard self.usageRetryAttempts < self.usageRetryLimit else { return }
+        self.usageRetryAttempts += 1
+        let interval = self.usageRetryIntervalSeconds
+        self.usageRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            guard self.isControlChannelConnected else { return }
+            await self.loadUsageSummaryOnce()
+            // Repaint only once the payload completes: rebuilding rows mid-tracking
+            // flickers, and an incomplete retry changes nothing visible.
+            if self.cachedUsageSummary?.refreshing != true {
+                await self.repaintOpenMenu(self.statusItem?.menu)
+            }
+        }
+    }
+
+    private func loadUsageSummary() async throws -> GatewayUsageSummary {
+        #if DEBUG
+        if let load = self.testUsageLoad { return try await load() }
+        #endif
+        return try await UsageLoader.loadSummary()
     }
 
     private func refreshCostUsageCache(force: Bool) async {
@@ -1285,6 +1336,26 @@ extension MenuSessionsInjector {
     func setTestingUsageSummary(_ summary: GatewayUsageSummary?) {
         self.cachedUsageSummary = summary
         self.usageCacheUpdatedAt = Date()
+    }
+
+    func setTestingUsageLoader(_ load: (() async throws -> GatewayUsageSummary)?) {
+        self.testUsageLoad = load
+    }
+
+    func setTestingUsageRetryInterval(_ seconds: TimeInterval) {
+        self.usageRetryIntervalSeconds = seconds
+    }
+
+    func refreshUsageCacheForTesting(force: Bool) async {
+        await self.refreshUsageCache(force: force)
+    }
+
+    var testingCachedUsageSummary: GatewayUsageSummary? {
+        self.cachedUsageSummary
+    }
+
+    var testingUsageCacheUpdatedAt: Date? {
+        self.usageCacheUpdatedAt
     }
 
     func setTestingCostUsageSummary(_ summary: GatewayCostUsageSummary?, errorText: String? = nil) {

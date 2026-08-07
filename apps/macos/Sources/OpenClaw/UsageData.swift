@@ -16,6 +16,9 @@ struct GatewayUsageProvider: Codable {
 struct GatewayUsageSummary: Codable {
     let updatedAt: Double
     let providers: [GatewayUsageProvider]
+    // True while the gateway's cold cache is still fetching provider usage in the
+    // background: the payload is a placeholder, not an answer. Absent on warm reads.
+    let refreshing: Bool?
 }
 
 struct UsageRow: Identifiable {

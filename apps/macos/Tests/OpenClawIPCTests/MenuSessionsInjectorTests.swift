@@ -100,7 +100,8 @@ struct MenuSessionsInjectorTests {
                     displayName: "Codex",
                     windows: [GatewayUsageWindow(label: "day", usedPercent: 3, resetAt: nil)],
                     plan: nil),
-            ])
+            ],
+            refreshing: nil)
         injector.setTestingUsageSummary(usage)
 
         let menu = NSMenu()
@@ -173,6 +174,73 @@ struct MenuSessionsInjectorTests {
         #expect(usageCostItem != nil)
         #expect(usageCostItem?.submenu != nil)
         #expect(usageCostItem?.submenu?.delegate == nil)
+    }
+
+    @Test func `cold incomplete usage payload refetches until the refresh lands`() async {
+        let injector = MenuSessionsInjector()
+        injector.setTestingControlChannelConnected(true)
+        injector.setTestingUsageRetryInterval(0.01)
+
+        var calls = 0
+        injector.setTestingUsageLoader {
+            calls += 1
+            if calls == 1 {
+                return GatewayUsageSummary(updatedAt: 1, providers: [], refreshing: true)
+            }
+            return GatewayUsageSummary(
+                updatedAt: 2,
+                providers: [
+                    GatewayUsageProvider(
+                        provider: "anthropic",
+                        displayName: "Claude",
+                        windows: [GatewayUsageWindow(label: "5h", usedPercent: 12, resetAt: nil)],
+                        plan: "Pro"),
+                ],
+                refreshing: nil)
+        }
+
+        await injector.refreshUsageCacheForTesting(force: true)
+        #expect(calls == 1)
+        #expect(injector.testingCachedUsageSummary?.refreshing == true)
+        #expect(injector.testingUsageCacheUpdatedAt == nil)
+
+        let completed = await Self.waitUntil { injector.testingCachedUsageSummary?.refreshing != true }
+        #expect(completed)
+        #expect(calls == 2)
+        #expect(injector.testingCachedUsageSummary?.providers.count == 1)
+        #expect(injector.testingUsageCacheUpdatedAt != nil)
+    }
+
+    @Test func `incomplete usage refetch stays bounded when the refresh never lands`() async {
+        let injector = MenuSessionsInjector()
+        injector.setTestingControlChannelConnected(true)
+        injector.setTestingUsageRetryInterval(0.01)
+
+        var calls = 0
+        injector.setTestingUsageLoader {
+            calls += 1
+            return GatewayUsageSummary(updatedAt: 1, providers: [], refreshing: true)
+        }
+
+        await injector.refreshUsageCacheForTesting(force: true)
+        let exhausted = await Self.waitUntil { calls >= 4 }
+        #expect(exhausted)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(calls == 4)
+        #expect(injector.testingUsageCacheUpdatedAt == nil)
+        #expect(injector.testingCachedUsageSummary?.refreshing == true)
+    }
+
+    private static func waitUntil(
+        timeout: TimeInterval = 2,
+        _ condition: @MainActor () -> Bool) async -> Bool
+    {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
     }
 
     @Test func `status text keeps useful error detail`() {
