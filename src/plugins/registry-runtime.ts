@@ -24,6 +24,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
@@ -282,6 +283,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           sessionKeys.add(sessionKey);
         }
       }
+      // The session ownership checks below list persisted entries to locate the
+      // claimed session ids/files. Those listings need a concrete agent scope;
+      // when the caller did not pass one (embedded runs are key-driven), derive
+      // it from the session key so the ownership check stays scoped to the agent
+      // that actually owns the target session instead of failing to resolve.
+      const scopedAgentId =
+        agentId ??
+        [...sessionKeys]
+          .map((key) => parseAgentSessionKey(key)?.agentId)
+          .find((value): value is string => Boolean(value));
       for (const sessionKey of sessionKeys) {
         assertStoredSessionEntryOwned({
           action: params.action,
@@ -309,7 +320,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return;
       }
       const entries = registryParams.runtime.agent.session.listSessionEntries({
-        ...(agentId ? { agentId } : {}),
+        ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
         ...(storePath ? { storePath } : {}),
         readOnly: true,
       });
