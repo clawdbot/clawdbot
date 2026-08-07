@@ -439,22 +439,36 @@ export async function sendPollWhatsApp(
     // still write decryptable key material to disk for every poll sent,
     // regardless of whether anything is opted in to read it.
     if (shouldEmitWhatsAppPollVoteHooks({ cfg, accountId: resolvedAccountId })) {
-      // Record ownership from the accepted send itself, not just from later
-      // observing our own message echo back on the inbound messages.upsert
-      // stream — a vote arriving before (or without) that echo would
-      // otherwise be silently rejected by the poll_vote_received hook gate.
-      rememberWhatsAppOwnPollCreation(resolvedAccountId, sentJid, messageId, cfg);
-      if (result.pollCreationMessage) {
-        // Persist the decryptable poll payload (including its decryption
-        // key) from the accepted send's own result, not just from the later
-        // messages.upsert echo — a restart between accepted-send and that
-        // echo would otherwise leave an owned poll without decodable state.
-        rememberWhatsAppPollCreationMessage(
-          resolvedAccountId,
-          sentJid,
-          messageId,
-          result.pollCreationMessage,
-          cfg,
+      try {
+        // Record ownership from the accepted send itself, not just from
+        // later observing our own message echo back on the inbound
+        // messages.upsert stream — a vote arriving before (or without) that
+        // echo would otherwise be silently rejected by the
+        // poll_vote_received hook gate.
+        rememberWhatsAppOwnPollCreation(resolvedAccountId, sentJid, messageId, cfg);
+        if (result.pollCreationMessage) {
+          // Persist the decryptable poll payload (including its decryption
+          // key) from the accepted send's own result, not just from the
+          // later messages.upsert echo — a restart between accepted-send and
+          // that echo would otherwise leave an owned poll without decodable
+          // state.
+          rememberWhatsAppPollCreationMessage(
+            resolvedAccountId,
+            sentJid,
+            messageId,
+            result.pollCreationMessage,
+            cfg,
+          );
+        }
+      } catch (hookStateError) {
+        // Baileys already accepted this poll — a plugin-state write failure
+        // here must not fail the send. Letting it propagate would report
+        // failure to a caller for a poll that's actually live, and a retry
+        // could create a duplicate poll. Losing this state only means the
+        // poll_vote_received hook won't fire for this specific poll's votes.
+        logger.error(
+          { err: String(hookStateError), jid: redactedJid, messageId },
+          "failed to persist poll_vote_received hook state (poll itself was sent successfully)",
         );
       }
     }

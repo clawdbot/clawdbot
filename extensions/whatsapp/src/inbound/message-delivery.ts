@@ -512,15 +512,26 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         // Poll votes are passive data (per #78963): decode and hook-dispatch
         // only, never enter the normal admission/reply pipeline below.
         if (msg.key) {
-          maybeEmitWhatsAppPollVoteReceivedHook({
-            cfg: options.loadConfig?.() ?? options.cfg,
-            accountId: options.accountId,
-            message: msg.message,
-            key: msg.key,
-            getCachedMessage: getCachedBaileysMessage,
-            selfJid: self.jid,
-            selfLid: self.lid,
-          });
+          try {
+            maybeEmitWhatsAppPollVoteReceivedHook({
+              cfg: options.loadConfig?.() ?? options.cfg,
+              accountId: options.accountId,
+              message: msg.message,
+              key: msg.key,
+              getCachedMessage: getCachedBaileysMessage,
+              selfJid: self.jid,
+              selfLid: self.lid,
+            });
+          } catch (error) {
+            // A poll-hook store read/write can throw synchronously (e.g. a
+            // plugin-state I/O failure). That must not abort this
+            // messages.upsert batch — later, unrelated messages in the same
+            // batch still need to reach the normal admission pipeline below.
+            inboundLogger.error(
+              { error: formatError(error) },
+              "whatsapp poll_vote_received hook failed synchronously",
+            );
+          }
         }
         continue;
       }

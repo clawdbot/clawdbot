@@ -22,8 +22,9 @@ import {
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 
-const { runPollVoteReceivedMock } = vi.hoisted(() => ({
+const { runPollVoteReceivedMock, maybeEmitWhatsAppPollVoteReceivedHookMock } = vi.hoisted(() => ({
   runPollVoteReceivedMock: vi.fn(async () => undefined),
+  maybeEmitWhatsAppPollVoteReceivedHookMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
@@ -32,6 +33,22 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
     runPollVoteReceived: runPollVoteReceivedMock,
   }),
 }));
+
+// Wraps the real maybeEmitWhatsAppPollVoteReceivedHook so a single test can
+// force it to throw synchronously (simulating a plugin-state store I/O
+// failure) without affecting every other test in this file — the default
+// implementation set below just delegates straight through to the real one.
+vi.mock("./inbound/poll-votes.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./inbound/poll-votes.js")>("./inbound/poll-votes.js");
+  maybeEmitWhatsAppPollVoteReceivedHookMock.mockImplementation(
+    actual.maybeEmitWhatsAppPollVoteReceivedHook,
+  );
+  return {
+    ...actual,
+    maybeEmitWhatsAppPollVoteReceivedHook: maybeEmitWhatsAppPollVoteReceivedHookMock,
+  };
+});
 
 const CHAT_JID = "999@s.whatsapp.net";
 // Matches the mock sock's `user.id` default in monitor-inbox.test-harness.ts —
@@ -303,6 +320,90 @@ describe("web monitor inbox poll vote hook", () => {
     });
 
     expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not stop processing later messages in the same batch when the poll hook throws synchronously", async () => {
+    // Regression: maybeEmitWhatsAppPollVoteReceivedHook can throw
+    // synchronously (e.g. a plugin-state store read/write failure). Before
+    // this fix, an uncaught throw here aborted the whole messages.upsert
+    // for-loop, silently dropping every later message in the same batch —
+    // including ordinary, unrelated ones.
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          pluginHooks: { pollVoteReceived: true },
+        },
+      },
+    });
+    const baileysCache = createBaileysCacheSupport();
+    const pollMessageId = "POLL-HOOK-THROWS";
+    const voteMessageId = "VOTE-HOOK-THROWS";
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Pizza", "Sushi"],
+    });
+    const creationKey = { remoteJid: CHAT_JID, id: pollMessageId, fromMe: true };
+
+    const onMessage = vi.fn(async () => {});
+    const { sock } = await startInboxMonitor(onMessage, {
+      recentMessageKeys: baileysCache.recentMessageKeys,
+      baileysGroupMetaCache: baileysCache.baileysGroupMetaCache,
+    });
+
+    // Simulate ownership recorded from an accepted send (the only producer
+    // since round 3), so the hook actually reaches the point that throws.
+    const cfg = mockLoadConfig() as never;
+    rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId, cfg);
+    rememberWhatsAppPollCreationMessage(
+      DEFAULT_ACCOUNT_ID,
+      CHAT_JID,
+      pollMessageId,
+      pollCreationMessage,
+      cfg,
+    );
+
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Sushi"],
+      pollEncKey,
+      pollCreatorJid: SELF_JID,
+      pollMsgId: pollMessageId,
+      voterJid: VOTER_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({
+      creationKey,
+      vote,
+      senderTimestampMs: 1_700_000_100_000,
+    });
+
+    maybeEmitWhatsAppPollVoteReceivedHookMock.mockImplementationOnce(() => {
+      throw new Error("simulated plugin-state store failure");
+    });
+
+    // Single upsert batch: the throwing poll-vote message, followed by an
+    // ordinary text message that must still reach the normal pipeline.
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { remoteJid: CHAT_JID, id: voteMessageId, fromMe: false, participant: VOTER_JID },
+          message: voteMessage,
+          messageTimestamp: 1_700_000_100,
+        },
+        {
+          key: {
+            remoteJid: CHAT_JID,
+            id: "NORMAL-AFTER-THROWING-POLL-HOOK",
+            fromMe: false,
+            participant: VOTER_JID,
+          },
+          message: { conversation: "hi, unrelated to the poll" },
+          messageTimestamp: 1_700_000_101,
+        },
+      ],
+    });
+
+    await waitForMessageCalls(onMessage, 1);
   });
 
   it("does not fire poll_vote_received twice for a redelivered vote-update upsert", async () => {
