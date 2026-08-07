@@ -4,7 +4,6 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import {
-  assertAgentRunAttributionCompatible,
   claimAgentRunContext,
   getAgentRunContext,
   retainQueuedAgentRunContext,
@@ -185,7 +184,22 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
               existingContext?.lifecycleGeneration === lifecycleGeneration
                 ? existingContext.attribution
                 : undefined;
-            assertAgentRunAttributionCompatible(existingAttribution, params.attribution);
+            if (existingAttribution && !params.attribution) {
+              throw new TypeError(
+                "Agent run ID is already bound to host-owned execution attribution.",
+              );
+            }
+            if (
+              existingAttribution &&
+              params.attribution &&
+              (existingAttribution.contextId !== params.attribution.contextId ||
+                existingAttribution.executionId !== params.attribution.executionId ||
+                existingAttribution.createdAt !== params.attribution.createdAt)
+            ) {
+              throw new TypeError(
+                "Agent run ID is already bound to different execution attribution.",
+              );
+            }
             const { attribution: _existingAttribution, ...existingContextFields } =
               existingContext ?? {};
             const admittedAt = Date.now();

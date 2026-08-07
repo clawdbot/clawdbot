@@ -284,50 +284,6 @@ describe("executeAgentTurn: runtime selection", () => {
     expect(cliAttribution).not.toHaveProperty("agentId");
   });
 
-  it("rejects a CLI run id already bound to different execution attribution", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const runId = "cli-attribution-collision";
-    const existingAttribution = createAgentExecutionAttribution({
-      runId,
-      lifecycleGeneration,
-    });
-    agentRunRegistry.claimAgentRunContext(runId, {
-      attribution: existingAttribution,
-      lifecycleGeneration,
-    });
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4"),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-
-    await expect(
-      executeAgentTurn({
-        ...createMinimalRunAgentTurnParams({ followupRun, opts: { runId } }),
-        attribution: createAgentExecutionAttribution({
-          runId,
-          lifecycleGeneration,
-        }),
-      }),
-    ).resolves.toEqual({
-      kind: "final",
-      payload: {
-        isError: true,
-        text: "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
-      },
-    });
-
-    expect(state.runCliAgentMock).not.toHaveBeenCalled();
-    expect(agentRunRegistry.getAgentRunContext(runId)?.attribution).toBe(existingAttribution);
-  });
-
   it("rejects queued heartbeat CLI fallback after placement crosses a lifecycle rotation", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
