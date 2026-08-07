@@ -316,7 +316,7 @@ function isGateProvenInProgressRun(run, ciGateJobs, nowMs) {
 function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
-  const latestDecisiveScheduledRun = latestRun(
+  const latestDecision = latestRun(
     scheduledRuns.filter(
       (run) => run.status === "completed" && !["cancelled", "skipped"].includes(run.conclusion),
     ),
@@ -325,11 +325,11 @@ function preferredCiRun(runs, nowMs) {
 
   // Manual proof may replace stale scheduled success or a pending run,
   // never an unresolved terminal non-success.
-  if (latestDecisiveScheduledRun && latestDecisiveScheduledRun.conclusion !== "success") {
-    return latestDecisiveScheduledRun;
+  if (latestDecision && latestDecision.conclusion !== "success") {
+    return latestDecision;
   }
-  if (isSuccessfulRecentRun(latestDecisiveScheduledRun, nowMs)) {
-    return latestDecisiveScheduledRun;
+  if (latestScheduledRun?.status === "completed" && isSuccessfulRecentRun(latestDecision, nowMs)) {
+    return latestDecision;
   }
   return latestManualRun ?? latestScheduledRun;
 }

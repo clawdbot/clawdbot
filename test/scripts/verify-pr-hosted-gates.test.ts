@@ -1020,10 +1020,15 @@ describe("verify-pr-hosted-gates", () => {
     (conclusion) => {
       const success = successfulRun("CI", 1, "2026-06-17T10:47:00Z");
       const neutral = { ...successfulRun("CI", 2, "2026-06-17T10:48:00Z"), conclusion };
-      expect(collectHostedGateEvidence({ sha, workflowRuns: [success, neutral] })).toEqual({
+      const collect = () => collectHostedGateEvidence({ sha, workflowRuns: [success, neutral] });
+      expect(collect()).toEqual({
         headSha: sha,
         workflows: [expect.objectContaining({ name: "CI", id: 1 })],
       });
+      for (const status of ["queued", "in_progress"]) {
+        Object.assign(neutral, { status, conclusion: null });
+        expect(collect).toThrow("Missing successful recent CI workflow");
+      }
     },
   );
 
