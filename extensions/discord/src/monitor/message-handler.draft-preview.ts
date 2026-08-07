@@ -129,14 +129,19 @@ export function createDiscordDraftPreviewController(params: {
         ? buildChannelProgressDraftLineForEntry(params.discordConfig, input, options)
         : buildChannelProgressDraftLine(input, options),
     update: async (previewText, options) => {
+      if (!draftStream) {
+        return false;
+      }
       lastPartialText = previewText;
       draftText = previewText;
       hasStreamedMessage = true;
       draftChunker?.reset();
-      draftStream?.update(previewText);
+      draftStream.update(previewText);
       if (options?.flush) {
-        await draftStream?.flush();
+        await draftStream.flush();
       }
+      // REST-backed draft work is pending until Discord returns a message id.
+      return Boolean(draftStream.messageId());
     },
     deleteCurrent: async () => {
       lastPartialText = "";

@@ -100,12 +100,20 @@ export async function createMatrixDraftController(params: {
       input.event === "approval"
         ? formatChannelProgressDraftLine(input, options)
         : buildChannelProgressDraftLineForEntry(progressConfigEntry, input, options),
-    update: (text) => {
+    update: async (text, options) => {
       const previewText =
         !progressDraftStreaming && (previewPlan || previewPlanExplanation)
           ? renderPreviewPlan()
           : text.replace(/^• /gmu, "- ");
-      draftStream?.update(previewText);
+      if (!draftStream) {
+        return false;
+      }
+      draftStream.update(previewText);
+      if (options?.flush) {
+        await draftStream.flush();
+      }
+      // A queued update is not visible until Matrix has accepted a draft event.
+      return Boolean(draftStream.eventId());
     },
   });
 

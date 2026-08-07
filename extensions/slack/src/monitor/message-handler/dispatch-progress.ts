@@ -185,26 +185,27 @@ export function createSlackProgressRuntime(runtimeParams: {
     );
 
   const markNativeProgressDelivered = (session: SlackStreamSession, threadTs?: string) => {
-    if (session.delivered) {
-      delivery.observedReplyDelivery = true;
+    if (!session.delivered) {
+      return false;
     }
+    delivery.observedReplyDelivery = true;
     if (threadTs) {
       delivery.usedReplyThreadTs ??= threadTs;
       delivery.rememberDeliveredThreadTs("block", threadTs);
     }
+    return true;
   };
 
   const startNativeProgressStream = async (
     chunks: NonNullable<ReturnType<typeof buildSlackProgressStreamStartChunks>>,
-    chunkKey: string,
-  ) => {
+  ): Promise<boolean> => {
     const streamThreadTs = replyPlan.nextThreadTs();
     if (!streamThreadTs) {
       logVerbose(
         "slack-stream: no reply thread target for native progress stream start, falling back",
       );
       delivery.streamFailed = true;
-      return;
+      return false;
     }
     delivery.nativeProgressStreamThreadTs = streamThreadTs;
     const startPromise = (async () => {
@@ -235,26 +236,23 @@ export function createSlackProgressRuntime(runtimeParams: {
         delivery.nativeProgressStreamStartPromise = null;
       }
     }
-    if (startedSession) {
-      markNativeProgressDelivered(startedSession, streamThreadTs);
-    }
-    nativeProgressChunkKey = chunkKey;
-    replyPlan.markSent();
+    return startedSession ? markNativeProgressDelivered(startedSession, streamThreadTs) : false;
   };
 
   const appendNativeProgressStream = async (
     chunks: NonNullable<ReturnType<typeof buildSlackProgressStreamUpdateChunks>>,
-    chunkKey: string,
-  ) => {
+  ): Promise<boolean> => {
     if (!delivery.streamSession) {
-      return;
+      return false;
     }
     await appendSlackStream({ session: delivery.streamSession, chunks });
-    markNativeProgressDelivered(delivery.streamSession);
-    nativeProgressChunkKey = chunkKey;
+    return markNativeProgressDelivered(
+      delivery.streamSession,
+      delivery.nativeProgressStreamThreadTs,
+    );
   };
 
-  const updateNativeProgressStream = async () => {
+  const updateNativeProgressStream = async (): Promise<boolean> => {
     const snapshot = progressDraft.getSnapshot();
     const progressLines = resolveNativeProgressLines(snapshot);
     const hasRetirableNativeTasks = [...nativeTaskState.values()].some(
@@ -269,11 +267,11 @@ export function createSlackProgressRuntime(runtimeParams: {
         !explicitProgressTitle &&
         !hasRetirableNativeTasks)
     ) {
-      return;
+      return false;
     }
     const canContinue = await waitForNativeProgressStreamStart();
     if (!canContinue) {
-      return;
+      return false;
     }
     const reconciled = reconcileSlackNativeTaskChunks({
       previousTasks: nativeTaskState,
@@ -281,21 +279,27 @@ export function createSlackProgressRuntime(runtimeParams: {
     });
     const chunks = reconciled.chunks;
     if (!chunks?.length) {
-      return;
+      return false;
     }
     const chunkKey = JSON.stringify(chunks);
     if (chunkKey === nativeProgressChunkKey) {
-      return;
+      return Boolean(delivery.streamSession?.delivered);
     }
     try {
-      if (!delivery.streamSession) {
-        await startNativeProgressStream(chunks, chunkKey);
-      } else {
-        await appendNativeProgressStream(chunks, chunkKey);
+      const accepted = !delivery.streamSession
+        ? await startNativeProgressStream(chunks)
+        : await appendNativeProgressStream(chunks);
+      if (!accepted) {
+        return false;
       }
-      // Commit only after Slack accepted the chunks; a failed emit must retry
-      // the same reconciliation against the previous snapshot.
+      // Commit transport identity and task state together. Buffered or failed
+      // chunks must leave the identical render eligible for another attempt.
+      if (nativeProgressChunkKey === undefined) {
+        replyPlan.markSent();
+      }
+      nativeProgressChunkKey = chunkKey;
       nativeTaskState = reconciled.tasks;
+      return true;
     } catch (err) {
       runtime.error?.(
         danger(
@@ -303,6 +307,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         ),
       );
       delivery.streamFailed = true;
+      return false;
     }
   };
 
@@ -335,11 +340,10 @@ export function createSlackProgressRuntime(runtimeParams: {
     updateOnLineChange: useNativeProgressStreaming || useRichProgressDraft,
     update: async (previewText, options) => {
       if (useNativeProgressStreaming) {
-        await updateNativeProgressStream();
-        return;
+        return await updateNativeProgressStream();
       }
       if (!draftStream) {
-        return;
+        return false;
       }
       const snapshot = progressDraft.getSnapshot();
       const structuredLines = resolveStructuredProgressLines(options?.lines ?? snapshot.lines);
@@ -365,6 +369,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       if (options?.flush) {
         await draftStream.flush();
       }
+      return Boolean(draftStream.messageId() && draftStream.channelId());
     },
   });
   const commentaryProgressEnabled = progressDraft.commentaryProgressEnabled;
