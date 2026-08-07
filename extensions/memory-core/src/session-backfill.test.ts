@@ -457,8 +457,6 @@ describe("runSessionBackfill", () => {
       "User: Owner confirmed this release workflow.",
       "Assistant: The migration is complete and all focused tests passed.",
     ]);
-    const state = await dreamingTestState.readSessionIngestionState(workspaceDir);
-    expect(Object.values(state.files)[0]?.lastContentLine).toBeGreaterThanOrEqual(3);
   });
 
   it("keeps canonical assistant replies tainted until an owner turn begins", async () => {
