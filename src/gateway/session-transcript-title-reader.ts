@@ -1,6 +1,7 @@
 // Session-list title reads: bounded transcript probes plus a watermark-validated
 // cache so list rendering never rescans transcripts that have not changed.
 import {
+  isSessionTranscriptProjectionUnavailableError,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptTitleProbeBatch,
   readSessionTranscriptWatermark,
@@ -105,47 +106,57 @@ function readSqliteTitleFields(
     setSqliteTitleFieldCache(cacheKey, cached);
     return { ...cachedFields };
   }
-  const tail = readSessionTranscriptMessageEventPage(scope, {
-    maxMessages: SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
-    offset: 0,
-  });
-  let lastText = findLastMessageText(tail.events);
-  if (!lastText && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
-    lastText = findLastMessageText(
-      readSqliteTitleProbeRange(
-        scope,
-        tail.totalMessages,
-        tail.totalMessages - SQLITE_TITLE_PROBE_MAX_MESSAGES,
-        tail.totalMessages - SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
-      ),
-    );
-  }
-
-  const head =
-    tail.totalMessages <= SQLITE_TITLE_PROBE_INITIAL_MESSAGES
-      ? tail.events
-      : readSqliteTitleProbeRange(
+  let fields: SessionTitleFields;
+  try {
+    const tail = readSessionTranscriptMessageEventPage(scope, {
+      maxMessages: SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+      offset: 0,
+    });
+    let lastText = findLastMessageText(tail.events);
+    if (!lastText && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
+      lastText = findLastMessageText(
+        readSqliteTitleProbeRange(
           scope,
           tail.totalMessages,
-          0,
+          tail.totalMessages - SQLITE_TITLE_PROBE_MAX_MESSAGES,
+          tail.totalMessages - SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+        ),
+      );
+    }
+
+    const head =
+      tail.totalMessages <= SQLITE_TITLE_PROBE_INITIAL_MESSAGES
+        ? tail.events
+        : readSqliteTitleProbeRange(
+            scope,
+            tail.totalMessages,
+            0,
+            SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
+          );
+    let firstUser = findFirstTitleUserMessage(head, opts?.includeInterSession === true);
+    if (!firstUser && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
+      firstUser = findFirstTitleUserMessage(
+        readSqliteTitleProbeRange(
+          scope,
+          tail.totalMessages,
           SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
-        );
-  let firstUser = findFirstTitleUserMessage(head, opts?.includeInterSession === true);
-  if (!firstUser && tail.totalMessages > SQLITE_TITLE_PROBE_INITIAL_MESSAGES) {
-    firstUser = findFirstTitleUserMessage(
-      readSqliteTitleProbeRange(
-        scope,
-        tail.totalMessages,
-        SQLITE_TITLE_PROBE_INITIAL_MESSAGES,
-        SQLITE_TITLE_PROBE_MAX_MESSAGES,
-      ),
-      opts?.includeInterSession === true,
-    );
+          SQLITE_TITLE_PROBE_MAX_MESSAGES,
+        ),
+        opts?.includeInterSession === true,
+      );
+    }
+    fields = {
+      firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
+      lastMessagePreview: lastText,
+    };
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    // Titles are optional list decoration: degrade only this session while its projection rebuilds.
+    // Do not cache nulls, so the next list can restore titles after reconciliation.
+    return { firstUserMessage: null, lastMessagePreview: null };
   }
-  const fields = {
-    firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
-    lastMessagePreview: lastText,
-  };
   const fieldsByVariant =
     cached?.generation === watermark.generation && cached.maxSeq === watermark.maxSeq
       ? cached.fields

@@ -197,6 +197,13 @@ data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
   val ownerAgentId: String? = null,
+  val classification: String? = null,
+  val accountId: String? = null,
+  val peerKind: String? = null,
+  val isMain: Boolean? = null,
+  val isBackground: Boolean? = null,
+  val hasClassificationMetadata: Boolean =
+    classification != null || accountId != null || peerKind != null || isMain != null || isBackground != null,
   val displayName: String? = null,
   val derivedTitle: String? = null,
   val label: String? = null,

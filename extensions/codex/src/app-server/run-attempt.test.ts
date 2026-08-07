@@ -394,6 +394,7 @@ async function buildDynamicToolsForTest(
     throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
   }
   return testing.buildDynamicTools({
+    attributionAttempt: params,
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
@@ -498,6 +499,7 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   }
   const nativeToolSurfaceEnabled = testing.shouldEnableCodexAppServerNativeToolSurface(params);
   const dynamicTools = await testing.buildDynamicTools({
+    attributionAttempt: params,
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
@@ -1120,6 +1122,7 @@ describe("runCodexAppServerAttempt", () => {
       sandbox,
     );
     const dynamicTools = await testing.buildDynamicTools({
+      attributionAttempt: params,
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
@@ -1223,6 +1226,7 @@ describe("runCodexAppServerAttempt", () => {
         { sandboxExecServerEnabled: true },
       );
       const dynamicTools = await testing.buildDynamicTools({
+        attributionAttempt: params,
         params,
         resolvedWorkspace: workspaceDir,
         effectiveWorkspace: "/workspace",

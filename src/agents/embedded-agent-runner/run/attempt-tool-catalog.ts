@@ -2,6 +2,7 @@
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { bindToolExecutionAttribution } from "../../agent-tools.before-tool-call.attribution.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -22,6 +23,7 @@ import {
 import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import { resolveEmbeddedAttemptExecutionAttribution } from "./attempt-execution-attribution.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { buildToolSearchRunPlan } from "./attempt.tool-search-run-plan.js";
@@ -59,23 +61,27 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   } = preparedToolBase;
   const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
   let effectiveTools = uncompactedEffectiveTools;
-  const catalogToolHookContext = {
-    agentId: input.sessionAgentId,
-    config: attempt.config,
-    cwd: input.effectiveCwd,
-    sessionKey: input.sandboxSessionKey,
-    sessionId: attempt.sessionId,
-    runId: attempt.runId,
-    approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
-    channelId: attempt.currentChannelId,
-    trace: input.runTrace,
-    loopDetection: resolveToolLoopDetectionConfig({
-      cfg: attempt.config,
+  const attribution = resolveEmbeddedAttemptExecutionAttribution(attempt);
+  const catalogToolHookContext = bindToolExecutionAttribution(
+    {
       agentId: input.sessionAgentId,
-    }),
-    onToolOutcome: attempt.onToolOutcome,
-    allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
-  };
+      config: attempt.config,
+      cwd: input.effectiveCwd,
+      sessionKey: input.sandboxSessionKey,
+      sessionId: attempt.sessionId,
+      runId: attempt.runId,
+      approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
+      channelId: attempt.currentChannelId,
+      trace: input.runTrace,
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: attempt.config,
+        agentId: input.sessionAgentId,
+      }),
+      onToolOutcome: attempt.onToolOutcome,
+      allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
+    },
+    attribution,
+  );
   const codeModeTools = codeModeControlsEnabledForRun
     ? createCodeModeTools({
         config: attempt.config,

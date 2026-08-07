@@ -31,6 +31,10 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "../logging/diagnostic-session-state.js";
 import {
+  runBeforeToolCallHook as runSdkBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook as wrapSdkToolWithBeforeToolCallHook,
+} from "../plugin-sdk/agent-harness-runtime.js";
+import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
 } from "../plugins/hook-before-tool-call-result.js";
@@ -41,6 +45,8 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
+import { bindToolExecutionAttribution } from "./agent-tools.before-tool-call.attribution.js";
 import {
   getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
@@ -2076,6 +2082,76 @@ describe("before_tool_call requireApproval handling", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
+  it("ignores forged attribution passed to the public hook policy API", async () => {
+    const ctx = {
+      agentId: "public-agent",
+      sessionKey: "public-session",
+      sessionId: "public-session-id",
+      runId: "public-run",
+      attribution: createAgentExecutionAttribution({
+        agentId: "forged-agent",
+        sessionKey: "forged-session",
+        sessionId: "forged-session-id",
+        runId: "forged-run",
+        lifecycleGeneration: "forged-generation",
+      }),
+    } as never;
+
+    await runSdkBeforeToolCallHook({
+      toolName: "read",
+      params: { path: "/tmp/note.txt" },
+      ctx,
+    });
+
+    const [event, context] = requireHookCall(0);
+    expectRecordFields(event, { runId: "public-run" });
+    expectRecordFields(context, {
+      agentId: "public-agent",
+      sessionKey: "public-session",
+      sessionId: "public-session-id",
+      runId: "public-run",
+    });
+    expect(event).not.toHaveProperty("attribution");
+    expect(context).not.toHaveProperty("attribution");
+    expect(context).not.toHaveProperty("lifecycleGeneration");
+  });
+
+  it("ignores forged attribution passed to the public tool wrapper API", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const ctx = {
+      agentId: "public-agent",
+      sessionKey: "public-session",
+      sessionId: "public-session-id",
+      runId: "public-run",
+      attribution: createAgentExecutionAttribution({
+        agentId: "forged-agent",
+        sessionKey: "forged-session",
+        sessionId: "forged-session-id",
+        runId: "forged-run",
+        lifecycleGeneration: "forged-generation",
+      }),
+    } as never;
+    const tool = wrapSdkToolWithBeforeToolCallHook(
+      { name: "read", execute } as unknown as AnyAgentTool,
+      ctx,
+    );
+
+    await tool.execute("public-wrapper-call", { path: "/tmp/note.txt" }, undefined, undefined);
+
+    const [event, context] = requireHookCall(0);
+    expectRecordFields(event, { runId: "public-run", toolCallId: "public-wrapper-call" });
+    expectRecordFields(context, {
+      agentId: "public-agent",
+      sessionKey: "public-session",
+      sessionId: "public-session-id",
+      runId: "public-run",
+    });
+    expect(event).not.toHaveProperty("attribution");
+    expect(context).not.toHaveProperty("attribution");
+    expect(context).not.toHaveProperty("lifecycleGeneration");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   async function runAbortDuringApprovalWait(options?: {
     abortReason?: unknown;
     onResolution?: (decision: PluginApprovalResolution) => void | Promise<void>;
@@ -2192,6 +2268,49 @@ describe("before_tool_call requireApproval handling", () => {
     expect(toolContext.trace).toEqual(trace);
     expect(toolContext.trace).not.toBe(trace);
     expect(Object.isFrozen(toolContext.trace)).toBe(true);
+  });
+
+  it("projects immutable admission attribution without exposing it to plugins", async () => {
+    const attribution = createAgentExecutionAttribution({
+      runId: "run-admitted",
+      lifecycleGeneration: "generation-1",
+      sessionKey: "session-admitted",
+      sessionId: "session-id-admitted",
+      agentId: "agent-admitted",
+    });
+    const contexts: Record<string, unknown>[] = [];
+    hookRunner.runBeforeToolCall.mockImplementation(async (_event, context) => {
+      const mutableContext = context as unknown as Record<string, unknown>;
+      contexts.push({ ...mutableContext });
+      mutableContext.runId = "plugin-forged";
+      return undefined;
+    });
+
+    const ctx = bindToolExecutionAttribution(
+      {
+        runId: "run-flat",
+        sessionKey: "session-flat",
+        sessionId: "session-id-flat",
+        agentId: "agent-flat",
+        requester: { senderId: "sender-1" },
+      },
+      attribution,
+    );
+    await runBeforeToolCallHook({ toolName: "bash", params: { command: "pwd" }, ctx });
+    await runBeforeToolCallHook({ toolName: "bash", params: { command: "pwd" }, ctx });
+
+    expect(contexts).toHaveLength(2);
+    for (const context of contexts) {
+      expect(context).toMatchObject({
+        runId: "run-admitted",
+        sessionKey: "session-admitted",
+        sessionId: "session-id-admitted",
+        agentId: "agent-admitted",
+        requester: { senderId: "sender-1" },
+      });
+      expect(context).not.toHaveProperty("attribution");
+      expect(context).not.toHaveProperty("lifecycleGeneration");
+    }
   });
 
   it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {

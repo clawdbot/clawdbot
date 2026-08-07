@@ -852,6 +852,7 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "hello" },
       {
+        agentHarnessCodingToolsFactory: undefined,
         bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: {} },
         nativeHookRelay: { enabled: true },
@@ -917,6 +918,7 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "calendar" },
       {
+        agentHarnessCodingToolsFactory: expect.any(Function),
         bindingStore: expect.any(Object),
         pluginConfig: liveConfig.plugins.entries.codex.config,
         nativeHookRelay: { enabled: true },
