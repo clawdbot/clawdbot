@@ -297,7 +297,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       messages: [message],
       pendingMessageCount: 1,
       steer: vi.fn(async () => undefined),
-      steerWithReceipt: vi.fn(async () => deferred.receipt),
+      steerWithReceipt: vi.fn(() => deferred.receipt),
       subscribe: vi.fn(() => () => undefined),
     };
     const recordEvent = vi.fn();
@@ -465,7 +465,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       messages: [firstMessage, secondMessage],
       pendingMessageCount: 2,
       steer: vi.fn(async () => undefined),
-      steerWithReceipt: vi.fn(async () => receipts.shift()!),
+      steerWithReceipt: vi.fn(() => receipts.shift()!),
       subscribe: vi.fn(() => () => undefined),
     };
     const recordEvent = vi.fn();
@@ -571,10 +571,10 @@ describe("prepareEmbeddedAttemptStream", () => {
       };
       const deferred = createDeferredReceipt(() => testCase.cancelResult);
       const steerWithReceipt = testCase.runtimeReject
-        ? vi.fn(async () => {
+        ? vi.fn(() => {
             throw new Error("steering rejected");
           })
-        : vi.fn(async () => deferred.receipt);
+        : vi.fn(() => deferred.receipt);
       const recordEvent = vi.fn();
       const prepared = prepareEmbeddedAttemptStream({
         attempt: {

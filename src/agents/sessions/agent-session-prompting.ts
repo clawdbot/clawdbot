@@ -356,24 +356,33 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   /** Queue steering with exact cancellation and durable transcript acknowledgment. */
-  async steerWithReceipt(
+  steerWithReceipt(
     text: string,
     images?: ImageContent[],
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<AgentSessionSteerReceipt> {
-    const prepared = await this.prepareSteer(
+  ): AgentSessionSteerReceipt {
+    // Reserve before async expansion so timeout and terminal cleanup can prevent late admission.
+    const reservation = this.steering.reserve(text);
+    void this.prepareSteer(
       text,
       images,
       userTurnTranscriptRecorder,
       media,
       imageOrder,
       inputProvenance,
-    );
-    const queueReceipt = this.agent.steerWithReceipt(prepared.message);
-    return this.steering.add(prepared.text, prepared.message, queueReceipt);
+    )
+      .then((prepared) => {
+        reservation.admit(prepared.text, prepared.message, () =>
+          this.agent.steerWithReceipt(prepared.message),
+        );
+      })
+      .catch((error: unknown) => {
+        reservation.reject(error);
+      });
+    return reservation.receipt;
   }
 
   private enqueuePreparedSteer(prepared: { text: string; message: AgentMessage }): void {

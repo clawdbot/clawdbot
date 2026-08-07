@@ -17,7 +17,7 @@ type AgentSessionSteerReceipt = {
 type ReceiptAwareSteerTarget = EmbeddedAgentActiveSessionSteerTarget & {
   steerWithReceipt: (
     ...args: Parameters<EmbeddedAgentActiveSessionSteerTarget["steer"]>
-  ) => Promise<AgentSessionSteerReceipt>;
+  ) => AgentSessionSteerReceipt;
 };
 
 function createDeferredReceipt(cancel: () => boolean = () => false): {
@@ -116,6 +116,71 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     }
   });
 
+  it("counts a lost pending-input claim against the entry deadline", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:queue-deadline";
+    let rejectResolve!: (error: unknown) => void;
+    const pending = registerPendingAgentQuestion({
+      questionId: "ask_queue_deadline",
+      sessionKey,
+      questions: [
+        {
+          id: "answer",
+          header: "Answer",
+          question: "What should happen?",
+          isOther: true,
+          options: [],
+        },
+      ],
+      gatewayCall: vi.fn(
+        () =>
+          new Promise((_, reject) => {
+            rejectResolve = reject;
+          }),
+      ),
+      answer: Promise.resolve({ status: "cancelled" }),
+    });
+    const cancel = vi.fn(() => true);
+    const deferred = createDeferredReceipt(cancel);
+    const steerWithReceipt = vi.fn(() => deferred.receipt);
+    const activeSession: ReceiptAwareSteerTarget = {
+      steer: async () => undefined,
+      steerWithReceipt,
+      subscribe: () => () => {},
+    };
+
+    try {
+      const wait = steerActiveSessionWithOptionalDeliveryWait(
+        activeSession,
+        "Continue",
+        {
+          deliveryTimeoutMs: 5,
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: true,
+        },
+        sessionKey,
+      );
+      const rejection = expect(wait).rejects.toThrow(
+        "queued steering message was not committed to the transcript before timeout",
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      rejectResolve(
+        Object.assign(new Error("question already completed"), {
+          details: { reason: "QUESTION_NOT_FOUND" },
+          name: "GatewayClientRequestError",
+        }),
+      );
+
+      await rejection;
+      expect(steerWithReceipt).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      pending.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("forwards ordered images with a queued steering message", async () => {
     const steer = vi.fn(async () => undefined);
     const images = [
@@ -156,7 +221,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const deferred = createDeferredReceipt();
     const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
-      steerWithReceipt: async () => deferred.receipt,
+      steerWithReceipt: () => deferred.receipt,
       subscribe: () => () => {},
     };
     const wait = steerWithDeliveryWait(activeSession, "queued completion");
@@ -195,7 +260,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const receipts = [first.receipt, second.receipt];
     const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
-      steerWithReceipt: async () => receipts.shift()!,
+      steerWithReceipt: () => receipts.shift()!,
       subscribe: () => () => {},
     };
 
@@ -244,7 +309,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       const receipts = [first.receipt, second.receipt];
       const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
-        steerWithReceipt: async () => receipts.shift()!,
+        steerWithReceipt: () => receipts.shift()!,
         subscribe: () => () => {},
       };
 
@@ -300,7 +365,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     });
     const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
-      steerWithReceipt: async () => deferred.receipt,
+      steerWithReceipt: () => deferred.receipt,
       subscribe: () => () => {},
     };
 
@@ -346,7 +411,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     });
     const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
-      steerWithReceipt: async () => deferred.receipt,
+      steerWithReceipt: () => deferred.receipt,
       subscribe: (listener) => {
         emit = listener;
         return () => {
@@ -378,7 +443,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const deferred = createDeferredReceipt(() => false);
     const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
-      steerWithReceipt: async () => deferred.receipt,
+      steerWithReceipt: () => deferred.receipt,
       subscribe: () => () => {},
     };
 
@@ -403,7 +468,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       const consumed = createDeferredReceipt(() => false);
       const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
-        steerWithReceipt: async () => consumed.receipt,
+        steerWithReceipt: () => consumed.receipt,
         subscribe: () => () => {},
       };
 
@@ -427,7 +492,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       const deferred = createDeferredReceipt();
       const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
-        steerWithReceipt: async () => deferred.receipt,
+        steerWithReceipt: () => deferred.receipt,
         subscribe: (listener) => {
           emit = listener;
           return () => {};
@@ -457,7 +522,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       const deferred = createDeferredReceipt();
       const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
-        steerWithReceipt: async () => deferred.receipt,
+        steerWithReceipt: () => deferred.receipt,
         subscribe: (listener) => {
           emit = listener;
           return () => {};

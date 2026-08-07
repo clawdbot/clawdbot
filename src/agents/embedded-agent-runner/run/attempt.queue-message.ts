@@ -27,7 +27,7 @@ type ReceiptAwareSteerTarget = {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<AgentSessionSteerReceipt>;
+  ): AgentSessionSteerReceipt;
 };
 
 type EmbeddedSteeringQueueOutcome =
@@ -119,10 +119,10 @@ function isCompactionStartEvent(event: unknown): boolean {
  * Sends a steering message and resolves only after its session-owned receipt
  * confirms transcript persistence. Terminal events only drive timely cleanup.
  */
-async function steerAndWaitForTranscriptCommit(
+function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  timeoutMs: number,
+  deadlineMs: number,
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   images?: ImageContent[],
   media?: MediaFact[],
@@ -130,12 +130,11 @@ async function steerAndWaitForTranscriptCommit(
   inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
 ): Promise<void> {
   if (!isReceiptAwareSteerTarget(activeSession)) {
-    throw new Error("active session does not support transcript commit receipts");
+    return Promise.reject(new Error("active session does not support transcript commit receipts"));
   }
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     let settled = false;
     let receipt: AgentSessionSteerReceipt | undefined;
-    let cancellationMessage: string | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let terminalTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err?: unknown) => {
@@ -158,7 +157,7 @@ async function steerAndWaitForTranscriptCommit(
     };
     const rejectAfterCancellation = (message: string) => {
       if (!receipt) {
-        cancellationMessage = message;
+        finish(new Error(message));
         return;
       }
       try {
@@ -185,15 +184,15 @@ async function steerAndWaitForTranscriptCommit(
       }, 0);
       terminalTimer.unref?.();
     };
+    const timeoutMessage =
+      "queued steering message was not committed to the transcript before timeout";
     const startCommitTimer = () => {
-      timer = setTimeout(
-        () => {
-          rejectAfterCancellation(
-            "queued steering message was not committed to the transcript before timeout",
-          );
-        },
-        Math.max(1, timeoutMs),
-      );
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        rejectAfterCancellation(timeoutMessage);
+        return;
+      }
+      timer = setTimeout(() => rejectAfterCancellation(timeoutMessage), remainingMs);
       timer.unref?.();
     };
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
@@ -213,36 +212,23 @@ async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    void activeSession
-      .steerWithReceipt(
+    try {
+      receipt = activeSession.steerWithReceipt(
         text,
         images,
         userTurnTranscriptRecorder,
         media,
         imageOrder,
         inputProvenance,
-      )
-      .then(
-        (sessionReceipt) => {
-          receipt = sessionReceipt;
-          void receipt.committed.then(
-            () => finish(),
-            (error: unknown) => finish(error),
-          );
-          if (cancellationMessage) {
-            // An already-settled commit wins over a terminal event observed
-            // before steerWithReceipt returned.
-            queueMicrotask(() => {
-              if (!settled && cancellationMessage) {
-                rejectAfterCancellation(cancellationMessage);
-              }
-            });
-            return;
-          }
-          startCommitTimer();
-        },
+      );
+      void receipt.committed.then(
+        () => finish(),
         (error: unknown) => finish(error),
       );
+      startCommitTimer();
+    } catch (error) {
+      finish(error);
+    }
   });
 }
 
@@ -256,6 +242,11 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
 ): Promise<EmbeddedSteeringQueueOutcome> {
+  const deadlineMs =
+    options?.waitForTranscriptCommit === true
+      ? Date.now() +
+        Math.max(0, options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS)
+      : undefined;
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !options?.images?.length;
   if (isInboundUserMessage && !isPlainTextAnswer) {
@@ -296,7 +287,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     await steerAndWaitForTranscriptCommit(
       activeSession,
       text,
-      options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
+      deadlineMs ?? Date.now(),
       options.userTurnTranscriptRecorder,
       options.images,
       options.media,
