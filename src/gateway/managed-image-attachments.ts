@@ -911,7 +911,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       transcriptSource: "all",
     });
     for (const message of readResult.messages) {
-      const id = (message as { __openclaw?: { id?: unknown } } | null)?.__openclaw?.id;
+      const id = (message as { __openclaw?: { id?: unknown } } | null)?.["__openclaw"]?.id;
       if (typeof id === "string" && id) {
         indexedMessages.push({ message, messageId: id });
       }

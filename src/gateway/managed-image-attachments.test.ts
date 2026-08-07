@@ -81,7 +81,7 @@ function mockSessionTranscriptMessages(messages: Record<string, unknown>[]): voi
   readSessionMessagesMock.mockResolvedValue(messages);
   readSessionMessageByIdMock.mockImplementation(async (_scope, messageId: string) => {
     const message = messages.find(
-      (candidate) => (candidate.__openclaw as { id?: unknown } | undefined)?.id === messageId,
+      (candidate) => (candidate["__openclaw"] as { id?: unknown } | undefined)?.id === messageId,
     );
     return message
       ? { found: true, message, oversized: false }

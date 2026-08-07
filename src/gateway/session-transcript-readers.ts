@@ -300,7 +300,7 @@ export async function readSessionMessagesAsync(
     }
     return records.map(sqliteRecordMessageWithSeq);
   }
-  const { hasTranscriptEvents, records } = await readSqliteMessageRecords(target);
+  const { hasTranscriptEvents, records } = readSqliteMessageRecords(target);
   if (!hasTranscriptEvents && opts.allowResetArchiveFallback === true) {
     return (await archivedTranscriptReader(target).read({ ...opts, resetArchiveOnly: true }))
       .messages;
@@ -317,7 +317,7 @@ export async function readSessionMessagesWithSourceAsync(
   const snapshot =
     opts.mode === "recent"
       ? await readRecentSqliteMessageRecords(target, opts)
-      : await readSqliteMessageRecords(target);
+      : readSqliteMessageRecords(target);
   if (opts.mode === "full" && opts.transcriptSource === "all") {
     const archived = await archivedTranscriptReader(target).read({
       mode: "full",
@@ -373,7 +373,7 @@ export async function visitSessionMessagesAsync(
 ): Promise<number> {
   const target = resolveTranscriptReadTarget(scope);
   let count = 0;
-  for (const record of (await readSqliteMessageRecords(target)).records) {
+  for (const record of readSqliteMessageRecords(target).records) {
     visit(record.message, record.seq);
     count += 1;
   }

@@ -226,7 +226,9 @@ async function writeMainSessionTranscript(
       ) {
         const record = parsed as Record<string, unknown>;
         if (!(typeof record.id === "string" && record.id.trim())) {
-          return { ...record, id: `gateway-chat-fixture-${index}` };
+          const identified = Object.assign({}, record);
+          identified.id = `gateway-chat-fixture-${index}`;
+          return identified;
         }
       }
       return parsed;
