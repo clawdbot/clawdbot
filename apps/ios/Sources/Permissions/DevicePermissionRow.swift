@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Capsule action used by permission rows: filled for the initial "Allow",
+/// Capsule action used by permission rows: filled for the initial "Continue",
 /// bordered for repair actions like "Open Settings" or "Upgrade".
 struct DevicePermissionActionButtonStyle: ButtonStyle {
     let prominent: Bool
@@ -38,7 +38,7 @@ struct DevicePermissionActionButtonStyle: ButtonStyle {
 }
 
 /// One device permission with an icon tile, explanation, and a single clear
-/// affordance: Allow when unset, a green check when granted, a repair action otherwise.
+/// affordance: Continue when unset, a green check when granted, a repair action otherwise.
 struct DevicePermissionRow: View {
     let identifierPrefix: String
     let identifier: String

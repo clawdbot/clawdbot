@@ -681,9 +681,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
         app.tap()
+        XCTAssertFalse(app.staticTexts["Allow access"].exists)
 
         let copySetupCommand = app.buttons["Copy setup code command"]
         XCTAssertTrue(copySetupCommand.waitForExistence(timeout: 8))
@@ -893,8 +892,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
@@ -954,6 +951,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let request = try XCTUnwrap(self.app?.buttons["privacy-access-photos-action"])
         XCTAssertTrue(request.waitForExistence(timeout: 5))
+        XCTAssertEqual(request.label, "Continue")
         request.tap()
         self.app?.tap()
 
@@ -1279,8 +1277,6 @@ extension OpenClawSnapshotUITests {
         self.app = app
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
-        app.buttons["Continue"].tap()
-        XCTAssertTrue(app.staticTexts["Allow access"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
         app.tap()
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
