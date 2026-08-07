@@ -6,18 +6,27 @@ import {
   createSpeechProviderRegistry,
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
-import { resolveTtsProviderOrder } from "./tts-provider-resolution.js";
+import {
+  isTtsProviderConfigured,
+  resolvePreparedTtsProvider,
+  resolveTtsProviderOrder,
+} from "./tts-provider-resolution.js";
+import { resolveTtsConfig } from "./tts-settings.js";
 
 const mocks = vi.hoisted(() => ({
   canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => {
     const normalized = providerId?.trim().toLowerCase();
     return normalized === "edge" ? "microsoft" : normalized || undefined;
   }),
+  getSpeechProvider: vi.fn(),
+  listSpeechProviders: vi.fn(),
 }));
 
 vi.mock("./provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./provider-registry.js")>()),
   canonicalizeSpeechProviderId: mocks.canonicalizeSpeechProviderId,
+  getSpeechProvider: mocks.getSpeechProvider,
+  listSpeechProviders: mocks.listSpeechProviders,
 }));
 
 function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlugin {
@@ -44,6 +53,8 @@ describe("speech provider registry", () => {
 
   beforeEach(() => {
     mocks.canonicalizeSpeechProviderId.mockClear();
+    mocks.getSpeechProvider.mockReset();
+    mocks.listSpeechProviders.mockReset();
     providers = [];
     directProvider = undefined;
     getProviderCalls.length = 0;
@@ -99,6 +110,94 @@ describe("speech provider registry", () => {
         inventory,
       ),
     ).toEqual(["openai", "google", "elevenlabs"]);
+  });
+
+  it("selects the first configured provider entirely from prepared facts", () => {
+    const openaiConfigured = vi.fn(() => false);
+    const googleConfigured = vi.fn(() => true);
+    const inventory = [
+      { ...createSpeechProvider("openai"), autoSelectOrder: 1, isConfigured: openaiConfigured },
+      { ...createSpeechProvider("google"), autoSelectOrder: 2, isConfigured: googleConfigured },
+    ];
+
+    expect(
+      resolvePreparedTtsProvider({
+        config: resolveTtsConfig({}),
+        providers: inventory,
+        configuredByProvider: new Map([
+          ["openai", false],
+          ["google", true],
+        ]),
+      }),
+    ).toBe("google");
+    expect(mocks.listSpeechProviders).not.toHaveBeenCalled();
+    expect(openaiConfigured).not.toHaveBeenCalled();
+    expect(googleConfigured).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "persisted aliases",
+      preference: { provider: "oai", source: "prefs" } as const,
+      inventory: [createSpeechProvider("openai", ["oai"])],
+      expected: "openai",
+    },
+    {
+      name: "configured providers",
+      preference: { provider: "custom", source: "config" } as const,
+      inventory: [],
+      expected: "custom",
+    },
+  ])("preserves $name in prepared selection", ({ preference, inventory, expected }) => {
+    expect(
+      resolvePreparedTtsProvider({
+        config: resolveTtsConfig({}),
+        preference,
+        providers: inventory,
+        configuredByProvider: new Map(),
+      }),
+    ).toBe(expected);
+  });
+
+  it("keeps persona selection conditional on provider availability", () => {
+    const availablePersonaProvider = createSpeechProvider("persona-provider");
+    mocks.getSpeechProvider.mockReturnValueOnce(availablePersonaProvider);
+    const config = resolveTtsConfig({});
+    const preference = { provider: "persona-provider", source: "persona" } as const;
+
+    expect(
+      resolvePreparedTtsProvider({
+        config,
+        preference,
+        providers: [],
+        configuredByProvider: new Map(),
+      }),
+    ).toBe("persona-provider");
+    expect(
+      resolvePreparedTtsProvider({
+        config,
+        preference,
+        providers: [createSpeechProvider("fallback")],
+        configuredByProvider: new Map([["fallback", true]]),
+      }),
+    ).toBe("fallback");
+  });
+
+  it("uses prepared provider objects for configuration without registry rediscovery", () => {
+    const resolveConfig = vi.fn(() => ({}));
+    const isConfigured = vi.fn(() => true);
+    const provider = {
+      ...createSpeechProvider("openai"),
+      resolveConfig,
+      isConfigured,
+    };
+    const cfg = {} as OpenClawConfig;
+
+    expect(isTtsProviderConfigured(resolveTtsConfig(cfg), provider, cfg)).toBe(true);
+    expect(resolveConfig).toHaveBeenCalledOnce();
+    expect(isConfigured).toHaveBeenCalledOnce();
+    expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
+    expect(mocks.getSpeechProvider).not.toHaveBeenCalled();
   });
 
   it("canonicalizes a voice-model alias omitted from the supplied inventory", () => {
