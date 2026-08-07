@@ -16,8 +16,9 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 
-type WindowsProcessSnapshotEntry = {
+export type WindowsProcessSnapshotEntry = {
   ProcessId?: number;
+  ParentProcessId?: number | null;
   CommandLine?: string | null;
 };
 
@@ -60,6 +61,60 @@ function matchesInstalledProgramArguments(
 function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number | null {
   const pid = entry.ProcessId;
   return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function getSnapshotParentProcessId(entry: WindowsProcessSnapshotEntry): number | null {
+  const parentPid = entry.ParentProcessId;
+  return typeof parentPid === "number" && Number.isFinite(parentPid) && parentPid > 0
+    ? parentPid
+    : null;
+}
+
+/** Builds a pid -> parent-pid index from a Windows process snapshot. */
+export function buildWindowsParentPidIndex(
+  entries: readonly WindowsProcessSnapshotEntry[],
+): Map<number, number> {
+  const parentById = new Map<number, number>();
+  for (const entry of entries) {
+    const pid = getSnapshotProcessId(entry);
+    const parentPid = getSnapshotParentProcessId(entry);
+    if (pid !== null && parentPid !== null && parentPid !== pid) {
+      parentById.set(pid, parentPid);
+    }
+  }
+  return parentById;
+}
+
+/** True when `descendantPid` is `ancestorPid` or sits inside its process tree. */
+export function isWindowsProcessDescendant(
+  descendantPid: number,
+  ancestorPid: number,
+  parentById: ReadonlyMap<number, number>,
+): boolean {
+  let cursor = descendantPid;
+  for (let hops = 0; cursor > 0 && hops < 64; hops += 1) {
+    if (cursor === ancestorPid) {
+      return true;
+    }
+    cursor = parentById.get(cursor) ?? 0;
+  }
+  return false;
+}
+
+/**
+ * True when the current process is the gateway process itself or inside its
+ * process tree (e.g. `openclaw gateway restart` spawned by the gateway's own
+ * agent exec tool). Requires a Windows process snapshot; false when unknown.
+ */
+export async function isCurrentProcessInsideGatewayTree(pid: number): Promise<boolean> {
+  if (process.platform !== "win32" || pid === process.pid) {
+    return false;
+  }
+  const snapshot = readWindowsProcessSnapshot();
+  if (!snapshot) {
+    return false;
+  }
+  return isWindowsProcessDescendant(process.pid, pid, buildWindowsParentPidIndex(snapshot));
 }
 
 export function findInstalledProcessPid(
@@ -305,21 +360,35 @@ export async function terminateGatewayProcessTree(pid: number, graceMs: number):
     killProcessTree(pid, { graceMs });
     return;
   }
+  // When the current process lives inside the target tree (e.g. `openclaw gateway
+  // restart` run through the gateway's own agent exec tool), `taskkill /T` would
+  // terminate us before the restart can relaunch the gateway, leaving it stopped.
+  // Kill only the gateway process itself in that case: its children survive as
+  // orphans, the port is released, and the caller's `schtasks /Run` step restarts.
+  const treeKill = !(await isCurrentProcessInsideGatewayTree(pid));
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
-  const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  const graceful = spawnSync(
+    taskkillPath,
+    treeKill ? ["/T", "/PID", String(pid)] : ["/PID", String(pid)],
+    {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    },
+  );
   // taskkill can race with exit; only a missing PID avoids forcing the verified owner.
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
-  const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  const forced = spawnSync(
+    taskkillPath,
+    treeKill ? ["/F", "/T", "/PID", String(pid)] : ["/F", "/PID", String(pid)],
+    {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    },
+  );
   if (forced.error || forced.status !== 0) {
     if (probeProcessState(pid) === "missing") {
       return;
@@ -359,7 +428,7 @@ export function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | nu
     [
       "-NoProfile",
       "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
     ],
     { encoding: "utf8", timeout: 5_000, windowsHide: true },
   );
