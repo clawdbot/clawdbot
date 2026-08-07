@@ -378,7 +378,11 @@ function expectBundleInspectState(
   params: {
     bundleCapabilities: readonly string[];
     shape: string;
-    mcpServers?: readonly { name: string; hasStdioTransport: boolean }[];
+    mcpServers?: readonly {
+      name: string;
+      hasStdioTransport: boolean;
+      unsupported?: boolean;
+    }[];
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
@@ -1060,12 +1064,18 @@ describe("plugin status reports", () => {
         rootDir: "/tmp/native-mcp",
         mcpServers: {
           app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
+          remote: { type: "http", url: "https://example.test/mcp" },
+          incomplete: { transport: "streamable-http" },
         },
       }),
       expectedId: "native-mcp",
       expectedBundleCapabilities: [],
       expectedShape: "non-capability",
-      expectedMcpServers: [{ name: "app", hasStdioTransport: true }],
+      expectedMcpServers: [
+        { name: "app", hasStdioTransport: true },
+        { name: "remote", hasStdioTransport: false },
+        { name: "incomplete", hasStdioTransport: false, unsupported: true },
+      ],
     },
   ])(
     "$name",

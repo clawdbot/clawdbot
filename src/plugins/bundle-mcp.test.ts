@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
 import { loadEnabledBundleLspConfig } from "./bundle-lsp.js";
-import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
+import { inspectBundleMcpRuntimeSupport, loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import {
   createEnabledPluginEntries,
   createBundleMcpTempHarness,
@@ -38,6 +38,10 @@ async function expectResolvedPathEqual(actual: unknown, expected: string): Promi
   );
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 function expectNoDiagnostics(diagnostics: unknown[]) {
   expect(diagnostics).toStrictEqual([]);
 }
@@ -54,6 +58,25 @@ function createEnabledBundleConfig(pluginIds: string[]): OpenClawConfig {
       entries: createEnabledPluginEntries(pluginIds),
     },
   };
+}
+
+const AGENT_PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+const AGENT_MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
+
+async function writeAgentBundle(params: {
+  homeDir: string;
+  pluginId: string;
+  manifest?: Record<string, unknown>;
+  mcp?: unknown;
+  textFiles?: Record<string, string>;
+}) {
+  const pluginRoot = resolveBundlePluginRoot(params.homeDir, params.pluginId);
+  await writeBundleTextFiles(pluginRoot, {
+    "plugin.json": `${JSON.stringify({ $schema: AGENT_PLUGIN_SCHEMA, name: params.pluginId, ...params.manifest }, null, 2)}\n`,
+    ...(params.mcp === undefined ? {} : { "mcp.json": `${JSON.stringify(params.mcp, null, 2)}\n` }),
+    ...params.textFiles,
+  });
+  return pluginRoot;
 }
 
 async function expectInlineBundleMcpServer(params: {
@@ -438,6 +461,191 @@ describe("loadEnabledBundleMcpConfig", () => {
         expect(loaded.diagnostics).toHaveLength(1);
         expect(loaded.diagnostics[0]?.pluginId).toBe("malformed-lsp");
         expect(loaded.diagnostics[0]?.message).toContain("unable to read .lsp.json");
+      },
+    );
+  });
+
+  it("loads Agent Plugins MCP config with placeholders, injected env, and canonical transports", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-agent-bundle-mcp",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeAgentBundle({
+          homeDir,
+          pluginId: "portable-mcp",
+          mcp: {
+            $schema: AGENT_MCP_SCHEMA,
+            mcpServers: {
+              local: {
+                type: "stdio",
+                command: "./bin/server",
+                args: ["${PLUGIN_ROOT}/config.json", "${PLUGIN_DATA}/cache"],
+                env: {
+                  ROOT_COPY: "${PLUGIN_ROOT}",
+                  DATA_COPY: "${PLUGIN_DATA}",
+                },
+                cwd: "${PLUGIN_DATA}",
+              },
+              remote: {
+                type: "streamable-http",
+                url: "https://example.test/mcp",
+                headers: { Authorization: "Bearer test" },
+              },
+              legacy: {
+                type: "sse",
+                url: "https://example.test/sse",
+              },
+            },
+          },
+          textFiles: {
+            "bin/server": "#!/bin/sh\n",
+            "config.json": "{}\n",
+          },
+        });
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["portable-mcp"]),
+        });
+        const local = expectDefined(loaded.config.mcpServers.local, "local agent MCP server");
+        const remote = expectDefined(loaded.config.mcpServers.remote, "remote agent MCP server");
+        const legacy = expectDefined(loaded.config.mcpServers.legacy, "legacy agent MCP server");
+        const localEnv = isRecord(local.env) ? local.env : {};
+        const localArgs = getServerArgs(local);
+
+        expectNoDiagnostics(loaded.diagnostics);
+        expect(local).toMatchObject({ transport: "stdio" });
+        expect(local.type).toBeUndefined();
+        await expectResolvedPathEqual(local.command, path.join(pluginRoot, "bin", "server"));
+        await expectResolvedPathEqual(localArgs?.[0], path.join(pluginRoot, "config.json"));
+        expect(localArgs?.[1]).toBe(path.join(String(localEnv.PLUGIN_DATA), "cache"));
+        await expectResolvedPathEqual(localEnv.PLUGIN_ROOT, pluginRoot);
+        await expectResolvedPathEqual(
+          localEnv.PLUGIN_DATA,
+          path.join(homeDir, ".openclaw", "plugin-data", "portable-mcp"),
+        );
+        await expectResolvedPathEqual(local.cwd, String(localEnv.PLUGIN_DATA));
+        expect(localEnv.ROOT_COPY).toBe(localEnv.PLUGIN_ROOT);
+        expect(localEnv.DATA_COPY).toBe(localEnv.PLUGIN_DATA);
+        expect(remote).toEqual({
+          transport: "streamable-http",
+          url: "https://example.test/mcp",
+          headers: { Authorization: "Bearer test" },
+        });
+        expect(legacy).toEqual({
+          transport: "sse",
+          url: "https://example.test/sse",
+        });
+        expect(
+          inspectBundleMcpRuntimeSupport({
+            pluginId: "portable-mcp",
+            rootDir: pluginRoot,
+            bundleFormat: "agent",
+          }),
+        ).toMatchObject({
+          hasSupportedStdioServer: true,
+          supportedServerNames: ["local", "remote", "legacy"],
+          stdioServerNames: ["local"],
+          unsupportedServerNames: [],
+        });
+      },
+    );
+  });
+
+  it("ignores dot MCP config and inline MCP fields for Agent Plugins", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-agent-bundle-closed",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeAgentBundle({
+          homeDir,
+          pluginId: "closed-agent",
+          manifest: {
+            mcpServers: {
+              inline: { type: "stdio", command: "node" },
+            },
+          },
+          textFiles: {
+            ".mcp.json": JSON.stringify({
+              mcpServers: { dotted: { type: "stdio", command: "node" } },
+            }),
+          },
+        });
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["closed-agent"]),
+        });
+
+        expectNoDiagnostics(loaded.diagnostics);
+        expect(loaded.config.mcpServers).toStrictEqual({});
+        await expectPathMissing(path.join(homeDir, ".openclaw", "plugin-data", "closed-agent"));
+        expect(await fs.realpath(pluginRoot)).toBeTruthy();
+      },
+    );
+  });
+
+  it.each([
+    { name: "malformed JSON", content: "{" },
+    { name: "missing mcpServers", content: JSON.stringify({ $schema: AGENT_MCP_SCHEMA }) },
+  ])("isolates Agent Plugins MCP failure for $name", async ({ content }) => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-agent-bundle-invalid",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeAgentBundle({
+          homeDir,
+          pluginId: "invalid-agent-mcp",
+        });
+        await fs.writeFile(path.join(pluginRoot, "mcp.json"), content, "utf-8");
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["invalid-agent-mcp"]),
+        });
+
+        expect(loaded.config.mcpServers).toStrictEqual({});
+        expect(loaded.diagnostics).toHaveLength(1);
+        expect(loaded.diagnostics[0]?.pluginId).toBe("invalid-agent-mcp");
+        expect(loaded.diagnostics[0]?.message).toContain("mcp.json");
+      },
+    );
+  });
+
+  it("skips invalid Agent Plugins MCP entries while retaining valid siblings", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-agent-bundle-entry-isolation",
+      async ({ homeDir, workspaceDir }) => {
+        await writeAgentBundle({
+          homeDir,
+          pluginId: "isolated-agent-mcp",
+          mcp: {
+            $schema: AGENT_MCP_SCHEMA,
+            mcpServers: {
+              valid: { type: "streamable-http", url: "https://example.test/mcp" },
+              invalid: {
+                type: "stdio",
+                command: "node --inspect",
+                env: { PLUGIN_ROOT: "override" },
+              },
+            },
+          },
+        });
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["isolated-agent-mcp"]),
+        });
+
+        expect(loaded.config.mcpServers).toEqual({
+          valid: {
+            transport: "streamable-http",
+            url: "https://example.test/mcp",
+          },
+        });
+        expect(loaded.diagnostics).toHaveLength(1);
+        expect(loaded.diagnostics[0]?.message).toContain('invalid MCP server "invalid"');
       },
     );
   });
