@@ -9,6 +9,7 @@ import {
   resolveLegacyInteractiveTextFallback,
   type MessagePresentation,
   type MessagePresentationInteractiveBlock,
+  type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -21,12 +22,15 @@ import { buildInlineKeyboard } from "./inline-keyboard.js";
 
 const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
 
-export const TELEGRAM_PRESENTATION_CAPABILITIES = {
+const TELEGRAM_PRESENTATION_CAPABILITIES = {
   supported: true,
   buttons: true,
   selects: true,
   context: true,
   divider: false,
+  // Native table blocks require the account's Bot API 10.2 rich-message path;
+  // per-account capability resolution flips this on when richMessages is enabled.
+  tables: false,
   limits: {
     actions: {
       maxActions: 100,
@@ -44,6 +48,51 @@ export const TELEGRAM_PRESENTATION_CAPABILITIES = {
     },
   },
 };
+
+export function resolveTelegramPresentationCapabilities(params: {
+  richMessages: boolean;
+}): typeof TELEGRAM_PRESENTATION_CAPABILITIES {
+  return params.richMessages
+    ? { ...TELEGRAM_PRESENTATION_CAPABILITIES, tables: true }
+    : TELEGRAM_PRESENTATION_CAPABILITIES;
+}
+
+function escapeTelegramTableCellText(value: string | number): string {
+  return String(value).replaceAll("|", "\\|").replace(/\s+/g, " ").trim();
+}
+
+// Pipe-table markdown feeds the existing markdown -> rich-block converter,
+// which emits native Bot API 10.2 table blocks on rich accounts.
+function renderTelegramTableMarkdown(block: MessagePresentationTableBlock): string {
+  const lines: string[] = [];
+  const caption = block.caption.trim();
+  if (caption) {
+    lines.push(`**${caption}**`);
+  }
+  lines.push(`| ${block.headers.map(escapeTelegramTableCellText).join(" | ")} |`);
+  lines.push(`| ${block.headers.map(() => "---").join(" | ")} |`);
+  for (const row of block.rows) {
+    lines.push(`| ${row.map(escapeTelegramTableCellText).join(" | ")} |`);
+  }
+  return lines.join("\n");
+}
+
+function renderTelegramRichFallbackText(presentation: MessagePresentation): string {
+  const parts: string[] = [];
+  if (presentation.title?.trim()) {
+    parts.push(`**${presentation.title.trim()}**`);
+  }
+  for (const block of presentation.blocks) {
+    const text =
+      block.type === "table"
+        ? renderTelegramTableMarkdown(block)
+        : renderMessagePresentationFallbackText({ presentation: { blocks: [block] } });
+    if (text.trim()) {
+      parts.push(text);
+    }
+  }
+  return parts.join("\n\n");
+}
 
 function canEncodeTelegramPresentationControl(
   block: MessagePresentationInteractiveBlock,
@@ -119,7 +168,7 @@ function partitionTelegramPresentationBlocks(params: {
 /** Convert portable presentation into the one Telegram payload shape used by every send funnel. */
 export function canonicalizeTelegramPresentationPayload(
   payload: ReplyPayload,
-  options?: { allowWebAppButtons?: boolean },
+  options?: { allowWebAppButtons?: boolean; richTables?: boolean },
 ): ReplyPayload {
   const normalizedPresentation = normalizeMessagePresentation(payload.presentation);
   const telegramData = payload.channelData?.telegram as
@@ -135,9 +184,10 @@ export function canonicalizeTelegramPresentationPayload(
     // Native-only controls need the same visible message anchor as portable controls.
     return { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK };
   }
+  const richTables = options?.richTables === true;
   const presentation = adaptMessagePresentationForChannel({
     presentation: normalizedPresentation,
-    capabilities: TELEGRAM_PRESENTATION_CAPABILITIES,
+    capabilities: resolveTelegramPresentationCapabilities({ richMessages: richTables }),
   });
 
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
@@ -166,16 +216,32 @@ export function canonicalizeTelegramPresentationPayload(
   );
   const buttons = existingButtons ?? presentationButtons;
 
-  const fallbackText = renderMessagePresentationFallbackText({
-    presentation: { ...presentation, blocks: fallbackBlocks },
-  });
+  const fallbackText = richTables
+    ? renderTelegramRichFallbackText({ ...presentation, blocks: fallbackBlocks })
+    : renderMessagePresentationFallbackText({
+        presentation: { ...presentation, blocks: fallbackBlocks },
+      });
   const currentText =
     resolveLegacyInteractiveTextFallback({ text: payload.text, interactive })?.trim() ?? "";
+  const textIsFallback = payload.presentationTextMode === "fallback";
   const hasFallback =
     fallbackText.length > 0 &&
     (currentText === fallbackText || currentText.endsWith(`\n\n${fallbackText}`));
-  const text = hasFallback ? currentText : [currentText, fallbackText].filter(Boolean).join("\n\n");
-  const { presentation: _presentation, ...withoutPresentation } = payload;
+  // presentationTextMode "fallback" marks payload.text as the authored plain
+  // rendering of the same presentation: rich accounts replace it with the
+  // native block rendering, plain accounts keep it and drop the generic flatten.
+  const text = textIsFallback
+    ? richTables
+      ? fallbackText || currentText
+      : currentText || fallbackText
+    : hasFallback
+      ? currentText
+      : [currentText, fallbackText].filter(Boolean).join("\n\n");
+  const {
+    presentation: _presentation,
+    presentationTextMode: _presentationTextMode,
+    ...withoutPresentation
+  } = payload;
   const canonical: ReplyPayload = {
     ...withoutPresentation,
     text: text || (buttons ? TELEGRAM_CONTROL_ONLY_FALLBACK : ""),

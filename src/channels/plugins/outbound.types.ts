@@ -230,6 +230,11 @@ export type ChannelOutboundAdapter = {
   }) => Promise<void> | void;
   /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
+  /** Account-aware capability resolution; takes precedence over the static declaration. */
+  resolvePresentationCapabilities?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;
   /** Render an adapted portable presentation into channel-native payload data. */
   renderPresentation?: (params: {

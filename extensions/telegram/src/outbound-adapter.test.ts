@@ -509,7 +509,7 @@ describe("telegramOutbound", () => {
     const rendered = await telegramOutbound.renderPresentation?.({
       payload: { text: "Open app:" },
       presentation,
-      ctx: { to: "12345" } as never,
+      ctx: { cfg: {}, to: "12345" } as never,
     });
     if (!rendered) {
       throw new Error("expected rendered Telegram presentation");
@@ -554,7 +554,7 @@ describe("telegramOutbound", () => {
           },
         ],
       },
-      ctx: {} as never,
+      ctx: { cfg: {} } as never,
     });
 
     expect((rendered?.channelData?.telegram as { buttons?: unknown })?.buttons).toEqual([
@@ -583,7 +583,7 @@ describe("telegramOutbound", () => {
           },
         ],
       },
-      ctx: {} as never,
+      ctx: { cfg: {} } as never,
     });
     if (!rendered) {
       throw new Error("expected rendered Telegram presentation");
@@ -631,7 +631,7 @@ describe("telegramOutbound", () => {
     const rendered = await telegramOutbound.renderPresentation?.({
       payload: { text: "Approve?" },
       presentation,
-      ctx: {} as never,
+      ctx: { cfg: {} } as never,
     });
     if (!rendered) {
       throw new Error("expected rendered Telegram approval presentation");

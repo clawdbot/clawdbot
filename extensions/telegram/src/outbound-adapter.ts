@@ -26,7 +26,7 @@ import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
-  TELEGRAM_PRESENTATION_CAPABILITIES,
+  resolveTelegramPresentationCapabilities,
 } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import {
@@ -434,7 +434,13 @@ export function createTelegramOutboundAdapter(
     preferFinalAssistantVisibleText: options.preferFinalAssistantVisibleText,
     normalizePayload: ({ payload }) => normalizeTelegramMetadataOnlyPayload(payload),
     normalizePayloadBatch: ({ payloads }) => normalizeTelegramFallbackPayloadBatch(payloads),
-    presentationCapabilities: TELEGRAM_PRESENTATION_CAPABILITIES,
+    presentationCapabilities: resolveTelegramPresentationCapabilities({ richMessages: false }),
+    resolvePresentationCapabilities: ({ cfg, accountId }) =>
+      resolveTelegramPresentationCapabilities({
+        richMessages:
+          mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
+            .richMessages === true,
+      }),
     deliveryCapabilities: {
       pin: true,
       durableFinal: {
@@ -452,7 +458,14 @@ export function createTelegramOutboundAdapter(
     renderPresentation: ({ payload, presentation, ctx }) =>
       canonicalizeTelegramPresentationPayload(
         { ...payload, presentation },
-        { allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct" },
+        {
+          allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct",
+          richTables:
+            mergeTelegramAccountConfig(
+              ctx.cfg,
+              ctx.accountId ?? resolveDefaultTelegramAccountId(ctx.cfg),
+            ).richMessages === true,
+        },
       ),
     afterDeliverPayload: ({ cfg, target, payload, results }) => {
       const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);

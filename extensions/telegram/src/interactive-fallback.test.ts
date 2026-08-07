@@ -392,4 +392,84 @@ describe("canonicalizeTelegramPresentationPayload", () => {
 
     expect(second.text).toBe(first.text);
   });
+
+  it("renders table blocks as markdown pipe tables for rich accounts", () => {
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        text: "Summary",
+        presentation: {
+          title: "FY25 outlook",
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account", "Stage"],
+              rows: [
+                ["Acme", "Won"],
+                ["Cells | with pipes", "Review"],
+              ],
+            },
+            { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+          ],
+        },
+      },
+      { richTables: true },
+    );
+
+    const text = result.text ?? "";
+    expect(text).toContain("**FY25 outlook**");
+    expect(text).toContain("**Pipeline**");
+    expect(text).toContain("| Account | Stage |");
+    expect(text).toContain("| --- | --- |");
+    expect(text).toContain("| Acme | Won |");
+    expect(text).toContain("| Cells \\| with pipes | Review |");
+    expect(text).not.toContain("Pipeline (table)");
+    expect(result.channelData?.telegram).toMatchObject({
+      buttons: [[{ text: "Refresh", callback_data: expect.any(String) }]],
+    });
+  });
+
+  it("replaces authored fallback text with the rich rendering when text is marked fallback", () => {
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        text: "Plain fallback body",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account"],
+              rows: [["Acme"]],
+            },
+          ],
+        },
+      },
+      { richTables: true },
+    );
+
+    expect(result.text).toContain("| Account |");
+    expect(result.text).not.toContain("Plain fallback body");
+    expect(result.presentationTextMode).toBeUndefined();
+  });
+
+  it("keeps authored fallback text on plain accounts instead of the generic flatten", () => {
+    const result = canonicalizeTelegramPresentationPayload({
+      text: "Plain fallback body",
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Pipeline",
+            headers: ["Account"],
+            rows: [["Acme"]],
+          },
+        ],
+      },
+    });
+
+    expect(result.text).toBe("Plain fallback body");
+    expect(result.presentation).toBeUndefined();
+  });
 });

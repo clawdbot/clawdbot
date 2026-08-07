@@ -568,6 +568,7 @@ export function createTelegramDeliveryController(params: {
       return normalized
         ? canonicalizeTelegramPresentationPayload(normalized, {
             allowWebAppButtons: resolveTelegramTargetChatType(String(context.chatId)) === "direct",
+            richTables: params.telegramCfg.richMessages === true,
           })
         : undefined;
     },

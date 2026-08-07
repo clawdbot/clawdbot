@@ -51,6 +51,11 @@ import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcr
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
+import type {
+  MessagePresentation,
+  MessagePresentationBlock,
+  MessagePresentationTableCell,
+} from "../interactive/payload.js";
 import {
   findDecisionReason,
   summarizeDecisionReason,
@@ -354,16 +359,16 @@ const readUsageFromSessionLog = (
   }
 };
 
-const formatUsagePair = (input?: number | null, output?: number | null) => {
+const formatTokensPairValue = (input?: number | null, output?: number | null) => {
   if (input == null && output == null) {
     return null;
   }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
-  return `🧮 Tokens: ${inputLabel} in / ${outputLabel} out`;
+  return `${inputLabel} in / ${outputLabel} out`;
 };
 
-const formatCacheLine = (
+const formatCacheHitValue = (
   input?: number | null,
   cacheRead?: number | null,
   cacheWrite?: number | null,
@@ -390,7 +395,7 @@ const formatCacheLine = (
       ? Math.round((cacheRead / totalInput) * 100)
       : 0;
 
-  return `🗄️ Cache: ${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
+  return `${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
 };
 
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
@@ -559,7 +564,17 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
   return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
+export type StatusMessageParts = {
+  text: string;
+  /** Structured mirror of the text body for channels with native table rendering. */
+  presentation: MessagePresentation;
+};
+
 export function buildStatusMessage(args: StatusArgs): string {
+  return buildStatusMessageParts(args).text;
+}
+
+export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
@@ -933,13 +948,14 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof sessionStartedAt === "number"
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
       : undefined;
-  const sessionLine = [
-    `Session: ${args.sessionKey ?? "unknown"}`,
+  const sessionValue = [
+    args.sessionKey ?? "unknown",
     sessionDuration ? `duration ${sessionDuration}` : null,
     typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
     .join(" • ");
+  const sessionLine = `Session: ${sessionValue}`;
 
   const isGroupSession =
     entry?.chatType === "group" ||
@@ -988,14 +1004,16 @@ export function buildStatusMessage(args: StatusArgs): string {
     provider: activeProvider,
     model: activeModel,
   });
+  const fastModeValue = formatFastModeStatusValue({
+    mode: fastMode,
+    fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+  });
+  const optionFlagsValue = [verboseLabel, traceLabel, elevatedLabel].filter(Boolean).join(" · ");
   const optionParts = [
     `Execution: ${execution.label}`,
     `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
-    `Fast: ${formatFastModeStatusValue({
-      mode: fastMode,
-      fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
-    })}`,
+    `Fast: ${fastModeValue}`,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
@@ -1105,22 +1123,25 @@ export function buildStatusMessage(args: StatusArgs): string {
     : null;
 
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
-  const fallbackLine = fallbackState.active
-    ? `↪️ Fallback: ${activeModelLabel}${
+  const fallbackValue = fallbackState.active
+    ? `${activeModelLabel}${
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
       } (${fallbackState.reason ?? "selected model unavailable"})`
     : null;
+  const fallbackLine = fallbackValue ? `↪️ Fallback: ${fallbackValue}` : null;
   const commit = resolveCommitHash({ moduleUrl: import.meta.url });
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
-  const usagePair = formatUsagePair(inputTokens, outputTokens);
-  const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
+  const tokensValue = formatTokensPairValue(inputTokens, outputTokens);
+  const usagePair = tokensValue ? `🧮 Tokens: ${tokensValue}` : null;
+  const cacheValue = formatCacheHitValue(inputTokens, cacheRead, cacheWrite);
+  const cacheLine = cacheValue ? `🗄️ Cache: ${cacheValue}` : null;
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
-  return [
+  const text = [
     versionLine,
     timeLine,
     args.uptimeLine,
@@ -1144,5 +1165,59 @@ export function buildStatusMessage(args: StatusArgs): string {
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+
+  const statusRows: MessagePresentationTableCell[][] = [];
+  const pushStatusRow = (label: string, value: string | number | null | undefined) => {
+    const cell = typeof value === "number" ? String(value) : (value?.trim() ?? "");
+    if (cell) {
+      statusRows.push([label, cell]);
+    }
+  };
+  pushStatusRow("🧠 Model", `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`);
+  pushStatusRow("🔑 Auth", selectedAuthLabelValue);
+  pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));
+  pushStatusRow("↪️ Fallback", fallbackValue);
+  pushStatusRow("🧮 Tokens", tokensValue);
+  pushStatusRow("💵 Cost", costLabel);
+  pushStatusRow("🗄️ Cache", cacheValue);
+  pushStatusRow("📚 Context", contextUsageLabel);
+  pushStatusRow("🧹 Compactions", entry?.compactionCount ?? 0);
+  pushStatusRow("🧵 Session", sessionValue);
+  pushStatusRow("⚙️ Execution", execution.label);
+  pushStatusRow("Runtime", agentRuntimeLabel);
+  pushStatusRow("Think", thinkLevel);
+  pushStatusRow("Fast", fastModeValue);
+  pushStatusRow("Text", textVerbosity);
+  pushStatusRow("Reasoning", reasoningLevel !== "off" ? reasoningLevel : null);
+  pushStatusRow("Options", optionFlagsValue);
+  pushStatusRow("👥 Activation", groupActivationValue);
+  pushStatusRow("🪢 Queue", `${queueMode}${queueDetails}`);
+
+  const contextBlock = (value: string | null | undefined): MessagePresentationBlock[] =>
+    value?.trim() ? [{ type: "context", text: value }] : [];
+  const presentation: MessagePresentation = {
+    title: versionLine,
+    blocks: [
+      ...contextBlock(timeLine),
+      ...contextBlock(args.uptimeLine),
+      {
+        type: "table",
+        caption: "Session status",
+        headers: ["Item", "Value"],
+        rows: statusRows,
+        rowHeaderColumnIndex: 0,
+      },
+      ...contextBlock(mediaLine),
+      ...contextBlock(args.usageLine),
+      ...contextBlock(args.subagentsLine),
+      ...contextBlock(args.taskLine),
+      ...contextBlock(args.channelFeatureLine),
+      ...contextBlock(args.pluginHealthLine),
+      ...contextBlock(pluginStatusLine ? `🧩 ${pluginStatusLine}` : null),
+      ...contextBlock(voiceLine),
+    ],
+  };
+
+  return { text, presentation };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

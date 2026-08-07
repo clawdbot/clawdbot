@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { buildStatusMessage } from "./status-message.js";
+import { buildStatusMessage, buildStatusMessageParts } from "./status-message.js";
 
 function statusTestModel(id: string, name: string, contextWindow: number): ModelDefinitionConfig {
   return {
@@ -37,6 +37,59 @@ describe("buildStatusMessage current time", () => {
     expect(text).toContain("Current time:");
     expect(text).toContain("(UTC)");
     expect(text).toContain("Reference UTC: 2025-07-03 08:00 UTC");
+  });
+});
+
+describe("buildStatusMessageParts presentation", () => {
+  it("mirrors the text body as a titled status table with context lines", () => {
+    const parts = buildStatusMessageParts({
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+      uptimeLine: "⏱️ Uptime: gateway 1h",
+      channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+    });
+
+    expect(parts.text).toBe(
+      buildStatusMessage({
+        now: 1_751_529_600_000,
+        config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+        agent: { model: "anthropic/claude-haiku-4-5" },
+        sessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        queue: { mode: "steer", depth: 0 },
+        modelAuth: "api-key",
+        uptimeLine: "⏱️ Uptime: gateway 1h",
+        channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+      }),
+    );
+    expect(parts.presentation.title).toMatch(/^🦞 OpenClaw /);
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    expect(table).toBeDefined();
+    if (table?.type !== "table") {
+      throw new Error("expected table block");
+    }
+    expect(table.headers).toEqual(["Item", "Value"]);
+    expect(table.rowHeaderColumnIndex).toBe(0);
+    const rowLabels = table.rows.map((row) => row[0]);
+    expect(rowLabels).toContain("🧠 Model");
+    expect(rowLabels).toContain("📚 Context");
+    expect(rowLabels).toContain("🧵 Session");
+    expect(rowLabels).toContain("🪢 Queue");
+    expect(
+      table.rows.every((row) => row.length === 2 && row.every((cell) => String(cell).trim())),
+    ).toBe(true);
+    const contextTexts = parts.presentation.blocks.flatMap((block) =>
+      block.type === "context" ? [block.text] : [],
+    );
+    expect(contextTexts).toContain("⏱️ Uptime: gateway 1h");
+    expect(contextTexts).toContain(
+      "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
+    );
   });
 });
 
