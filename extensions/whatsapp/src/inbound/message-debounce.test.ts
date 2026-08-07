@@ -76,7 +76,7 @@ describe("whatsapp inbound debouncer batching", () => {
         },
       });
       for (const entry of entries) {
-        debouncer.enqueue(entry);
+        await debouncer.enqueue(entry);
       }
       await vi.advanceTimersByTimeAsync(200);
       await debouncer.drain();
@@ -97,10 +97,10 @@ describe("whatsapp inbound debouncer batching", () => {
     ]);
 
     expect(delivered).toHaveLength(1);
-    const [batch] = delivered;
-    expect(batch.payload.body).toBe("<contact>\nPlease call her");
+    const batch = delivered[0]!;
+    expect(batch.payload?.body).toBe("<contact>\nPlease call her");
     expect(batch.event?.isBatched).toBe(true);
-    expect(batch.payload.channelStructuredContext).toEqual(CONTACT_CONTEXT);
+    expect(batch.payload?.channelStructuredContext).toEqual(CONTACT_CONTEXT);
   });
 
   // Order matters for the model reading it, so the batch has to concatenate
@@ -114,7 +114,7 @@ describe("whatsapp inbound debouncer batching", () => {
     ]);
 
     expect(delivered).toHaveLength(1);
-    expect(delivered[0].payload.channelStructuredContext).toEqual([
+    expect(delivered[0]!.payload?.channelStructuredContext).toEqual([
       ...CONTACT_CONTEXT,
       ...second,
     ]);
@@ -129,7 +129,7 @@ describe("whatsapp inbound debouncer batching", () => {
     ]);
 
     expect(delivered).toHaveLength(1);
-    expect(delivered[0].payload.body).toBe("first line\nsecond line");
-    expect(delivered[0].payload.channelStructuredContext).toBeUndefined();
+    expect(delivered[0]!.payload?.body).toBe("first line\nsecond line");
+    expect(delivered[0]!.payload?.channelStructuredContext).toBeUndefined();
   });
 });
