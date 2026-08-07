@@ -1647,5 +1647,73 @@ describe("imessage message actions", () => {
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );
+
+  it("rejects a malformed base64 buffer for upload-file instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "upload-file",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "photo.jpg",
+          buffer: "!!!not-base64!!!",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendAttachment).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 buffer for setGroupIcon instead of setting a garbage icon", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "setGroupIcon",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "icon.png",
+          buffer: "!!!not-base64!!!",
+        },
+        senderIsOwner: true,
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.setGroupIcon).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 reply attachment instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "here it is",
+          buffer: "!!!not-base64!!!",
+          filename: "card.png",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
