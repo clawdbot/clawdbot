@@ -1062,6 +1062,39 @@ NODE
     });
   });
 
+  it("keeps ClawSweeper dispatch events aligned with receiver workflows", () => {
+    const workflowPath = ".github/workflows/clawsweeper-dispatch.yml";
+    const source = readFileSync(workflowPath, "utf8");
+    const workflow = readWorkflow(workflowPath);
+    const steps = workflow.jobs.dispatch.steps as WorkflowStep[];
+    const receiverDispatchSteps = steps.filter((step) =>
+      step.run?.includes("repos/openclaw/clawsweeper/dispatches"),
+    );
+    const eventTypes = receiverDispatchSteps.map((step) => {
+      const matches = [...(step.run ?? "").matchAll(/\bevent_type\s*:\s*"([^"]+)"/gu)];
+      expect(matches, step.name).toHaveLength(1);
+      return expectDefined(matches[0]?.[1], step.name ?? "ClawSweeper dispatch event");
+    });
+
+    // This allowlist mirrors the target repository receiver contract; changes require coordinated receiver updates.
+    expect(eventTypes.toSorted()).toEqual([
+      "clawsweeper_comment",
+      "clawsweeper_item",
+      "github_activity",
+    ]);
+    expect(source).not.toContain("clawsweeper_commit_review");
+    expect(source).not.toContain("CLAWSWEEPER_COMMIT_REVIEW_CREATE_CHECKS");
+    expect(workflow.on.push.branches).toEqual(["main"]);
+
+    const activityRun = expectDefined(
+      steps.find((step) => step.name === "Dispatch GitHub activity to ClawSweeper")?.run,
+      "ClawSweeper GitHub activity dispatch",
+    );
+    expect(activityRun).toMatch(
+      /push: \(if \$event_name == "push" then \{\s+before: \.before,\s+after: \.after,\s+ref: \.ref,\s+compare: \.compare,\s+head_commit: \.head_commit\.id\s+\} else null end\)/u,
+    );
+  });
+
   it("runs the PR context and evidence gate only for relevant PR changes", () => {
     const workflow = readRealBehaviorProofWorkflow();
 
