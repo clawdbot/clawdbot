@@ -138,6 +138,52 @@ async function runBackendExec(
 }
 
 describe("daytona backend live e2e", () => {
+  // Image-based creates pull the image on first use, so this heavier path is
+  // double-gated: OPENCLAW_E2E_DAYTONA=1 plus OPENCLAW_E2E_DAYTONA_IMAGE=1.
+  it.runIf(E2E_ENABLED && process.env.OPENCLAW_E2E_DAYTONA_IMAGE === "1")(
+    "provisions an image-based sandbox with explicit resources",
+    async () => {
+      const imagePluginConfig = resolveDaytonaPluginConfig({
+        image: "python:3.13-slim",
+        resources: { cpu: 1, memory: 2, disk: 5 },
+        autoDeleteInterval: 60,
+      });
+      const factory = createDaytonaSandboxBackendFactory({
+        pluginConfig: imagePluginConfig,
+        hostConfig,
+      });
+      const params = await createLiveParams();
+
+      const handle = await factory(params);
+      createdRuntimeIds.push(handle.runtimeId);
+      expect(handle.configLabel).toBe("python:3.13-slim");
+      expect(handle.configLabelKind).toBe("Image");
+
+      const probe = await runBackendExec(handle, {
+        command: "python3 --version && cat seed-marker.txt && nproc",
+      });
+      expect(probe.exitCode).toBe(0);
+      expect(probe.stdout).toContain("Python 3.13");
+      expect(probe.stdout).toContain("seeded-by-openclaw");
+
+      const manager = createDaytonaSandboxBackendManager({
+        pluginConfig: imagePluginConfig,
+        hostConfig,
+      });
+      await manager.removeRuntime({
+        entry: {
+          containerName: handle.runtimeId,
+          sessionKey: params.scopeKey,
+          createdAtMs: Date.now(),
+          lastUsedAtMs: Date.now(),
+          image: handle.configLabel ?? "default",
+        },
+        config: hostConfig,
+      });
+    },
+    E2E_TIMEOUT_MS,
+  );
+
   it.runIf(E2E_ENABLED)(
     "provisions, executes, bridges files, adopts, and removes a real sandbox",
     async () => {

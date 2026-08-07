@@ -96,18 +96,26 @@ and seeds it from the current local workspace.
 
 All settings live under `plugins.entries.daytona.config`:
 
-| Key                       | Type              | Default                   | Description                                                                                         |
-| ------------------------- | ----------------- | ------------------------- | --------------------------------------------------------------------------------------------------- |
-| `apiKey`                  | string, SecretRef | unset                     | Daytona API key. Falls back to the `DAYTONA_API_KEY` environment variable.                          |
-| `apiUrl`                  | string            | Daytona cloud             | Daytona API base URL. Falls back to `DAYTONA_API_URL`.                                              |
-| `target`                  | string            | Daytona default           | Target region for new sandboxes. Falls back to `DAYTONA_TARGET`.                                    |
-| `snapshot`                | string            | Daytona default snapshot  | Snapshot for new sandboxes. The image needs `sh`, `tar`, `base64`, `stat`, and `python3` on `PATH`. |
-| `autoStopInterval`        | integer (minutes) | `15` (Daytona default)    | Minutes of inactivity before Daytona stops the sandbox. `0` keeps it running continuously.          |
-| `autoDeleteInterval`      | integer (minutes) | disabled                  | Minutes a sandbox may stay stopped before Daytona deletes it. `0` deletes immediately on stop.      |
-| `networkBlockAll`         | boolean           | Daytona default           | Block all sandbox network egress at creation.                                                       |
-| `remoteWorkspaceDir`      | string            | `/home/daytona/workspace` | Absolute path of the session workspace inside the sandbox.                                          |
-| `remoteAgentWorkspaceDir` | string            | `/home/daytona/agent`     | Absolute path mirroring the real agent workspace when `workspaceAccess` is not `none`.              |
-| `timeoutSeconds`          | number            | `120`                     | Timeout for Daytona API operations (create, upload, filesystem commands).                           |
+| Key                       | Type              | Default                   | Description                                                                                                                                                                                          |
+| ------------------------- | ----------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiKey`                  | string, SecretRef | unset                     | Daytona API key. Falls back to the `DAYTONA_API_KEY` environment variable.                                                                                                                           |
+| `apiUrl`                  | string            | Daytona cloud             | Daytona API base URL. Falls back to `DAYTONA_API_URL`.                                                                                                                                               |
+| `target`                  | string            | Daytona default           | Target region for new sandboxes. Falls back to `DAYTONA_TARGET`.                                                                                                                                     |
+| `snapshot`                | string            | Daytona default snapshot  | Snapshot for new sandboxes. The image needs `sh`, `tar`, `base64`, `stat`, and `python3` on `PATH`. Mutually exclusive with `image`.                                                                 |
+| `image`                   | string            | unset                     | Docker image for new sandboxes, pulled or built by Daytona on first create. Mutually exclusive with `snapshot`.                                                                                      |
+| `resources`               | object            | unset                     | `{ cpu, gpu, memory, disk }` for image-based sandboxes (memory and disk in GiB). Omitted fields use the Daytona defaults (1 vCPU, 1 GB, 3 GiB). Snapshot sandboxes size from the snapshot.           |
+| `user`                    | string            | snapshot default          | OS user for the sandbox. Align the remote workspace dirs with that user's writable paths.                                                                                                            |
+| `volumes`                 | array             | unset                     | Daytona volumes to mount, as `{ volumeId, mountPath }` entries. Reachable from `exec`; outside the file-tool workspace mounts.                                                                       |
+| `autoStopInterval`        | integer (minutes) | `15` (Daytona default)    | Minutes of inactivity before Daytona stops the sandbox. `0` keeps it running continuously.                                                                                                           |
+| `autoPauseInterval`       | integer (minutes) | disabled                  | Minutes of inactivity before Daytona pauses the sandbox (VM-based runners; pause preserves memory state). At most one of auto-stop and auto-pause may be non-zero.                                   |
+| `autoArchiveInterval`     | integer (minutes) | `7` days (Daytona)        | Minutes a stopped sandbox waits before archiving to cold storage. `0` uses the Daytona maximum.                                                                                                      |
+| `autoDeleteInterval`      | integer (minutes) | disabled                  | Minutes a sandbox may stay stopped before Daytona deletes it. `0` deletes immediately on stop.                                                                                                       |
+| `networkBlockAll`         | boolean           | Daytona default           | Block all sandbox network egress at creation.                                                                                                                                                        |
+| `networkAllowList`        | string            | unset                     | Comma-separated CIDR addresses the sandbox may reach when restricting egress.                                                                                                                        |
+| `domainAllowList`         | string            | unset                     | Comma-separated domains the sandbox may reach when restricting egress.                                                                                                                               |
+| `remoteWorkspaceDir`      | string            | `/home/daytona/workspace` | Absolute path of the session workspace inside the sandbox.                                                                                                                                           |
+| `remoteAgentWorkspaceDir` | string            | `/home/daytona/agent`     | Absolute path mirroring the real agent workspace when `workspaceAccess` is not `none`.                                                                                                               |
+| `timeoutSeconds`          | number            | `120`                     | Timeout for Daytona API operations (create, upload, filesystem commands). Image-based creates automatically get a higher floor to cover image pulls; raise this when declarative builds need longer. |
 
 ## Lifecycle management
 
@@ -128,8 +136,10 @@ as Docker runtimes: pruned entries delete the Daytona sandbox.
 ## Cost controls
 
 - `autoStopInterval` (default 15 minutes) stops idle sandboxes; stopped
-  sandboxes restart automatically on next use.
-- `autoDeleteInterval` deletes sandboxes that stay stopped, if you prefer
+  sandboxes restart automatically on next use. `autoPauseInterval` pauses
+  instead, on sandbox classes that support pausing.
+- `autoArchiveInterval` moves long-stopped sandboxes to cold storage;
+  `autoDeleteInterval` deletes sandboxes that stay stopped, if you prefer
   Daytona-side cleanup in addition to OpenClaw pruning.
 - OpenClaw prune (`sandbox.prune.idleHours` / `maxAgeDays`) deletes registered
   sandboxes from the OpenClaw side.
@@ -138,7 +148,10 @@ as Docker runtimes: pruned entries delete the Daytona sandbox.
 
 - Browser sandboxing is not supported on this backend.
 - `sandbox.docker.*` settings (image, binds, network) do not apply; use
-  `snapshot` and `networkBlockAll` instead. `sandbox.docker.binds` is rejected.
+  `snapshot`/`image` and the network allow-list options instead.
+  `sandbox.docker.binds` is rejected; Daytona `volumes` cover shared storage.
+- Volume mount paths are reachable from `exec` commands only; the file tools
+  stay inside the managed workspace mounts.
 - The workspace is seeded once (remote-canonical); there is no mirror mode.
 - Exec stdin is line-oriented text (Daytona session input); binary stdin
   streams are not preserved byte-for-byte in non-PTY execs.

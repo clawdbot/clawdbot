@@ -49,6 +49,14 @@ type PendingDaytonaExec = {
 // Snapshot label shown when the sandbox uses the Daytona org default snapshot.
 const DEFAULT_SNAPSHOT_LABEL = "default";
 
+// Image-based creates pull or build the image before the sandbox starts, so
+// they get a higher timeout floor than snapshot creates.
+const IMAGE_CREATE_TIMEOUT_FLOOR_SECONDS = 600;
+
+function resolveConfiguredBaseLabel(pluginConfig: ResolvedDaytonaPluginConfig): string {
+  return pluginConfig.snapshot ?? pluginConfig.image ?? DEFAULT_SNAPSHOT_LABEL;
+}
+
 // Sandboxes in these states cannot be started again; adoption skips them so a
 // fresh sandbox replaces the retired runtime id in the registry.
 const UNUSABLE_SANDBOX_STATES = new Set(["destroyed", "destroying", "error", "build_failed"]);
@@ -138,8 +146,8 @@ class DaytonaSandboxBackendImpl {
       runtimeLabel: sandbox.name || sandbox.id,
       workdir: this.pluginConfig.remoteWorkspaceDir,
       env: this.params.createParams.cfg.docker.env,
-      configLabel: this.pluginConfig.snapshot ?? DEFAULT_SNAPSHOT_LABEL,
-      configLabelKind: "Snapshot",
+      configLabel: resolveConfiguredBaseLabel(this.pluginConfig),
+      configLabelKind: this.pluginConfig.image ? "Image" : "Snapshot",
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
@@ -251,19 +259,36 @@ class DaytonaSandboxBackendImpl {
       }
       return adopted;
     }
-    const sandbox = await client.create(
-      {
-        snapshot: this.pluginConfig.snapshot,
-        labels: {
-          "openclaw.sandbox": "1",
-          "openclaw.scope": hashScopeKey(this.params.createParams.scopeKey),
-        },
-        autoStopInterval: this.pluginConfig.autoStopInterval,
-        autoDeleteInterval: this.pluginConfig.autoDeleteInterval,
-        networkBlockAll: this.pluginConfig.networkBlockAll,
+    const baseParams = {
+      labels: {
+        "openclaw.sandbox": "1",
+        "openclaw.scope": hashScopeKey(this.params.createParams.scopeKey),
       },
-      { timeout: this.timeoutSeconds },
-    );
+      user: this.pluginConfig.user,
+      volumes: this.pluginConfig.volumes,
+      autoStopInterval: this.pluginConfig.autoStopInterval,
+      autoPauseInterval: this.pluginConfig.autoPauseInterval,
+      autoArchiveInterval: this.pluginConfig.autoArchiveInterval,
+      autoDeleteInterval: this.pluginConfig.autoDeleteInterval,
+      networkBlockAll: this.pluginConfig.networkBlockAll,
+      networkAllowList: this.pluginConfig.networkAllowList,
+      domainAllowList: this.pluginConfig.domainAllowList,
+    };
+    // Config resolution rejects snapshot+image together, so this branch picks
+    // the create overload rather than encoding a precedence policy.
+    const sandbox = this.pluginConfig.image
+      ? await client.create(
+          {
+            ...baseParams,
+            image: this.pluginConfig.image,
+            resources: this.pluginConfig.resources,
+          },
+          { timeout: Math.max(this.timeoutSeconds, IMAGE_CREATE_TIMEOUT_FLOOR_SECONDS) },
+        )
+      : await client.create(
+          { ...baseParams, snapshot: this.pluginConfig.snapshot },
+          { timeout: this.timeoutSeconds },
+        );
     await this.seedWorkspace(sandbox);
     seededDaytonaSandboxes.add(sandbox.id);
     return sandbox;
@@ -551,7 +576,7 @@ export function createDaytonaSandboxBackendManager(params: {
   return {
     async describeRuntime({ entry, config }): Promise<SandboxBackendRuntimeInfo> {
       const pluginConfig = resolveDaytonaPluginConfigFromConfig(config, params.pluginConfig);
-      const configuredLabel = pluginConfig.snapshot ?? DEFAULT_SNAPSHOT_LABEL;
+      const configuredLabel = resolveConfiguredBaseLabel(pluginConfig);
       try {
         const { sandbox } = await getSandboxForEntry(config, entry.containerName);
         return {

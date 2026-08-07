@@ -19,9 +19,15 @@ describe("resolveDaytonaPluginConfig", () => {
       apiUrl: "https://daytona.example.com/api",
       target: "us",
       snapshot: "my-snapshot",
+      user: "runner",
+      volumes: [{ volumeId: "vol-1", mountPath: "/data/shared/" }],
       autoStopInterval: 0,
+      autoPauseInterval: 30,
+      autoArchiveInterval: 120,
       autoDeleteInterval: 60,
       networkBlockAll: true,
+      networkAllowList: "10.0.0.0/24,192.168.0.0/16",
+      domainAllowList: "registry.npmjs.org,pypi.org",
       remoteWorkspaceDir: "/workspaces/session/",
       remoteAgentWorkspaceDir: "/workspaces-agent",
       timeoutSeconds: 30.7,
@@ -31,13 +37,31 @@ describe("resolveDaytonaPluginConfig", () => {
       apiUrl: "https://daytona.example.com/api",
       target: "us",
       snapshot: "my-snapshot",
+      image: undefined,
+      resources: undefined,
+      user: "runner",
+      volumes: [{ volumeId: "vol-1", mountPath: "/data/shared" }],
       autoStopInterval: 0,
+      autoPauseInterval: 30,
+      autoArchiveInterval: 120,
       autoDeleteInterval: 60,
       networkBlockAll: true,
+      networkAllowList: "10.0.0.0/24,192.168.0.0/16",
+      domainAllowList: "registry.npmjs.org,pypi.org",
       remoteWorkspaceDir: "/workspaces/session",
       remoteAgentWorkspaceDir: "/workspaces-agent",
       timeoutMs: 30_700,
     });
+  });
+
+  it("resolves image-based sandbox config with resources", () => {
+    const resolved = resolveDaytonaPluginConfig({
+      image: "python:3.13-slim",
+      resources: { cpu: 2, memory: 4, disk: 10 },
+    });
+    expect(resolved.image).toBe("python:3.13-slim");
+    expect(resolved.resources).toEqual({ cpu: 2, memory: 4, disk: 10 });
+    expect(resolved.snapshot).toBeUndefined();
   });
 
   it("accepts SecretRef apiKey values", () => {
@@ -71,6 +95,37 @@ describe("resolveDaytonaPluginConfig", () => {
       { remoteWorkspaceDir: "/data", remoteAgentWorkspaceDir: "/data" },
       /distinct, non-nested/,
     ],
+    [
+      "snapshot combined with image",
+      { snapshot: "snap", image: "python:3.13-slim" },
+      /mutually exclusive/,
+    ],
+    ["resources without image", { resources: { cpu: 2 } }, /resources require image/],
+    [
+      "both idle intervals non-zero",
+      { autoStopInterval: 15, autoPauseInterval: 30 },
+      /cannot both be non-zero/,
+    ],
+    [
+      "relative volume mountPath",
+      { volumes: [{ volumeId: "vol-1", mountPath: "data" }] },
+      /must be an absolute POSIX path/,
+    ],
+    [
+      "volume mounted over the workspace root",
+      { volumes: [{ volumeId: "vol-1", mountPath: "/home/daytona/workspace/cache" }] },
+      /must not overlap the managed workspace dirs/,
+    ],
+    [
+      "volumes nested inside each other",
+      {
+        volumes: [
+          { volumeId: "vol-1", mountPath: "/data" },
+          { volumeId: "vol-2", mountPath: "/data/nested" },
+        ],
+      },
+      /must not overlap each other/,
+    ],
   ])("rejects %s", (_name, config, message) => {
     expect(() => resolveDaytonaPluginConfig(config)).toThrow(message);
   });
@@ -82,6 +137,10 @@ describe("resolveDaytonaPluginConfig", () => {
     ["empty snapshot", { snapshot: " " }],
     ["oversized timeout", { timeoutSeconds: 2_147_001 }],
     ["invalid secret ref", { apiKey: { source: "env", provider: "default", id: "lowercase" } }],
+    ["zero resource units", { image: "python:3.13-slim", resources: { cpu: 0 } }],
+    ["unknown resource keys", { image: "python:3.13-slim", resources: { vram: 1 } }],
+    ["empty volume id", { volumes: [{ volumeId: " ", mountPath: "/data" }] }],
+    ["unknown volume keys", { volumes: [{ volumeId: "vol-1", mountPath: "/data", ro: true }] }],
   ])("rejects %s", (_name, config) => {
     expect(() => resolveDaytonaPluginConfig(config)).toThrow(/Invalid daytona plugin config/);
   });

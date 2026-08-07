@@ -246,9 +246,15 @@ describe("daytona backend provisioning", () => {
           "openclaw.sandbox": "1",
           "openclaw.scope": expect.stringMatching(/^[a-f0-9]{32}$/),
         },
+        user: undefined,
+        volumes: undefined,
         autoStopInterval: undefined,
+        autoPauseInterval: undefined,
+        autoArchiveInterval: undefined,
         autoDeleteInterval: undefined,
         networkBlockAll: undefined,
+        networkAllowList: undefined,
+        domainAllowList: undefined,
       },
       { timeout: 120 },
     );
@@ -284,6 +290,62 @@ describe("daytona backend provisioning", () => {
     expect(usable.start).toHaveBeenCalledTimes(1);
     expect(client.create).not.toHaveBeenCalled();
     expect(usable.fs.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it("passes create-time sandbox settings through to Daytona", async () => {
+    const setup = await createTestSetup();
+    const pluginConfig = resolveDaytonaPluginConfig({
+      snapshot: "team-snap",
+      user: "runner",
+      volumes: [{ volumeId: "vol-1", mountPath: "/data/shared" }],
+      autoStopInterval: 0,
+      autoArchiveInterval: 240,
+      networkAllowList: "10.0.0.0/24",
+      domainAllowList: "registry.npmjs.org",
+      remoteWorkspaceDir: setup.remoteWorkspaceDir,
+      remoteAgentWorkspaceDir: setup.remoteAgentWorkspaceDir,
+    });
+    const client = installFakeClient({ created: createFakeSandbox() });
+
+    const handle = await createFactory(pluginConfig)(setup.createParams);
+
+    expect(client.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: "team-snap",
+        user: "runner",
+        volumes: [{ volumeId: "vol-1", mountPath: "/data/shared" }],
+        autoStopInterval: 0,
+        autoArchiveInterval: 240,
+        networkAllowList: "10.0.0.0/24",
+        domainAllowList: "registry.npmjs.org",
+      }),
+      { timeout: 120 },
+    );
+    expect(handle.configLabel).toBe("team-snap");
+    expect(handle.configLabelKind).toBe("Snapshot");
+  });
+
+  it("creates image-based sandboxes with resources and a longer timeout floor", async () => {
+    const setup = await createTestSetup();
+    const pluginConfig = resolveDaytonaPluginConfig({
+      image: "python:3.13-slim",
+      resources: { cpu: 2, memory: 4, disk: 10 },
+      remoteWorkspaceDir: setup.remoteWorkspaceDir,
+      remoteAgentWorkspaceDir: setup.remoteAgentWorkspaceDir,
+    });
+    const client = installFakeClient({ created: createFakeSandbox() });
+
+    const handle = await createFactory(pluginConfig)(setup.createParams);
+
+    expect(client.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: "python:3.13-slim",
+        resources: { cpu: 2, memory: 4, disk: 10 },
+      }),
+      { timeout: 600 },
+    );
+    expect(handle.configLabel).toBe("python:3.13-slim");
+    expect(handle.configLabelKind).toBe("Image");
   });
 
   it("refuses to seed workspaces containing symlinks that escape the tree", async () => {
