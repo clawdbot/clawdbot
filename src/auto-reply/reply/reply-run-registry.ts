@@ -1417,7 +1417,7 @@ export function beginReplyMessageInjectionTarget(
     outcome: queued.then(
       (result): ReplyMessageInjectionOutcome =>
         result ? { status: "accepted", result } : { status: "accepted" },
-      (error): ReplyMessageInjectionOutcome => ({
+      (error: unknown): ReplyMessageInjectionOutcome => ({
         status: "rejected",
         reason: "runtime_rejected",
         errorMessage: String(error),

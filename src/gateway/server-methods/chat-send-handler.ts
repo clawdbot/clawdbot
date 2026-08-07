@@ -26,7 +26,6 @@ import {
   retireQueuedChatTurnCancellation,
 } from "../chat-queued-turns.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
@@ -36,7 +35,10 @@ import {
   resolveWebchatPromptCacheKey,
   scheduleChatDashboardSessionTitle,
 } from "./chat-send-background.js";
-import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
+import {
+  createChatSendDispatchErrorLifecycle,
+  handleChatSendSetupError,
+} from "./chat-send-dispatch-errors.js";
 import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
 import { respondChatSessionRoutingChanged } from "./chat-send-pre-admission.js";
@@ -721,55 +723,13 @@ export async function handleChatSend(
       .catch(dispatchErrorLifecycle.handleError)
       .finally(dispatchErrorLifecycle.finalize);
   } catch (err) {
-    if (restartSafeAdmission) {
-      const terminalized = await terminalizeRestartSafeAdmission({
-        retryable: true,
-        status: "failed",
-      }).catch((terminalizeError: unknown) => {
-        context.logGateway.warn(
-          `failed to release restart-safe chat admission after setup error: ${formatForLog(
-            terminalizeError,
-          )}`,
-        );
-        return false;
-      });
-      if (terminalized) {
-        emitSessionsChanged(context, {
-          sessionKey,
-          ...(agentId ? { agentId } : {}),
-          reason: "chat.dispatch-error",
-        });
-      }
-    }
-    cleanupAdmittedRun({ force: true });
-    clearAgentRunContext(clientRunId, lifecycleGeneration);
-    context.removeChatRun(clientRunId, clientRunId, sessionKey);
-    const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-    const payload = {
-      runId: clientRunId,
-      status: "error" as const,
-      summary: String(err),
-    };
-    setGatewayDedupeEntry({
-      dedupe: context.dedupe,
-      key: `chat:${clientRunId}`,
-      entry: {
-        ts: Date.now(),
-        ok: false,
-        payload,
-        error,
-      },
-    });
-    respond(false, payload, error, {
-      runId: clientRunId,
-      error: formatForLog(err),
-    });
-    broadcastChatError({
+    await handleChatSendSetupError({
+      admission: admitted.value,
       context,
-      runId: clientRunId,
-      sessionKey,
-      agentId,
-      errorMessage: String(err),
+      error: err,
+      respond,
+      session: preparedSession.value,
+      terminalizeRestartSafeAdmission,
     });
   }
 }
