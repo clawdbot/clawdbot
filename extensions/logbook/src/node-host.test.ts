@@ -93,6 +93,21 @@ describe("handleLogbookSnapshot", () => {
     expect(rmMock).toHaveBeenCalledOnce();
   });
 
+  it("captures on linux with ffmpeg when DISPLAY is set", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("DISPLAY", ":1");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+    runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
+
+    await expect(handleLogbookSnapshot({ maxWidth: 800, quality: 0.6 })).resolves.toEqual({
+      format: "jpeg",
+      base64: Buffer.from("jpeg").toString("base64"),
+    });
+    expect(runExecMock).toHaveBeenCalledTimes(1);
+    expect(runExecMock.mock.calls[0]?.[0]).toBe("ffmpeg");
+    expect(runExecMock.mock.calls[0]?.[1]).toContain(":1.0");
+  });
+
   it("shares the capture deadline with the resize command", async () => {
     runExecMock.mockImplementation(
       async (command: string, _args: string[], options: RunExecOptions) => {

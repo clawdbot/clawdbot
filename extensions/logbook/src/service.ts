@@ -180,13 +180,35 @@ export class LogbookService {
       return { node: this.cachedNode };
     }
     const { nodes } = await this.deps.runtime.nodes.list({ connected: true });
-    const captureCommand = (node: { commands?: string[] }) =>
-      CAPTURE_COMMANDS.find((command) => (node.commands ?? []).includes(command));
-    // App nodes (screen.snapshot) come first: plugin node-host commands are
-    // advertised on every platform, but logbook.snapshot only captures on
-    // macOS, so headless hosts are a fallback rather than the default pick.
-    const commandRank = (node: { commands?: string[] }) =>
-      CAPTURE_COMMANDS.indexOf(captureCommand(node) as (typeof CAPTURE_COMMANDS)[number]);
+    // Prefer logbook.snapshot when a node advertises both. App/macOS nodes
+    // usually expose only screen.snapshot; Linux hosts with cua-computer often
+    // advertise a broken Wayland/XWayland screen.snapshot alongside a working
+    // logbook.snapshot (ffmpeg/grim), so preferring the plugin command avoids
+    // a failing first attempt every tick.
+    const orderedCommandsFor = (node: { commands?: string[] }) => {
+      const commands = node.commands ?? [];
+      const hasLogbook = commands.includes("logbook.snapshot");
+      const hasScreen = commands.includes("screen.snapshot");
+      const order =
+        hasLogbook && hasScreen
+          ? (["logbook.snapshot", "screen.snapshot"] as const)
+          : CAPTURE_COMMANDS;
+      return order.filter((command) => commands.includes(command));
+    };
+    const captureCommand = (node: { commands?: string[] }) => orderedCommandsFor(node)[0];
+    // Sort nodes by capability class: anything with screen.snapshot still beats
+    // logbook-only hosts (mac app before headless). Dual-command nodes stay in
+    // the screen class even when we invoke logbook.snapshot on them.
+    const commandRank = (node: { commands?: string[] }) => {
+      const commands = node.commands ?? [];
+      if (commands.includes("screen.snapshot")) {
+        return 0;
+      }
+      if (commands.includes("logbook.snapshot")) {
+        return 1;
+      }
+      return CAPTURE_COMMANDS.length;
+    };
     const candidates = nodes
       .filter((node) => captureCommand(node) !== undefined)
       .toSorted((a, b) => commandRank(a) - commandRank(b) || a.nodeId.localeCompare(b.nodeId));

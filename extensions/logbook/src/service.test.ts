@@ -77,6 +77,26 @@ describe("LogbookService capture node selection", () => {
     expect(service.status()).toMatchObject({ pendingFrames: 1, lastCaptureError: undefined });
   });
 
+  it("prefers logbook.snapshot when a node advertises both capture commands", async () => {
+    const { service, invoked, tick, dataDir } = makeService({
+      nodes: [
+        {
+          nodeId: "linux-host",
+          commands: ["screen.snapshot", "logbook.snapshot"],
+        },
+      ],
+      invoke: async () => framePayload,
+    });
+    cleanups.push(() => {
+      service.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+
+    await tick();
+    expect(invoked).toEqual([{ nodeId: "linux-host", command: "logbook.snapshot" }]);
+    expect(service.status()).toMatchObject({ pendingFrames: 1, lastCaptureError: undefined });
+  });
+
   it("rotates to the next capture node after a failure instead of re-picking the broken one", async () => {
     const { service, invoked, tick, dataDir } = makeService({
       nodes: [
