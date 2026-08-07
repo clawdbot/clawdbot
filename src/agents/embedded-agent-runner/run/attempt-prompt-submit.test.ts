@@ -66,6 +66,9 @@ function createCapturingTrajectoryRecorder() {
       recordEvent: (type: string, data?: Record<string, unknown>) => {
         events.push({ type, data });
       },
+      recordToolResult: (data: Record<string, unknown>) => {
+        events.push({ type: "tool.result", data });
+      },
       flush: async () => undefined,
       describeFlushState: () => undefined,
     },

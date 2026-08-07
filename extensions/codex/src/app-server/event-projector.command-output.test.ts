@@ -24,6 +24,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordToolResult: vi.fn(),
       recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
@@ -283,6 +284,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordToolResult: vi.fn(),
       recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
@@ -340,6 +342,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordToolResult: vi.fn(),
       recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
@@ -395,6 +398,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordToolResult: vi.fn(),
       recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };
@@ -501,6 +505,7 @@ describe("CodexAppServerEventProjector command output projection", () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
+      recordToolResult: vi.fn(),
       recordPromptSubmitted: vi.fn(),
       flush: vi.fn(async () => undefined),
     };

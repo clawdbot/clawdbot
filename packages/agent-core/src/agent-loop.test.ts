@@ -2009,7 +2009,7 @@ describe("agentLoop tool termination", () => {
       ...makeTool("sessions_send", []),
       execute: async () => {
         recordAgentToolTargetSessionKey("agent:worker:main");
-        return { content: [{ type: "text", text: "sent" }] };
+        return { content: [{ type: "text", text: "sent" }], details: {} };
       },
     };
     const streamFn: StreamFn = () => {
@@ -2047,7 +2047,9 @@ describe("agentLoop tool termination", () => {
         })
       | undefined;
 
-    expect(event?.result.content).toEqual([{ type: "text", text: "middleware replacement" }]);
+    expect((event?.result as AgentToolResult<unknown> | undefined)?.content).toEqual([
+      { type: "text", text: "middleware replacement" },
+    ]);
     expect(JSON.stringify(event)).not.toContain("agent:worker:main");
     expect(Object.keys(event ?? {})).not.toContain("privateState");
     expect(consumeAgentToolTargetSessionKey(event?.privateState)).toBe("agent:worker:main");

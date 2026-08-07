@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 declare const privateStateBrand: unique symbol;
-
 export type AgentToolExecutionPrivateState = { readonly [privateStateBrand]: true };
 
 const activePrivateState = new AsyncLocalStorage<AgentToolExecutionPrivateState>();
