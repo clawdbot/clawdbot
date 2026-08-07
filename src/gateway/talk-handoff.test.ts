@@ -1,6 +1,7 @@
 /**
  * Tests talk handoff coordination between gateway sessions and realtime state.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelTalkHandoffTurn,
@@ -12,12 +13,7 @@ import {
   startTalkHandoffTurn,
 } from "./talk-handoff.js";
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {

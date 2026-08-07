@@ -154,6 +154,22 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
+  it("uses an explicit compatibility host version for startup convergence", async () => {
+    const cfg = { plugins: { entries: {} } } as unknown as OpenClawConfig;
+    await runPostCorePluginConvergence({
+      cfg,
+      env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12" },
+      compatibilityHostVersion: "2026.7.2-beta.7",
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+      cfg,
+      env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.7.2-beta.7",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+  });
+
   it("returns ok when no warnings/failures and includes repair changes", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ['Repaired missing configured plugin "discord".'],

@@ -1,5 +1,8 @@
 // Covers conversion from OpenClaw bundle-MCP config into Codex app-server
 // thread config patches.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMcpServersConfig, loadCodexBundleMcpThreadConfig } from "./codex-mcp-config.js";
 import { testing as resolverTesting } from "./mcp-connection-resolver.js";
@@ -12,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
   },
 }));
+const tempDirs: string[] = [];
 
 vi.mock("../plugins/bundle-mcp.js", () => ({
   loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
@@ -26,8 +30,9 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => {
+afterEach(async () => {
   resolverTesting.setMcpServerConnectionResolversForTest();
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("buildCodexMcpServersConfig", () => {
@@ -85,6 +90,42 @@ describe("buildCodexMcpServersConfig", () => {
 });
 
 describe("loadCodexBundleMcpThreadConfig", () => {
+  it("prepares Agent Plugins data dirs before projecting Codex thread config", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-agent-mcp-"));
+    tempDirs.push(tempDir);
+    const dataDir = path.join(tempDir, "plugin-data");
+    const collisionPath = path.join(tempDir, "plugin-data-collision");
+    await fs.writeFile(collisionPath, "not a directory", "utf8");
+    Object.assign(mocks.bundleMcp, {
+      config: {
+        mcpServers: {
+          weather: {
+            command: "node",
+            env: { PLUGIN_DATA: dataDir },
+          },
+          broken: { command: "node", env: { PLUGIN_DATA: collisionPath } },
+        },
+      },
+      diagnostics: [],
+      prepareDataDirsByServer: {
+        weather: { pluginId: "weather-plugin", dataDir },
+        broken: { pluginId: "broken-plugin", dataDir: collisionPath },
+      },
+    });
+
+    const loaded = loadCodexBundleMcpThreadConfig({ workspaceDir: "/workspace" });
+
+    expect((await fs.stat(dataDir)).isDirectory()).toBe(true);
+    expect(loaded.configPatch?.mcp_servers.weather).toMatchObject({ command: "node" });
+    expect(loaded.configPatch?.mcp_servers.broken).toBeUndefined();
+    expect(loaded.diagnostics).toEqual([
+      expect.objectContaining({
+        pluginId: "broken-plugin",
+        message: expect.stringMatching(/unable to prepare PLUGIN_DATA.*EEXIST/iu),
+      }),
+    ]);
+  });
+
   it("loads enabled bundled MCP servers as a Codex thread config patch", () => {
     mocks.bundleMcp = {
       config: {

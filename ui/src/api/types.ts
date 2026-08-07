@@ -454,6 +454,12 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  classification?: import("../../../packages/gateway-protocol/src/index.js").SessionClassification;
+  agentId?: string;
+  accountId?: string;
+  peerKind?: import("../../../packages/gateway-protocol/src/index.js").SessionPeerKind;
+  isMain?: boolean;
+  isBackground?: boolean;
   visibility?: SessionVisibility;
   sharingRole?: SessionSharingRole;
   incognito?: true;
@@ -811,6 +817,7 @@ export type SkillClawHubLink =
       valid: true;
       registry: string;
       slug: string;
+      ownerHandle?: string;
       installedVersion: string;
       installedAt: number;
       originPath?: string;

@@ -8,6 +8,7 @@ export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
+const batchAdmittedToolCallIds = new Set<string>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -88,6 +89,29 @@ export function consumeStructuredReplaySafeToolCall(toolCallId: string, runId?: 
   return replaySafe;
 }
 
+/** Mark a call whose loop policy was already admitted with its whole assistant batch. */
+export function recordBatchAdmittedToolCall(toolCallId: string, runId?: string): void {
+  batchAdmittedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+/** Consume whole-batch loop admission while leaving the remaining tool policies intact. */
+export function consumeBatchAdmittedToolCall(toolCallId: string, runId?: string): boolean {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const admitted = batchAdmittedToolCallIds.has(key);
+  batchAdmittedToolCallIds.delete(key);
+  return admitted;
+}
+
+/** Remove unused batch-admission markers when their embedded run ends. */
+export function clearBatchAdmittedToolCallsForRun(runId: string): void {
+  const prefix = `${runId}:`;
+  for (const key of batchAdmittedToolCallIds) {
+    if (key.startsWith(prefix)) {
+      batchAdmittedToolCallIds.delete(key);
+    }
+  }
+}
+
 /** Clear adjusted tool parameters between isolated tests. */
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
@@ -95,4 +119,5 @@ export function resetAdjustedParamsByToolCallIdForTests(): void {
   trackedToolCallIds.clear();
   startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
+  batchAdmittedToolCallIds.clear();
 }

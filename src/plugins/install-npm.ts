@@ -53,6 +53,7 @@ export async function installPluginFromNpmSpec(
     mode?: "install" | "update";
     dryRun?: boolean;
     expectedPluginId?: string;
+    expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   },
@@ -269,6 +270,7 @@ export async function installPluginFromNpmSpec(
     dryRun,
     skipPolicyPreflight: true,
     expectedPluginId,
+    expectedReplacementPluginId: params.expectedReplacementPluginId,
     npmResolution,
     ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
   });

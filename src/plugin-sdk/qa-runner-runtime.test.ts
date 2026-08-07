@@ -135,6 +135,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
     const adapterFactory = {
       id: "example",
       isolatesInstances: true,
+      supportsModuleFlows: true as const,
       matches: vi.fn(),
       create: vi.fn(),
     };
@@ -177,6 +178,40 @@ describe("plugin-sdk qa-runner-runtime", () => {
       dirName: "qa-example",
       artifactBasename: "qa-runner-api.js",
     });
+  });
+
+  it("rejects invalid module-flow support metadata", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "qa-example",
+          origin: "bundled",
+          qaRunners: [{ commandName: "example" }],
+          rootDir: "/tmp/qa-example",
+        },
+      ],
+      diagnostics: [],
+    });
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      qaRunnerCliRegistrations: [
+        {
+          commandName: "example",
+          adapterFactory: {
+            id: "example",
+            supportsModuleFlows: false,
+            matches: vi.fn(),
+            create: vi.fn(),
+          },
+          register: vi.fn(),
+        },
+      ],
+    });
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(() => module.listQaRunnerCliContributions()).toThrow(
+      'QA runner plugin "qa-example" exported an invalid transport factory for "example"',
+    );
   });
 
   it("reports declared runners as blocked when the plugin is present but not activated", async () => {

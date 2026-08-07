@@ -120,7 +120,11 @@ async function runPollAction(params: {
       maxSelections?: number;
       threadId?: string;
     };
-    ctx?: { inboundEventKind?: string; params?: Record<string, unknown> };
+    ctx?: {
+      inboundEventKind?: string;
+      idempotencyKey?: string;
+      params?: Record<string, unknown>;
+    };
   };
   return {
     ...call.resolveCorePoll?.(),
@@ -224,6 +228,21 @@ describe("runMessageAction poll handling", () => {
     });
 
     expect(call?.ctx?.inboundEventKind).toBe("room_event");
+  });
+
+  it("copies the normalized idempotency key into poll execution context", async () => {
+    const call = await runPollAction({
+      cfg: pollerConfig,
+      actionParams: {
+        channel: "poller",
+        target: "poller:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        idempotencyKey: " run-1:message-tool:poll-1:fingerprint ",
+      },
+    });
+
+    expect(call?.ctx?.idempotencyKey).toBe("run-1:message-tool:poll-1:fingerprint");
   });
 
   it("expands maxSelections when pollMulti is enabled", async () => {

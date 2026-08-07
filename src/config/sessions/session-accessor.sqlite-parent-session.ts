@@ -48,7 +48,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 import { mergeSessionEntry, resolveFreshSessionTotalTokens } from "./types.js";
 
 // Parent-session fork owner: decision, transcript copy, and child entry commit.
@@ -218,15 +218,17 @@ export async function forkSqliteSessionEntryFromParentTarget(
         fork: fork.transcript,
         parentEntry: cloneSessionEntry(freshParent),
       });
-      const next = mergeSessionEntry(freshBase, {
+      const forkIdentityPatch: Partial<InternalSessionEntry> = {
         ...patch,
         forkSource: {
           sessionKey: parentTarget.canonicalKey,
           sessionId: freshParent.sessionId,
         },
         forkedFromParent: true,
+        lifecycleRunId: undefined,
         sessionId: fork.transcript.sessionId,
-      });
+      };
+      const next = mergeSessionEntry(freshBase, forkIdentityPatch);
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
       writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next, {
         previousEntry: freshBase,

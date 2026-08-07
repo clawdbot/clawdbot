@@ -1,24 +1,15 @@
 // Control UI E2E tests cover attributed chat identity placement.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, expect, type Browser, type Page } from "playwright/test";
-import { afterAll, beforeAll, describe, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  controlUiSessionUrl,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, type Page } from "playwright/test";
+import { it } from "vitest";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI attributed chat identity",
+  startServerBeforeBrowser: true,
+});
 
 function resolveArtifactDir(): string | undefined {
   return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
@@ -36,23 +27,13 @@ async function captureProof(page: Page, name: string) {
   });
 }
 
-describeControlUiE2e("Control UI attributed chat identity", () => {
-  beforeAll(async () => {
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("uses one avatar placement and keeps shared-thread authors readable", async () => {
     const artifactDir = resolveArtifactDir();
     if (artifactDir) {
       await fs.mkdir(artifactDir, { recursive: true });
     }
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir
         ? { recordVideo: { dir: artifactDir, size: { height: 760, width: 1180 } } }
@@ -102,7 +83,7 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
       ],
     });
 
-    await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await page.getByText("This is much easier to scan in a team conversation.").waitFor();
 
     const userGroups = page.locator(".chat-group.user");
@@ -145,7 +126,7 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
   });
 
   it("keeps missing same-origin avatar initials through a live rerender", async () => {
-    const context = await browser.newContext({ viewport: { height: 760, width: 1180 } });
+    const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
     const page = await context.newPage();
     const sender = {
       id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
@@ -205,7 +186,7 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
     });
 
     try {
-      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("Please keep my fallback avatar readable.").waitFor();
 
       const userGroup = page.locator(".chat-group.user", {

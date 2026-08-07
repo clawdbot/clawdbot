@@ -727,7 +727,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
-  it("runs the TUI PTY local smoke against built CLI artifacts", () => {
+  it("keeps the full TUI PTY suite in its dedicated built-CLI shard", () => {
     const tuiPtyShard = createNodeTestShards().find(
       (shard) => shard.shardName === "core-runtime-tui-pty",
     );
@@ -741,6 +741,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       },
       requiresDist: true,
     });
+    expect(tuiPtyShard?.includePatterns).toBeUndefined();
   });
 
   it("covers every infra test exactly once across core runtime infra shards", () => {

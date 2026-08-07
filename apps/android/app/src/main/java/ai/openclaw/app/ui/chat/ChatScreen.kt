@@ -1668,7 +1668,7 @@ internal val starterPrompts =
   )
 
 @Composable
-private fun ChatBubble(
+internal fun ChatBubble(
   messageId: String?,
   entryId: String?,
   role: String,

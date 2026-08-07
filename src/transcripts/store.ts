@@ -38,6 +38,8 @@ import {
 import {
   appendMeetingTranscriptUtterance,
   meetingTranscriptDb,
+  meetingTranscriptSessionQuery,
+  meetingTranscriptUtteranceQuery,
   type MeetingTranscriptSessionRow,
   sessionFromRow,
   summaryFromRow,
@@ -62,23 +64,29 @@ export class TranscriptsStore {
     return openOpenClawStateDatabase(this.databaseOptions);
   }
 
+  private transaction(
+    operationLabel: string,
+    operation: (database: OpenClawStateDatabase) => void,
+  ): void {
+    runOpenClawStateWriteTransaction(operation, this.databaseOptions, { operationLabel });
+  }
+
   sessionDir(session: TranscriptSessionDescriptor): string {
     return path.join(this.exportRootDir, transcriptSessionSelector(session));
   }
 
   private entryFromRow(
     row: MeetingTranscriptSessionRow,
-    summaryKeys: ReadonlySet<string>,
+    hasSummary: boolean,
   ): StoreTypes.TranscriptsSessionEntry {
     const session = sessionFromRow(row);
     const sessionDir = this.sessionDir(session);
-    const key = `${session.sessionId}\0${session.startedAt}`;
     return {
       session,
       sessionDir,
       selector: row.selector,
       summaryPath: path.join(sessionDir, "summary.md"),
-      hasSummary: summaryKeys.has(key),
+      hasSummary,
     };
   }
 
@@ -113,11 +121,10 @@ export class TranscriptsStore {
     const database = this.database();
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
-      meetingTranscriptDb(database.db)
-        .selectFrom("meeting_transcript_sessions")
-        .select(["export_manifest_json", "export_pending_json"])
-        .where("session_id", "=", session.sessionId)
-        .where("started_at", "=", session.startedAt),
+      meetingTranscriptSessionQuery(database.db, session).select([
+        "export_manifest_json",
+        "export_pending_json",
+      ]),
     );
     return row
       ? {
@@ -133,11 +140,7 @@ export class TranscriptsStore {
     const database = this.database();
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
-      meetingTranscriptDb(database.db)
-        .selectFrom("meeting_transcript_sessions")
-        .selectAll()
-        .where("session_id", "=", session.sessionId)
-        .where("started_at", "=", session.startedAt),
+      meetingTranscriptSessionQuery(database.db, session).selectAll(),
     );
     return row ? sessionFromRow(row) : undefined;
   }
@@ -146,11 +149,8 @@ export class TranscriptsStore {
     const database = this.database();
     return {
       database,
-      query: meetingTranscriptDb(database.db)
-        .selectFrom("meeting_transcript_utterances")
+      query: meetingTranscriptUtteranceQuery(database.db, session)
         .selectAll()
-        .where("session_id", "=", session.sessionId)
-        .where("session_started_at", "=", session.startedAt)
         .orderBy("sequence", "asc"),
     };
   }
@@ -173,8 +173,8 @@ export class TranscriptsStore {
     }
     const hashes: Record<string, string> = {
       "metadata.json": sha256Hex(`${JSON.stringify(storedSession, null, 2)}\n`),
+      "transcript.jsonl": this.transcriptJsonlDigest(storedSession),
     };
-    hashes["transcript.jsonl"] = this.transcriptJsonlDigest(storedSession);
     const summary = await this.readSummary(storedSession);
     if (summary.summary) {
       hashes["summary.json"] = sha256Hex(`${JSON.stringify(summary.summary, null, 2)}\n`);
@@ -185,80 +185,68 @@ export class TranscriptsStore {
     return hashes;
   }
 
+  private updateExportState(
+    session: TranscriptSessionDescriptor,
+    operationLabel: string,
+    update: (
+      stored:
+        | Pick<MeetingTranscriptSessionRow, "export_manifest_json" | "export_pending_json">
+        | undefined,
+    ) => { export_pending_json: string; export_manifest_json?: string },
+  ): void {
+    this.transaction(operationLabel, ({ db: database }) => {
+      const stored = executeSqliteQueryTakeFirstSync(
+        database,
+        meetingTranscriptSessionQuery(database, session).select([
+          "export_manifest_json",
+          "export_pending_json",
+        ]),
+      );
+      executeSqliteQuerySync(
+        database,
+        meetingTranscriptDb(database)
+          .updateTable("meeting_transcript_sessions")
+          .set(update(stored))
+          .where("session_id", "=", session.sessionId)
+          .where("started_at", "=", session.startedAt),
+      );
+    });
+  }
+
   private updateExportManifest(
     session: TranscriptSessionDescriptor,
     exportedHashes: Readonly<Record<string, string>>,
     removedExports: ReadonlySet<string> = new Set(),
   ): void {
-    runOpenClawStateWriteTransaction(
-      ({ db: database }) => {
-        const db = meetingTranscriptDb(database);
-        const stored = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("meeting_transcript_sessions")
-            .select(["export_manifest_json", "export_pending_json"])
-            .where("session_id", "=", session.sessionId)
-            .where("started_at", "=", session.startedAt),
-        );
-        const manifest = stored
-          ? (JSON.parse(stored.export_manifest_json) as Record<string, string>)
-          : {};
-        const pending = new Set(stored ? (JSON.parse(stored.export_pending_json) as string[]) : []);
-        for (const fileName of removedExports) {
-          delete manifest[fileName];
-        }
-        for (const fileName of [...Object.keys(exportedHashes), ...removedExports]) {
-          pending.delete(fileName);
-        }
-        executeSqliteQuerySync(
-          database,
-          db
-            .updateTable("meeting_transcript_sessions")
-            .set({
-              export_manifest_json: JSON.stringify({ ...manifest, ...exportedHashes }),
-              export_pending_json: JSON.stringify([...pending].toSorted()),
-            })
-            .where("session_id", "=", session.sessionId)
-            .where("started_at", "=", session.startedAt),
-        );
-      },
-      this.databaseOptions,
-      { operationLabel: "meeting-transcripts.export.record" },
-    );
+    this.updateExportState(session, "meeting-transcripts.export.record", (stored) => {
+      const manifest = stored
+        ? (JSON.parse(stored.export_manifest_json) as Record<string, string>)
+        : {};
+      const pending = new Set(stored ? (JSON.parse(stored.export_pending_json) as string[]) : []);
+      for (const fileName of removedExports) {
+        delete manifest[fileName];
+      }
+      for (const fileName of [...Object.keys(exportedHashes), ...removedExports]) {
+        pending.delete(fileName);
+      }
+      return {
+        export_manifest_json: JSON.stringify({ ...manifest, ...exportedHashes }),
+        export_pending_json: JSON.stringify([...pending].toSorted()),
+      };
+    });
   }
 
   private markPendingExports(session: TranscriptSessionDescriptor, fileNames: string[]): void {
-    runOpenClawStateWriteTransaction(
-      ({ db: database }) => {
-        const db = meetingTranscriptDb(database);
-        const stored = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("meeting_transcript_sessions")
-            .select("export_pending_json")
-            .where("session_id", "=", session.sessionId)
-            .where("started_at", "=", session.startedAt),
-        );
-        if (!stored) {
-          throw new Error(`transcripts session not found: ${session.sessionId}`);
-        }
-        const pending = new Set(JSON.parse(stored.export_pending_json) as string[]);
-        for (const fileName of fileNames) {
-          pending.add(fileName);
-        }
-        executeSqliteQuerySync(
-          database,
-          db
-            .updateTable("meeting_transcript_sessions")
-            .set({ export_pending_json: JSON.stringify([...pending].toSorted()) })
-            .where("session_id", "=", session.sessionId)
-            .where("started_at", "=", session.startedAt),
-        );
-      },
-      this.databaseOptions,
-      { operationLabel: "meeting-transcripts.export.pending" },
-    );
+    this.updateExportState(session, "meeting-transcripts.export.pending", (stored) => {
+      if (!stored) {
+        throw new Error(`transcripts session not found: ${session.sessionId}`);
+      }
+      const pending = new Set(JSON.parse(stored.export_pending_json) as string[]);
+      for (const fileName of fileNames) {
+        pending.add(fileName);
+      }
+      return { export_pending_json: JSON.stringify([...pending].toSorted()) };
+    });
   }
 
   private async assertExportDestinationOwned(
@@ -321,7 +309,9 @@ export class TranscriptsStore {
         .orderBy("session_id", "asc"),
     ).rows;
     const summaryKeys = this.readSummaryKeys(database);
-    return rows.map((row) => this.entryFromRow(row, summaryKeys));
+    return rows.map((row) =>
+      this.entryFromRow(row, summaryKeys.has(`${row.session_id}\0${row.started_at}`)),
+    );
   }
 
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
@@ -350,52 +340,40 @@ export class TranscriptsStore {
         await this.assertExportDestinationOwned(session, legacySessionDir);
       }
     }
-    const selector = transcriptSessionSelector(session);
-    const sourceJson = JSON.stringify(session.source);
-    const metadataJson = session.metadata ? JSON.stringify(session.metadata) : null;
+    const sessionValues = {
+      selector: transcriptSessionSelector(session),
+      export_key: transcriptSessionExportKey(session),
+      session_slug: safeTranscriptPathSegment(session.sessionId),
+      provider_id: session.source.providerId,
+      title: session.title ?? null,
+      source_json: JSON.stringify(session.source),
+      stopped_at: session.stoppedAt ?? null,
+      metadata_json: session.metadata ? JSON.stringify(session.metadata) : null,
+    };
     const now = Date.now();
-    runOpenClawStateWriteTransaction(
-      ({ db: database }) => {
-        const db = meetingTranscriptDb(database);
-        executeSqliteQuerySync(
-          database,
-          db
-            .insertInto("meeting_transcript_sessions")
-            .values({
-              session_id: session.sessionId,
-              started_at: session.startedAt,
-              selector,
-              export_key: transcriptSessionExportKey(session),
-              session_slug: safeTranscriptPathSegment(session.sessionId),
-              provider_id: session.source.providerId,
-              title: session.title ?? null,
-              source_json: sourceJson,
-              stopped_at: session.stoppedAt ?? null,
-              metadata_json: metadataJson,
-              export_manifest_json: "{}",
-              export_pending_json: "[]",
-              next_utterance_seq: 0,
-              created_at_ms: now,
+    this.transaction("meeting-transcripts.session.write", ({ db: database }) => {
+      executeSqliteQuerySync(
+        database,
+        meetingTranscriptDb(database)
+          .insertInto("meeting_transcript_sessions")
+          .values({
+            session_id: session.sessionId,
+            started_at: session.startedAt,
+            ...sessionValues,
+            export_manifest_json: "{}",
+            export_pending_json: "[]",
+            next_utterance_seq: 0,
+            created_at_ms: now,
+            updated_at_ms: now,
+          })
+          .onConflict((conflict) =>
+            conflict.columns(["session_id", "started_at"]).doUpdateSet({
+              ...sessionValues,
               updated_at_ms: now,
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["session_id", "started_at"]).doUpdateSet({
-                selector,
-                export_key: transcriptSessionExportKey(session),
-                session_slug: safeTranscriptPathSegment(session.sessionId),
-                provider_id: session.source.providerId,
-                title: session.title ?? null,
-                source_json: sourceJson,
-                stopped_at: session.stoppedAt ?? null,
-                metadata_json: metadataJson,
-                updated_at_ms: now,
-              }),
-            ),
-        );
-      },
-      this.databaseOptions,
-      { operationLabel: "meeting-transcripts.session.write" },
-    );
+            }),
+          ),
+      );
+    });
   }
 
   async readSession(sessionSelector: string): Promise<TranscriptSessionDescriptor | undefined> {
@@ -408,34 +386,18 @@ export class TranscriptsStore {
     const database = this.database();
     const db = meetingTranscriptDb(database.db);
     const qualified = /^\d{4}-\d{2}-\d{2}\//u.test(sessionSelector);
-    const exactRows = qualified
-      ? executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("meeting_transcript_sessions")
-            .selectAll()
-            .where("selector", "=", sessionSelector),
-        ).rows
-      : executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("meeting_transcript_sessions")
-            .selectAll()
-            .where("session_id", "=", sessionSelector)
-            .orderBy("started_at", "desc")
-            .limit(2),
-        ).rows;
-    const slugRows = qualified
-      ? []
-      : executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("meeting_transcript_sessions")
-            .selectAll()
-            .where("session_slug", "=", sessionSelector)
-            .orderBy("started_at", "desc")
-            .limit(2),
-        ).rows;
+    const matchingRows = (column: "selector" | "session_id" | "session_slug") => {
+      let query = db
+        .selectFrom("meeting_transcript_sessions")
+        .selectAll()
+        .where(column, "=", sessionSelector);
+      if (column !== "selector") {
+        query = query.orderBy("started_at", "desc").limit(2);
+      }
+      return executeSqliteQuerySync(database.db, query).rows;
+    };
+    const exactRows = matchingRows(qualified ? "selector" : "session_id");
+    const slugRows = qualified ? [] : matchingRows("session_slug");
     const rows = [
       ...new Map(
         [...exactRows, ...slugRows].map((row) => [`${row.session_id}\0${row.started_at}`, row]),
@@ -452,10 +414,7 @@ export class TranscriptsStore {
     if (!row) {
       return undefined;
     }
-    const summaryKeys = this.hasSummary(database, row)
-      ? new Set([`${row.session_id}\0${row.started_at}`])
-      : new Set<string>();
-    return this.entryFromRow(row, summaryKeys);
+    return this.entryFromRow(row, this.hasSummary(database, row));
   }
 
   async appendUtteranceForSession(
@@ -465,11 +424,8 @@ export class TranscriptsStore {
     const metadataJson = utterance.metadata ? JSON.stringify(utterance.metadata) : null;
     const now = Date.now();
     ensureMeetingTranscriptsSchema(this.databaseOptions);
-    runOpenClawStateWriteTransaction(
-      ({ db: database }) =>
-        appendMeetingTranscriptUtterance({ database, metadataJson, now, session, utterance }),
-      this.databaseOptions,
-      { operationLabel: "meeting-transcripts.utterance.append" },
+    this.transaction("meeting-transcripts.utterance.append", ({ db: database }) =>
+      appendMeetingTranscriptUtterance({ database, metadataJson, now, session, utterance }),
     );
   }
 
@@ -479,11 +435,7 @@ export class TranscriptsStore {
   ): Promise<TranscriptUtterance[]> {
     const database = this.database();
     const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
-    const query = meetingTranscriptDb(database.db)
-      .selectFrom("meeting_transcript_utterances")
-      .selectAll()
-      .where("session_id", "=", session.sessionId)
-      .where("session_started_at", "=", session.startedAt);
+    const query = meetingTranscriptUtteranceQuery(database.db, session).selectAll();
     if (maxUtterances === undefined) {
       return executeSqliteQuerySync(database.db, query.orderBy("sequence", "asc")).rows.map(
         utteranceFromRow,
@@ -515,35 +467,28 @@ export class TranscriptsStore {
     }
     const summaryJson = JSON.stringify(summary);
     const markdown = renderTranscriptsMarkdown(summary);
+    const summaryValues = {
+      generated_at: summary.generatedAt,
+      summary_json: summaryJson,
+      markdown,
+      utterance_count: summary.utteranceCount,
+    };
     ensureMeetingTranscriptsSchema(this.databaseOptions);
-    runOpenClawStateWriteTransaction(
-      ({ db: database }) => {
-        const db = meetingTranscriptDb(database);
-        executeSqliteQuerySync(
-          database,
-          db
-            .insertInto("meeting_transcript_summaries")
-            .values({
-              session_id: resolved.sessionId,
-              session_started_at: resolved.startedAt,
-              generated_at: summary.generatedAt,
-              summary_json: summaryJson,
-              markdown,
-              utterance_count: summary.utteranceCount,
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["session_id", "session_started_at"]).doUpdateSet({
-                generated_at: summary.generatedAt,
-                summary_json: summaryJson,
-                markdown,
-                utterance_count: summary.utteranceCount,
-              }),
-            ),
-        );
-      },
-      this.databaseOptions,
-      { operationLabel: "meeting-transcripts.summary.write" },
-    );
+    this.transaction("meeting-transcripts.summary.write", ({ db: database }) => {
+      executeSqliteQuerySync(
+        database,
+        meetingTranscriptDb(database)
+          .insertInto("meeting_transcript_summaries")
+          .values({
+            session_id: resolved.sessionId,
+            session_started_at: resolved.startedAt,
+            ...summaryValues,
+          })
+          .onConflict((conflict) =>
+            conflict.columns(["session_id", "session_started_at"]).doUpdateSet(summaryValues),
+          ),
+      );
+    });
     return path.join(this.sessionDir(resolved), "summary.md");
   }
 
@@ -601,13 +546,6 @@ export class TranscriptsStore {
     kind: StoreTypes.TranscriptArtifactKind,
   ): Promise<StoreTypes.MaterializedTranscriptArtifacts> {
     const sessionDir = this.sessionDir(session);
-    const metadataPath = path.join(sessionDir, "metadata.json");
-    const transcriptPath = path.join(sessionDir, "transcript.jsonl");
-    const summaryJsonPath = path.join(sessionDir, "summary.json");
-    const summaryPath = path.join(sessionDir, "summary.md");
-    // Every export starts with identity metadata, so even an interrupted partial
-    // materialization remains inspectable by Doctor without guessing its owner.
-    const includeMetadata = true;
     const includeTranscript = kind === "all" || kind === "transcript";
     const includeSummary = kind === "all" || kind === "summary";
     const storedSummary = includeSummary ? await this.readSummary(session) : {};
@@ -632,13 +570,13 @@ export class TranscriptsStore {
     if (!ensured.ok) {
       throw ensured.error;
     }
-    if (includeMetadata) {
-      exportedHashes["metadata.json"] = await writeTranscriptArtifact(
-        sessionDir,
-        "metadata.json",
-        `${JSON.stringify(session, null, 2)}\n`,
-      );
-    }
+    // Every export starts with identity metadata, so even an interrupted partial
+    // materialization remains inspectable by Doctor without guessing its owner.
+    exportedHashes["metadata.json"] = await writeTranscriptArtifact(
+      sessionDir,
+      "metadata.json",
+      `${JSON.stringify(session, null, 2)}\n`,
+    );
     if (includeTranscript) {
       exportedHashes["transcript.jsonl"] = await writeTranscriptJsonlArtifact({
         sessionDir,
@@ -668,15 +606,13 @@ export class TranscriptsStore {
         removedExports.add("summary.md");
       }
     }
-    if (Object.keys(exportedHashes).length > 0 || removedExports.size > 0) {
-      this.updateExportManifest(session, exportedHashes, removedExports);
-    }
+    this.updateExportManifest(session, exportedHashes, removedExports);
     return {
       sessionDir,
-      metadataPath,
-      transcriptPath,
-      summaryJsonPath,
-      summaryPath,
+      metadataPath: path.join(sessionDir, "metadata.json"),
+      transcriptPath: path.join(sessionDir, "transcript.jsonl"),
+      summaryJsonPath: path.join(sessionDir, "summary.json"),
+      summaryPath: path.join(sessionDir, "summary.md"),
       hasSummary: storedSummary.summary !== undefined || storedSummary.markdown !== undefined,
     };
   }

@@ -284,6 +284,8 @@ class GatewaySession(
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
+    private const val NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE =
+      "node-invoke-session-key-envelope-v1"
   }
 
   /**
@@ -295,6 +297,8 @@ class GatewaySession(
     val command: String,
     val paramsJson: String?,
     val timeoutMs: Long?,
+    val sessionKey: String?,
+    val hasSessionKeyEnvelope: Boolean,
   )
 
   data class InvokeResult(
@@ -896,6 +900,11 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
+  private data class PendingRequest(
+    val deferred: CompletableDeferred<RpcResponse>,
+    val onResponse: ((RpcResponse) -> Unit)?,
+  )
+
   private data class TicketedMediaRequest(
     val url: String,
     val headers: Map<String, String>,
@@ -918,6 +927,11 @@ class GatewaySession(
     CLOSED,
   }
 
+  private enum class NodeInvokeSessionEnvelopeMode {
+    AUTHORITATIVE,
+    LEGACY,
+  }
+
   private inner class Connection(
     val endpoint: GatewayEndpoint,
     private val token: String?,
@@ -932,6 +946,7 @@ class GatewaySession(
     private val connectDeferred = CompletableDeferred<ConnectedGateway>()
     private val closedDeferred = CompletableDeferred<Unit>()
     private val connectChallengeDeferred = CompletableDeferred<ConnectChallenge>()
+    private val nodeInvokeSessionEnvelopeMode = CompletableDeferred<NodeInvokeSessionEnvelopeMode>()
     private val terminalCallbackClaimed = AtomicBoolean(false)
     private val connectResponseAccepted = AtomicBoolean(false)
 
@@ -951,7 +966,7 @@ class GatewaySession(
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
-    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
+    private val pending = ConcurrentHashMap<String, PendingRequest>()
 
     private val pendingLock = Any()
     private val messagePumpJob =
@@ -987,10 +1002,11 @@ class GatewaySession(
       method: String,
       params: JsonElement?,
       timeoutMs: Long,
+      onResponse: ((RpcResponse) -> Unit)? = null,
     ): RpcResponse {
       val id = UUID.randomUUID().toString()
       if (method == "connect") connectRequestId = id
-      val deferred = registerPending(id)
+      val deferred = registerPending(id, onResponse).deferred
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
         return withTimeout(timeoutMs) { deferred.await() }
@@ -1114,7 +1130,7 @@ class GatewaySession(
       onError: (ErrorShape) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
-      val deferred = registerPending(id)
+      val deferred = registerPending(id).deferred
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
       } catch (err: Throwable) {
@@ -1149,16 +1165,20 @@ class GatewaySession(
       }
     }
 
-    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
+    private fun registerPending(
+      id: String,
+      onResponse: ((RpcResponse) -> Unit)? = null,
+    ): PendingRequest {
       val deferred = CompletableDeferred<RpcResponse>()
+      val request = PendingRequest(deferred = deferred, onResponse = onResponse)
       // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
       synchronized(pendingLock) {
         if (state.get() == ConnectionState.CLOSED) {
           throw GatewayRequestNotEnqueued("Gateway closed")
         }
-        pending[id] = deferred
+        pending[id] = request
       }
-      return deferred
+      return request
     }
 
     suspend fun sendJson(obj: JsonObject) {
@@ -1364,7 +1384,66 @@ class GatewaySession(
       }
       val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
       connectDeferred.complete(connected)
+      startNodeInvokeSessionEnvelopeNegotiation()
     }
+
+    private fun startNodeInvokeSessionEnvelopeNegotiation() {
+      if (options.role != "node" || onInvoke == null) {
+        nodeInvokeSessionEnvelopeMode.complete(NodeInvokeSessionEnvelopeMode.LEGACY)
+        return
+      }
+      connectionScope.launch {
+        val mode =
+          try {
+            val response =
+              request(
+                GatewayMethod.NodeProtocolFeaturesUpdate.rawValue,
+                buildJsonObject {
+                  put(
+                    "features",
+                    JsonArray(
+                      listOf(JsonPrimitive(NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE)),
+                    ),
+                  )
+                },
+                timeoutMs = 15_000,
+                onResponse = { response ->
+                  nodeInvokeSessionEnvelopeMode.complete(
+                    resolveNodeInvokeSessionEnvelopeMode(response),
+                  )
+                },
+              )
+            resolveNodeInvokeSessionEnvelopeMode(response)
+          } catch (err: TimeoutCancellationException) {
+            Log.w(loggerTag, "node protocol feature publish timed out")
+            NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
+          } catch (err: CancellationException) {
+            nodeInvokeSessionEnvelopeMode.cancel(err)
+            throw err
+          } catch (err: Throwable) {
+            Log.w(
+              loggerTag,
+              "node protocol feature publish failed: ${err.message ?: err::class.java.simpleName}",
+            )
+            NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
+          }
+        nodeInvokeSessionEnvelopeMode.complete(mode)
+      }
+    }
+
+    private fun isUnsupportedNodeProtocolFeaturesUpdate(response: RpcResponse): Boolean {
+      val error = response.error ?: return false
+      return !response.ok &&
+        error.code == "INVALID_REQUEST" &&
+        error.message == "unknown method: node.protocolFeatures.update"
+    }
+
+    private fun resolveNodeInvokeSessionEnvelopeMode(response: RpcResponse): NodeInvokeSessionEnvelopeMode =
+      if (isUnsupportedNodeProtocolFeaturesUpdate(response)) {
+        NodeInvokeSessionEnvelopeMode.LEGACY
+      } else {
+        NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
+      }
 
     private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
       if (authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN) return false
@@ -1624,10 +1703,9 @@ class GatewaySession(
     private suspend fun handleMessage(text: String) {
       val frame = json.parseToJsonElement(text).asObjectOrNull() ?: return
       val frameType = frame["type"].asStringOrNull()
-      if (
-        state.get() == ConnectionState.CLOSED &&
-        (frameType != "res" || frame["id"].asStringOrNull() != connectRequestId)
-      ) {
+      // The transport closes its input only after accepting preceding frames. Drain all
+      // connection-owned responses so a completed RPC wins over the following close.
+      if (state.get() == ConnectionState.CLOSED && frameType != "res") {
         return
       }
       when (frameType) {
@@ -1675,7 +1753,12 @@ class GatewaySession(
             }
           ErrorShape(wireError.code, wireError.message, details)
         }
-      pending.remove(id)?.complete(RpcResponse(id, response.ok, payloadJson, error))
+      val rpcResponse = RpcResponse(id, response.ok, payloadJson, error)
+      pending.remove(id)?.let { request ->
+        // Response observers run in socket receive order before the next event is admitted.
+        request.onResponse?.invoke(rpcResponse)
+        request.deferred.complete(rpcResponse)
+      }
     }
 
     private fun handleEvent(frame: JsonObject) {
@@ -1725,18 +1808,31 @@ class GatewaySession(
     }
 
     private fun handleInvokeEvent(payloadJson: String) {
+      val receivedAtMs = SystemClock.elapsedRealtime()
+      val payloadObject =
+        runCatching { json.parseToJsonElement(payloadJson).asObjectOrNull() }.getOrNull() ?: return
       val payload =
         runCatching {
-          json.decodeFromString(GatewayNodeInvokeRequest.serializer(), payloadJson)
+          json.decodeFromJsonElement(GatewayNodeInvokeRequest.serializer(), payloadObject)
         }.getOrNull() ?: return
       // Older gateways sent structured `params`; keep accepting that shipped wire shape while
       // generated models follow the canonical `paramsJSON` schema.
       val paramsJson =
         payload.paramsJson
-          ?: runCatching {
-            json.parseToJsonElement(payloadJson).asObjectOrNull()?.get("params")
-          }.getOrNull()?.let { value -> if (value is JsonNull) null else value.toString() }
+          ?: payloadObject["params"]?.let { value -> if (value is JsonNull) null else value.toString() }
+      val hasWireSessionKey = payloadObject.containsKey("sessionKey")
+      // An omitted envelope is only authoritative after this socket has finished
+      // publishing the feature. Do not reinterpret already-received legacy frames.
+      val envelopeNegotiationCompleteAtReceipt = nodeInvokeSessionEnvelopeMode.isCompleted
       connectionScope.launch {
+        val envelopeMode =
+          when {
+            hasWireSessionKey -> NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
+            !envelopeNegotiationCompleteAtReceipt -> NodeInvokeSessionEnvelopeMode.LEGACY
+            else -> nodeInvokeSessionEnvelopeMode.await()
+          }
+        val hasSessionKeyEnvelope =
+          hasWireSessionKey || envelopeMode == NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
         val request =
           InvokeRequest(
             id = payload.id,
@@ -1744,24 +1840,38 @@ class GatewaySession(
             command = payload.command,
             paramsJson = paramsJson,
             timeoutMs = payload.timeoutMs,
+            sessionKey =
+              payload.sessionKey
+                .asStringOrNull()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() },
+            hasSessionKeyEnvelope = hasSessionKeyEnvelope,
           )
-        val result = executeInvokeRequest(request)
+        val result = executeInvokeRequest(request, receivedAtMs)
         sendInvokeResult(payload.id, payload.nodeId, result, payload.timeoutMs)
       }
     }
 
-    private suspend fun executeInvokeRequest(request: InvokeRequest): InvokeResult {
+    private suspend fun executeInvokeRequest(
+      request: InvokeRequest,
+      receivedAtMs: Long,
+    ): InvokeResult {
       val handler = onInvoke ?: return InvokeResult.error("UNAVAILABLE", "invoke handler missing")
       return try {
         val timeoutMs = resolveInvokeExecutionTimeoutMs(request.timeoutMs)
         if (timeoutMs == null) {
           handler(request)
         } else {
+          val elapsedMs = (SystemClock.elapsedRealtime() - receivedAtMs).coerceAtLeast(0L)
+          if (elapsedMs >= timeoutMs) {
+            return InvokeResult.error("TIMEOUT", "node invoke timed out")
+          }
+          val remainingTimeoutMs = timeoutMs - elapsedMs
           // Keep the deadline owner separate so a blocking handler cannot delay the timeout result.
           // Cancellation still reaches cooperative handlers; late results are never sent.
           val handlerTask = connectionScope.async { handler(request) }
           try {
-            withTimeoutOrNull(timeoutMs) { handlerTask.await() }
+            withTimeoutOrNull(remainingTimeoutMs) { handlerTask.await() }
               ?: run {
                 handlerTask.cancel(CancellationException("node invoke timed out"))
                 InvokeResult.error("TIMEOUT", "node invoke timed out")
@@ -1825,7 +1935,9 @@ class GatewaySession(
           pending.values.toList().also { pending.clear() }
         }
       for (waiter in waiters) {
-        waiter.completeExceptionally(GatewayRequestOutcomeUnknown("Gateway disconnected before response"))
+        waiter.deferred.completeExceptionally(
+          GatewayRequestOutcomeUnknown("Gateway disconnected before response"),
+        )
       }
     }
   }

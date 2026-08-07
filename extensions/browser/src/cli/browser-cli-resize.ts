@@ -2,8 +2,27 @@
  * Shared Browser CLI resize runner used by resize and set viewport commands.
  */
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
-import { callBrowserResize, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserResize,
+  parseBrowserPositiveIntegerValue,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { danger, defaultRuntime } from "./core-api.js";
+
+/** Parses a bounded viewport dimension for both Browser resize commands. */
+export function parseBrowserViewportDimension(value: unknown, label: string): number | undefined {
+  const parsed = parseBrowserPositiveIntegerValue(value);
+  if (parsed !== undefined && parsed <= ACT_MAX_VIEWPORT_DIMENSION) {
+    return parsed;
+  }
+  const reason =
+    parsed === undefined
+      ? "must be a positive integer"
+      : `maximum is ${ACT_MAX_VIEWPORT_DIMENSION}`;
+  defaultRuntime.error(danger(`Invalid ${label}: ${reason}`));
+  defaultRuntime.exit(1);
+  return undefined;
+}
 
 /** Validates viewport dimensions, sends resize action, and writes CLI output. */
 export async function runBrowserResizeWithOutput(params: {

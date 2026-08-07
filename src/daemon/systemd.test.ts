@@ -98,10 +98,12 @@ import {
   readSystemdServiceRuntime,
   readSystemdServiceExecStart,
   restartSystemdService,
+  resolveSystemdUserServiceAccount,
   resolveSystemdUserUnitPath,
   startSystemdService,
   stageSystemdService,
   stopSystemdService,
+  uninstallLegacySystemdUnits,
   uninstallSystemdService,
   isSystemUnitActiveAndEnabled,
   uninstallUserSystemdGatewayUnit,
@@ -339,6 +341,25 @@ describe("systemd availability", () => {
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the sudo caller as the systemd user service account", () => {
+    mockEffectiveUid(0);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "root",
+      uid: 0,
+      gid: 0,
+      shell: "/bin/bash",
+      homedir: "/root",
+    });
+
+    expect(
+      resolveSystemdUserServiceAccount({
+        SUDO_USER: "debian",
+        USER: "root",
+        LOGNAME: "root",
+      }),
+    ).toBe("debian");
+  });
+
   it("keeps root user scope when stale SUDO_USER is paired with root bus environment", async () => {
     mockEffectiveUid(0);
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -359,6 +380,28 @@ describe("systemd availability", () => {
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves root for a real root user-manager environment", () => {
+    mockEffectiveUid(0);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "root",
+      uid: 0,
+      gid: 0,
+      shell: "/bin/bash",
+      homedir: "/root",
+    });
+
+    expect(
+      resolveSystemdUserServiceAccount({
+        HOME: "/root",
+        USER: "root",
+        LOGNAME: "root",
+        SUDO_USER: "debian",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      }),
+    ).toBe("root");
+  });
+
   it("does not let stale SUDO_USER override a sudo-u target user scope", async () => {
     mockEffectiveUid(1000);
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -370,6 +413,21 @@ describe("systemd availability", () => {
       isSystemdUserServiceAvailable({ USER: "openclaw", SUDO_USER: "admin" }),
     ).resolves.toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the effective non-root account instead of stale SUDO_USER", () => {
+    mockEffectiveUid(1000);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "openclaw",
+      uid: 1000,
+      gid: 1000,
+      shell: "/bin/bash",
+      homedir: "/home/openclaw",
+    });
+
+    expect(resolveSystemdUserServiceAccount({ USER: "openclaw", SUDO_USER: "admin" })).toBe(
+      "openclaw",
+    );
   });
 });
 
@@ -2717,6 +2775,48 @@ describe("isSystemUnitActiveAndEnabled", () => {
   );
 });
 
+describe("uninstallLegacySystemdUnits", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("preserves a legacy unit file when systemctl cannot disable it", async () => {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-unit-"));
+    const env = { HOME: path.join(tempHomeRoot, "home") };
+    const unitPath = path.join(env.HOME, ".config", "systemd", "user", "clawdbot-gateway.service");
+    try {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=Clawdbot Gateway\n", "utf8");
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "is-enabled", "clawdbot-gateway.service");
+          cb(null, "enabled\n", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", "clawdbot-gateway.service");
+          cb(createExecFileError("permission denied", { code: 1 }), "", "Permission denied");
+        });
+
+      const { stdout } = createWritableStreamMock();
+      await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toThrow(
+        "systemctl disable failed: Permission denied",
+      );
+      await expect(fs.access(unitPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("uninstallUserSystemdGatewayUnit", () => {
   async function withUserUnitFixture(
     run: (context: { env: Record<string, string>; unitPath: string }) => Promise<void>,
@@ -2804,6 +2904,53 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
       const writes = write.mock.calls.map((call) => String(call[0])).join("");
       expect(writes).toContain("systemctl unavailable; removing unit file only");
+    });
+  });
+
+  it("preserves the unit file when systemctl cannot disable the service", async () => {
+    await withUserUnitFixture(async ({ env, unitPath }) => {
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", GATEWAY_SERVICE);
+          cb(createExecFileError("permission denied", { code: 1 }), "", "Permission denied");
+        });
+
+      const { stdout } = createWritableStreamMock();
+      await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
+        "systemctl disable failed: Permission denied",
+      );
+      await expect(fs.access(unitPath)).resolves.toBeUndefined();
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("surfaces daemon-reload failure after removing the disabled unit", async () => {
+    await withUserUnitFixture(async ({ env, unitPath }) => {
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", GATEWAY_SERVICE);
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(createExecFileError("bus unavailable", { code: 1 }), "", "Bus unavailable");
+        });
+
+      const { stdout } = createWritableStreamMock();
+      await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
+        "systemctl daemon-reload failed: Bus unavailable",
+      );
+      await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

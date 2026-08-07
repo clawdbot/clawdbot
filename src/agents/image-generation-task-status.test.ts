@@ -8,10 +8,7 @@ import {
   findDuplicateGuardImageGenerationTaskForSession,
   IMAGE_GENERATION_TASK_KIND,
 } from "./image-generation-task-status.js";
-import {
-  findDuplicateGuardMediaGenerationTaskForSession,
-  recordRecentMediaGenerationTaskStartForSession,
-} from "./media-generation-task-status-shared.js";
+import { recordRecentMediaGenerationTaskStartForSession } from "./media-generation-task-status-shared.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
@@ -379,18 +376,20 @@ describe("image generation task status", () => {
     });
 
     expect(
-      findDuplicateGuardMediaGenerationTaskForSession({
-        sessionKey: "agent:main",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourcePrefix: "image_generate",
-        taskLabel: "stale prompt",
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "stale prompt",
         requestKey: "image-request:stale",
-        maxAgeMs: 10 * 60_000,
       }),
     ).toBeUndefined();
+    expect(
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "fresh prompt",
+        requestKey: "image-request:fresh",
+      })?.taskId,
+    ).toBe("task-fresh");
   });
 
-  it("does not keep stale recent starts forever for non-finite maxAgeMs", () => {
+  it("expires recent image starts after the canonical 120-second guard window", () => {
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({
       sessionKey: "agent:main",
@@ -402,17 +401,13 @@ describe("image generation task status", () => {
       requestKey: "image-request:stale",
       providerId: "xai",
       progressSummary: "Generating stale image",
-      nowMs: now - 1,
+      nowMs: now - 2 * 60_000 - 1,
     });
 
     expect(
-      findDuplicateGuardMediaGenerationTaskForSession({
-        sessionKey: "agent:main",
-        taskKind: IMAGE_GENERATION_TASK_KIND,
-        sourcePrefix: "image_generate",
-        taskLabel: "stale prompt",
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "stale prompt",
         requestKey: "image-request:stale",
-        maxAgeMs: Number.POSITIVE_INFINITY,
       }),
     ).toBeUndefined();
   });

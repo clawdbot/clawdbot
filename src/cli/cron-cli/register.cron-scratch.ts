@@ -1,5 +1,6 @@
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { handleCronCliError, printCronJson } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
@@ -18,8 +19,8 @@ function parseExpectedRevision(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const revision = Number(value);
-  if (!Number.isSafeInteger(revision) || revision < 0) {
+  const revision = parseStrictNonNegativeInteger(value);
+  if (revision === undefined) {
     throw new Error("--expected-revision must be a non-negative integer");
   }
   return revision;

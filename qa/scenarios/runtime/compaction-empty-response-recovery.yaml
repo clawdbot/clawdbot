@@ -27,6 +27,7 @@ scenario:
     kind: flow
     summary: Reject one empty overflow-compaction summary, retry it, and verify the recovered summary persists.
     config:
+      requiredProviderMode: mock-openai
       faultMode: empty-output-once
       faultMarkerPrefix: QA-COMPACTION-EMPTY-OUTPUT-ONCE
       summaryMarker: QA-COMPACTION-EMPTY-RECOVERED-SUMMARY

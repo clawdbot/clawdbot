@@ -174,6 +174,7 @@ export function buildSidebarSessionNavigationState(input: {
       agentStatusNote: input.resolveAgentStatusNote(row),
       observerDigest: row.observerDigest,
       spawnedBy: row.spawnedBy,
+      forkSource: row.forkSource,
       status: row.status,
       startedAt: row.startedAt,
       updatedAt: row.updatedAt,

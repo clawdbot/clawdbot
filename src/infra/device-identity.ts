@@ -100,7 +100,10 @@ function withDeviceIdentityCoordinator<T>(
     path: resolved.databasePath,
     identityKey: resolved.identityKey,
   };
-  const coordinator = acquireDeviceIdentityCoordinator({ databasePath: resolved.databasePath });
+  const coordinator = acquireDeviceIdentityCoordinator({
+    databasePath: resolved.databasePath,
+    env: options.env,
+  });
   let result: T;
   try {
     result = operation(resolved, resolvedOptions);

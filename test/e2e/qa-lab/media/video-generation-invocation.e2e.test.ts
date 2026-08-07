@@ -5,7 +5,7 @@ import type { PreparedModelRuntimeSnapshot } from "../../../../src/agents/prepar
 import { createVideoGenerateTool } from "../../../../src/agents/tools/video-generate-tool.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { resolveVideoGenerationMode } from "../../../../src/video-generation/capabilities.js";
+import { resolveVideoGenerationModeCapabilities } from "../../../../src/video-generation/capabilities.js";
 import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
@@ -143,10 +143,12 @@ describe("video generation invocation QA", () => {
         providerOptions,
       });
       expect(
-        resolveVideoGenerationMode({
+        resolveVideoGenerationModeCapabilities({
+          provider: fallbackProvider,
+          model: fallbackRequest?.model,
           inputImageCount: fallbackRequest?.inputImages?.length,
           inputVideoCount: fallbackRequest?.inputVideos?.length,
-        }),
+        }).mode,
       ).toBe("imageToVideo");
       expect(fallbackRequest?.inputImages).toEqual([
         {

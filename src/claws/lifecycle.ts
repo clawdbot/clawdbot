@@ -24,6 +24,7 @@ import {
   type ClawOpenClawProfile,
   type ClawPackage,
   type ClawSourceIdentity,
+  type ClawWorkspaceSourceSnapshot,
 } from "./types.js";
 
 const AGENT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -194,6 +195,8 @@ async function inspectWorkspaceFileAction(params: {
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
   clawMarkdownBody?: Buffer;
+  packageBootstrap?: ClawWorkspaceSourceSnapshot;
+  includePackageBootstrap?: boolean;
   openClawProfile?: ClawOpenClawProfile;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
@@ -302,6 +305,27 @@ export async function buildClawAddPlan(params: {
       ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
       : {}),
   });
+
+  if (params.packageBootstrap && params.includePackageBootstrap !== false) {
+    actions.push({
+      kind: "bootstrap",
+      id: "BOOTSTRAP.md",
+      action: "write",
+      target: resolve(workspace, "BOOTSTRAP.md"),
+      source: params.packageBootstrap.realPath,
+      digest: params.packageBootstrap.digest,
+      details: {
+        sourcePath: params.packageBootstrap.sourcePath,
+        byteLength: params.packageBootstrap.byteLength,
+        expectedState: "absent-or-native-consumed",
+        lifecycle: "native-seed-once",
+      },
+      blocked: workspaceBlocked,
+      ...(workspaceBlocked
+        ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
+        : {}),
+    });
+  }
 
   const pendingWorkspaceFiles: PendingWorkspaceFileAction[] = [];
   async function addWorkspaceFileInspection(fileParams: {
@@ -629,7 +653,10 @@ export async function buildClawAddPlan(params: {
       totalActions: actions.length,
       agentActions: actions.filter((action) => action.kind === "agent").length,
       workspaceActions: actions.filter(
-        (action) => action.kind === "workspace" || action.kind === "workspaceFile",
+        (action) =>
+          action.kind === "workspace" ||
+          action.kind === "bootstrap" ||
+          action.kind === "workspaceFile",
       ).length,
       packageActions: actions.filter((action) => action.kind === "package").length,
       mcpServerActions: actions.filter((action) => action.kind === "mcpServer").length,

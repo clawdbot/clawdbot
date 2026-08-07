@@ -186,6 +186,21 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
+  it("does not synthesize configured models when options are restricted to catalog results", () => {
+    const state = createChatModelState({
+      restrictOptionsToCatalog: true,
+      sessionsResult: createSessionsListResult({
+        model: "openai/gpt-5-mini",
+        modelProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolved.defaultSelectable).toBe(false);
+    expect(resolved.options).toEqual([]);
+  });
+
   it("builds picker options without introducing a bare duplicate", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),

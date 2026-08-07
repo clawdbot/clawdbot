@@ -615,6 +615,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  refreshChatMetadata?: () => Promise<void>;
   onChannelsStarted?: () => Awaitable<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -700,6 +701,9 @@ export async function startGatewaySidecars(params: {
       params.prewarmPrimaryModel,
     ),
   );
+  await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
+    await params.refreshChatMetadata?.();
+  });
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
@@ -1064,6 +1068,7 @@ export async function startGatewayPostAttachRuntime(
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    refreshChatMetadata?: () => Promise<void>;
     recoveryRuntime: GatewayRecoveryRuntime;
     logHooks: {
       info: (msg: string) => void;
@@ -1251,6 +1256,7 @@ export async function startGatewayPostAttachRuntime(
                 defaultWorkspaceDir: params.defaultWorkspaceDir,
                 deps: params.deps,
                 startChannels: params.startChannels,
+                refreshChatMetadata: params.refreshChatMetadata,
                 log: params.log,
                 logHooks: params.logHooks,
                 logChannels: params.logChannels,

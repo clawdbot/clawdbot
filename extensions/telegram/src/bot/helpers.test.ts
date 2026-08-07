@@ -1,6 +1,6 @@
 // Telegram tests cover helpers plugin behavior.
+import type { MessageEntity } from "grammy/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderTelegramTextEntities } from "./body-helpers.js";
 import {
   buildTelegramInboundOriginTarget,
   buildTelegramRoutingTarget,
@@ -18,6 +18,7 @@ import {
   resetTelegramForumFlagCacheForTest,
   shouldUseTelegramDmThreadSession,
 } from "./helpers.js";
+import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMessage = Parameters<typeof normalizeForwardedContext>[0];
 
@@ -1015,7 +1016,7 @@ describe("renderTelegramTextEntities", () => {
       { type: "strikethrough", offset: 17, length: 6 },
       { type: "underline", offset: 24, length: 9 },
       { type: "spoiler", offset: 34, length: 7 },
-    ];
+    ] satisfies MessageEntity[];
 
     expect(renderTelegramTextEntities(text, entities)).toBe(
       "**bold** _italic_ `code` ~~strike~~ __underline__ ||spoiler||",
@@ -1024,14 +1025,18 @@ describe("renderTelegramTextEntities", () => {
 
   it("renders pre entities with language fences", () => {
     const text = "const value = 1;";
-    const entities = [{ type: "pre", offset: 0, length: text.length, language: "ts" }];
+    const entities = [
+      { type: "pre", offset: 0, length: text.length, language: "ts" },
+    ] satisfies MessageEntity[];
 
     expect(renderTelegramTextEntities(text, entities)).toBe("```ts\nconst value = 1;\n```");
   });
 
   it("uses a pre fence that cannot close inside content", () => {
     const text = "before\n```\ninside";
-    const entities = [{ type: "pre", offset: 0, length: text.length, language: "md" }];
+    const entities = [
+      { type: "pre", offset: 0, length: text.length, language: "md" },
+    ] satisfies MessageEntity[];
 
     expect(renderTelegramTextEntities(text, entities)).toBe("````md\nbefore\n```\ninside\n````");
   });
@@ -1042,7 +1047,7 @@ describe("renderTelegramTextEntities", () => {
       { type: "bold", offset: 5, length: 4 },
       { type: "text_link", offset: 5, length: 4, url: "https://docs.example" },
       { type: "italic", offset: 10, length: 3 },
-    ];
+    ] satisfies MessageEntity[];
 
     expect(renderTelegramTextEntities(text, entities)).toBe(
       "Read **[docs](https://docs.example)** _now_",
@@ -1051,7 +1056,7 @@ describe("renderTelegramTextEntities", () => {
 
   it("uses UTF-16 Telegram offsets", () => {
     const text = "Hi 😀 bold";
-    const entities = [{ type: "bold", offset: 6, length: 4 }];
+    const entities = [{ type: "bold", offset: 6, length: 4 }] satisfies MessageEntity[];
 
     expect(renderTelegramTextEntities(text, entities)).toBe("Hi 😀 **bold**");
   });

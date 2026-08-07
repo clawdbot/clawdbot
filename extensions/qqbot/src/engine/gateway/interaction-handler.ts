@@ -452,21 +452,10 @@ function resolveApprovalButtonAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): QQBotAccountConfigView {
-  const qqbot = readRecord(readRecord(cfg.channels)?.qqbot);
-  const accounts = readRecord(qqbot?.accounts);
-  if (accountId === "default") {
-    return {
-      ...qqbot,
-      ...readRecord(accounts?.default),
-    } as QQBotAccountConfigView;
-  }
-  return (readRecord(accounts?.[accountId]) ?? {}) as QQBotAccountConfigView;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  // Approval authorization must use the same own-container and own-entry
+  // projection as runtime account resolution or inherited allowlists can grant access.
+  return resolveAccountBase(cfg as unknown as Record<string, unknown>, accountId)
+    .config as QQBotAccountConfigView;
 }
 
 function resolveApprovalActorSenderIds(event: InteractionEvent): string[] {

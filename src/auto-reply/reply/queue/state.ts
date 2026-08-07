@@ -38,6 +38,8 @@ type FollowupQueueState = {
     count: number;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];
+    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
+    summaryLines: string[];
     /** Weak source mapping keeps concurrent summary consumption identity-safe. */
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
@@ -102,6 +104,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
         continue;
       }
       const [source] = entry.sources.splice(sourceIndex, 1);
+      entry.summaryLines.splice(sourceIndex, 1);
       entry.count = entry.sources.length;
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
@@ -262,7 +265,8 @@ export function refreshQueuedFollowupSession(params: {
         delete run.hasAutoFallbackProvenance;
       }
       if (Object.hasOwn(params, "nextModelOverrideSource")) {
-        run.hasSessionModelOverride = Boolean(run.provider || run.model);
+        run.hasSessionModelOverride =
+          params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {

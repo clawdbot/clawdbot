@@ -95,6 +95,11 @@ const preparedPlan = vi.hoisted(() => ({
     sha256: "abc123",
   },
 }));
+const gatewayBoundPreparedPlan = {
+  ...preparedPlan,
+  agentId: "requested-agent",
+  sessionKey: "requested-session",
+};
 const nodeCommandMarker = vi.hoisted(() => "=node-command:test");
 const exactCommandMarker = (commandText: string): string =>
   `=command:${crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16)}`;
@@ -356,6 +361,7 @@ function createNodeHostRequest(
 type MockNodeInvokeParams = {
   command?: string;
   timeoutMs?: number;
+  sessionKey?: string;
   params?: Record<string, unknown>;
 };
 
@@ -1170,7 +1176,7 @@ describe("executeNodeHostCommand", () => {
 
     expect(result.details?.status).toBe("approval-pending");
     expect(requireRegisteredApprovalRequest()).toMatchObject({
-      systemRunPlan: preparedPlan,
+      systemRunPlan: gatewayBoundPreparedPlan,
       toolCallId: "tool-node",
     });
 
@@ -1182,17 +1188,53 @@ describe("executeNodeHostCommand", () => {
     expect(call.options.timeoutMs).toBe(40_000);
     expect(call.params?.timeoutMs).toBe(35_000);
     expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
+    expect(requireGatewayCommand("system.run.prepare").params?.sessionKey).toBe(
+      "requested-session",
+    );
+    expect(call.params?.sessionKey).toBe("requested-session");
     const runParams = requireRunParams(call);
     expect(runParams.approved).toBe(true);
     expect(runParams.approvalDecision).toBe("allow-once");
     expect(runParams.approvalSource).toBeUndefined();
-    expect(runParams.systemRunPlan).toEqual(preparedPlan);
+    expect(runParams.systemRunPlan).toEqual(gatewayBoundPreparedPlan);
     expect(runParams.timeoutMs).toBe(30_000);
     expect(runParams.turnSourceChannel).toBe("telegram");
     expect(runParams.turnSourceTo).toBe("telegram:12345");
     expect(runParams.turnSourceAccountId).toBe("work");
     expect(runParams.turnSourceThreadId).toBe("42");
     expect(resolveExecHostApprovalContextMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears node-prepared attribution when the gateway request has none", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        agentId: undefined,
+        sessionKey: undefined,
+      }),
+    );
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(requireRegisteredApprovalRequest()).toMatchObject({
+      systemRunPlan: {
+        agentId: null,
+        sessionKey: null,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(callGatewayToolMock).toHaveBeenCalledTimes(3);
+    });
+    expect(requireRunParams(requireGatewayCall(2)).systemRunPlan).toMatchObject({
+      agentId: null,
+      sessionKey: null,
+    });
   });
 
   it("forwards cancellation without removing detached node approval scopes", async () => {
@@ -1961,8 +2003,8 @@ describe("executeNodeHostCommand", () => {
         command: "rm -rf /tmp/work",
         argv: ["rm", "-rf", "/tmp/work"],
         agent: {
-          id: "prepared-agent",
-          sessionKey: "prepared-session",
+          id: "requested-agent",
+          sessionKey: "requested-session",
         },
       }),
     );
@@ -2055,7 +2097,7 @@ describe("executeNodeHostCommand", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(resolveExecApprovalsFromFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "prepared-agent" }),
+      expect.objectContaining({ agentId: "requested-agent" }),
     );
     expectSystemRunInvoke({ invokeDeadlineMs: 35_000, invokeWaitMs: 40_000, runTimeoutMs: 30_000 });
   });
@@ -3666,7 +3708,12 @@ describe("executeNodeHostCommand", () => {
       FOO: "bar",
     });
     expect(requireGatewayCommand("system.run.prepare").params?.params?.cwd).toBe("/tmp/work");
-    const runParams = requireRunParams(requireGatewayCommand("system.run"));
+    expect(requireGatewayCommand("system.run.prepare").params?.sessionKey).toBe(
+      "requested-session",
+    );
+    const runCall = requireGatewayCommand("system.run");
+    expect(runCall.params?.sessionKey).toBe("requested-session");
+    const runParams = requireRunParams(runCall);
     expect(runParams.env).toEqual({ FOO: "bar" });
     expect(runParams.cwd).toBe("/tmp/work");
     const evalEnvs = evaluateShellAllowlistMock.mock.calls.map(
@@ -3687,6 +3734,7 @@ describe("executeNodeHostCommand", () => {
     const call = requireGatewayCall(0);
     expect(call.options.timeoutMs).toBe(40_000);
     expect(call.params?.timeoutMs).toBe(35_000);
+    expect(call.params?.sessionKey).toBe("requested-session");
     const runParams = requireRunParams(call);
     expect(runParams.command).toEqual(["/bin/sh", "-lc", "bun ./script.ts"]);
     expect(runParams.rawCommand).toBe("bun ./script.ts");

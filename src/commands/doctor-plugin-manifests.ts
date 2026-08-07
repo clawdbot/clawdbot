@@ -182,7 +182,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   note?: typeof note;
-}): Promise<void> {
+}): Promise<boolean> {
   const migrations = collectLegacyPluginManifestContractMigrations({
     ...(params.config ? { config: params.config } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -190,7 +190,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   if (migrations.length === 0) {
-    return;
+    return false;
   }
 
   const emitNote = params.note ?? note;
@@ -209,7 +209,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
       initialValue: true,
     }));
   if (!shouldRepair) {
-    return;
+    return false;
   }
 
   const applied: string[] = [];
@@ -227,4 +227,5 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   if (applied.length > 0) {
     emitNote(applied.join("\n"), "Doctor changes");
   }
+  return applied.length > 0;
 }

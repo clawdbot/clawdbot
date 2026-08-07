@@ -313,6 +313,64 @@ describe("resolveSubagentToolPolicyForSession", () => {
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
+  it.each(["allow", "alsoAllow"] as const)(
+    "does not let configured %s entries re-enable hard-denied tools",
+    async (allowField) => {
+      const storePath = createSessionStorePath(`openclaw-subagent-hard-deny-${allowField}`);
+      const sessionKeys = {
+        leaf: "agent:main:subagent:hard-deny-leaf",
+        orchestrator: "agent:main:subagent:hard-deny-orchestrator",
+      } as const;
+      await writeSessionEntries(storePath, {
+        [sessionKeys.leaf]: {
+          sessionId: "hard-deny-leaf",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+        [sessionKeys.orchestrator]: {
+          sessionId: "hard-deny-orchestrator",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+        },
+      });
+      const hardDeniedTools = [
+        "gateway",
+        "agents_list",
+        "session_status",
+        "automations",
+        "cron",
+        "message",
+        "sessions_send",
+        "conversations_list",
+        "conversations_send",
+        "conversations_turn",
+      ];
+      const cfg = {
+        ...baseCfg,
+        session: { store: storePath },
+        tools: {
+          subagents: {
+            tools: {
+              [allowField]: [...hardDeniedTools, "memory_search"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      for (const sessionKey of Object.values(sessionKeys)) {
+        const policy = resolveSubagentToolPolicyForSession(cfg, sessionKey);
+        for (const toolName of hardDeniedTools) {
+          expect(isToolAllowedByPolicyName(toolName, policy), toolName).toBe(false);
+        }
+        expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+      }
+    },
+  );
+
   it("resolves inherited tool denies from stored subagent sessions", async () => {
     const storePath = createSessionStorePath("openclaw-subagent-inherited-deny");
     await writeSessionEntries(storePath, {

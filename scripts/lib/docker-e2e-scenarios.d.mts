@@ -16,6 +16,7 @@ export type DockerE2eLane = {
   retryPatterns: RegExp[];
   stateScenario?: string;
   timeoutMs?: number;
+  upgradeSurvivorScenario?: string;
   weight: number;
 };
 
