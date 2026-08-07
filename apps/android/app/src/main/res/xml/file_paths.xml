@@ -3,4 +3,5 @@
     <cache-path name="apk_updates" path="updates/" />
     <cache-path name="widget_exports" path="exports/" />
     <cache-path name="workspace_files" path="workspace-files/" />
+    <cache-path name="chat_captures" path="chat-captures/" />
 </paths>

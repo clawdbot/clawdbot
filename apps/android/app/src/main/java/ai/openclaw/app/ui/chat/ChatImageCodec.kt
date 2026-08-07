@@ -47,6 +47,20 @@ internal fun loadPickedMediaOrDocumentAttachment(
   return loadSharedAttachment(resolver, SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType)))
 }
 
+/** Stages a camera-recorded clip; provider MIME may be missing for FileProvider cache files. */
+internal fun loadCapturedVideoAttachment(
+  resolver: ContentResolver,
+  uri: Uri,
+): PendingAttachment =
+  loadSharedAttachment(
+    resolver,
+    SharedAttachment(
+      uri = uri,
+      kind = SharedAttachmentKind.Video,
+      mimeType = CHAT_VIDEO_CAPTURE_MIME_TYPE,
+    ),
+  )
+
 /** Revalidates provider MIME metadata while the sender grant is live, then loads bounded bytes. */
 internal fun loadSharedAttachment(
   resolver: ContentResolver,

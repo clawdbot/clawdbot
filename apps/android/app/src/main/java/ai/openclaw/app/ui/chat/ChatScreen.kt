@@ -76,6 +76,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -153,6 +154,7 @@ import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -496,6 +498,46 @@ fun ChatScreen(
         )
       }
     }
+  val videoCaptureOwnerCheckpoint =
+    rememberSaveable(saver = ChatComposerMediaCheckpoint.Saver) { ChatComposerMediaCheckpoint() }
+  var pendingVideoCapture by remember { mutableStateOf<ChatVideoCaptureTarget?>(null) }
+  val captureVideo =
+    rememberLauncherForActivityResult(CaptureVideoToUri()) { success ->
+      val lease = videoCaptureOwnerCheckpoint.clear() ?: return@rememberLauncherForActivityResult
+      val target = pendingVideoCapture
+      pendingVideoCapture = null
+      if (!success || target == null) {
+        composerState.cancelMediaAcquisition(lease.authorizationId)
+        deleteChatVideoCaptureTarget(target)
+        return@rememberLauncherForActivityResult
+      }
+      val importOwner =
+        if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) {
+          currentPickerOwner
+        } else {
+          lease.owner
+        }
+      viewModel.importChatComposerAttachments(
+        owner = importOwner,
+        mediaAuthorizationId = lease.authorizationId,
+        mainSessionKey = currentPickerMainSessionKey,
+        expectedCount = 1,
+      ) {
+        try {
+          listOfNotNull(
+            try {
+              loadCapturedVideoAttachment(resolver, target.uri)
+            } catch (err: CancellationException) {
+              throw err
+            } catch (_: Throwable) {
+              null
+            },
+          )
+        } finally {
+          deleteChatVideoCaptureTarget(target)
+        }
+      }
+    }
 
   LaunchedEffect(composerOwner) {
     dictationController.cancel()
@@ -820,7 +862,41 @@ fun ChatScreen(
         filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
         pickMediaOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
       },
-      onPickVideo = {
+      onRecordVideo = {
+        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
+        if (!canLaunchSystemVideoCapture(context)) {
+          val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
+          filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
+          pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
+          return@ChatComposer
+        }
+        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
+        val target =
+          try {
+            createChatVideoCaptureTarget(context)
+          } catch (_: Throwable) {
+            composerState.cancelMediaAcquisition(authorizationId)
+            val fallbackAuthorizationId =
+              composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
+            filePickerOwnerCheckpoint.begin(composerOwner, fallbackAuthorizationId)
+            pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
+            return@ChatComposer
+          }
+        videoCaptureOwnerCheckpoint.begin(composerOwner, authorizationId)
+        pendingVideoCapture = target
+        try {
+          captureVideo.launch(target.uri)
+        } catch (_: Throwable) {
+          pendingVideoCapture = null
+          videoCaptureOwnerCheckpoint.clear()
+          deleteChatVideoCaptureTarget(target)
+          composerState.cancelMediaAcquisition(authorizationId)
+          val retryAuthorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
+          filePickerOwnerCheckpoint.begin(composerOwner, retryAuthorizationId)
+          pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
+        }
+      },
+      onPickExistingVideo = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
         val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
         filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
@@ -2076,7 +2152,8 @@ private fun ChatComposer(
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
-  onPickVideo: () -> Unit,
+  onRecordVideo: () -> Unit,
+  onPickExistingVideo: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
@@ -2195,7 +2272,8 @@ private fun ChatComposer(
           onValueChange = onValueChange,
           onPickImages = onPickImages,
           onPickAudioOrDocument = onPickAudioOrDocument,
-          onPickVideo = onPickVideo,
+          onRecordVideo = onRecordVideo,
+          onPickExistingVideo = onPickExistingVideo,
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
           dictationActive = dictationActive,
@@ -2640,7 +2718,8 @@ private fun ChatInputPill(
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
-  onPickVideo: () -> Unit,
+  onRecordVideo: () -> Unit,
+  onPickExistingVideo: () -> Unit,
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   dictationActive: Boolean,
@@ -2653,6 +2732,8 @@ private fun ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
+  val recordVideoLabel = nativeString("Record video")
+  val attachExistingVideoLabel = nativeString("Attach video")
 
   Surface(
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
@@ -2676,9 +2757,23 @@ private fun ChatInputPill(
           Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attachment"), modifier = Modifier.size(20.dp))
         }
       }
-      Surface(onClick = onPickVideo, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
+      Surface(
+        modifier =
+          Modifier
+            .size(ClawTheme.spacing.touchTarget)
+            .combinedClickable(
+              onClickLabel = recordVideoLabel,
+              onLongClickLabel = attachExistingVideoLabel,
+              role = Role.Button,
+              onClick = onRecordVideo,
+              onLongClick = onPickExistingVideo,
+            ),
+        shape = CircleShape,
+        color = ClawTheme.colors.surfaceRaised,
+        contentColor = ClawTheme.colors.text,
+      ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Videocam, contentDescription = nativeString("Attach video"), modifier = Modifier.size(20.dp))
+          Icon(imageVector = Icons.Default.Videocam, contentDescription = recordVideoLabel, modifier = Modifier.size(20.dp))
         }
       }
       Box(modifier = Modifier.weight(1f)) {
