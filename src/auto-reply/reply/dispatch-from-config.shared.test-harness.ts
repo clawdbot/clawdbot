@@ -589,7 +589,6 @@ vi.mock("../../infra/agent-events.js", () => ({
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
-  withAgentRunLifecycleGeneration: <T>(_: string, run: () => T): T => run(),
 }));
 vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingDeclinedText: () => "Plugin binding request was declined.",
