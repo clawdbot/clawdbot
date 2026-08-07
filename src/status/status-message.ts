@@ -956,7 +956,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   ]
     .filter(Boolean)
     .join(" • ");
-  const sessionLine = `Session: ${sessionValue}`;
 
   const isGroupSession =
     entry?.chatType === "group" ||
@@ -972,13 +971,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
         formatTokens(totalTokens, contextTokens ?? null))
       : formatTokens(totalTokens, contextTokens ?? null);
-  const contextLine = [
-    `Context: ${contextUsageLabel}`,
-    `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join(" · ");
-
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
@@ -1010,23 +1002,17 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
   });
   const optionFlagsValue = [verboseLabel, traceLabel, elevatedLabel].filter(Boolean).join(" · ");
-  const optionParts = [
-    `Execution: ${execution.label}`,
-    `Runtime: ${agentRuntimeLabel}`,
-    `Think: ${thinkLevel}`,
-    `Fast: ${fastModeValue}`,
-    textVerbosity ? `Text: ${textVerbosity}` : null,
-    verboseLabel,
-    traceLabel,
-    reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
-    elevatedLabel,
-  ];
-  const optionsLine = optionParts.filter(Boolean).join(" · ");
-  const activationParts = [
-    groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
-    `🪢 Queue: ${queueMode}${queueDetails}`,
-  ];
-  const activationLine = activationParts.filter(Boolean).join(" · ");
+  // Mode switches are individually tiny; one shared line keeps them scannable
+  // in both the plain body and the presentation table.
+  const modesValue = [
+    `think ${thinkLevel}`,
+    `fast ${fastModeValue}`,
+    textVerbosity ? `text ${textVerbosity}` : null,
+    reasoningLevel !== "off" ? `reasoning ${reasoningLevel}` : null,
+    optionFlagsValue || null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const selectedModelLabel = modelRefs.selected.label || "unknown";
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
@@ -1087,7 +1073,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     : undefined;
   const costLabel = hasUsage ? formatUsd(cost) : undefined;
 
-  const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
   const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
@@ -1107,8 +1092,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // A user-driven live switch that no completed turn has applied yet: surface
   // it so /status does not imply the new selection is already running.
   const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
+  // Auth gets its own line below; keeping it inline here duplicated the value.
   const modelLines = [
-    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
+    `🧠 Model: ${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
   ];
 
   // Show configured fallback models (from agent model config)
@@ -1137,32 +1123,53 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const cacheValue = formatCacheHitValue(inputTokens, cacheRead, cacheWrite);
   const cacheLine = cacheValue ? `🗄️ Cache: ${cacheValue}` : null;
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
-  const usageCostLine =
-    usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
+  // Depth 0 is the boring default; the queue row keeps details only when the
+  // queue is non-empty or the session carries queue overrides.
+  const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
+  const compactionCount = entry?.compactionCount ?? 0;
+  const contextPct =
+    typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
+      ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
+      : null;
+  const contextMeter =
+    contextPct !== null
+      ? (() => {
+          const filled = Math.min(10, Math.max(0, Math.round(contextPct / 10)));
+          return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
+        })()
+      : "";
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
+  // One fact per line: chat clients wrap long lines mid-fact, so joining
+  // several facts with separators reads as a wall rather than a summary.
   const text = [
     versionLine,
     timeLine,
     uptimeLine,
     ...modelLines,
+    selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
     configuredFallbacksLine,
     fallbackLine,
-    usageCostLine,
+    usagePair,
+    costLine,
     cacheLine,
-    `📚 ${contextLine}`,
+    `📚 Context: ${contextUsageLabel}`,
+    compactionCount > 0 ? `🧹 Compactions: ${compactionCount}` : null,
     mediaLine,
     args.usageLine,
-    `🧵 ${sessionLine}`,
+    `🧵 Session: ${sessionValue}`,
     args.subagentsLine,
     args.taskLine,
     args.channelFeatureLine,
-    `⚙️ ${optionsLine}`,
+    `⚙️ Execution: ${execution.label}`,
+    `🤖 Runtime: ${agentRuntimeLabel}`,
+    modesValue ? `🎛️ Modes: ${modesValue}` : null,
     args.pluginHealthLine,
     pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
-    activationLine,
+    groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
+    `🪢 Queue: ${queueMode}${queueHasSignal ? queueDetails : ""}`,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -1181,39 +1188,13 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   pushStatusRow("🧮 Tokens", tokensValue);
   pushStatusRow("💵 Cost", costLabel);
   pushStatusRow("🗄️ Cache", cacheValue);
-  const contextPct =
-    typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
-      ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
-      : null;
-  const contextMeter =
-    contextPct !== null
-      ? (() => {
-          const filled = Math.min(10, Math.max(0, Math.round(contextPct / 10)));
-          return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
-        })()
-      : "";
   pushStatusRow("📚 Context", `${contextMeter}${contextUsageLabel}`);
-  const compactionCount = entry?.compactionCount ?? 0;
   pushStatusRow("🧹 Compactions", compactionCount > 0 ? compactionCount : null);
   pushStatusRow("🧵 Session", sessionValue);
   pushStatusRow("⚙️ Execution", execution.label);
   pushStatusRow("Runtime", agentRuntimeLabel);
-  pushStatusRow(
-    "🎛️ Modes",
-    [
-      `think ${thinkLevel}`,
-      `fast ${fastModeValue}`,
-      textVerbosity ? `text ${textVerbosity}` : null,
-      reasoningLevel !== "off" ? `reasoning ${reasoningLevel}` : null,
-      optionFlagsValue || null,
-    ]
-      .filter(Boolean)
-      .join(" · "),
-  );
+  pushStatusRow("🎛️ Modes", modesValue);
   pushStatusRow("👥 Activation", groupActivationValue);
-  // Depth 0 is the boring default; the queue row keeps details only when the
-  // queue is non-empty or the session carries queue overrides.
-  const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
   pushStatusRow("🪢 Queue", queueHasSignal ? `${queueMode}${queueDetails}` : queueMode);
 
   const contextBlock = (value: string | null | undefined): MessagePresentationBlock[] =>
