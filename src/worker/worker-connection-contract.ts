@@ -12,6 +12,7 @@ const FENCED_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
   "credential-replaced",
   "owner-epoch-mismatch",
 ]);
+const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 
 export type WorkerFencedReason = "credential-replaced" | "owner-epoch-mismatch";
 
@@ -96,5 +97,23 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
 }
 
 export function toError(error: unknown): Error {
-  return toErrorObject(error, String(error));
+  const message = String(error);
+  if (
+    error instanceof Error ||
+    ((typeof error !== "object" || error === null) && typeof error !== "function")
+  ) {
+    return toErrorObject(error, message);
+  }
+  const details = Object.fromEntries(
+    Reflect.ownKeys(error)
+      .filter(
+        (key) =>
+          (typeof key !== "string" || !ERROR_OWNED_FIELDS.has(key)) &&
+          Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
+      )
+      .map((key) => [key, Reflect.get(error, key)]),
+  );
+  const normalized = toErrorObject(details, message);
+  normalized.cause = error;
+  return normalized;
 }

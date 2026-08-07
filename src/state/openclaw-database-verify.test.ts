@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -45,6 +45,62 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
         cleanup();
       }
     }
+  });
+});
+
+describe("database verification error coercion", () => {
+  it("preserves adapter-owned Error fields when structured failure fields collide", async () => {
+    const detailKey = Symbol("detail");
+    let reservedReads = 0;
+    const failure = {
+      get name() {
+        reservedReads += 1;
+        return "SpoofedError";
+      },
+      get message() {
+        reservedReads += 1;
+        return "spoofed message";
+      },
+      get cause() {
+        reservedReads += 1;
+        return "spoofed cause";
+      },
+      get stack() {
+        reservedReads += 1;
+        return "spoofed stack";
+      },
+      code: "SQLITE_IOERR",
+      details: { database: "state" },
+      [detailKey]: "symbol detail",
+    };
+
+    const error = await runDatabaseVerifyWorker([], {
+      onWorker: (worker) => {
+        if (!worker) {
+          return;
+        }
+        worker.send = ((...args: unknown[]) => {
+          const callback = args.at(-1);
+          if (typeof callback === "function") {
+            callback(failure);
+          }
+          return true;
+        }) as ChildProcess["send"];
+      },
+    }).then(
+      () => {
+        throw new Error("expected database verification worker failure");
+      },
+      (rejection: unknown) => rejection as Error,
+    );
+
+    expect(reservedReads).toBe(0);
+    expect(error.message).toBe("[object Object]");
+    expect(error.cause).toBe(failure);
+    expect(error.name).toBe("Error");
+    expect(error.stack).toContain("Error: [object Object]");
+    expect(error).toMatchObject({ code: "SQLITE_IOERR", details: { database: "state" } });
+    expect(Reflect.get(error, detailKey)).toBe("symbol detail");
   });
 });
 

@@ -25,9 +25,28 @@ export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
+const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 
 function toError(error: unknown): Error {
-  return toErrorObject(error, String(error));
+  const message = String(error);
+  if (
+    error instanceof Error ||
+    ((typeof error !== "object" || error === null) && typeof error !== "function")
+  ) {
+    return toErrorObject(error, message);
+  }
+  const details = Object.fromEntries(
+    Reflect.ownKeys(error)
+      .filter(
+        (key) =>
+          (typeof key !== "string" || !ERROR_OWNED_FIELDS.has(key)) &&
+          Reflect.getOwnPropertyDescriptor(error, key)?.enumerable,
+      )
+      .map((key) => [key, Reflect.get(error, key)]),
+  );
+  const normalized = toErrorObject(details, message);
+  normalized.cause = error;
+  return normalized;
 }
 
 function resolveDatabaseVerifyWorkerUrl(currentModuleUrl = import.meta.url): URL {

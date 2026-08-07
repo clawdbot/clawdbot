@@ -141,6 +141,42 @@ describe("worker connection error coercion", () => {
     expect(error.cause).toBe(cause);
     expect(error).toMatchObject(cause);
   });
+
+  it("preserves adapter-owned Error fields when structured cause fields collide", () => {
+    const detailKey = Symbol("detail");
+    let reservedReads = 0;
+    const cause = {
+      get name() {
+        reservedReads += 1;
+        return "SpoofedError";
+      },
+      get message() {
+        reservedReads += 1;
+        return "spoofed message";
+      },
+      get cause() {
+        reservedReads += 1;
+        return "spoofed cause";
+      },
+      get stack() {
+        reservedReads += 1;
+        return "spoofed stack";
+      },
+      code: "ECONNRESET",
+      details: { retryable: true },
+      [detailKey]: "symbol detail",
+    };
+
+    const error = toError(cause);
+
+    expect(reservedReads).toBe(0);
+    expect(error.message).toBe("[object Object]");
+    expect(error.cause).toBe(cause);
+    expect(error.name).toBe("Error");
+    expect(error.stack).toContain("Error: [object Object]");
+    expect(error).toMatchObject({ code: "ECONNRESET", details: { retryable: true } });
+    expect(Reflect.get(error, detailKey)).toBe("symbol detail");
+  });
 });
 
 describe("WorkerConnection state listener isolation", () => {
