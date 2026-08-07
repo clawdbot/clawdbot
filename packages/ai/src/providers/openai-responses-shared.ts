@@ -12,6 +12,7 @@ import type {
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
+import { parseResponsesReasoningSignature } from "../transports/openai-responses-replay.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
@@ -309,9 +310,13 @@ export function convertResponsesMessages<TApi extends Api>(
 
       for (const block of msg.content) {
         if (block.type === "thinking") {
-          if (block.thinkingSignature) {
+          const reasoningSignature = parseResponsesReasoningSignature(block.thinkingSignature);
+          if (!reasoningSignature) {
+            // A dropped reasoning item breaks the pairing for signed text ids.
+            previousReplayItemWasReasoning = false;
+          } else {
             const reasoningItem = normalizeResponsesReasoningReplayItem({
-              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
+              item: reasoningSignature,
               replayResponsesItemIds: shouldReplayResponsesItemIds,
             });
             output.push(reasoningItem as ResponseInputItem);

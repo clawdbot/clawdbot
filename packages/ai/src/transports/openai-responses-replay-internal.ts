@@ -27,7 +27,10 @@ import {
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
-import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import {
+  parseResponsesReasoningSignature,
+  resolveReplayableResponsesMessageId,
+} from "./openai-responses-replay.js";
 import { log } from "./openai-transport-shared.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
@@ -434,19 +437,13 @@ export function convertResponsesMessages(
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
         if (block.type === "thinking") {
-          if (
-            shouldReplayReasoningItems &&
-            block.thinkingSignature &&
-            block.thinkingSignature.startsWith("{")
-          ) {
-            // openai-completions plain-text reasoning paths persist a
-            // provenance tag (e.g. "reasoning", "reasoning_details", "content")
-            // as thinkingSignature rather than a JSON-encoded reasoning item.
-            // Replaying those values would corrupt the next request payload
-            // (OpenRouter returns HTTP 500), so skip non-JSON signatures.
-            const reasoningItem = JSON.parse(
-              block.thinkingSignature,
-            ) as ReplayableResponseReasoningItem;
+          const reasoningItem = shouldReplayReasoningItems
+            ? parseResponsesReasoningSignature(block.thinkingSignature)
+            : undefined;
+          if (!reasoningItem) {
+            // A dropped reasoning item breaks the pairing for signed text ids.
+            previousReplayItemWasReasoning = false;
+          } else {
             const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
               reasoningItem,
               replayContext,

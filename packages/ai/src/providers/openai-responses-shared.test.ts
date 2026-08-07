@@ -613,6 +613,76 @@ describe("convertResponsesMessages", () => {
     expect(functionCall).not.toHaveProperty("id");
   });
 
+  it("skips malformed thinking signatures as untrusted JSON during replay", () => {
+    const assistantWithSignature = (thinkingSignature: string, text: string): AssistantMessage => ({
+      role: "assistant",
+      api: nativeOpenAIModel.api,
+      provider: nativeOpenAIModel.provider,
+      model: nativeOpenAIModel.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+      content: [
+        { type: "thinking", thinking: "hidden chain of thought", thinkingSignature },
+        {
+          type: "text",
+          text,
+          textSignature: JSON.stringify({ v: 1, id: `msg_${text}` }),
+        },
+      ],
+    });
+
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          // Plain provenance tag written by openai-completions reasoning paths.
+          assistantWithSignature("reasoning", "first"),
+          { role: "user", content: "next", timestamp: 2 },
+          // Truncated JSON from a corrupted session-history entry.
+          assistantWithSignature('{"type":"reasoning","summary":[', "second"),
+          { role: "user", content: "again", timestamp: 3 },
+          assistantWithSignature(
+            JSON.stringify({
+              type: "reasoning",
+              id: "rs_valid",
+              summary: [],
+              encrypted_content: "ciphertext",
+            }),
+            "third",
+          ),
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const reasoningItems = input.filter((item) => item.type === "reasoning");
+    expect(reasoningItems).toHaveLength(1);
+    expect(reasoningItems[0]).toMatchObject({
+      type: "reasoning",
+      id: "rs_valid",
+      encrypted_content: "ciphertext",
+    });
+
+    const assistantTexts = input.filter(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expect(assistantTexts).toHaveLength(3);
+    // A dropped reasoning item breaks the pairing for signed text ids.
+    expect(assistantTexts[0]).not.toHaveProperty("id");
+    expect(assistantTexts[1]).not.toHaveProperty("id");
+    expect(assistantTexts[2]).toHaveProperty("id", "msg_third");
+  });
+
   it("replays update_plan-style empty non-image tool results as no output", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
