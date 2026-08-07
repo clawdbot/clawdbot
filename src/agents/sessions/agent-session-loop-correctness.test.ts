@@ -339,6 +339,43 @@ describe("AgentSession loop correctness", () => {
     );
   });
 
+  it("does not compact when the resolved model contextWindow is zero", async () => {
+    const zeroWindowModel = { ...testModel, contextWindow: 0 };
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session, sessionManager } = await createTestSession({
+      model: zeroWindowModel,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    // Degenerate window (0) must not trigger threshold compaction even with
+    // non-zero contextTokens (100). The guard in shouldCompact() returns false,
+    // so runAutoCompaction is never called and no compaction entry is persisted.
+    expect(compactionEvents).toEqual([]);
+    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "complete answer" }],
+    });
+  });
+
   it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false, reserveTokens: 0, keepRecentTokens: 1 },

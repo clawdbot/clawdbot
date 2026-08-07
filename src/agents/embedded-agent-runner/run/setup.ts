@@ -223,10 +223,16 @@ function resolveEffectiveRuntimeModel(params: {
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
 
-  // Apply contextTokens cap to model so session runtime's auto-compaction
-  // threshold uses the effective limit, not the native context window.
+  // Apply the resolved contextTokens cap so the session runtime's auto-compaction
+  // threshold uses the effective limit. Also repair a nonpositive runtime window
+  // here: resolveContextWindowInfo always resolves a positive budget, so a
+  // zero/negative window (missing/stale model metadata) must adopt it instead of
+  // surviving and collapsing the compaction threshold downstream. This is the
+  // canonical owner-boundary repair; shouldCompact keeps a narrow defensive guard
+  // only for non-setup callers.
+  const runtimeWindow = params.runtimeModel.contextWindow ?? Infinity;
   const effectiveModel =
-    ctxInfo.tokens < (params.runtimeModel.contextWindow ?? Infinity)
+    runtimeWindow <= 0 || ctxInfo.tokens < runtimeWindow
       ? { ...params.runtimeModel, contextWindow: ctxInfo.tokens }
       : params.runtimeModel;
   const ctxGuard = evaluateContextWindowGuard({ info: ctxInfo });

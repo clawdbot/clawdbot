@@ -131,6 +131,19 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
   });
 
+  it("does not request preemptive compaction at low context usage (safeguard yielded-parent regression #86684)", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("short history")],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 1_050_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.shouldCompact).toBe(false);
+    expect(result.route).toBe("fits");
+  });
+
   it("formats all-route pre-prompt diagnostics for a fits decision", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("short history")],

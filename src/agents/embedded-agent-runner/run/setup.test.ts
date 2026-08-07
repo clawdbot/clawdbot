@@ -296,6 +296,30 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     });
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
+
+  it("repairs a zero runtime contextWindow to the resolved positive budget", () => {
+    // Missing/stale model metadata can surface as a zero contextWindow on the
+    // runtime model. resolveContextWindowInfo still resolves a positive budget
+    // (here from contextTokens), so setup must propagate it instead of leaving
+    // the degenerate window to collapse the compaction threshold downstream.
+    const runtimeModel = { ...createRuntimeModel(), contextWindow: 0 };
+
+    const result = resolveEmbeddedRuntimeModelPolicy({
+      cfg: undefined,
+      provider: "openai",
+      modelId: runtimeModel.id,
+      runtimeModel,
+      nativeModelOwned: false,
+    });
+
+    expect(result.contextWindowInfo).toEqual({
+      source: "model",
+      tokens: 272_000,
+    });
+    // Without the repair the zero window survives and effectiveModel.contextWindow
+    // stays 0; the fix adopts the resolved positive budget.
+    expect(result.effectiveModel.contextWindow).toBe(272_000);
+  });
 });
 
 describe("native model-owned harness policy", () => {

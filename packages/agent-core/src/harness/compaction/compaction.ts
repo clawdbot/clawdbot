@@ -260,10 +260,10 @@ export function shouldCompact(
   if (!settings.enabled) {
     return false;
   }
-  // Guard against missing/stale model contextWindow metadata. When the resolved
-  // model lacks contextWindow (e.g. sessions_yield wake path rehydrating settings
-  // before model metadata is attached), the threshold collapses to a negative
-  // number and any non-zero contextTokens would falsely trigger compaction.
+  // Defensive guard for non-setup callers: a nonpositive contextWindow collapses
+  // the threshold and would falsely trigger compaction. The canonical repair
+  // normalizes such a window to the resolved positive budget in setup.ts
+  // (resolveEffectiveRuntimeModel); this guard backstops paths that bypass it.
   if (contextWindow <= 0) {
     return false;
   }

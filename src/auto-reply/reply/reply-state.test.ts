@@ -388,6 +388,18 @@ describe("shouldRunPreflightCompaction", () => {
       }),
     ).toBe(true);
   });
+
+  it("returns false when contextWindowTokens is zero (safeguard yielded-parent regression #86684)", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 65_320, totalTokensFresh: true },
+        tokenCount: 65_320,
+        contextWindowTokens: 0,
+        reserveTokensFloor: 20_000,
+        softThresholdTokens: 4_000,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("hasAlreadyFlushedForCurrentCompaction", () => {
