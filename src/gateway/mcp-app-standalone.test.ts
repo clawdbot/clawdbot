@@ -465,4 +465,33 @@ describe("MCP App standalone host", () => {
       ).res.statusCode,
     ).toBe(400);
   });
+
+  it("omits requestTimeoutMs from the view payload for native MCP App runtimes without a request-deadline contract", async () => {
+    const nativeRuntime = {
+      ...runtime,
+      getServerRequestTimeoutMs: undefined,
+    };
+    const nativeView = { ...view, runtime: nativeRuntime };
+    mocks.peekSessionMcpRuntime.mockReturnValue(nativeRuntime);
+    mocks.getMcpAppViewLease.mockReturnValue(nativeView);
+
+    const issued = issueTicket({ sessionKey: "agent:main:main", view: nativeView, nowMs, secret });
+    const accepted = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${issued.ticket}`,
+    });
+    expect(accepted.res.statusCode).toBe(200);
+    const payload = JSON.parse(String(accepted.end.mock.calls[0]?.[0]));
+    expect(payload).not.toHaveProperty("requestTimeoutMs");
+
+    // The serialized browser host must keep the initial-load timeout but
+    // omit the operation AbortSignal for runtimes with no deadline contract.
+    const shell = await request({ url: "/__openclaw__/mcp-app" });
+    const html = String(shell.end.mock.calls[0]?.[0]);
+    expect(html).toContain("AbortSignal.timeout(config.initialLoadTimeoutMs)");
+    // The operation fetch uses a ternary that only adds AbortSignal when
+    // payload.requestTimeoutMs is set; for native runtimes the key is
+    // omitted, so the null check must be present.
+    expect(html).toContain("payload?.requestTimeoutMs != null");
+  });
 });

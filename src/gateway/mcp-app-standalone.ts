@@ -346,13 +346,15 @@ function runStandaloneMcpAppHost(config: {
       body: JSON.stringify({ method, params }),
       cache: "no-store",
       credentials: "omit",
-      signal: AbortSignal.timeout(
-        Math.min(
-          (payload?.requestTimeoutMs ?? config.defaultRequestTimeoutMs) +
-            config.requestTimeoutGraceMs,
-          config.timerSafeMax,
-        ),
-      ),
+      signal:
+        payload?.requestTimeoutMs != null
+          ? AbortSignal.timeout(
+              Math.min(
+                payload.requestTimeoutMs + config.requestTimeoutGraceMs,
+                config.timerSafeMax,
+              ),
+            )
+          : undefined,
     });
     const body = (await response.json().catch(() => undefined)) as
       | { ok?: boolean; result?: unknown; error?: string }
@@ -704,7 +706,9 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
-              requestTimeoutMs: view.requestTimeoutMs,
+              ...(runtime.getServerRequestTimeoutMs !== undefined
+                ? { requestTimeoutMs: view.requestTimeoutMs }
+                : {}),
             }),
       );
       return true;
