@@ -437,6 +437,89 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
+  it("classifies empty non-GPT completions as fallback-worthy (#120132)", () => {
+    // A tail model that survives the API call but returns an empty completion
+    // must not count as candidate_succeeded: that silently drops the turn on
+    // visible channels.
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "",
+          finalAssistantVisibleText: "",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "zai/glm-5.2 ended without a visible assistant reply",
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("classifies whitespace-only non-GPT completions as fallback-worthy (#120132)", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads: [{ text: "   " }],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "   ",
+          finalAssistantVisibleText: "   ",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "zai/glm-5.2 ended without a visible assistant reply",
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("classifies reasoning-only non-GPT completions as fallback-worthy (#120132)", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads: [{ isReasoning: true, text: "thinking about the answer" }],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "",
+          finalAssistantVisibleText: "",
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "zai/glm-5.2 ended with reasoning only",
+      reason: "format",
+      code: "reasoning_only_result",
+    });
+  });
+
+  it("keeps deliberate silent replies successful for non-GPT models (#120132)", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads: [],
+        meta: {
+          durationMs: 42,
+          finalAssistantRawText: "NO_REPLY",
+          finalAssistantVisibleText: "NO_REPLY",
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("keeps side-effecting incomplete tool turns out of fallback before harness classification", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",

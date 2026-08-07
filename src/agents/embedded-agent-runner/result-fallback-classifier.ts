@@ -5,7 +5,6 @@ import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
-import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
@@ -270,12 +269,10 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     };
   }
 
-  if (!isGpt5ModelId(params.model)) {
-    return null;
-  }
-
-  // Legacy GPT-5 handling treats empty/reasoning-only payloads as fallback
-  // candidates, while deliberate silent replies remain successful terminal work.
+  // Empty completions and reasoning-only output are fallback candidates for
+  // every model: counting them as success silently drops the turn on visible
+  // channels (the user sees nothing). Deliberate silent replies remain
+  // successful terminal work.
   if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }
@@ -291,6 +288,21 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       message: `${params.provider}/${params.model} ended with reasoning only`,
       reason: "format",
       code: "reasoning_only_result",
+    };
+  }
+  // A completion that returns only empty/whitespace text payloads is the same
+  // silent drop as no payloads at all.
+  if (
+    payloads.every(
+      (payload) =>
+        !hasNonTextVisiblePayloadContent(payload) &&
+        !(typeof payload?.text === "string" && payload.text.trim().length > 0),
+    )
+  ) {
+    return {
+      message: `${params.provider}/${params.model} ended without a visible assistant reply`,
+      reason: "format",
+      code: "empty_result",
     };
   }
 
