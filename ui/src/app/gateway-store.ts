@@ -4,6 +4,7 @@ import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
+  resolveGatewayErrorDetailCode,
   type GatewayBrowserClientOptions,
   type GatewayEventListener,
   type GatewayHelloOk,
@@ -412,7 +413,7 @@ export function createApplicationGateway(
           canvasPluginSurfaceUrl: null,
           selfUser: null,
           lastError: error?.message ?? `disconnected (${code}): ${reason || "no reason"}`,
-          lastErrorCode: error?.code ?? null,
+          lastErrorCode: resolveGatewayErrorDetailCode(error) ?? error?.code ?? null,
         });
       },
       onGap: ({ expected, received }) => {
