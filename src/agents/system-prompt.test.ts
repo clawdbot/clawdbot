@@ -1365,6 +1365,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       '"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"',
     );
+    // Binds the button shape to the tool call so models cannot satisfy the
+    // guidance by serializing button JSON into the visible reply instead.
+    expect(prompt).toContain("pass buttons as tool arguments, never as JSON in reply text");
   });
 
   it("does not embed Telegram rich-text authoring guidance in core messaging", () => {

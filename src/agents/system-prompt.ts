@@ -655,7 +655,7 @@ function buildMessagingSection(params: {
               : `- After visible \`message(send)\`, final ONLY ${SILENT_REPLY_TOKEN}.`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
-              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
+              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`; pass buttons as tool arguments, never as JSON in reply text.'
               : params.runtimeChannel
                 ? `- Inline buttons OFF for ${params.runtimeChannel}; ask owner for ${params.runtimeChannel}.capabilities.inlineButtons=dm|group|all|allowlist.`
                 : ""

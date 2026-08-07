@@ -48,12 +48,12 @@ export function registerGroupIntroPromptCases(): void {
     const automaticGroupDeliveryGuidance = [
       "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
       "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
-      "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+      "Use message(action=send) to this same group/topic only for payloads plain text cannot carry: files, images, other attachments, or typed presentation blocks such as inline buttons.",
     ];
     const automaticChannelDeliveryGuidance = [
       "Your text replies are automatically sent to this channel unless the current-turn context says final replies stay private.",
       "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
-      "Use message(action=send) only when you need to send files, images, or other attachments to this same channel/thread.",
+      "Use message(action=send) to this same channel/thread only for payloads plain text cannot carry: files, images, other attachments, or typed presentation blocks such as inline buttons.",
     ];
     const cases: GroupIntroCase[] = [
       {
