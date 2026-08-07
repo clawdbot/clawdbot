@@ -55,8 +55,15 @@ export type SteerSendDependencies = {
     message: string,
     attachments: ChatAttachment[] | undefined,
     options: { canApplyError: () => boolean; queueMode?: QueueMode; runId: string },
-  ) => Promise<ChatSendAck | { kind: "rejected"; error: string } | null>;
+  ) => Promise<SteerChatSendResult>;
 };
+
+type RejectedSteerChatSend = { kind: "rejected"; error: string };
+type SteerChatSendResult = ChatSendAck | RejectedSteerChatSend | null;
+
+function isRejectedSteerChatSend(result: SteerChatSendResult): result is RejectedSteerChatSend {
+  return result !== null && "kind" in result && result.kind === "rejected";
+}
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -328,7 +335,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     }
     return;
   }
-  if ("kind" in result && result.kind === "rejected") {
+  if (isRejectedSteerChatSend(result)) {
     const failed = updateQueuedMessage(host, id, (entry) => ({
       ...entry,
       sendError: result.error,

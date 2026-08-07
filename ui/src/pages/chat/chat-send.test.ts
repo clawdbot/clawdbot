@@ -8615,7 +8615,7 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main:main",
       agentId: "main",
     };
-    const host = makeHost({
+    const host = makeChatHost({
       requestHandlers: {
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "definitive steer rejection payload");
