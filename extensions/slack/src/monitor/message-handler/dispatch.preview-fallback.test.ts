@@ -2,6 +2,7 @@ import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-ru
 // Slack tests cover dispatch.preview fallback plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackMonitorContext } from "../context.js";
 
 const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
@@ -161,6 +162,25 @@ function requireCapturedTyping() {
   return capturedTyping;
 }
 
+function createSlackThreadStatusMock() {
+  return vi.fn<SlackMonitorContext["setSlackThreadStatus"]>(async () => undefined);
+}
+
+function createSealedTypingController(): Parameters<
+  NonNullable<GetReplyOptions["onTypingController"]>
+>[0] {
+  return {
+    onReplyStart: vi.fn(async () => {}),
+    startTypingLoop: vi.fn(async () => {}),
+    startTypingOnText: vi.fn(async () => {}),
+    refreshTypingTtl: vi.fn(),
+    isActive: vi.fn(() => false),
+    markRunComplete: vi.fn(),
+    markDispatchIdle: vi.fn(),
+    cleanup: vi.fn(),
+  };
+}
+
 function createSlackPlatformError(error: string, details?: { needed?: string; provided?: string }) {
   // Mirrors @slack/web-api 7.18.0 platformErrorFromResult: message plus structured result data.
   return Object.assign(new Error(`An API error occurred: ${error}`), {
@@ -302,6 +322,7 @@ function createPreparedSlackMessage(params?: {
   channelConfig?: Record<string, unknown> | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   isDirectMessage?: boolean;
+  isRoomish?: boolean;
   route?: Partial<{
     agentId: string;
     accountId: string;
@@ -384,7 +405,7 @@ function createPreparedSlackMessage(params?: {
     },
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: params?.isDirectMessage ?? false,
-    isRoomish: false,
+    isRoomish: params?.isRoomish ?? false,
     historyKey: "history-key",
     preview: "",
     ackReactionValue: "eyes",
@@ -434,6 +455,20 @@ async function dispatchNativeProgressScenario(params: {
 }
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveAgentConfig: (
+    cfg: {
+      agents?: {
+        defaults?: { typingMode?: string };
+        entries?: Record<string, { typingMode?: string }>;
+        list?: Array<{ id: string; typingMode?: string }>;
+      };
+    },
+    agentId: string,
+  ) => {
+    const agent =
+      cfg.agents?.entries?.[agentId] ?? cfg.agents?.list?.find((entry) => entry.id === agentId);
+    return agent ? { ...cfg.agents?.defaults, ...agent } : undefined;
+  },
   resolveHumanDelayConfig: () => undefined,
 }));
 
@@ -1808,7 +1843,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("keeps Slack typing callbacks when channel replies are message-tool-only", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackThreadStatus = createSlackThreadStatusMock();
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -1849,6 +1884,1011 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(requireRecord(removeReactionCall[3], "remove Slack reaction options").token).toBe(
       "xoxb-test",
     );
+  });
+
+  it("keeps thread status visible until every queued explicit turn settles", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    let sharedContext: unknown;
+    const createTurn = async (ts: string) => {
+      const lifecycle = {
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onSettled: vi.fn(),
+      };
+      const prepared = createPreparedSlackMessage({
+        ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+        message: { ts },
+        setSlackThreadStatus,
+        typingReaction: "hourglass_flowing_sand",
+        turnAdoptionLifecycle: lifecycle,
+      }) as { ctx: unknown };
+      if (sharedContext) {
+        prepared.ctx = sharedContext;
+      } else {
+        sharedContext = prepared.ctx;
+      }
+      await dispatchPreparedSlackMessage(prepared as never);
+      return {
+        typing: requireCapturedTyping(),
+        lifecycle: capturedReplyOptions?.turnAdoptionLifecycle,
+      };
+    };
+    const clearCalls = () =>
+      setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "");
+
+    const first = await createTurn("171234.111");
+    await first.typing.start();
+
+    const second = await createTurn("171234.222");
+    second.lifecycle?.onDeferred?.();
+    await first.typing.stop?.();
+    expect(clearCalls()).toHaveLength(0);
+    expect(removeSlackReactionMock).toHaveBeenCalledTimes(1);
+
+    const third = await createTurn("171234.333");
+    third.lifecycle?.onDeferred?.();
+    await second.typing.start();
+    await second.typing.stop?.();
+    await third.typing.start();
+    await third.typing.stop?.();
+    expect(removeSlackReactionMock).toHaveBeenCalledTimes(3);
+
+    second.lifecycle?.onSettled?.();
+    expect(clearCalls()).toHaveLength(0);
+
+    third.lifecycle?.onSettled?.();
+    await vi.waitFor(() => expect(clearCalls()).toHaveLength(1));
+    expect(removeSlackReactionMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps existing implicit-thread typing visible while its followup is queued", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const mentionContext = {
+      WasMentioned: true,
+      ExplicitlyMentionedBot: false,
+      MentionSource: "implicit_thread",
+    };
+    const firstPrepared = createPreparedSlackMessage({
+      ctxPayload: mentionContext,
+      isRoomish: true,
+      setSlackThreadStatus,
+    }) as { ctx: unknown };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      ctxPayload: mentionContext,
+      isRoomish: true,
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      0,
+    );
+
+    lifecycle.onSettled();
+    await vi.waitFor(() => {
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(1);
+    });
+  });
+
+  it.each(["steer", "followup", "collect"] as const)(
+    "keeps %s model work thinking until every owner completes",
+    async (queueMode) => {
+      let slackStatusVisible = false;
+      const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+        slackStatusVisible = params.status !== "";
+      });
+      mockedDispatchSequence = [];
+      const firstPrepared = createPreparedSlackMessage({
+        cfg: { messages: { queue: { mode: queueMode } } },
+        ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+        setSlackThreadStatus,
+      }) as { ctx: unknown };
+      await dispatchPreparedSlackMessage(firstPrepared as never);
+      const firstTyping = requireCapturedTyping();
+      await firstTyping.start();
+      expect(slackStatusVisible).toBe(true);
+
+      const onAdopted = vi.fn();
+      const onDeferred = vi.fn();
+      const onSettled = vi.fn();
+      const lifecycle = { onAdopted, onDeferred, onSettled };
+      const nextPrepared = createPreparedSlackMessage({
+        ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+        message: { ts: "171234.222" },
+        turnAdoptionLifecycle: lifecycle,
+      }) as { ctx: unknown };
+      nextPrepared.ctx = firstPrepared.ctx;
+      await dispatchPreparedSlackMessage(nextPrepared as never);
+
+      let needsQueuedSettlement = queueMode !== "steer";
+      try {
+        if (queueMode === "steer") {
+          slackStatusVisible = false;
+          await lifecycle.onAdopted();
+          await vi.waitFor(() => expect(slackStatusVisible).toBe(true));
+          expect(onAdopted).toHaveBeenCalledOnce();
+          expect(onDeferred).not.toHaveBeenCalled();
+          expect(onSettled).not.toHaveBeenCalled();
+        } else {
+          lifecycle.onDeferred();
+          expect(onDeferred).toHaveBeenCalledOnce();
+        }
+
+        const draftOptions = requireRecord(
+          createSlackDraftStreamMock.mock.calls.at(-1)?.[0],
+          "Slack draft stream options",
+        );
+        const onMessageSent = draftOptions.onMessageSent as (() => void) | undefined;
+        expect(onMessageSent).toBeTypeOf("function");
+        slackStatusVisible = false;
+        onMessageSent?.();
+        await vi.waitFor(() => expect(slackStatusVisible).toBe(true));
+
+        await firstTyping.stop?.();
+        if (queueMode !== "steer") {
+          expect(slackStatusVisible).toBe(true);
+          lifecycle.onSettled();
+          needsQueuedSettlement = false;
+          await vi.waitFor(() => expect(slackStatusVisible).toBe(false));
+          expect(onSettled).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await firstTyping.stop?.();
+        if (needsQueuedSettlement) {
+          lifecycle.onSettled();
+        }
+      }
+
+      expect(slackStatusVisible).toBe(false);
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("restores active model thinking after progress without another pending turn", async () => {
+    let slackStatusVisible = false;
+    const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+      slackStatusVisible = params.status !== "";
+    });
+    mockedDispatchSequence = [];
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+        setSlackThreadStatus,
+      }),
+    );
+    const typing = requireCapturedTyping();
+    await typing.start();
+
+    try {
+      const draftOptions = requireRecord(
+        createSlackDraftStreamMock.mock.calls.at(-1)?.[0],
+        "Slack draft stream options",
+      );
+      const onMessageSent = draftOptions.onMessageSent as (() => void) | undefined;
+      slackStatusVisible = false;
+      onMessageSent?.();
+      await vi.waitFor(() => expect(slackStatusVisible).toBe(true));
+    } finally {
+      await typing.stop?.();
+    }
+
+    expect(slackStatusVisible).toBe(false);
+    expect(setSlackThreadStatus.mock.calls.at(-1)?.[0].status).toBe("");
+  });
+
+  it("keeps interrupt replacement thinking until the new model work completes", async () => {
+    let slackStatusVisible = false;
+    const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+      slackStatusVisible = params.status !== "";
+    });
+    mockedDispatchSequence = [];
+    const interruptedPrepared = createPreparedSlackMessage({
+      cfg: { messages: { queue: { mode: "interrupt" } } },
+      ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+      setSlackThreadStatus,
+    }) as { ctx: unknown };
+    await dispatchPreparedSlackMessage(interruptedPrepared as never);
+    const interruptedTyping = requireCapturedTyping();
+    await interruptedTyping.start();
+
+    const replacementPrepared = createPreparedSlackMessage({
+      ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+      message: { ts: "171234.222" },
+    }) as { ctx: unknown };
+    replacementPrepared.ctx = interruptedPrepared.ctx;
+    await dispatchPreparedSlackMessage(replacementPrepared as never);
+    const replacementTyping = requireCapturedTyping();
+    await replacementTyping.start();
+
+    try {
+      await interruptedTyping.stop?.();
+      expect(slackStatusVisible).toBe(true);
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(0);
+
+      const draftOptions = requireRecord(
+        createSlackDraftStreamMock.mock.calls.at(-1)?.[0],
+        "Slack draft stream options",
+      );
+      const onMessageSent = draftOptions.onMessageSent as (() => void) | undefined;
+      slackStatusVisible = false;
+      onMessageSent?.();
+      await vi.waitFor(() => expect(slackStatusVisible).toBe(true));
+    } finally {
+      await replacementTyping.stop?.();
+    }
+
+    expect(slackStatusVisible).toBe(false);
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+  });
+
+  it("rearms three queued explicit turns when Slack clears status after each reply", async () => {
+    let slackStatusVisible = false;
+    const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+      slackStatusVisible = params.status !== "";
+    });
+    mockedDispatchSequence = [];
+    const firstPrepared = createPreparedSlackMessage({
+      ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+      setSlackThreadStatus,
+    }) as { ctx: unknown };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+    expect(slackStatusVisible).toBe(true);
+
+    const queuedLifecycles = [];
+    for (const ts of ["171234.222", "171234.333"]) {
+      const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+      const queuedPrepared = createPreparedSlackMessage({
+        ctxPayload: { WasMentioned: true, MentionSource: "explicit_bot" },
+        message: { ts },
+        turnAdoptionLifecycle: lifecycle,
+      }) as { ctx: unknown };
+      queuedPrepared.ctx = firstPrepared.ctx;
+      await dispatchPreparedSlackMessage(queuedPrepared as never);
+      lifecycle.onDeferred();
+      queuedLifecycles.push(lifecycle);
+    }
+
+    deliverRepliesMock.mockImplementation(async () => {
+      slackStatusVisible = false;
+      return undefined;
+    });
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+
+    expect(slackStatusVisible).toBe(true);
+    await firstTyping.stop?.();
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    expect(slackStatusVisible).toBe(true);
+    queuedLifecycles[0]?.onSettled();
+    expect(slackStatusVisible).toBe(true);
+
+    slackStatusVisible = false;
+    await capturedReplyOptions?.onObservedReplyDelivery?.();
+    await vi.waitFor(() => expect(slackStatusVisible).toBe(true));
+
+    queuedLifecycles[1]?.onSettled();
+    await vi.waitFor(() => expect(slackStatusVisible).toBe(false));
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status !== "")).toHaveLength(
+      4,
+    );
+  });
+
+  it("does not let a pending queued status update block a delivered Slack reply", async () => {
+    let finishStatusUpdate: (() => void) | undefined;
+    const pendingStatusUpdate = new Promise<void>((resolve) => {
+      finishStatusUpdate = resolve;
+    });
+    let nonemptyUpdates = 0;
+    const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+      if (params.status !== "" && ++nonemptyUpdates > 1) {
+        await pendingStatusUpdate;
+      }
+    });
+    mockedDispatchSequence = [];
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+    lifecycle.onDeferred();
+
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    let deliveryCompleted = false;
+    const delivery = dispatchPreparedSlackMessage(firstPrepared as never).then(() => {
+      deliveryCompleted = true;
+    });
+    try {
+      await vi.waitFor(() => expect(nonemptyUpdates).toBe(2));
+      await vi.waitFor(() => expect(deliveryCompleted).toBe(true), { timeout: 100 });
+    } finally {
+      finishStatusUpdate?.();
+      await delivery;
+      await firstTyping.stop?.();
+      lifecycle.onSettled();
+    }
+  });
+
+  it("refreshes retained queued thread status before Slack's two-minute timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mockedDispatchSequence = [];
+      const setSlackThreadStatus = createSlackThreadStatusMock();
+      const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+        ctx: unknown;
+      };
+      await dispatchPreparedSlackMessage(firstPrepared as never);
+      const firstTyping = requireCapturedTyping();
+      await firstTyping.start();
+
+      const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+      const queuedPrepared = createPreparedSlackMessage({
+        message: { ts: "171234.222" },
+        turnAdoptionLifecycle: lifecycle,
+      }) as { ctx: unknown };
+      queuedPrepared.ctx = firstPrepared.ctx;
+      await dispatchPreparedSlackMessage(queuedPrepared as never);
+      lifecycle.onDeferred();
+      await firstTyping.stop?.();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "is typing..."),
+      ).toHaveLength(3);
+
+      lifecycle.onSettled();
+      await vi.advanceTimersByTimeAsync(1);
+      const settledCallCount = setSlackThreadStatus.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(setSlackThreadStatus.mock.calls).toHaveLength(settledCallCount);
+      expect(setSlackThreadStatus.mock.calls.at(-1)?.[0].status).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { configuredSeconds: 7, refreshMs: 7_000 },
+    { configuredSeconds: 180, refreshMs: 60_000 },
+  ])(
+    "honors a $configuredSeconds-second typing interval within Slack's expiry budget",
+    async ({ configuredSeconds, refreshMs }) => {
+      vi.useFakeTimers();
+      try {
+        mockedDispatchSequence = [];
+        const setSlackThreadStatus = createSlackThreadStatusMock();
+        const firstPrepared = createPreparedSlackMessage({
+          cfg: { agents: { defaults: { typingIntervalSeconds: configuredSeconds } } },
+          setSlackThreadStatus,
+        }) as { ctx: unknown };
+        await dispatchPreparedSlackMessage(firstPrepared as never);
+        const firstTyping = requireCapturedTyping();
+        await firstTyping.start();
+
+        const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+        const queuedPrepared = createPreparedSlackMessage({
+          message: { ts: "171234.222" },
+          turnAdoptionLifecycle: lifecycle,
+        }) as { ctx: unknown };
+        queuedPrepared.ctx = firstPrepared.ctx;
+        await dispatchPreparedSlackMessage(queuedPrepared as never);
+        lifecycle.onDeferred();
+        await firstTyping.stop?.();
+
+        await vi.advanceTimersByTimeAsync(refreshMs - 1);
+        expect(
+          setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "is typing..."),
+        ).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(
+          setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "is typing..."),
+        ).toHaveLength(2);
+
+        lifecycle.onSettled();
+        await vi.advanceTimersByTimeAsync(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("rearms retained thread status when a portable progress draft posts", async () => {
+    let slackStatusVisible = false;
+    const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+      slackStatusVisible = params.status !== "";
+    });
+    mockedDispatchSequence = [];
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+    lifecycle.onDeferred();
+
+    const draftOptions = requireRecord(
+      createSlackDraftStreamMock.mock.calls.at(-1)?.[0],
+      "Slack draft stream options",
+    );
+    const onMessageSent = draftOptions.onMessageSent as (() => void) | undefined;
+    expect(onMessageSent).toBeTypeOf("function");
+    slackStatusVisible = false;
+    onMessageSent?.();
+    await vi.waitFor(() => expect(slackStatusVisible).toBe(true));
+
+    await firstTyping.stop?.();
+    lifecycle.onSettled();
+    await vi.waitFor(() => expect(slackStatusVisible).toBe(false));
+  });
+
+  it("clears a passively retained thread status when queued ownership is canceled", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const abortController = new AbortController();
+    const lifecycle = {
+      abortSignal: abortController.signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      0,
+    );
+
+    abortController.abort();
+    await vi.waitFor(() => {
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(1);
+    });
+
+    lifecycle.onSettled();
+    await Promise.resolve();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+  });
+
+  it("retains a queued owner admitted before its thread status first starts", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.start();
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      0,
+    );
+
+    lifecycle.onSettled();
+    await vi.waitFor(() => {
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(1);
+    });
+  });
+
+  it("settles an in-flight status start before clearing its last owner", async () => {
+    let releaseStatusStart: (() => void) | undefined;
+    const statusStarted = new Promise<void>((resolve) => {
+      releaseStatusStart = resolve;
+    });
+    const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+      if (params.status !== "") {
+        await statusStarted;
+      }
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ setSlackThreadStatus }));
+    const typing = requireCapturedTyping();
+    const started = typing.start();
+    await vi.waitFor(() => expect(setSlackThreadStatus).toHaveBeenCalledOnce());
+    const stopped = typing.stop?.();
+    releaseStatusStart?.();
+    await Promise.all([started, stopped]);
+
+    expect(setSlackThreadStatus.mock.calls.map(([params]) => params.status)).toEqual([
+      "is typing...",
+      "",
+    ]);
+  });
+
+  it("rearms status when a queued owner arrives during an in-flight clear", async () => {
+    let finishFirstClear: (() => void) | undefined;
+    const firstClear = new Promise<void>((resolve) => {
+      finishFirstClear = resolve;
+    });
+    let clearCount = 0;
+    const setSlackThreadStatus = vi.fn(async (params: { status: string }) => {
+      if (params.status === "" && ++clearCount === 1) {
+        await firstClear;
+      }
+    });
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+    const firstStop = firstTyping.stop?.();
+    await vi.waitFor(() => expect(clearCount).toBe(1));
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+    lifecycle.onDeferred();
+
+    finishFirstClear?.();
+    await firstStop;
+    expect(setSlackThreadStatus.mock.calls.map(([params]) => params.status)).toEqual([
+      "is typing...",
+      "",
+      "is typing...",
+    ]);
+
+    lifecycle.onSettled();
+    await vi.waitFor(() => expect(clearCount).toBe(2));
+  });
+
+  it("does not retain thread status for rejected queued ownership", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = {
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(() => false),
+      onSettled: vi.fn(),
+    };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    expect(lifecycle.onDeferred()).toBe(false);
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+  });
+
+  it("preserves never typing mode when a sibling turn already owns thread status", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({
+      cfg: { agents: { defaults: { typingMode: "never" } } },
+      setSlackThreadStatus,
+    }) as { ctx: unknown };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = {
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+    lifecycle.onSettled();
+  });
+
+  it("preserves agent-specific never typing mode over a global instant default", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({
+      cfg: {
+        agents: {
+          defaults: { typingMode: "instant" },
+          entries: {
+            "active-agent": { typingMode: "instant" },
+            "never-agent": { typingMode: "never" },
+          },
+        },
+      },
+      route: { agentId: "active-agent" },
+      setSlackThreadStatus,
+    }) as { ctx: unknown };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      route: { agentId: "never-agent" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+    lifecycle.onSettled();
+  });
+
+  it.each(["message", "thinking"])(
+    "does not show queued %s typing before the existing typing policy starts it",
+    async (typingMode) => {
+      const setSlackThreadStatus = createSlackThreadStatusMock();
+      const firstPrepared = createPreparedSlackMessage({
+        cfg: {
+          agents: {
+            defaults: { typingMode: "instant" },
+            entries: {
+              "active-agent": { typingMode: "instant" },
+              "delayed-agent": { typingMode },
+            },
+          },
+        },
+        route: { agentId: "active-agent" },
+        setSlackThreadStatus,
+      }) as { ctx: unknown };
+      await dispatchPreparedSlackMessage(firstPrepared as never);
+      const firstTyping = requireCapturedTyping();
+      await firstTyping.start();
+
+      const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+      const queuedPrepared = createPreparedSlackMessage({
+        message: { ts: "171234.222" },
+        route: { agentId: "delayed-agent" },
+        turnAdoptionLifecycle: lifecycle,
+      }) as { ctx: unknown };
+      queuedPrepared.ctx = firstPrepared.ctx;
+      await dispatchPreparedSlackMessage(queuedPrepared as never);
+      const queuedTyping = requireCapturedTyping();
+      const queuedController = createSealedTypingController();
+      expect(capturedReplyOptions?.onTypingController).toBeTypeOf("function");
+      capturedReplyOptions?.onTypingController?.(queuedController);
+
+      lifecycle.onDeferred();
+      await queuedController.startTypingLoop();
+      await firstTyping.stop?.();
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(1);
+
+      await lifecycle.onAdopted();
+      if (typingMode === "thinking") {
+        await queuedController.startTypingLoop();
+      } else {
+        await queuedController.startTypingOnText("visible reply");
+      }
+      await vi.waitFor(() => {
+        expect(
+          setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "is typing..."),
+        ).toHaveLength(2);
+      });
+      await queuedTyping.stop?.();
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(1);
+      lifecycle.onSettled();
+      await vi.waitFor(() => {
+        expect(
+          setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+        ).toHaveLength(2);
+      });
+    },
+  );
+
+  it("restarts the adopted queued turn when a later turn owns the sealed controller", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({
+      cfg: {
+        agents: {
+          defaults: { typingMode: "instant" },
+          entries: {
+            "active-agent": { typingMode: "instant" },
+            "delayed-agent": { typingMode: "thinking" },
+          },
+        },
+      },
+      route: { agentId: "active-agent" },
+      setSlackThreadStatus,
+      typingReaction: "hourglass_flowing_sand",
+    }) as { ctx: unknown };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+    reactSlackMessageMock.mockClear();
+
+    const firstQueuedLifecycle = {
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+    const firstQueuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      route: { agentId: "delayed-agent" },
+      turnAdoptionLifecycle: firstQueuedLifecycle,
+    }) as { ctx: unknown };
+    firstQueuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(firstQueuedPrepared as never);
+    firstQueuedLifecycle.onDeferred();
+
+    const secondQueuedLifecycle = {
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+    const secondQueuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.333" },
+      route: { agentId: "delayed-agent" },
+      turnAdoptionLifecycle: secondQueuedLifecycle,
+    }) as { ctx: unknown };
+    secondQueuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(secondQueuedPrepared as never);
+    const latestController = createSealedTypingController();
+    capturedReplyOptions?.onTypingController?.(latestController);
+    secondQueuedLifecycle.onDeferred();
+
+    await firstTyping.stop?.();
+    await firstQueuedLifecycle.onAdopted();
+    await latestController.startTypingLoop();
+    await vi.waitFor(() => {
+      expect(reactSlackMessageMock).toHaveBeenCalledWith(
+        "C123",
+        "171234.222",
+        "hourglass_flowing_sand",
+        expect.any(Object),
+      );
+    });
+    expect(reactSlackMessageMock).not.toHaveBeenCalledWith(
+      "C123",
+      "171234.333",
+      "hourglass_flowing_sand",
+      expect.any(Object),
+    );
+
+    firstQueuedLifecycle.onSettled();
+    secondQueuedLifecycle.onSettled();
+    await vi.waitFor(() => {
+      expect(setSlackThreadStatus.mock.calls.at(-1)?.[0].status).toBe("");
+    });
+  });
+
+  it("does not restart queued message typing for silent streamed reply prefixes", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { agents: { defaults: { typingMode: "message" } } },
+        setSlackThreadStatus,
+        turnAdoptionLifecycle: lifecycle,
+      }),
+    );
+    const queuedController = createSealedTypingController();
+    expect(capturedReplyOptions?.onTypingController).toBeTypeOf("function");
+    capturedReplyOptions?.onTypingController?.(queuedController);
+    lifecycle.onDeferred();
+    await lifecycle.onAdopted();
+
+    for (const text of ["NO", "NO_R", "NO_REPLY"]) {
+      await queuedController.startTypingOnText(text);
+    }
+    await Promise.resolve();
+    expect(setSlackThreadStatus).not.toHaveBeenCalled();
+
+    await queuedController.startTypingOnText("No worries");
+    await vi.waitFor(() => {
+      expect(setSlackThreadStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "is typing..." }),
+      );
+    });
+    lifecycle.onSettled();
+    await vi.waitFor(() => {
+      expect(setSlackThreadStatus).toHaveBeenCalledWith(expect.objectContaining({ status: "" }));
+    });
+  });
+
+  it("preserves default delayed typing for an unmentioned queued group message", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({
+      cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+      ctxPayload: { ChatType: "channel", WasMentioned: true },
+      isRoomish: true,
+      setSlackThreadStatus,
+    }) as { ctx: unknown };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      ctxPayload: { ChatType: "channel", WasMentioned: false, MentionSource: "none" },
+      isRoomish: true,
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+    lifecycle.onSettled();
+  });
+
+  it("removes a queued typing reaction even when its add request finishes after stop", async () => {
+    let finishReactionAdd: (() => void) | undefined;
+    const pendingReactionAdd = new Promise<void>((resolve) => {
+      finishReactionAdd = resolve;
+    });
+    let reactionVisible = false;
+    reactSlackMessageMock.mockImplementation(async () => {
+      await pendingReactionAdd;
+      reactionVisible = true;
+    });
+    removeSlackReactionMock.mockImplementation(async () => {
+      reactionVisible = false;
+    });
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        typingReaction: "hourglass_flowing_sand",
+        turnAdoptionLifecycle: lifecycle,
+      }),
+    );
+    lifecycle.onDeferred();
+    const typing = requireCapturedTyping();
+    const starting = typing.start();
+    await vi.waitFor(() => expect(reactSlackMessageMock).toHaveBeenCalledOnce());
+    const stopping = typing.stop?.();
+    finishReactionAdd?.();
+    await Promise.all([starting, stopping]);
+    lifecycle.onSettled();
+
+    expect(reactionVisible).toBe(false);
+  });
+
+  it("keeps status ownership scoped to its Slack account and thread", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = { onAdopted: vi.fn(), onDeferred: vi.fn(), onSettled: vi.fn() };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      route: { accountId: "other-account" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.stop?.();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+    lifecycle.onSettled();
+    await Promise.resolve();
+    expect(setSlackThreadStatus.mock.calls.filter(([params]) => params.status === "")).toHaveLength(
+      1,
+    );
+  });
+
+  it("releases thread status even when the existing queued settlement callback throws", async () => {
+    const setSlackThreadStatus = createSlackThreadStatusMock();
+    const firstPrepared = createPreparedSlackMessage({ setSlackThreadStatus }) as {
+      ctx: unknown;
+    };
+    await dispatchPreparedSlackMessage(firstPrepared as never);
+    const firstTyping = requireCapturedTyping();
+    await firstTyping.start();
+
+    const lifecycle = {
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(() => {
+        throw new Error("existing settlement failed");
+      }),
+    };
+    const queuedPrepared = createPreparedSlackMessage({
+      message: { ts: "171234.222" },
+      turnAdoptionLifecycle: lifecycle,
+    }) as { ctx: unknown };
+    queuedPrepared.ctx = firstPrepared.ctx;
+    await dispatchPreparedSlackMessage(queuedPrepared as never);
+
+    lifecycle.onDeferred();
+    await firstTyping.stop?.();
+    expect(() => lifecycle.onSettled()).toThrow("existing settlement failed");
+    await vi.waitFor(() => {
+      expect(
+        setSlackThreadStatus.mock.calls.filter(([params]) => params.status === ""),
+      ).toHaveLength(1);
+    });
   });
 
   it("logs the formatted Slack error when adding the typing reaction fails", async () => {

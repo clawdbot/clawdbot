@@ -50,8 +50,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     messageSentHookContext,
     messageSentHookTarget,
     onModelSelected,
+    onQueuedTypingController,
     onSlackDeliveryError,
     previewStreamingEnabled,
+    rearmQueuedThreadStatus,
     replyPipeline,
     replyPlan,
     route,
@@ -368,7 +370,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       },
       delivery: {
-        deliver: deliverSlackPayload,
+        deliver: async (payload, info) => {
+          const result = await deliverSlackPayload(payload, info);
+          if (result?.visibleReplySent !== false) {
+            rearmQueuedThreadStatus(info.kind !== "final");
+          }
+          return result;
+        },
         onError: onSlackDeliveryError,
       },
       record: prepared.turn.record as InboundReplyRecordOptions,
@@ -378,6 +386,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         ...(prepared.turnAdoptionLifecycle
           ? { turnAdoptionLifecycle: prepared.turnAdoptionLifecycle }
           : {}),
+        ...(onQueuedTypingController ? { onTypingController: onQueuedTypingController } : {}),
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
         // Room events are observe-style turns; Slack status indicators imply an
@@ -416,6 +425,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await progress.onDraftBoundary?.();
         },
         onQueuedFollowupAdmitted: progress.onQueuedFollowupAdmitted,
+        onObservedReplyDelivery: rearmQueuedThreadStatus,
         onReasoningStream:
           statusReactionsEnabled || progress.previewToolProgressEnabled
             ? async (payload) => {
@@ -514,6 +524,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // emits for the non-streaming/fallback paths). emitSlackMessageSentHooks
       // self-gates on registered listeners, so this is a no-op when unused.
       delivery.acknowledgeStoppedStreamedDeliveries(finalStream, stopResult?.messageId);
+      rearmQueuedThreadStatus();
       if (
         progress.pendingNativeProgressReceipt &&
         stopResult?.messageId &&
@@ -529,7 +540,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await delivery.deliverPendingStreamFallback(finalStream, err);
-        if (!streamFallbackDelivered) {
+        if (streamFallbackDelivered) {
+          rearmQueuedThreadStatus();
+        } else {
           dispatchError ??= err;
         }
       } else {
