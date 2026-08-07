@@ -476,7 +476,6 @@ type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   constructor(
     private cfg: OpenClawConfig,
-    private accountId: string,
     private logger?: Logger,
   ) {
     super();

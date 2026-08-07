@@ -1,10 +1,12 @@
 // Discord tests cover thread session close plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+type ResolveStorePath = typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
+
 const hoisted = vi.hoisted(() => {
   const deleteSessionEntry = vi.fn();
   const listSessionEntries = vi.fn();
-  const resolveStorePath = vi.fn(() => "/tmp/openclaw-sessions.json");
+  const resolveStorePath = vi.fn<ResolveStorePath>(() => "/tmp/openclaw-sessions.json");
   return { deleteSessionEntry, listSessionEntries, resolveStorePath };
 });
 
@@ -236,15 +238,17 @@ describe("closeDiscordThreadSessions", () => {
 
   it("closes sessions across every agent's store", async () => {
     // Two agents, each with its own store keyed by resolved path.
-    const stores: Record<string, Record<string, { sessionId?: string; updatedAt: number }>> = {
-      "/stores/main.json": { [`agent:main:discord:channel:${THREAD_ID}`]: { updatedAt: 1_000 } },
-      "/stores/work.json": {
-        [`agent:work:discord:channel:${THREAD_ID}:thread:${THREAD_ID}`]: { updatedAt: 2_000 },
-      },
+    const mainStore = {
+      [`agent:main:discord:channel:${THREAD_ID}`]: { updatedAt: 1_000 },
     };
-    hoisted.resolveStorePath.mockImplementation(
-      (_store: unknown, opts: { agentId: string }) => `/stores/${opts.agentId}.json`,
-    );
+    const workStore = {
+      [`agent:work:discord:channel:${THREAD_ID}:thread:${THREAD_ID}`]: { updatedAt: 2_000 },
+    };
+    const stores: Record<string, Record<string, { sessionId?: string; updatedAt: number }>> = {
+      "/stores/main.json": mainStore,
+      "/stores/work.json": workStore,
+    };
+    hoisted.resolveStorePath.mockImplementation((_store, opts) => `/stores/${opts?.agentId}.json`);
     hoisted.listSessionEntries.mockImplementation(({ storePath }: { storePath: string }) =>
       Object.entries(stores[storePath] ?? {}).map(([sessionKey, entry]) => ({ sessionKey, entry })),
     );
@@ -265,7 +269,7 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(2);
-    expect(Object.keys(stores["/stores/main.json"])).toHaveLength(0);
-    expect(Object.keys(stores["/stores/work.json"])).toHaveLength(0);
+    expect(Object.keys(mainStore)).toHaveLength(0);
+    expect(Object.keys(workStore)).toHaveLength(0);
   });
 });
