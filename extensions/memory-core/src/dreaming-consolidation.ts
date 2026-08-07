@@ -8,6 +8,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MemoryConsolidationResult } from "./dreaming-consolidation-artifacts.js";
 import { filterConsolidationCandidates } from "./dreaming-consolidation-candidates.js";
 import type { SubagentSurface } from "./dreaming-narrative.js";
+import { extractAssistantText } from "./dreaming-shared.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import {
   buildPromotionRecallAnnotations,
@@ -90,41 +91,6 @@ function buildConsolidationPrompt(
       supersedesKey: candidate.provenance?.supersedesKey ?? null,
     })),
   });
-}
-
-function extractAssistantText(messages: unknown[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const record = message as { role?: unknown; content?: unknown };
-    if (record.role !== "assistant") {
-      continue;
-    }
-    if (typeof record.content === "string" && record.content.trim()) {
-      return record.content.trim();
-    }
-    if (Array.isArray(record.content)) {
-      const text = record.content
-        .flatMap((part) => {
-          if (!part || typeof part !== "object" || Array.isArray(part)) {
-            return [];
-          }
-          const item = part as { type?: unknown; text?: unknown };
-          return (item.type === "text" || item.type === "output_text") &&
-            typeof item.text === "string"
-            ? [item.text]
-            : [];
-        })
-        .join("\n")
-        .trim();
-      if (text) {
-        return text;
-      }
-    }
-  }
-  return null;
 }
 
 function parseConsolidatedMemory(raw: string): ConsolidationOutput | null {

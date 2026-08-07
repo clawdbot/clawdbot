@@ -242,7 +242,7 @@ function conversationThreadStartResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.146.0",
+      cliVersion: "0.146.1",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

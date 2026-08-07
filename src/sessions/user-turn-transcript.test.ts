@@ -479,11 +479,13 @@ describe("user turn transcript persistence", () => {
       });
       const persistence = recorder.persistFallback();
       await resolverStarted;
-      await persistUserTurnTranscript({
+      const admitted = await persistUserTurnTranscript({
         ...target,
         input: admittedInput,
       });
-      recorder.markRuntimePersisted(recorder.message);
+      expect(admitted).toBeDefined();
+      recorder.markRuntimePersisted(recorder.message, admitted?.admission);
+      const admissionReceipt = recorder.getAdmissionReceipt();
       recorder.markSentToProvider?.();
       resolveMedia({
         ...admittedInput,
@@ -492,6 +494,11 @@ describe("user turn transcript persistence", () => {
 
       await persistence;
 
+      expect(recorder.getAdmissionReceipt()).toEqual(admissionReceipt);
+      expect(recorder.getPersistedMessage?.()).toMatchObject({
+        content: "describe this",
+        idempotencyKey: "chat-run-late:user",
+      });
       const messages = await readTranscriptMessages(target);
       expect(messages).toEqual([
         expect.objectContaining({
@@ -517,6 +524,32 @@ describe("user turn transcript persistence", () => {
           kind: "image",
         }),
       ]);
+    });
+
+    it("records the exact self-persisted admission identity", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-receipt-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "admit exactly once",
+          idempotencyKey: "receipt:user",
+        },
+        target,
+      });
+
+      const persisted = await recorder.persistApproved();
+
+      expect(persisted).toBeDefined();
+      expect(recorder.getAdmissionReceipt()).toBe(persisted?.admission);
+      expect(recorder.getAdmissionReceipt()).toMatchObject({
+        entryId: persisted?.messageId,
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        idempotencyKey: "receipt:user",
+        logicalTurnId: expect.any(String),
+        role: "user",
+      });
     });
 
     it("preserves distinct text supplied with late-resolved media", async () => {

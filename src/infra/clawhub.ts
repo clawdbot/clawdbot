@@ -390,6 +390,7 @@ export type ClawHubSkillSecurityVerdictItem = {
   decision: ClawHubSkillVerificationDecision;
   reasons: string[];
   requestedSlug: string;
+  requestedOwnerHandle?: string;
   requestedVersion: string;
   slug?: string | null;
   version?: string | null;
@@ -1320,6 +1321,7 @@ export async function fetchClawHubSkillVerification(params: {
   tag?: string;
   baseUrl?: string;
   token?: string;
+  skipAuth?: boolean;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubSkillVerificationResponse> {
@@ -1327,6 +1329,7 @@ export async function fetchClawHubSkillVerification(params: {
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
     token: params.token,
+    skipAuth: params.skipAuth,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
     search: {

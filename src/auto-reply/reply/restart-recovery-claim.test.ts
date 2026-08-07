@@ -19,6 +19,27 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function createTestAdmission(params: {
+  entryId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}) {
+  return {
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    generation: "test-generation",
+    entryId: params.entryId,
+    rawSeq: 1,
+    effectiveParentId: null,
+    activeMessagePosition: 0,
+    logicalTurnId: `${params.entryId}:turn`,
+    role: "user" as const,
+  };
+}
+
 function replaceSessionEntryFromIndependentConnection(params: {
   entry: SessionEntry;
   sessionKey: string;
@@ -38,6 +59,57 @@ function replaceSessionEntryFromIndependentConnection(params: {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  it.each([
+    { receiptState: undefined, expectedStatus: "done" },
+    { receiptState: "terminal-pending" as const, expectedStatus: "failed" },
+  ])(
+    "clears lifecycle ownership when claim cleanup settles $expectedStatus",
+    async ({ receiptState, expectedStatus }) => {
+      const root = tempDirs.make(`openclaw-reply-claim-${expectedStatus}-`);
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const sessionId = "session";
+      let entry: InternalSessionEntry = {
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-run",
+        restartRecoveryBeforeAgentReplyState: "admitted",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        sessionId,
+        startedAt: 1,
+        status: "running",
+        updatedAt: 1,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      const controller = createReplyRestartRecoveryClaimController({
+        admissionRunId: "recovery-run",
+        getEntry: () => entry,
+        getSessionId: () => sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        sessionKey,
+        setEntry: (next) => {
+          entry = next;
+        },
+        storePath,
+      });
+
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      if (receiptState) {
+        entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+          restartRecoveryDeliveryReceiptState: receiptState,
+        }))) as InternalSessionEntry;
+      } else {
+        await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+        await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+      }
+      await controller.clear();
+
+      const persisted = loadSessionEntry({ storePath, sessionKey }) as InternalSessionEntry;
+      expect(persisted.status).toBe(expectedStatus);
+      expect(persisted.lifecycleRunId).toBeUndefined();
+    },
+  );
+
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const root = tempDirs.make("openclaw-reply-admission-");
     const storePath = path.join(root, "sessions.json");
@@ -47,10 +119,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
     await replaceSessionEntry({ storePath, sessionKey }, entry);
 
     let persistedTarget: UserTurnTranscriptTarget | undefined;
+    const admission = createTestAdmission({
+      entryId: "user-turn-1",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>(async (params) => {
       persistedTarget =
         typeof params?.target === "function" ? await params.target() : params?.target;
       return {
+        admission,
         appended: true,
         message: { role: "user", content: "hello", timestamp: Date.now() },
         messageId: "user-turn-1",
@@ -61,6 +140,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     const recorder = {
       message: undefined,
       resolveMessage: async () => undefined,
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},
@@ -121,6 +201,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
       status: "done",
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>();
     const recorder = {
       message: undefined,
@@ -137,6 +223,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           timestamp: Date.now(),
         };
       },
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},
@@ -198,10 +285,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
       idempotencyKey: sourceTurnId,
       timestamp: Date.now(),
     };
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const recorder = {
       message: undefined,
       getPersistedMessage: () => sourceMessage,
       resolveMessage: async () => sourceMessage,
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},

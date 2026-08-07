@@ -200,6 +200,15 @@ const recipe = [
   },
 ];
 
+export function resolveUpgradeSurvivorConfigSteps(scenario = "base") {
+  const validateStep = recipe.at(-1);
+  return [
+    ...recipe.slice(0, -1),
+    ...resolveScenarioConfigSteps(scenario),
+    ...(validateStep ? [validateStep] : []),
+  ];
+}
+
 function selectedScenario() {
   return process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
 }
@@ -250,6 +259,16 @@ function adaptStepForBaseline(step, baselineVersion, summary) {
     };
   }
   return step;
+}
+
+export function resolveUpgradeSurvivorConfigStepsForBaseline(
+  scenario = "base",
+  baselineVersion = null,
+) {
+  const summary = { skippedIntents: [] };
+  return resolveUpgradeSurvivorConfigSteps(scenario)
+    .map((step) => adaptStepForBaseline(step, baselineVersion, summary))
+    .filter(Boolean);
 }
 
 export function resolveUpgradeSurvivorOpenClawCommand(argv, params = {}) {
@@ -331,7 +350,7 @@ function applyRecipe() {
     steps: [],
   };
 
-  for (const step of [...recipe.slice(0, -1), ...scenarioSteps, recipe.at(-1)]) {
+  for (const step of resolveUpgradeSurvivorConfigSteps(scenario)) {
     const adaptedStep = adaptStepForBaseline(step, baselineVersion, summary);
     if (!adaptedStep) {
       continue;

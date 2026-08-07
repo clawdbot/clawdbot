@@ -302,6 +302,19 @@ export function sanitizeChatHistoryMessage(
   }
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
+  const openClawMeta = readRecord(entry["__openclaw"]);
+  if (openClawMeta && "upstreamUserText" in openClawMeta) {
+    // Codex retains the decorated upstream prompt for transcript reconstruction.
+    // It is not display data and can otherwise evict the visible row from history.
+    const projectedMeta = { ...openClawMeta };
+    delete projectedMeta.upstreamUserText;
+    if (Object.keys(projectedMeta).length > 0) {
+      entry["__openclaw"] = projectedMeta;
+    } else {
+      delete entry["__openclaw"];
+    }
+    changed = true;
+  }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
   const preserveExactToolPayload =
     role === "toolresult" ||

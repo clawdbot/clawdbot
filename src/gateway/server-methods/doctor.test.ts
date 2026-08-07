@@ -382,6 +382,41 @@ describe("doctor.memory.status", () => {
     });
   });
 
+  it("orders dreaming entries deterministically when one timestamp is malformed", async () => {
+    useMemoryManagerFixture({
+      status: () => ({ provider: "gemini" }),
+    });
+    const recentIso = "2026-04-04T00:00:00.000Z";
+    loadShortTermPromotionDreamingStats.mockImplementation(async () =>
+      makeDreamingStats({
+        shortTermCount: 2,
+        shortTermEntries: [
+          makeDreamingEntry("memory/malformed.md", {
+            snippet: "malformed timestamp entry",
+            totalSignalCount: 5,
+            lastRecalledAt: "not-a-valid-date",
+          }),
+          makeDreamingEntry("memory/recent.md", {
+            snippet: "valid timestamp entry",
+            totalSignalCount: 1,
+            lastRecalledAt: recentIso,
+          }),
+        ],
+      }),
+    );
+
+    const respond = vi.fn();
+    await invokeDoctorMemory("doctor.memory.status", respond, {});
+
+    const dreaming = respondPayload(respond).dreaming as Record<string, unknown>;
+    const entries = dreaming.shortTermEntries as Array<Record<string, unknown>>;
+    // A NaN-returning comparator would leave the order undefined; with the fix
+    // the malformed timestamp coerces to -Infinity so the valid recent entry
+    // sorts first even though the malformed entry has more signals.
+    expect(entries[0]).toMatchObject({ path: "memory/recent.md" });
+    expect(entries[1]).toMatchObject({ path: "memory/malformed.md" });
+  });
+
   it("returns llama.cpp runtime facts created by the deep embedding probe", async () => {
     let probed = false;
     const { close } = useMemoryManagerFixture({

@@ -14,7 +14,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   extractChangelogReleaseSections,
+  formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
+  parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
   verifyGithubReleaseNotes,
@@ -671,10 +673,8 @@ export function contributionRecordTarget(section) {
   if (recordStart < 0) {
     return undefined;
   }
-  return section.source
-    .slice(recordStart)
-    .match(/^This audited record covers the complete \S+\.\.(?<target>[0-9a-f]{40}) history:/mu)
-    ?.groups?.target;
+  const target = parseContributionRecordProvenance(section.source.slice(recordStart))?.target;
+  return target && /^[0-9a-f]{40}$/u.test(target) ? target : undefined;
 }
 
 export function pullRequestTitleFromCommitSubject(subject, number) {
@@ -688,19 +688,12 @@ function completeContributionRecord(section, label) {
     fail(`${label} is missing ### Complete contribution record`);
   }
   const recordSource = section.source.slice(recordStart);
-  const provenance = recordSource.match(
-    /^This audited record covers the complete \S+\.\.[0-9a-f]{40} history: (?<count>[0-9]+) merged PRs?\./mu,
-  );
-  if (!provenance?.groups?.count) {
+  const provenance = parseContributionRecordProvenance(recordSource);
+  if (!provenance || !/^[0-9a-f]{40}$/u.test(provenance.target)) {
     fail(`${label} is missing exact complete contribution record provenance`);
   }
   const record = contributionRecordFor(section);
-  const declaredCount = Number(provenance.groups.count);
-  if (record.pullRequests.size !== declaredCount) {
-    fail(
-      `${label} contribution record declares ${declaredCount} PRs but contains ${record.pullRequests.size}`,
-    );
-  }
+  const declaredCount = provenance.uniquePullRequests;
   return { record, declaredCount };
 }
 
@@ -2069,6 +2062,10 @@ export function ledgerFor(
       !revertedReferences.has(entry.number),
   );
   const issues = entries.filter((entry) => entry.type === "Issue");
+  const inRangePullRequestNumbers = new Set([
+    ...sourcePullRequests,
+    ...[...sourceReferences].filter((number) => nodes.get(number)?.__typename === "PullRequest"),
+  ]);
   const legacyIssues = legacyIssuesByPullRequest(priorRecord, nodes);
   const records = pullRequests.map((entry) => {
     const priorEntry = priorRecord.pullRequests.get(entry.number);
@@ -2097,11 +2094,20 @@ export function ledgerFor(
       thanks,
     });
   });
+  const inRangePullRequests = records.filter((entry) =>
+    inRangePullRequestNumbers.has(entry.number),
+  ).length;
+  const retainedSeedOnlyPullRequests = records.length - inRangePullRequests;
+  const provenance = {
+    inRangePullRequests,
+    retainedSeedOnlyPullRequests,
+    uniquePullRequests: records.length,
+  };
   const shippedBaselineLine = formatShippedBaselineExclusions(shippedBaselines);
   const ledger = [
     "### Complete contribution record",
     "",
-    `This audited record covers the complete ${base}..${target} history: ${records.length} merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
+    `${formatContributionRecordProvenance({ base, target, ...provenance })} The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
     ...(shippedBaselineLine ? ["", shippedBaselineLine] : []),
     "",
     "#### Pull requests",
@@ -2113,6 +2119,7 @@ export function ledgerFor(
     issues,
     ledger,
     pullRequests: records,
+    provenance,
     titleReferences: titleReferences(records),
   };
 }
@@ -2176,6 +2183,22 @@ export function ledgerChecks(section, pullRequests, nodes, directCommits, shippe
     return errors;
   }
   const ledger = section.source.slice(ledgerStart);
+  try {
+    const provenance = parseContributionRecordProvenance(ledger);
+    if (!provenance) {
+      errors.push("missing exact complete contribution record provenance");
+    } else if (
+      section.expectedProvenance &&
+      provenance.inRangePullRequests !== undefined &&
+      (provenance.inRangePullRequests !== section.expectedProvenance.inRangePullRequests ||
+        provenance.retainedSeedOnlyPullRequests !==
+          section.expectedProvenance.retainedSeedOnlyPullRequests)
+    ) {
+      errors.push("contribution record provenance partition does not match generated inventory");
+    }
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
   const expectedShippedBaselineLine = formatShippedBaselineExclusions(shippedBaselines);
   try {
     const sectionShippedBaselineLine = formatShippedBaselineExclusions(
@@ -2312,7 +2335,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   }));
   const unlinkedCommits = directCommits.filter((commit) => commit.references.length === 0);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     base: options.base,
     target: options.target,
     mergeBase: source.mergeBase,
@@ -2320,7 +2343,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     shippedBaselines: source.shippedBaselines,
     source: {
       references: ledger.entries.length,
-      pullRequests: ledger.pullRequests.length,
+      ...ledger.provenance,
       issues: ledger.issues.length,
       directCommits: directCommits.length,
       unlinkedCommits: unlinkedCommits.length,
@@ -2589,7 +2612,7 @@ function main() {
   }
 
   const errors = ledgerChecks(
-    candidateSection,
+    { ...candidateSection, expectedProvenance: ledger.provenance },
     ledger.pullRequests,
     nodes,
     relationships.directCommits,
@@ -2619,7 +2642,7 @@ function main() {
     shippedBaselines: source.shippedBaselines,
     source: {
       references: references.length,
-      pullRequests: ledger.pullRequests.length,
+      ...ledger.provenance,
       issues: ledger.issues.length,
       directCommits: manifest.directCommits.length,
       unlinkedCommits: manifest.unlinkedCommits.length,
@@ -2642,7 +2665,7 @@ function main() {
       ? `, GitHub snapshot ${githubSnapshotState.hits} hits/${githubSnapshotState.misses} misses`
       : "";
     process.stdout.write(
-      `${options.version}: ${ledger.pullRequests.length} PRs, ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}${snapshotSummary}\n`,
+      `${options.version}: ${ledger.provenance.uniquePullRequests} unique PRs (${ledger.provenance.inRangePullRequests} in-range + ${ledger.provenance.retainedSeedOnlyPullRequests} retained seed-only), ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}${snapshotSummary}\n`,
     );
   }
   if (errors.length > 0) {

@@ -1,8 +1,13 @@
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
   getPreparedModelCatalogOwnerSnapshot,
   type LoadPreparedModelCatalogParams,
@@ -10,17 +15,23 @@ import {
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { getSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
+import { listAgentsForGateway } from "../session-utils.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
+import type {
+  ChatStartupProjectionReadParams,
+  ChatStartupProjectionResult,
+} from "./chat-startup-projection-contract.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export type { ChatMetadataResult } from "./chat-metadata-contract.js";
@@ -44,11 +55,18 @@ type PreparedAgentMetadata = PreparedAgentFacts & {
   swarmEnabled: boolean;
 };
 
+type PreparedAgentProjection = {
+  metadata: ChatMetadataResult;
+  modelCatalog: ModelCatalogEntry[];
+};
+
 type PreparedMetadataGeneration = {
   epoch: number;
   facts: PreparedGenerationFacts;
   agentsById: Map<string, PreparedAgentMetadata>;
-  metadataByKey: Map<string, Promise<ChatMetadataResult>>;
+  neutralProjectionByAgentId: Map<string, Promise<PreparedAgentProjection>>;
+  sessionProjectionByKey: Map<string, Promise<PreparedAgentProjection>>;
+  agentsListByKey: Map<string, ChatStartupProjectionResult["agentsList"]>;
 };
 
 type MetadataReplacement = {
@@ -73,12 +91,12 @@ type ChatMetadataRuntimeDeps = {
     cfg: OpenClawConfig;
     agentId: string;
   }) => Promise<{ commands?: unknown[] }>;
-  buildModels: (params: {
+  buildProjection: (params: {
     context: GatewayRequestContext;
     facts: PreparedAgentFacts;
     preferredProfileId?: string;
     lockedProfileId?: string;
-  }) => Promise<{ models?: unknown[] }>;
+  }) => Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }>;
 };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
@@ -172,17 +190,17 @@ function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefin
   if (!profileId) {
     return {};
   }
-  const profileSource = sessionEntry?.authProfileOverrideSource;
-  const legacyUserProfile =
-    profileSource === undefined && sessionEntry?.authProfileOverrideCompactionCount === undefined;
+  const profileSource = resolveSessionAuthProfileOverrideSource(sessionEntry);
   return {
     preferredProfileId: profileId,
-    ...(profileSource === "user" || legacyUserProfile ? { lockedProfileId: profileId } : {}),
+    ...(profileSource === "user" ? { lockedProfileId: profileId } : {}),
   };
 }
 
-function metadataKey(agentId: string, sessionEntry: ChatMetadataSessionEntry | undefined): string {
-  const profiles = resolveSessionProfiles(sessionEntry);
+function sessionProjectionKey(
+  agentId: string,
+  profiles: ReturnType<typeof resolveSessionProfiles>,
+): string {
   return [
     normalizeAgentId(agentId),
     profiles.preferredProfileId ?? "",
@@ -203,12 +221,12 @@ async function defaultBuildCommands(params: {
   });
 }
 
-async function defaultBuildModels(params: {
+async function defaultBuildProjection(params: {
   context: GatewayRequestContext;
   facts: PreparedAgentFacts;
   preferredProfileId?: string;
   lockedProfileId?: string;
-}): Promise<{ models?: unknown[] }> {
+}): Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }> {
   const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   const projector = createGatewayAgentModelCatalogProjector({
@@ -220,18 +238,22 @@ async function defaultBuildModels(params: {
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });
-  return await buildModelsListResult({
-    context: params.context,
-    agentId: params.facts.agentId,
-    params: { view: "configured" },
-    preloadedCatalog: {
+  const [modelCatalog, metadata] = await Promise.all([
+    projector.projectCatalog(),
+    buildModelsListResult({
+      context: params.context,
       agentId: params.facts.agentId,
-      config: params.facts.owner.config,
-      snapshot: params.facts.owner.modelCatalog,
-    },
-    preloadedOnly: true,
-    catalogProjector: projector,
-  });
+      params: { view: "configured" },
+      preloadedCatalog: {
+        agentId: params.facts.agentId,
+        config: params.facts.owner.config,
+        snapshot: params.facts.owner.modelCatalog,
+      },
+      preloadedOnly: true,
+      catalogProjector: projector,
+    }),
+  ]);
+  return { modelCatalog, ...metadata };
 }
 
 export function createGatewayChatMetadataRuntime(params: {
@@ -248,6 +270,7 @@ export function createGatewayChatMetadataRuntime(params: {
   fail: (error: unknown) => void;
   refresh: () => Promise<void>;
   read: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
+  readStartup: (params: ChatStartupProjectionReadParams) => Promise<ChatStartupProjectionResult>;
 } {
   const deps: ChatMetadataRuntimeDeps = {
     getConfig: params.getConfig,
@@ -257,7 +280,7 @@ export function createGatewayChatMetadataRuntime(params: {
     getSkillsVersion: getSkillsSnapshotVersion,
     getPluginRegistryVersion: getActivePluginRegistryVersion,
     buildCommands: defaultBuildCommands,
-    buildModels: defaultBuildModels,
+    buildProjection: defaultBuildProjection,
     ...params.deps,
   };
   let current: PreparedMetadataGeneration | undefined;
@@ -272,34 +295,46 @@ export function createGatewayChatMetadataRuntime(params: {
       }
     | undefined;
 
-  const projectMetadata = (
+  const projectAgent = (
     generation: PreparedMetadataGeneration,
     agent: PreparedAgentMetadata,
     sessionEntry?: ChatMetadataSessionEntry,
-  ): Promise<ChatMetadataResult> => {
-    const key = metadataKey(agent.agentId, sessionEntry);
-    const existing = generation.metadataByKey.get(key);
+  ): Promise<PreparedAgentProjection> => {
+    const profiles = resolveSessionProfiles(sessionEntry);
+    const neutral =
+      profiles.preferredProfileId === undefined && profiles.lockedProfileId === undefined;
+    const projections = neutral
+      ? generation.neutralProjectionByAgentId
+      : generation.sessionProjectionByKey;
+    const key = neutral ? agent.agentId : sessionProjectionKey(agent.agentId, profiles);
+    const existing = projections.get(key);
     if (existing) {
       return existing;
     }
-    const profiles = resolveSessionProfiles(sessionEntry);
     const projection = deps
-      .buildModels({
+      .buildProjection({
         context: deps.getContext(),
         facts: agent,
         ...profiles,
       })
-      .then((models) => ({
-        ...models,
-        ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
-        swarmEnabled: agent.swarmEnabled,
+      .then(({ modelCatalog, ...models }) => ({
+        modelCatalog,
+        metadata: {
+          ...models,
+          ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
+          swarmEnabled: agent.swarmEnabled,
+        },
       }))
       .catch((error: unknown) => {
-        generation.metadataByKey.delete(key);
+        projections.delete(key);
         throw error;
       });
-    generation.metadataByKey.set(key, projection);
-    pruneMapToMaxSize(generation.metadataByKey, CHAT_METADATA_CACHE_MAX_ENTRIES);
+    projections.set(key, projection);
+    if (!neutral) {
+      // Neutral projections belong to the published generation. Only request-derived profile
+      // variants are bounded; evicting neutral entries puts catalog work back on startup reads.
+      pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
+    }
     return projection;
   };
 
@@ -329,13 +364,18 @@ export function createGatewayChatMetadataRuntime(params: {
       epoch,
       facts,
       agentsById: new Map(agents.map((agent) => [agent.agentId, agent])),
-      metadataByKey: new Map(),
+      neutralProjectionByAgentId: new Map(),
+      sessionProjectionByKey: new Map(),
+      agentsListByKey: new Map(),
     };
     if (epoch !== invalidationEpoch) {
       return false;
     }
+    await Promise.all(agents.map((agent) => projectAgent(generation, agent)));
+    if (epoch !== invalidationEpoch) {
+      return false;
+    }
     current = generation;
-    await Promise.allSettled(agents.map((agent) => projectMetadata(generation, agent)));
     return epoch === invalidationEpoch;
   };
 
@@ -415,7 +455,9 @@ export function createGatewayChatMetadataRuntime(params: {
     return trackRefresh(promise, facts);
   };
 
-  const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> => {
+  const readCurrent = async <Result>(
+    project: (generation: PreparedMetadataGeneration) => Promise<Result>,
+  ): Promise<Result> => {
     for (;;) {
       const replacementPromise = replacement?.promise;
       if (replacementPromise) {
@@ -462,15 +504,8 @@ export function createGatewayChatMetadataRuntime(params: {
           );
         }
       }
-      const agentId = normalizeAgentId(readParams.agentId);
-      const agent = generation.agentsById.get(agentId);
-      if (!agent) {
-        throw new ChatMetadataSnapshotUnavailableError(
-          `prepared chat metadata is unavailable for agent "${agentId}"`,
-        );
-      }
       try {
-        const result = await projectMetadata(generation, agent, readParams.sessionEntry);
+        const result = await project(generation);
         // Lazy projections may outlive their generation. Never return an obsolete success after
         // invalidation; retry through the replacement gate so the caller sees one coherent epoch.
         if (current === generation && generation.epoch === invalidationEpoch) {
@@ -483,6 +518,78 @@ export function createGatewayChatMetadataRuntime(params: {
       }
     }
   };
+
+  const read = async (readParams: ChatMetadataReadParams): Promise<ChatMetadataResult> =>
+    await readCurrent(async (generation) => {
+      const agentId = normalizeAgentId(readParams.agentId);
+      const agent = generation.agentsById.get(agentId);
+      if (!agent) {
+        throw new ChatMetadataSnapshotUnavailableError(
+          `prepared chat metadata is unavailable for agent "${agentId}"`,
+        );
+      }
+      return (await projectAgent(generation, agent, readParams.sessionEntry)).metadata;
+    });
+
+  const readStartup = async (
+    readParams: ChatStartupProjectionReadParams,
+  ): Promise<ChatStartupProjectionResult> =>
+    await readCurrent(async (generation) => {
+      const sessionAgentId = normalizeAgentId(readParams.agentId);
+      const sessionAgent = generation.agentsById.get(sessionAgentId);
+      if (!sessionAgent) {
+        throw new ChatMetadataSnapshotUnavailableError(
+          `prepared chat startup projection is unavailable for agent "${sessionAgentId}"`,
+        );
+      }
+      const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(generation.facts.config));
+      const defaultAgent = generation.agentsById.get(defaultAgentId);
+      if (!defaultAgent) {
+        throw new ChatMetadataSnapshotUnavailableError(
+          `prepared chat startup projection is unavailable for default agent "${defaultAgentId}"`,
+        );
+      }
+      const profileNeutralProjections = await Promise.all(
+        [...generation.agentsById.values()].map(
+          async (agent) => [agent.agentId, await projectAgent(generation, agent)] as const,
+        ),
+      );
+      const projectionByAgentId = new Map(profileNeutralProjections);
+      const sessionProjection = await projectAgent(
+        generation,
+        sessionAgent,
+        readParams.sessionEntry,
+      );
+      const defaultProjection = projectionByAgentId.get(defaultAgentId);
+      if (!defaultProjection) {
+        throw new ChatMetadataSnapshotUnavailableError(
+          `prepared chat startup projection is unavailable for default agent "${defaultAgentId}"`,
+        );
+      }
+      const agentsListKey = readParams.includeSystem ? "include-system" : "agents-only";
+      let agentsList = generation.agentsListByKey.get(agentsListKey);
+      if (!agentsList) {
+        const modelCatalogByAgentId = new Map(
+          profileNeutralProjections.map(([agentId, projection]) => [
+            agentId,
+            projection.modelCatalog,
+          ]),
+        );
+        // Disk-only legacy roster rows remain visible, but inherit the default prepared catalog.
+        // Only configured agents own auth/plugin projections in the lifecycle generation.
+        agentsList = listAgentsForGateway(generation.facts.config, defaultProjection.modelCatalog, {
+          modelCatalogByAgentId,
+          includeSystem: readParams.includeSystem,
+        });
+        generation.agentsListByKey.set(agentsListKey, agentsList);
+      }
+      return {
+        metadata: sessionProjection.metadata,
+        sessionModelCatalog: sessionProjection.modelCatalog,
+        defaultModelCatalog: defaultProjection.modelCatalog,
+        agentsList,
+      };
+    });
 
   const invalidate = () => {
     invalidationEpoch += 1;
@@ -500,5 +607,5 @@ export function createGatewayChatMetadataRuntime(params: {
     failedReplacement?.reject(replacementError);
   };
 
-  return { fail, invalidate, read, refresh };
+  return { fail, invalidate, read, readStartup, refresh };
 }

@@ -9,8 +9,11 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { buildNodeSystemRunInvoke } from "../agents/bash-tools.exec-host-node-phases.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { coerceNodeInvokePayload } from "../node-host/invoke-payload.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
@@ -1268,25 +1271,219 @@ describe("gateway/node-registry", () => {
     expect(onDispatchReady).not.toHaveBeenCalled();
   });
 
-  it("forwards the agent session that owns a stateful node invoke", async () => {
+  it("preserves producer-owned session attribution through the node request envelope", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const producerEnvelope = buildNodeSystemRunInvoke({
+      target: {
+        nodeId: "node-1",
+        argv: ["echo", "ok"],
+        env: undefined,
+        invokeDeadlineMs: 30_000,
+        invokeWaitMs: 35_000,
+        runTimeoutSec: 30,
+        supportsSystemRunPrepare: true,
+      },
+      command: ["echo", "ok"],
+      rawCommand: "echo ok",
+      cwd: undefined,
+      agentId: "main",
+      sessionKey: "agent:main:canvas",
+    });
+    const invoke = registry.invoke({
+      nodeId: producerEnvelope.nodeId as string,
+      command: producerEnvelope.command as string,
+      params: producerEnvelope.params,
+      timeoutMs: 0,
+      sessionKey: producerEnvelope.sessionKey as string,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: unknown;
+    };
+    const decoded = coerceNodeInvokePayload(request.payload);
+
+    expect(decoded).toMatchObject({
+      nodeId: "node-1",
+      command: "system.run",
+      sessionKey: "agent:main:canvas",
+    });
+    expect(
+      registry.handleInvokeResult({
+        id: decoded?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
+  it("binds gateway-owned attribution into params for legacy nodes", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      params: {
+        value: "ok",
+        sessionKey: "agent:attacker:forged",
+      },
+      sessionKey: "agent:main:main",
+      timeoutMs: 0,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { id?: string; paramsJSON?: string | null; sessionKey?: string | null };
+    };
+
+    expect(request.payload?.sessionKey).toBe("agent:main:main");
+    expect(JSON.parse(request.payload?.paramsJSON ?? "{}")).toEqual({
+      value: "ok",
+      sessionKey: "agent:main:main",
+    });
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
+  it("keeps non-empty attribution for legacy commands without an object params carrier", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      params: "ping",
+      sessionKey: "agent:main:main",
+      timeoutMs: 0,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { id?: string; paramsJSON?: string | null; sessionKey?: string | null };
+    };
+
+    expect(request.payload?.sessionKey).toBe("agent:main:main");
+    expect(JSON.parse(request.payload?.paramsJSON ?? "null")).toBe("ping");
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
+  it("clears nested attribution for unattributed legacy node invokes", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      params: {
+        value: "ok",
+        sessionKey: "agent:attacker:forged",
+      },
+      timeoutMs: 0,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { id?: string; paramsJSON?: string | null; sessionKey?: string | null };
+    };
+
+    expect(request.payload).not.toHaveProperty("sessionKey");
+    expect(JSON.parse(request.payload?.paramsJSON ?? "{}")).toEqual({ value: "ok" });
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
+  it("omits an unattributed session envelope until the node negotiates explicit clears", async () => {
     const registry = createNodeRegistry();
     const frames = registerNode(registry);
     const invoke = registry.invoke({
       nodeId: "node-1",
       command: "debug.ping",
       timeoutMs: 0,
-      sessionKey: "agent:main:canvas",
     });
     const request = JSON.parse(frames[0] ?? "{}") as {
-      payload?: { id?: string; sessionKey?: string };
+      payload?: { id?: string; sessionKey?: string | null };
     };
 
-    expect(request.payload?.sessionKey).toBe("agent:main:canvas");
+    expect(request.payload).not.toHaveProperty("sessionKey");
     expect(
       registry.handleInvokeResult({
         id: request.payload?.id ?? "",
         nodeId: "node-1",
         connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
+  it("emits explicit null for negotiated unattributed node invokes", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    registry.updateProtocolFeatures("node-1", "conn-1", [
+      NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE,
+    ]);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 0,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { id?: string; sessionKey?: string | null };
+    };
+
+    expect(request.payload?.sessionKey).toBeNull();
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
+  it("does not let a stale connection negotiate features for its replacement", async () => {
+    const registry = createNodeRegistry();
+    registerNodeSession(registry, makeClient("conn-old", "node-1"), {});
+    const frames: string[] = [];
+    registerNodeSession(registry, makeClient("conn-new", "node-1", frames), {});
+
+    expect(
+      registry.updateProtocolFeatures("node-1", "conn-old", [
+        NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE,
+      ]),
+    ).toBeNull();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 0,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { id?: string; sessionKey?: string | null };
+    };
+
+    expect(request.payload).not.toHaveProperty("sessionKey");
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-new",
         ok: true,
       }),
     ).toBe(true);

@@ -448,7 +448,10 @@ export function parseStoreTimestampMs(value: string | undefined): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
-function compareStoreTimestampDesc(left: string | undefined, right: string | undefined): number {
+export function compareStoreTimestampDesc(
+  left: string | undefined,
+  right: string | undefined,
+): number {
   const leftMs = parseStoreTimestampMs(left);
   const rightMs = parseStoreTimestampMs(right);
   if (leftMs === rightMs) {

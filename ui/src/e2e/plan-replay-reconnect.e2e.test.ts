@@ -1,21 +1,14 @@
 // Control UI tests cover plan-snapshot replay on connect/reconnect.
-import { chromium, expect, type Browser, type BrowserContext, type Page } from "playwright/test";
-import { afterAll, afterEach, beforeAll, describe, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, type BrowserContext, type Page } from "playwright/test";
+import { afterEach, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI plan snapshot replay",
+  startServerBeforeBrowser: true,
+});
 
-let server: ControlUiE2eServer;
-let browser: Browser;
 const openBrowserContexts = new Set<BrowserContext>();
 
 const REPLAY_RUN_ID = "run-plan-replay";
@@ -37,7 +30,7 @@ const replayScenario = {
 };
 
 async function newPage(): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext({
+  const context = await suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1280 },
@@ -51,28 +44,18 @@ async function closeBrowserContext(context: BrowserContext): Promise<void> {
   await context.close();
 }
 
-describeControlUiE2e("Control UI plan snapshot replay", () => {
-  beforeAll(async () => {
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
+suite.define(() => {
   afterEach(async () => {
     for (const context of openBrowserContexts) {
       await closeBrowserContext(context);
     }
   });
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
   it("seeds the plan checklist from a replayed in-flight snapshot on load", async () => {
     const { context, page } = await newPage();
     await installMockGateway(page, replayScenario);
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
 
       // The checklist must render from the replayed snapshot alone, before any
       // live plan event arrives — this is the reconnect gap the replay closes.
@@ -89,7 +72,7 @@ describeControlUiE2e("Control UI plan snapshot replay", () => {
     const { context, page } = await newPage();
     const gateway = await installMockGateway(page, replayScenario);
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.locator(".plan-checklist").first().waitFor({ state: "visible", timeout: 10_000 });
       // Bar + in-thread card render for an active run; the live event must
       // replace both in place, not mount additional checklists.
@@ -126,7 +109,7 @@ describeControlUiE2e("Control UI plan snapshot replay", () => {
     const { context, page } = await newPage();
     await installMockGateway(page, replayScenario);
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.locator(".plan-checklist").first().waitFor({ state: "visible", timeout: 10_000 });
 
       // Mock routes are page-scoped, so reinstall before reload to keep serving

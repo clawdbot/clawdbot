@@ -648,6 +648,26 @@ describe("AppSidebar catalog session rows", () => {
     }
   });
 
+  it("associates catalog running state with the session link description", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-running", name: "Running catalog", status: "running" }]),
+        ["agent:main:main"],
+      );
+      const row = sidebar.querySelector('[data-session-key*="thread-running"]');
+      const link = row?.querySelector("a");
+      const state = row?.querySelector(".session-row-state");
+
+      expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
+      expect(link?.getAttribute("title")).toBe("Running catalog · Local Codex · Active run");
+      expect(state?.querySelector('.session-run-spinner[aria-label="Active run"]')).not.toBeNull();
+      expect(state?.querySelector(".session-run-spinner")?.hasAttribute("title")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders an adopted catalog session as its live row and hides the duplicate", async () => {
     vi.useFakeTimers();
     try {

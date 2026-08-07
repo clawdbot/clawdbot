@@ -8,7 +8,10 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  isChannelPartialDeliveryError,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import {
@@ -1732,10 +1735,10 @@ export const registerTelegramNativeCommands = ({
           resolveTelegramNativeCommandDisableBlockStreaming(runtimeTelegramCfg);
         const deliveryState = {
           delivered: false,
-          intentionallySuppressed: false,
           skippedNonSilent: 0,
           failedNonSilent: 0,
         };
+        let finalReplyOutcome: "accepted" | "failed" | "suppressed" | undefined;
 
         const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
         let recordSessionMetaTask: Promise<unknown> | undefined;
@@ -1810,17 +1813,31 @@ export const registerTelegramNativeCommands = ({
                     suppression: { reason: "no_visible_result" as const },
                   };
             },
-            onDelivered: (_payload, _info, result) => {
+            onDelivered: (_payload, info, result) => {
               const reason = result?.suppression?.reason;
+              if (info.kind === "final" && result?.visibleReplySent) {
+                finalReplyOutcome = "accepted";
+              }
               if (
-                reason === "cancelled_by_reply_payload_sending_hook" ||
-                reason === "empty_after_reply_payload_sending_hook"
+                info.kind === "final" &&
+                finalReplyOutcome !== "failed" &&
+                (reason === "cancelled_by_reply_payload_sending_hook" ||
+                  reason === "empty_after_reply_payload_sending_hook")
               ) {
-                deliveryState.intentionallySuppressed = true;
+                finalReplyOutcome = "suppressed";
               }
             },
             onError: (err, info) => {
               deliveryState.failedNonSilent += 1;
+              const partialDelivery = isChannelPartialDeliveryError(err);
+              if (partialDelivery) {
+                deliveryState.delivered = true;
+                logVerbose("telegram slash reply partially delivered before failure");
+              }
+              if (info.kind === "final") {
+                // A failed final outweighs any earlier suppression until a final delivers.
+                finalReplyOutcome = partialDelivery ? "accepted" : "failed";
+              }
               runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
             },
           },
@@ -1835,8 +1852,8 @@ export const registerTelegramNativeCommands = ({
         )(turnPlan);
         if (
           !deliveryState.delivered &&
-          !deliveryState.intentionallySuppressed &&
-          deliveryState.skippedNonSilent > 0 &&
+          finalReplyOutcome !== "suppressed" &&
+          (deliveryState.skippedNonSilent > 0 || deliveryState.failedNonSilent > 0) &&
           (!turnResult.dispatched ||
             turnResult.dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" ||
             deliveryState.failedNonSilent > 0)

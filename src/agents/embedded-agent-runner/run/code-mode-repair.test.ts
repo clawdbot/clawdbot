@@ -104,6 +104,30 @@ describe("installCodeModeRepairHook", () => {
     });
   });
 
+  it("leaves critical tool-loop recovery to agent core without spending repair", async () => {
+    const agent = createAgent();
+
+    await expect(
+      agent.afterToolOutcome?.(
+        outcome({
+          result: {
+            content: [{ type: "text", text: "choose a different action" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          isError: true,
+          executionStarted: false,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      agent.afterToolOutcome?.(outcome({ result: failedResult() })),
+    ).resolves.toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
+    });
+  });
+
   it("terminates when the single repair attempt also fails", async () => {
     const agent = createAgent();
 

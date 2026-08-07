@@ -36,6 +36,11 @@ export const BROWSER_ACTION_TRANSPORT_SLACK_MS = 5_000;
 /** Post-action window that keeps navigation policy interception active. */
 export const BROWSER_ACTION_NAVIGATION_GRACE_MS = 250;
 
+/** Keep navigation timeouts consistent across transports and browser backends. */
+export function resolveBrowserNavigationTimeoutMs(timeoutMs?: number): number {
+  return Math.min(120_000, resolveTimerTimeoutMs(timeoutMs, 20_000, 1_000));
+}
+
 export function normalizeActBoundedNonNegativeMs(
   value: number | undefined,
   fieldName: string,

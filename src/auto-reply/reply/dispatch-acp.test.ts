@@ -1,13 +1,29 @@
-// Tests ACP dispatch wiring, command bypass, and runtime event handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
+// Tests ACP dispatch wiring, command bypass, and runtime event handling.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import {
+  captureAgentRunExecutionContextLifecycleToken,
+  getAgentRunExecutionContextLifecycleToken,
+  getAgentRunExecutionLifecycleGeneration,
+} from "../../infra/agent-run-execution-context.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  getAgentRunContext,
+  getAgentRunContextLifecycleToken,
+} from "../../infra/agent-run-registry.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
@@ -56,6 +72,7 @@ const routeMocks = vi.hoisted(() => ({
       _params: unknown,
     ) => Promise<
       | { ok: true; delivered: boolean; messageId?: string }
+      | { ok: true; delivered: false; suppressed: true }
       | { ok: false; delivered: boolean; error: string }
     >
   >(async () => ({ ok: true, delivered: true, messageId: "mock" })),
@@ -95,6 +112,8 @@ const ttsMocks = vi.hoisted(() => ({
   }),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
 }));
+
+const ttsCapabilityMocks = vi.hoisted(() => ({ captionedFinalText: false }));
 
 const mediaUnderstandingMocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn<
@@ -176,6 +195,16 @@ vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
+vi.mock("../../tts/captioned-final.js", async () => {
+  const actual = await vi.importActual<typeof import("../../tts/captioned-final.js")>(
+    "../../tts/captioned-final.js",
+  );
+  return {
+    ...actual,
+    shouldDeferFinalTtsText: () => ttsCapabilityMocks.captionedFinalText,
+  };
+});
+
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ({
     autoMode: "always",
@@ -255,12 +284,7 @@ const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, _label: string) {
   return source.mock.calls[callIndex]?.[argIndex];
@@ -517,6 +541,7 @@ describe("tryDispatchAcpReply", () => {
     });
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsCapabilityMocks.captionedFinalText = false;
     mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
     acpAttachmentBuffers.clear();
@@ -560,6 +585,125 @@ describe("tryDispatchAcpReply", () => {
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
+  it("owns generated audit runs until the ACP turn settles", async () => {
+    setReadyAcpResolution();
+    let observedRunId: string | undefined;
+    let observedContext: ReturnType<typeof getAgentRunContext>;
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        observedRunId = (
+          mockArg(auditMocks.emitAcpLifecycleStart, 0, 0, "audit start") as { runId: string }
+        ).runId;
+        observedContext = getAgentRunContext(observedRunId);
+        await onEvent?.({ type: "done", status: "completed" });
+      },
+    );
+
+    await runDispatch({ bodyForAgent: "audit owned turn" });
+
+    expect(observedContext).toMatchObject({
+      agentId: "codex-acp",
+      isControlUiVisible: false,
+      projectSessionActive: false,
+      projectSessionLifecycle: false,
+      sessionKey,
+      attribution: {
+        runId: observedRunId,
+        agentId: "codex-acp",
+        sessionKey,
+      },
+    });
+    expect(observedRunId).toBeTypeOf("string");
+    expect(getAgentRunContext(observedRunId ?? "")).toBeUndefined();
+  });
+
+  it("captures generated audit ownership after asynchronous runtime loading", async () => {
+    setReadyAcpResolution();
+
+    const dispatch = runDispatch({ bodyForAgent: "audit rotation turn" });
+    const lifecycleGeneration = rotateAgentEventLifecycleGeneration();
+    await dispatch;
+
+    expect(lifecycleGeneration).toBe(getAgentEventLifecycleGeneration());
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycleGeneration }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycleGeneration }),
+    );
+  });
+
+  it("keeps delayed ACP audit callbacks on the admitted run after lifecycle reuse", async () => {
+    setReadyAcpResolution();
+    let admittedGeneration: string | undefined;
+    let admittedToken: object | undefined;
+    let callbackGeneration: string | undefined;
+    let callbackToken: object | undefined;
+    let terminalGeneration: string | undefined;
+    let terminalToken: object | undefined;
+    let observedRunId: string | undefined;
+    let replacementGeneration: string | undefined;
+    let replacementToken: object | undefined;
+
+    auditMocks.emitAcpLifecycleStart.mockImplementationOnce(
+      (params: { lifecycleGeneration?: string; runId: string }) => {
+        admittedGeneration = params.lifecycleGeneration;
+        admittedToken = admittedGeneration
+          ? getAgentRunContextLifecycleToken(params.runId, admittedGeneration)
+          : undefined;
+        if (admittedGeneration && admittedToken) {
+          captureAgentRunExecutionContextLifecycleToken(
+            params.runId,
+            admittedGeneration,
+            admittedToken,
+          );
+        }
+      },
+    );
+    auditMocks.emitAcpRuntimeEvent.mockImplementationOnce((params: { runId: string }) => {
+      callbackGeneration = getAgentRunExecutionLifecycleGeneration();
+      callbackToken = getAgentRunExecutionContextLifecycleToken(params.runId);
+    });
+    auditMocks.emitAcpLifecycleEnd.mockImplementationOnce((params: { runId: string }) => {
+      terminalGeneration = getAgentRunExecutionLifecycleGeneration();
+      terminalToken = getAgentRunExecutionContextLifecycleToken(params.runId);
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        observedRunId = (
+          mockArg(auditMocks.emitAcpLifecycleStart, 0, 0, "audit start") as { runId: string }
+        ).runId;
+        replacementGeneration = rotateAgentEventLifecycleGeneration();
+        claimAgentRunContext(observedRunId, {
+          agentId: "replacement",
+          lifecycleGeneration: replacementGeneration,
+          sessionKey: "agent:replacement:main",
+        });
+        replacementToken = getAgentRunContextLifecycleToken(observedRunId, replacementGeneration);
+        if (onEvent) {
+          await emitToolLifecycleEvents(onEvent, "tool-delayed");
+        }
+      },
+    );
+
+    await runDispatch({ bodyForAgent: "audit delayed callback" });
+
+    expect(admittedGeneration).toBeTypeOf("string");
+    expect(admittedToken).toBeTypeOf("object");
+    expect(replacementToken).toBeTypeOf("object");
+    expect(replacementToken).not.toBe(admittedToken);
+    expect(callbackGeneration).toBe(admittedGeneration);
+    expect(callbackToken).toBe(admittedToken);
+    expect(terminalGeneration).toBe(admittedGeneration);
+    expect(terminalToken).toBe(admittedToken);
+    expect(getAgentRunContext(observedRunId ?? "")).toMatchObject({
+      agentId: "replacement",
+      lifecycleGeneration: replacementGeneration,
+      sessionKey: "agent:replacement:main",
+    });
+    clearAgentRunContext(observedRunId ?? "", replacementGeneration);
+  });
+
   it("keeps caller-owned run ids on the shared lifecycle path", async () => {
     setReadyAcpResolution();
 
@@ -571,6 +715,144 @@ describe("tryDispatchAcpReply", () => {
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "caller-run", auditOnly: false }),
     );
+  });
+
+  it("keeps delayed caller-owned ACP callbacks on their admitted lifecycle", async () => {
+    setReadyAcpResolution();
+    const runId = "caller-reused-run";
+    const admittedGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(runId, {
+      agentId: "caller",
+      lifecycleGeneration: admittedGeneration,
+      sessionKey,
+    });
+    const admittedToken = getAgentRunContextLifecycleToken(runId, admittedGeneration);
+    let callbackGeneration: string | undefined;
+    let callbackToken: object | undefined;
+    let terminalGeneration: string | undefined;
+    let terminalToken: object | undefined;
+    let replacementGeneration: string | undefined;
+    let replacementToken: object | undefined;
+
+    auditMocks.emitAcpLifecycleStart.mockImplementationOnce(
+      (params: { lifecycleGeneration?: string; runId: string }) => {
+        if (params.lifecycleGeneration && admittedToken) {
+          captureAgentRunExecutionContextLifecycleToken(
+            params.runId,
+            params.lifecycleGeneration,
+            admittedToken,
+          );
+        }
+      },
+    );
+    auditMocks.emitAcpRuntimeEvent.mockImplementationOnce((params: { runId: string }) => {
+      callbackGeneration = getAgentRunExecutionLifecycleGeneration();
+      callbackToken = getAgentRunExecutionContextLifecycleToken(params.runId);
+    });
+    auditMocks.emitAcpLifecycleEnd.mockImplementationOnce((params: { runId: string }) => {
+      terminalGeneration = getAgentRunExecutionLifecycleGeneration();
+      terminalToken = getAgentRunExecutionContextLifecycleToken(params.runId);
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        replacementGeneration = rotateAgentEventLifecycleGeneration();
+        claimAgentRunContext(runId, {
+          agentId: "replacement",
+          lifecycleGeneration: replacementGeneration,
+          sessionKey: "agent:replacement:main",
+        });
+        replacementToken = getAgentRunContextLifecycleToken(runId, replacementGeneration);
+        if (onEvent) {
+          await emitToolLifecycleEvents(onEvent, "tool-delayed-caller");
+        }
+      },
+    );
+
+    await runDispatch({ bodyForAgent: "audit delayed caller callback", runId });
+
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
+      expect.objectContaining({ runId, lifecycleGeneration: admittedGeneration, auditOnly: false }),
+    );
+    expect(admittedToken).toBeTypeOf("object");
+    expect(replacementToken).toBeTypeOf("object");
+    expect(replacementToken).not.toBe(admittedToken);
+    expect(callbackGeneration).toBe(admittedGeneration);
+    expect(callbackToken).toBe(admittedToken);
+    expect(terminalGeneration).toBe(admittedGeneration);
+    expect(terminalToken).toBe(admittedToken);
+    expect(getAgentRunContext(runId)).toMatchObject({
+      agentId: "replacement",
+      lifecycleGeneration: replacementGeneration,
+      sessionKey: "agent:replacement:main",
+    });
+    clearAgentRunContext(runId, replacementGeneration);
+  });
+
+  it("captures caller-owned ACP lifecycle before lazy dispatch setup yields", async () => {
+    setReadyAcpResolution();
+    const runId = "caller-reused-during-setup";
+    const admittedGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(runId, {
+      agentId: "caller",
+      lifecycleGeneration: admittedGeneration,
+      sessionKey,
+    });
+    const admittedToken = getAgentRunContextLifecycleToken(runId, admittedGeneration);
+    let startGeneration: string | undefined;
+    let startToken: object | undefined;
+    let callbackGeneration: string | undefined;
+    let callbackToken: object | undefined;
+    let terminalGeneration: string | undefined;
+    let terminalToken: object | undefined;
+
+    auditMocks.emitAcpLifecycleStart.mockImplementationOnce(
+      (params: { lifecycleGeneration?: string }) => {
+        startGeneration = params.lifecycleGeneration;
+        startToken = getAgentRunExecutionContextLifecycleToken(runId);
+      },
+    );
+    auditMocks.emitAcpRuntimeEvent.mockImplementationOnce(() => {
+      callbackGeneration = getAgentRunExecutionLifecycleGeneration();
+      callbackToken = getAgentRunExecutionContextLifecycleToken(runId);
+    });
+    auditMocks.emitAcpLifecycleEnd.mockImplementationOnce(() => {
+      terminalGeneration = getAgentRunExecutionLifecycleGeneration();
+      terminalToken = getAgentRunExecutionContextLifecycleToken(runId);
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        if (onEvent) {
+          await emitToolLifecycleEvents(onEvent, "tool-after-setup-reuse");
+        }
+      },
+    );
+
+    const dispatch = runDispatch({ bodyForAgent: "audit setup race", runId });
+    const replacementGeneration = rotateAgentEventLifecycleGeneration();
+    claimAgentRunContext(runId, {
+      agentId: "replacement",
+      lifecycleGeneration: replacementGeneration,
+      sessionKey: "agent:replacement:main",
+    });
+    const replacementToken = getAgentRunContextLifecycleToken(runId, replacementGeneration);
+
+    await dispatch;
+
+    expect(admittedToken).toBeTypeOf("object");
+    expect(replacementToken).toBeTypeOf("object");
+    expect(replacementToken).not.toBe(admittedToken);
+    expect(startGeneration).toBe(admittedGeneration);
+    expect(startToken).toBe(admittedToken);
+    expect(callbackGeneration).toBe(admittedGeneration);
+    expect(callbackToken).toBe(admittedToken);
+    expect(terminalGeneration).toBe(admittedGeneration);
+    expect(terminalToken).toBe(admittedToken);
+    expect(getAgentRunContext(runId)).toMatchObject({
+      agentId: "replacement",
+      lifecycleGeneration: replacementGeneration,
+      sessionKey: "agent:replacement:main",
+    });
+    clearAgentRunContext(runId, replacementGeneration);
   });
 
   it("keeps audit run ids unique when channel message ids repeat", async () => {
@@ -2890,6 +3172,150 @@ describe("tryDispatchAcpReply", () => {
     expect(finalPayload.spokenText).toBe("WebChat ACP block reply.");
     expect(finalPayload.trustedLocalMedia).toBe(true);
     expect(result?.queuedFinal).toBe(true);
+  });
+
+  it("delivers Telegram ACP final-mode TTS as one captioned voice reply", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      text: "Captioned ACP reply.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+      spokenText: "Captioned ACP reply.",
+      ttsSupplement: { spokenText: "Captioned ACP reply." },
+    } as MockTtsReply);
+    mockVisibleTextTurn("Captioned ACP reply.");
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply)).toMatchObject({
+      text: "Captioned ACP reply.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps Telegram ACP TTS-only block text out of the voice caption", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    } as MockTtsReply);
+    mockVisibleTextTurn("[[tts:text]]Private speech.[[/tts:text]]");
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBeUndefined();
+  });
+
+  it("keeps cross-block ACP TTS-only text out of the Telegram caption", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    } as MockTtsReply);
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          text: "Visible. [[tts:text]]Private",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: " speech.[[/tts:text]] Done.",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({ type: "done", status: "completed" });
+      },
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Visible.  Done.");
+  });
+
+  it("falls back to Telegram ACP text when a routed captioned voice is suppressed", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      text: "Visible ACP fallback.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+      spokenText: "Visible ACP fallback.",
+      ttsSupplement: { spokenText: "Visible ACP fallback." },
+    } as MockTtsReply);
+    mockRoutedTextTurn("Visible ACP fallback.");
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: true, delivered: false, suppressed: true })
+      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "fallback" });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routePayload(0)).toMatchObject({
+      text: "Visible ACP fallback.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+    });
+    expect(routePayload(1)).toEqual({ text: "Visible ACP fallback." });
+  });
+
+  it("delivers deferred Telegram ACP text when the runtime is cancelled", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          text: "Partial reply before cancellation.",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({ type: "done", status: "cancelled" });
+      },
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply)).toEqual({
+      text: "Partial reply before cancellation.",
+    });
   });
 
   it("falls back to final text when a later telegram ACP block delivery fails", async () => {

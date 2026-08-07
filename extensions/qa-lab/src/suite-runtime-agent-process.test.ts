@@ -319,26 +319,38 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(pending).resolves.toEqual({ ok: true });
   });
 
-  it("parses json qa cli output after colored startup logs", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
+  it.each([
+    {
+      title: "parses json qa cli output after colored startup logs",
+      stdout:
         '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex loaded plugin package metadata\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("parses pretty json qa cli output after startup logs", async () => {
+    },
+    {
+      title: "parses pretty json qa cli output after startup logs",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
+    },
+    {
+      title: "parses pretty json qa cli output before trailing stdout logs",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores diagnostic json fragments before the qa cli payload",
+      stdout:
+        '[plugins] diagnostic context {"ok":true}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores leading json diagnostic records before the qa cli payload",
+      stdout:
+        '{"event":"startup-repair"}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores trailing json diagnostic records after the qa cli payload",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n{"event":"cleanup"}\n',
+    },
+  ])("$title", async ({ stdout }) => {
     const { child, pending } = startMockQaCli({
       env: QA_CLI_JSON_ENV,
       args: ["memory", "search", "--json"],
@@ -346,12 +358,7 @@ describe("qa suite runtime agent process helpers", () => {
     });
 
     await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
-      ),
-    );
+    child.stdout.emit("data", Buffer.from(stdout));
     child.emit("close", 0);
 
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
@@ -370,82 +377,6 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("close", 0);
 
     await expect(pending).resolves.toEqual({ results: [{ text: "LATE-STDOUT" }] });
-  });
-
-  it("parses pretty json qa cli output before trailing stdout logs", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores diagnostic json fragments before the qa cli payload", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] diagnostic context {"ok":true}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores leading json diagnostic records before the qa cli payload", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '{"event":"startup-repair"}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores trailing json diagnostic records after the qa cli payload", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search", "--json"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n{"event":"cleanup"}\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
 
   it("rejects oversized qa cli stdout instead of parsing truncated output", async () => {

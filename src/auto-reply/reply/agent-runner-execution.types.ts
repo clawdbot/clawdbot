@@ -1,3 +1,4 @@
+import type { AgentExecutionAttribution } from "../../agents/agent-execution-attribution.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
@@ -73,6 +74,8 @@ export type AgentTurnExecutionResult = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = {
+  /** Admission-owned execution correlation; never persisted in the queued run. */
+  attribution?: AgentExecutionAttribution;
   commandBody: string;
   transcriptCommandBody?: string;
   followupRun: FollowupRun;

@@ -5,8 +5,6 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { consumeSessionSkillSuggestion } from "../../config/sessions/skill-suggestions.js";
-import type { PendingSkillSuggestion, SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -17,8 +15,12 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
-import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { hasControlCommand } from "../command-detection.js";
+import {
+  isNativeCommandTurn,
+  isTextSlashCommandTurn,
+  resolveCommandTurnContext,
+} from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -28,7 +30,6 @@ import {
   buildExecOverridePromptHint,
   hasInboundHistoryBody,
   hasReplyTargetContext,
-  projectSkillSuggestionForTurn,
   resolvePromptSessionContextForSystemEvent,
   resolvePromptSilentReplyConversationType,
   stripPromptThinkingDirectives,
@@ -233,12 +234,20 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
+  const commandTurn = resolveCommandTurnContext(ctx);
+  const isRegisteredWholeMessageCommand =
+    isWholeMessageCommand && (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand);
+  const isActiveCommandTurn =
+    isNativeCommandTurn(commandTurn) ||
+    (allowTextCommands &&
+      ctx.CommandInterpretationSuppressed !== true &&
+      (isTextSlashCommandTurn(commandTurn) || isRegisteredWholeMessageCommand));
   if (
-    allowTextCommands &&
+    isActiveCommandTurn &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
-    isWholeMessageCommand &&
-    (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand)
+    isRegisteredWholeMessageCommand
   ) {
+    opts?.onDeliberateSilentTerminalReply?.();
     typing.cleanup();
     return { kind: "reply", reply: undefined } as const;
   }
@@ -307,7 +316,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   }
 
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const skillSuggestionEnabled = resolveSkillWorkshopConfig(cfg).autonomous.mode === "off";
   const inboundUserContextSessionCtx = isNewSession
     ? {
         ...sessionCtx,
@@ -316,35 +324,9 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           : {}),
       }
     : { ...sessionCtx, ThreadStarterBody: undefined };
-  let consumedSkillSuggestion: PendingSkillSuggestion | undefined;
-  const resolveContextSessionEntry = async (
-    entry: SessionEntry | undefined,
-  ): Promise<SessionEntry | undefined> => {
-    if (isHeartbeat) {
-      return undefined;
-    }
-    let currentEntry = entry;
-    if (!consumedSkillSuggestion && currentEntry?.pendingSkillSuggestion) {
-      try {
-        const consumed = await consumeSessionSkillSuggestion({ agentId, sessionKey, storePath });
-        if (consumed) {
-          currentEntry = consumed.entry;
-          consumedSkillSuggestion = skillSuggestionEnabled ? consumed.suggestion : undefined;
-          sessionEntry = consumed.entry;
-          sessionEntryHandle?.replaceCurrent(consumed.entry);
-          if (sessionStore) {
-            sessionStore[sessionKey] = consumed.entry;
-          }
-        }
-      } catch (error) {
-        logVerbose(`Skill suggestion consume failed: ${String(error)}`);
-      }
-    }
-    return projectSkillSuggestionForTurn(currentEntry, consumedSkillSuggestion);
-  };
-  let inboundContextSessionEntry = await resolveContextSessionEntry(
-    sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry,
-  );
+  let inboundContextSessionEntry = isHeartbeat
+    ? undefined
+    : (sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry);
   let activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
   let inboundUserContext = buildInboundUserContextPrefix(
     inboundUserContextSessionCtx,
@@ -355,11 +337,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     if (isHeartbeat) {
       return;
     }
-    const latestSessionEntry =
+    inboundContextSessionEntry =
       storePath && sessionKey
         ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
         : (sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry);
-    inboundContextSessionEntry = await resolveContextSessionEntry(latestSessionEntry);
     activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
     inboundUserContext = buildInboundUserContextPrefix(
       inboundUserContextSessionCtx,

@@ -527,6 +527,13 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("scopes configured-default wording to direct model selections", () => {
+    const model = requireChatCommand("model");
+    expect(model.description).toBe(
+      "Show or set the model; direct owner/admin selections request a default update.",
+    );
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);

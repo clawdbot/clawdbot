@@ -26,6 +26,10 @@ import type { EmbeddedAttemptSessionLockController } from "./attempt.session-loc
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
+import {
+  createToolLoopBatchAdmission,
+  installToolLoopRecoveryCleanup,
+} from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type ClientToolPreparation = Omit<
@@ -166,6 +170,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
+    beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
+      ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
+      : undefined,
   });
   const activeSession = createdSession.session;
   if (!activeSession) {
@@ -174,6 +181,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
+  installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
   activeSession.setActiveToolsByName(sessionToolAllowlist);
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);

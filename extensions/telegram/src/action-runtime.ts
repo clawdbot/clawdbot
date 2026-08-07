@@ -47,6 +47,7 @@ import {
   resolveTelegramMessageMutationChatId,
   type TelegramMessageMutationContext,
 } from "./message-topic-binding.js";
+import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
@@ -414,6 +415,7 @@ export async function handleTelegramAction(
     toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
+  rejectTelegramNativeButtonParams(params);
   const { action, accountId } = {
     action: normalizeTelegramActionName(readStringParam(params, "action", { required: true })),
     accountId: readStringParam(params, "accountId"),

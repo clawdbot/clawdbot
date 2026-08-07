@@ -315,6 +315,8 @@ main() {
     local locked_pr="${1-}"
     acquire_pr_operation_lock "$locked_pr"
     begin_pr_operation_validation_phase
+    # Temp-backed shell redirections must fail while the supervisor can auto-release.
+    validate_pr_temp_storage
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 131' QUIT

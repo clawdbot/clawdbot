@@ -2,6 +2,7 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { isGatewayAdmin } from "../session-sharing.js";
+import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
 import type { SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
@@ -10,6 +11,7 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 type SessionListFence = {
   agentRunIndexVersion: number;
   sessionsMutationVersion: number;
+  titleProjectionUnavailableVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
 type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
@@ -26,13 +28,15 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
+    titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
   };
 }
 
 function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
   return (
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
-    value.sessionsMutationVersion === fence.sessionsMutationVersion
+    value.sessionsMutationVersion === fence.sessionsMutationVersion &&
+    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion
   );
 }
 
