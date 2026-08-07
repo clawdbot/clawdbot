@@ -429,6 +429,15 @@ function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
   }
 }
 
+function isReplyOperationMessageInjectable(
+  operation: ReplyOperation,
+  backend: ReplyBackendHandle,
+): boolean {
+  // Admission and delivery must share freshness or a stale owner can waive the
+  // transcript-leaf fence and then reject the same steer during injection.
+  return !isReplyRunEvidenceStale(operation) && isReplyBackendMessageInjectable(backend);
+}
+
 /** Run work after an operation no longer owns its session lane. */
 export function runAfterReplyOperationClear(
   operation: ReplyOperation,
@@ -1186,7 +1195,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
       return false;
     }
     const backend = getAttachedBackend(operation);
-    return backend ? isReplyBackendMessageInjectable(backend) : false;
+    return backend ? isReplyOperationMessageInjectable(operation, backend) : false;
   },
   abort(sessionKey) {
     const operation = this.get(sessionKey);
@@ -1295,12 +1304,7 @@ export function queueReplyRunMessage(
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  // Steering into an evidence-dead run swallows the human message that would
-  // otherwise trigger stale takeover through normal reply admission.
-  if (isReplyRunEvidenceStale(operation)) {
-    return false;
-  }
-  if (!isReplyBackendMessageInjectable(backend)) {
+  if (!isReplyOperationMessageInjectable(operation, backend)) {
     return false;
   }
   if (resolveReplyBackendQueueMessageMismatch(backend, options)) {

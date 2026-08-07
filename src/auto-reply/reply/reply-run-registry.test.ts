@@ -1216,28 +1216,40 @@ describe("reply run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("hello");
   });
 
-  it("refuses stale reply-run steering until real activity resumes", () => {
+  it("refuses stale injectable owners for admission and delivery until activity resumes", () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
       const operation = createTestReplyOperation({
         sessionId: "session-running",
+        originatingLeafEntryId: "leaf-a",
       });
       operation.attachBackend({
         kind: "embedded",
         cancel: vi.fn(),
-        isStreaming: () => true,
+        isStreaming: () => false,
+        isStopped: () => false,
         queueMessage,
       });
       operation.setPhase("running");
 
+      expect(
+        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+      ).toBe(true);
+
       vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
 
+      expect(
+        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+      ).toBe(false);
       expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
       expect(queueMessage).not.toHaveBeenCalled();
 
       operation.recordActivity();
 
+      expect(
+        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+      ).toBe(true);
       expect(queueReplyRunMessage("session-running", "fresh")).toBe(true);
       expect(queueMessage).toHaveBeenCalledWith("fresh");
     } finally {
