@@ -48,8 +48,10 @@ Token boundary:
 
 ## Hosted Commit Reviews
 
-Hosted per-commit reports and commit Check Runs are retired. For local review of
-an already-committed change, use `$autoreview --mode commit --commit <sha>`.
+Hosted per-commit reports and commit Check Runs are retired. For the retained
+offline review of a committed branch, use `pnpm local-review -- --base main`.
+`$autoreview --mode commit --commit <sha>` remains a separate general-purpose
+review path.
 
 ## Sweep Reports
 
