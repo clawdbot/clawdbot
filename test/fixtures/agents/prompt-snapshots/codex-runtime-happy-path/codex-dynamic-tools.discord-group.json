@@ -100,8 +100,38 @@
             "description": "Bind new chat thread when supported; true defaults mode=\"session\"; unavailable with visible=true.",
             "type": "boolean"
           },
+          "tools": {
+            "anyOf": [
+              {
+                "const": "none",
+                "description": "Disable all child tools.",
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "allow": {
+                    "description": "Allowed tool names; groups/globs supported.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "deny": {
+                    "description": "Denied tool names; wins over allow.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            ],
+            "description": "Immutable tool policy for native runtime=\"subagent\". \"none\" disables tools; omit for defaults. Persistent sessions reuse it. Visible and ACP spawns reject it; CLI supports allow-only."
+          },
           "visible": {
-            "description": "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+            "description": "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/tools/attachments/attachAs; unavailable with inherited tool allow/denylist.",
             "type": "boolean"
           },
           "worktree": {
