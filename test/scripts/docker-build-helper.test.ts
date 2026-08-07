@@ -2423,6 +2423,7 @@ docker_e2e_docker_run_cmd run demo
     expect(upgradeSurvivor).toContain(
       'ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"',
     );
+    expect(upgradeSurvivor).toContain('DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"');
     expect(upgradeSurvivor).toContain(
       '-v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
     );
@@ -3749,10 +3750,11 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
     expectTextToIncludeAll(helper, [
       "--allow-unreleased-changelog",
-      '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
-      '-v "$ROOT_DIR/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
-      '-v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
-      '-v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"',
+      'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
+      '-v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+      '-v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
+      '-v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
+      '-v "$harness_root/test/helpers:/app/test/helpers:ro"',
     ]);
   });
 
