@@ -52,6 +52,7 @@ import {
   resolvePluginSubagentRequestedModelRef,
 } from "./server-plugin-subagent-runtime.js";
 import { projectGatewayRuntimeNodes } from "./server-plugins-node-runtime.js";
+import { resolvePluginOwnedCleanupOptions } from "./session-plugin-ownership.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -466,54 +467,24 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
     getSessionMessages,
     async deleteSession(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
-      const pluginOwnedCleanupOptions = pluginId
-        ? {
-            pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
-              ? {
-                  forceSyntheticClient: true,
-                  syntheticScopes: [ADMIN_SCOPE],
-                }
-              : {}),
-          }
-        : undefined;
       await dispatchGatewayMethodInProcess(
         "sessions.delete",
         {
           key: params.sessionKey,
           deleteTranscript: params.deleteTranscript ?? true,
         },
-        pluginOwnedCleanupOptions,
+        resolvePluginOwnedCleanupOptions(scope),
       );
     },
     async abortSession(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
-      const pluginOwnedCleanupOptions = pluginId
-        ? {
-            pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
-              ? {
-                  forceSyntheticClient: true,
-                  syntheticScopes: [ADMIN_SCOPE],
-                }
-              : {}),
-          }
-        : undefined;
       await dispatchGatewayMethodInProcess(
         "sessions.abort",
         {
           key: params.sessionKey,
           ...(params.runId && { runId: params.runId }),
         },
-        pluginOwnedCleanupOptions,
+        resolvePluginOwnedCleanupOptions(scope),
       );
     },
   };
