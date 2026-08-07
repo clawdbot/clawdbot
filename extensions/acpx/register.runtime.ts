@@ -106,8 +106,8 @@ async function startRealService(
 }
 
 function createDeferredRuntime(state: DeferredServiceState, lifecycleRevision: number): AcpRuntime {
-  const deferredRuntime = createLazyAcpRuntimeProxy(() =>
-    startRealService(state, lifecycleRevision, deferredRuntime),
+  const deferredRuntime: AcpRuntime = createLazyAcpRuntimeProxy(
+    (): Promise<AcpRuntime> => startRealService(state, lifecycleRevision, deferredRuntime),
   );
   return deferredRuntime;
 }
