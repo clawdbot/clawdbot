@@ -67,13 +67,14 @@ describe("buildStatusMessageParts presentation", () => {
         channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
       }),
     );
-    expect(parts.presentation.title).toMatch(/^🦞 OpenClaw /);
+    expect(parts.presentation.title).toBeUndefined();
     const table = parts.presentation.blocks.find((block) => block.type === "table");
     expect(table).toBeDefined();
     if (table?.type !== "table") {
       throw new Error("expected table block");
     }
-    expect(table.headers).toEqual(["Item", "Value"]);
+    expect(table.headers[0]).toBe("🦞 OpenClaw");
+    expect(table.headers[1]).toMatch(/^\d{4}\.\d+\.\d+/);
     expect(table.rowHeaderColumnIndex).toBe(0);
     const rowLabels = table.rows.map((row) => row[0]);
     expect(rowLabels).toContain("🧠 Model");

@@ -58,23 +58,51 @@ export function resolveTelegramPresentationCapabilities(params: {
 }
 
 function escapeTelegramTableCellText(value: string | number): string {
-  return String(value).replaceAll("|", "\\|").replace(/\s+/g, " ").trim();
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-// Pipe-table markdown feeds the existing markdown -> rich-block converter,
-// which emits native Bot API 10.2 table blocks on rich accounts.
-function renderTelegramTableMarkdown(block: MessagePresentationTableBlock): string {
-  const lines: string[] = [];
-  const caption = block.caption.trim();
-  if (caption) {
-    lines.push(`**${caption}**`);
-  }
-  lines.push(`| ${block.headers.map(escapeTelegramTableCellText).join(" | ")} |`);
-  lines.push(`| ${block.headers.map(() => "---").join(" | ")} |`);
-  for (const row of block.rows) {
-    lines.push(`| ${row.map(escapeTelegramTableCellText).join(" | ")} |`);
-  }
-  return lines.join("\n");
+// The `<table>` HTML island feeds the existing island -> rich-block converter,
+// which emits native Bot API 10.2 table blocks (bordered, striped, native
+// caption, header cells) on rich accounts. Markdown pipe tables cannot express
+// row-header columns or native captions, so the island form is canonical here.
+function renderTelegramTableIsland(block: MessagePresentationTableBlock): string {
+  const caption = block.caption.trim()
+    ? `<caption>${escapeTelegramTableCellText(block.caption)}</caption>`
+    : "";
+  const headerRow = block.headers
+    .map((header) => `<th>${escapeTelegramTableCellText(header)}</th>`)
+    .join("");
+  const bodyRows = block.rows
+    .map(
+      (row) =>
+        `<tr>${row
+          .map((cell, index) =>
+            index === block.rowHeaderColumnIndex
+              ? `<th>${escapeTelegramTableCellText(cell)}</th>`
+              : `<td>${escapeTelegramTableCellText(cell)}</td>`,
+          )
+          .join("")}</tr>`,
+    )
+    .join("");
+  return `<table>${caption}<thead><tr>${headerRow}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+}
+
+// Context blocks are low-emphasis by contract; italics is Telegram's closest
+// native register. Lines already containing markdown emphasis markers stay
+// plain so wrapping cannot mis-parse them.
+function renderTelegramContextText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      return trimmed && !/[_*]/.test(trimmed) ? `_${trimmed}_` : line;
+    })
+    .join("\n");
 }
 
 function renderTelegramRichFallbackText(presentation: MessagePresentation): string {
@@ -85,8 +113,10 @@ function renderTelegramRichFallbackText(presentation: MessagePresentation): stri
   for (const block of presentation.blocks) {
     const text =
       block.type === "table"
-        ? renderTelegramTableMarkdown(block)
-        : renderMessagePresentationFallbackText({ presentation: { blocks: [block] } });
+        ? renderTelegramTableIsland(block)
+        : block.type === "context"
+          ? renderTelegramContextText(block.text)
+          : renderMessagePresentationFallbackText({ presentation: { blocks: [block] } });
     if (text.trim()) {
       parts.push(text);
     }

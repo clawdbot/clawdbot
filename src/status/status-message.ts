@@ -1185,28 +1185,36 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   pushStatusRow("🧵 Session", sessionValue);
   pushStatusRow("⚙️ Execution", execution.label);
   pushStatusRow("Runtime", agentRuntimeLabel);
-  pushStatusRow("Think", thinkLevel);
-  pushStatusRow("Fast", fastModeValue);
-  pushStatusRow("Text", textVerbosity);
-  pushStatusRow("Reasoning", reasoningLevel !== "off" ? reasoningLevel : null);
-  pushStatusRow("Options", optionFlagsValue);
+  pushStatusRow(
+    "🎛️ Modes",
+    [
+      `think ${thinkLevel}`,
+      `fast ${fastModeValue}`,
+      textVerbosity ? `text ${textVerbosity}` : null,
+      reasoningLevel !== "off" ? `reasoning ${reasoningLevel}` : null,
+      optionFlagsValue || null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  );
   pushStatusRow("👥 Activation", groupActivationValue);
   pushStatusRow("🪢 Queue", `${queueMode}${queueDetails}`);
 
   const contextBlock = (value: string | null | undefined): MessagePresentationBlock[] =>
     value?.trim() ? [{ type: "context", text: value }] : [];
+  // The header row doubles as the card title on native renderers, so the
+  // presentation carries no separate title.
   const presentation: MessagePresentation = {
-    title: versionLine,
     blocks: [
-      ...contextBlock(timeLine),
-      ...contextBlock(args.uptimeLine),
       {
         type: "table",
         caption: "Session status",
-        headers: ["Item", "Value"],
+        headers: ["🦞 OpenClaw", `${VERSION}${commit ? ` (${commit})` : ""}`],
         rows: statusRows,
         rowHeaderColumnIndex: 0,
       },
+      ...contextBlock(timeLine),
+      ...contextBlock(args.uptimeLine),
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
