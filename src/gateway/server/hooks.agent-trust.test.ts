@@ -847,6 +847,7 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook Global announce: done", {
         sessionKey: "global",
+        ownerAgentId: "hooks",
       }),
     );
     await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
@@ -899,7 +900,7 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Global error (error): Error: agent exploded",
-        { sessionKey: "global" },
+        { sessionKey: "global", ownerAgentId: "hooks" },
       ),
     );
     await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
@@ -935,13 +936,14 @@ describe("dispatchAgentHook trust handling", () => {
 
     await waitForFast(() => expect(enqueueSystemEventMock).toHaveBeenCalled());
     await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
-    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+    const announceWake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(announceWake).toMatchObject({
       source: "hook",
       intent: "immediate",
       reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
       agentId: "main",
-      sessionKey: "global",
     });
+    expect(announceWake.sessionKey).toBeUndefined();
   });
 
   it("carries the fresh default agent on the global-scope failure wake", async () => {
@@ -954,13 +956,14 @@ describe("dispatchAgentHook trust handling", () => {
     dispatchAgentHook(buildAgentPayload("Email"));
 
     await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
-    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+    const failureWake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(failureWake).toMatchObject({
       source: "hook",
       intent: "immediate",
       reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
       agentId: "main",
-      sessionKey: "global",
     });
+    expect(failureWake.sessionKey).toBeUndefined();
   });
 
   it("carries the explicit agent on the recovered global failure wake when the initial key is absent", async () => {
@@ -984,7 +987,7 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Config (error): Error: config exploded",
-        { sessionKey: "global" },
+        { sessionKey: "global", ownerAgentId: "hooks" },
       ),
     );
     await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));

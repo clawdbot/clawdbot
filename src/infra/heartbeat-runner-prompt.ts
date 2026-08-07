@@ -1,3 +1,4 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isHeartbeatContentEffectivelyEmpty } from "../auto-reply/heartbeat.js";
@@ -161,8 +162,10 @@ export async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.sessionKey,
   );
-  const pendingEventEntries =
-    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
+  const runAgentId = normalizeAgentId(params.agentId);
+  const pendingEventEntries = (
+    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey)
+  ).filter((event) => !event.ownerAgentId || event.ownerAgentId === runAgentId);
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({

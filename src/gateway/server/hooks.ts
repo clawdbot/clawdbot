@@ -1,5 +1,6 @@
 // Gateway hook server wiring translates external hook requests into wake events or isolated agent runs.
 import { randomUUID } from "node:crypto";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -279,6 +280,9 @@ export function createGatewayHooksRequestHandler(params: {
     const sessionKey = target?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, {
       sessionKey,
+      ...(isUnscopedSessionKeySentinel(sessionKey) && target?.heartbeatTarget.agentId
+        ? { ownerAgentId: normalizeAgentId(target.heartbeatTarget.agentId) }
+        : {}),
     });
     if (value.mode === "now") {
       requestHeartbeat({
@@ -327,25 +331,25 @@ export function createGatewayHooksRequestHandler(params: {
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
       const eventSessionKey = hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
+      const fallbackHeartbeatTarget = isUnscopedSessionKeySentinel(eventSessionKey)
+        ? {
+            agentId:
+              normalizeOptionalString(value.agentId) ?? resolveDefaultAgentId(getRuntimeConfig()),
+          }
+        : { sessionKey: eventSessionKey };
+      const heartbeatTarget = hookEventTarget?.heartbeatTarget ?? fallbackHeartbeatTarget;
       enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
         sessionKey: eventSessionKey,
+        ...(isUnscopedSessionKeySentinel(eventSessionKey) && heartbeatTarget.agentId
+          ? { ownerAgentId: normalizeAgentId(heartbeatTarget.agentId) }
+          : {}),
       });
       if (value.wakeMode === "now") {
-        // Before config resolves, the error belongs to the fallback main session.
-        // Global scope has no session-owned target, so carry the explicit or
-        // current default agent without the shared sentinel session key.
-        const fallbackHeartbeatTarget = isUnscopedSessionKeySentinel(eventSessionKey)
-          ? {
-              agentId:
-                normalizeOptionalString(value.agentId) ??
-                resolveDefaultAgentId(getRuntimeConfig()),
-            }
-          : { sessionKey: eventSessionKey };
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
-          ...(hookEventTarget?.heartbeatTarget ?? fallbackHeartbeatTarget),
+          ...heartbeatTarget,
         });
       }
     };
@@ -503,6 +507,10 @@ export function createGatewayHooksRequestHandler(params: {
               hookEventTarget?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
             enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
               sessionKey: eventSessionKey,
+              ...(isUnscopedSessionKeySentinel(eventSessionKey) &&
+              hookEventTarget?.heartbeatTarget.agentId
+                ? { ownerAgentId: normalizeAgentId(hookEventTarget.heartbeatTarget.agentId) }
+                : {}),
             });
             if (value.wakeMode === "now") {
               requestHeartbeat({

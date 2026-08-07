@@ -3,6 +3,7 @@
 // events ephemeral. Events are session-scoped and require an explicit key.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -20,6 +21,12 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  /**
+   * Agent that owns this transient event. Events in a shared (global-scope)
+   * session queue carry their producer's agent so a targeted heartbeat wake
+   * cannot consume another agent's queued result or failure event.
+   */
+  ownerAgentId?: string | null;
 };
 
 const MAX_EVENTS = 20;
@@ -39,6 +46,13 @@ type SystemEventOptions = {
   deliveryContext?: DeliveryContext;
   /** Replace the pending event for this context and delivery route. Requires contextKey. */
   replace?: boolean;
+  /**
+   * Agent that owns this event. In global session scope the transient queue
+   * key is the shared `global` sentinel; ownership metadata keeps concurrent
+   * hook completions from cross-consuming each other's events while the
+   * store's literal `global` session row stays shared.
+   */
+  ownerAgentId?: string | null;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -92,13 +106,18 @@ function findDuplicateInQueue(
   text: string,
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
+  ownerAgentId: string | null,
 ): boolean {
-  const incoming = { text, contextKey, deliveryContext };
+  const incoming = { text, contextKey, deliveryContext, ownerAgentId };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
     return last ? isDuplicateSystemEvent(last, incoming) : false;
   }
   return queue.some((event) => isDuplicateSystemEvent(event, incoming));
+}
+
+function normalizeOwnerAgentId(agentId: string | null | undefined): string | null {
+  return normalizeOptionalString(agentId) ? normalizeAgentId(agentId) : null;
 }
 
 export function enqueueSystemEventEntry(
@@ -116,7 +135,16 @@ export function enqueueSystemEventEntry(
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
-  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
+  const normalizedOwnerAgentId = normalizeOwnerAgentId(options.ownerAgentId);
+  if (
+    findDuplicateInQueue(
+      entry.queue,
+      cleaned,
+      normalizedContextKey,
+      normalizedDeliveryContext,
+      normalizedOwnerAgentId,
+    )
+  ) {
     return null;
   }
   if (normalizedContextKey !== null) {
@@ -127,6 +155,7 @@ export function enqueueSystemEventEntry(
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    ownerAgentId: normalizedOwnerAgentId,
   };
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
@@ -174,9 +203,11 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     throw new Error("replaced system events require a contextKey");
   }
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  const normalizedOwnerAgentId = normalizeOwnerAgentId(options.ownerAgentId);
   const matching = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) === normalizedContextKey &&
+      (event.ownerAgentId ?? null) === normalizedOwnerAgentId &&
       areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   if (matching.length === 1 && matching[0]?.text === cleaned) {
@@ -188,6 +219,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
   entry.queue = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) !== normalizedContextKey ||
+      (event.ownerAgentId ?? null) !== normalizedOwnerAgentId ||
       !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   const event: SystemEvent = {
@@ -195,6 +227,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    ownerAgentId: normalizedOwnerAgentId,
   };
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
@@ -206,11 +239,12 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
 
 function isDuplicateSystemEvent(
   existing: SystemEvent,
-  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext" | "ownerAgentId">,
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
+    (existing.ownerAgentId ?? null) === (incoming.ownerAgentId ?? null) &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
@@ -220,6 +254,7 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
+    (left.ownerAgentId ?? null) === (right.ownerAgentId ?? null) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

@@ -153,6 +153,65 @@ describe("runHeartbeatOnce identity", () => {
     });
   });
 
+  it("keeps a global hook event owned by another agent queued for its owner", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+      const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { workspace: tmpDir },
+          entries: { main: { default: true }, alpha: {}, beta: {} },
+        },
+        session: { scope: "global", store: storeTemplate },
+      };
+      await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "alpha" }), "global", {});
+      await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "beta" }), "global", {});
+      // Two hook agents complete before the coalesced wakes fire; both events
+      // land in the shared `global` queue with per-agent ownership.
+      enqueueSystemEvent("Hook Alpha: done", { sessionKey: "global", ownerAgentId: "alpha" });
+      enqueueSystemEvent("Hook Beta: done", { sessionKey: "global", ownerAgentId: "beta" });
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const alphaResult = await runHeartbeatOnce({
+        cfg,
+        agentId: "alpha",
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:wake",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+        },
+      });
+
+      expect(alphaResult.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        AgentId: "alpha",
+        SessionKey: "global",
+      });
+      // The first targeted wake must not drain the other agent's queued event.
+      expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
+        "Hook Beta: done",
+      ]);
+
+      const betaResult = await runHeartbeatOnce({
+        cfg,
+        agentId: "beta",
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:wake",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+        },
+      });
+
+      expect(betaResult.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(peekSystemEventEntries("global")).toEqual([]);
+    });
+  });
+
   it.each([
     { name: "alert", replyText: "needs attention", showOk: false },
     { name: "heartbeat ok", replyText: "HEARTBEAT_OK", showOk: true },
