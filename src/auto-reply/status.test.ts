@@ -241,7 +241,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
-    expect(normalized).toContain("Think: medium");
+    expect(normalized).toContain("think medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
@@ -562,9 +562,9 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Think: high");
+    expect(normalized).toContain("think high");
     expect(normalized).toContain("verbose:full");
-    expect(normalized).toContain("Reasoning: on");
+    expect(normalized).toContain("reasoning on");
   });
 
   it("shows plugin status lines only when verbose is enabled", () => {
@@ -712,14 +712,14 @@ describe("buildStatusMessage", () => {
       model: "openai/gpt-5.4",
       sessionId: "fast",
       fastMode: true,
-      expected: "Fast",
+      expected: "fast",
     },
     {
       name: "shows fast mode when disabled",
       model: "anthropic/claude-opus-4-6",
       sessionId: "fast-off",
       fastMode: false,
-      expected: "Fast: off",
+      expected: "fast off",
     },
   ])("$name", ({ model, sessionId, fastMode, expected }) => {
     const text = buildStatusMessage({
@@ -757,7 +757,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).toContain(expectedRuntime);
     expect(normalized).not.toContain(unexpectedSuffix);
   });
@@ -789,7 +789,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Text: low");
+    expect(normalizeTestText(text)).toContain("text low");
   });
 
   it("shows per-agent text verbosity overrides for the active model", () => {
@@ -828,7 +828,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Text: low");
+    expect(normalizeTestText(text)).toContain("text low");
   });
 
   it("notes channel model overrides in status output", () => {

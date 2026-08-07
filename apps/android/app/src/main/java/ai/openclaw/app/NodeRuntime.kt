@@ -1528,6 +1528,7 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+      hasOperatorAdminScope = { OperatorAdminScope in _operatorScopes.value },
       activeAgentId = {
         resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
       },
