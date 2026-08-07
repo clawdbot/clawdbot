@@ -727,6 +727,52 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     },
   );
 
+  it("preserves queue custody when a provider timeout looks like an abort", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const timeout = new DOMException("Matrix request timed out", "AbortError");
+    const sendMatrix = vi.fn().mockRejectedValue(timeout);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "preserve this delivery until reconciliation" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow(timeout.message);
+
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      recoveryState: "unknown_after_send",
+      retryCount: 1,
+    });
+  });
+
+  it("removes an unsent queue intent when the caller cancels after publication", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const controller = new AbortController();
+    const sendMatrix = vi.fn();
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "cancel before provider dispatch" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        abortSignal: controller.signal,
+        onDeliveryIntent: () =>
+          controller.abort(new DOMException("Operator cancelled delivery", "AbortError")),
+      }),
+    ).rejects.toThrow("Operation aborted");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+  });
+
   it.each(["abort", "permanent rejection"] as const)(
     "preserves an already-sent Matrix payload when a later payload ends in %s",
     async (failureKind) => {

@@ -22,6 +22,7 @@ import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { resolveProjectKey } from "../project-memory-scope.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -263,6 +264,14 @@ export async function compactEmbeddedAgentSessionDirect(
       const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
       const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
       const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
+      const resolveAuthProvider = (provider: string) =>
+        resolveProviderIdForAuth(provider, {
+          config: params.config,
+          metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+        });
+      const primaryAuthProviders = new Set(
+        [primaryProvider, requestedPrimaryProvider].map(resolveAuthProvider),
+      );
       const fallbacksOverride = resolveCompactionFallbacksOverride(params);
       const resolvedPrimaryCandidate = resolveModelCandidateChain({
         cfg: params.config,
@@ -287,6 +296,8 @@ export async function compactEmbeddedAgentSessionDirect(
         agentId: fallbackAgentId,
         sessionId: params.sessionId,
         sessionKey: fallbackSessionKey,
+        userLockedAuthProfileId:
+          params.authProfileIdSource === "user" ? params.authProfileId : undefined,
         abortSignal: params.abortSignal,
         prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
           await ensureSelectedAgentHarnessPlugin({
@@ -308,9 +319,7 @@ export async function compactEmbeddedAgentSessionDirect(
             provider === resolvedPrimaryCandidate?.provider &&
             model === resolvedPrimaryCandidate.model;
           const preservesPrimaryAuth =
-            isPrimaryCandidate ||
-            provider === primaryProvider ||
-            provider === requestedPrimaryProvider;
+            isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
           const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
           return await compactEmbeddedAgentSessionDirectOnce({
             ...params,

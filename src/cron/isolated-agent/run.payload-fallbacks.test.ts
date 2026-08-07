@@ -8,6 +8,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
   mockRunCronFallbackPassthrough,
+  resolveAgentConfigMock,
   resolveConfiguredModelRefMock,
   resolveCliRuntimeExecutionProviderMock,
   resolveAgentModelFallbacksOverrideMock,
@@ -241,6 +242,52 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       "zai/glm-5",
     ]);
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      modelFallbacksOverride: ["openai/gpt-5.2", "zai/glm-5"],
+    });
+  });
+
+  it("uses default subagent fallbacks ahead of a named agent's primary through the run path", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveAgentConfigMock.mockReturnValue({
+      model: {
+        primary: "anthropic/claude-opus-4-6",
+        fallbacks: ["openai/gpt-5.4"],
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        agentId: "research",
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: {
+                model: {
+                  primary: "kimi/kimi-code",
+                  fallbacks: ["openai/gpt-5.2", "zai/glm-5"],
+                },
+              },
+            },
+            list: [
+              {
+                id: "research",
+                model: {
+                  primary: "anthropic/claude-opus-4-6",
+                  fallbacks: ["openai/gpt-5.4"],
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(requireModelFallbackRequest().fallbacksOverride).toEqual([
+      "openai/gpt-5.2",
+      "zai/glm-5",
+    ]);
     expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
       modelFallbacksOverride: ["openai/gpt-5.2", "zai/glm-5"],
     });

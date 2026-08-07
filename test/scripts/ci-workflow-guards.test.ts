@@ -2287,6 +2287,12 @@ NODE
     const runStep = workflow.jobs.android.steps.find(
       (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
     );
+    const nativeResourcesSetup = expectDefined(
+      workflow.jobs.android.steps.find(
+        (step: WorkflowStep) => step.name === "Setup Node environment for native resources",
+      ),
+      "Android native resources Node setup",
+    );
 
     expect(source).toContain('task: useCompatibleAndroidCi ? "test-play-compat" : "test-play"');
     expect(source).toContain(
@@ -2301,6 +2307,11 @@ NODE
     expect(runStep.run).toContain(":app:lintPlayDebug");
     expect(runStep.run).toContain(":app:lintThirdPartyDebug");
     expect(runStep.run).toContain(":benchmark:assembleDebug");
+    expect(nativeResourcesSetup.uses).toBe("./.github/actions/setup-node-env");
+    expect(nativeResourcesSetup.if).toBe(
+      "needs.preflight.outputs.use_compatible_android_ci != 'true'",
+    );
+    expect(nativeResourcesSetup.with).toMatchObject({ "install-bun": "false" });
   });
 
   it("runs canonical main CI single-flight while coalescing the pending tip", () => {
@@ -4503,6 +4514,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const legacy = runCiManifestFixture({ bundledPlanner: false });
     expect(legacy.status, legacy.output).toBe(0);
     expect(legacy.outputs.historical_target).toBe("true");
+    expect(legacy.outputs.use_compatible_android_ci).toBe("true");
     expect(legacy.outputs.run_ios_build).toBe("false");
     expect(legacy.outputs.run_native_i18n).toBe("false");
     expect(legacy.outputs.run_openclawkit_tests).toBe("false");
@@ -4533,6 +4545,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     const current = runCiManifestFixture({ bundledPlanner: true });
     expect(current.status, current.output).toBe(0);
+    expect(current.outputs.use_compatible_android_ci).toBe("false");
     expect(current.outputs.run_ios_build).toBe("true");
     expect(current.outputs.run_native_i18n).toBe("true");
     expect(current.outputs.run_openclawkit_tests).toBe("true");
@@ -4551,6 +4564,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
+
+    const releaseCandidateCurrent = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      releaseCandidateCompatibility: true,
+    });
+    expect(releaseCandidateCurrent.status, releaseCandidateCurrent.output).toBe(0);
+    expect(releaseCandidateCurrent.outputs.compatibility_target).toBe("true");
+    expect(releaseCandidateCurrent.outputs.use_compatible_android_ci).toBe("false");
 
     const currentMissingAndroidCapabilities = runCiManifestFixture({
       androidCiCapabilities: false,

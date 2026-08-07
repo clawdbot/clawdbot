@@ -16,6 +16,11 @@ import {
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { hasControlCommand } from "../command-detection.js";
+import {
+  isNativeCommandTurn,
+  isTextSlashCommandTurn,
+  resolveCommandTurnContext,
+} from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -229,12 +234,20 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
+  const commandTurn = resolveCommandTurnContext(ctx);
+  const isRegisteredWholeMessageCommand =
+    isWholeMessageCommand && (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand);
+  const isActiveCommandTurn =
+    isNativeCommandTurn(commandTurn) ||
+    (allowTextCommands &&
+      ctx.CommandInterpretationSuppressed !== true &&
+      (isTextSlashCommandTurn(commandTurn) || isRegisteredWholeMessageCommand));
   if (
-    allowTextCommands &&
+    isActiveCommandTurn &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
-    isWholeMessageCommand &&
-    (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand)
+    isRegisteredWholeMessageCommand
   ) {
+    opts?.onDeliberateSilentTerminalReply?.();
     typing.cleanup();
     return { kind: "reply", reply: undefined } as const;
   }

@@ -523,6 +523,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "authProfileId"
   | "authProfileIdSource"
   | "runtimePlan"
+  | "userTurnTranscriptRecorder"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };

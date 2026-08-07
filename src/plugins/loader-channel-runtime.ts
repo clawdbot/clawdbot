@@ -119,7 +119,13 @@ export function loadSetupRuntimeChannelCandidate(params: {
       runtimeMod = withProfile(
         { pluginId: record.id, source: safeRuntimeSource },
         "load-setup-runtime-entry",
-        () => params.loadPluginModule(safeRuntimeSource) as OpenClawPluginModule,
+        () =>
+          params.loadPluginModule(
+            safeRuntimeSource,
+            manifestRecord.trustedOfficialInstall
+              ? { trustedInstalledPrivateSdkOwner: manifestRecord.id }
+              : undefined,
+          ) as OpenClawPluginModule,
       );
     } catch (error) {
       recordPluginError({

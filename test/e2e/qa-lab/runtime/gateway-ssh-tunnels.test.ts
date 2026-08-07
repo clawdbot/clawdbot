@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { waitForFile } from "../../../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -171,11 +172,13 @@ describeOnTestbox("Gateway SSH tunnel QA producer", () => {
 
   it("proves real forwarding, cleanup, and operator diagnostics", async () => {
     const artifactBase = tempDirs.make("openclaw-gateway-ssh-evidence-");
+    const gatewayStartupEnv = snapshotGatewayStartupEnv();
     const evidence = await runGatewaySshTunnels({
       artifactBase,
       repoRoot: process.cwd(),
     });
 
+    expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]?.result.status).toBe("pass");
     const summary = JSON.parse(

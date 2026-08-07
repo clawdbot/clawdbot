@@ -85,139 +85,173 @@ function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], pr
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
 
+function joinJsonlFrames(...frames: unknown[]) {
+  return frames
+    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
+    .join("\n");
+}
+
+function claudeStreamEvent(event: Record<string, unknown>) {
+  return { type: "stream_event", event };
+}
+
+function claudeMessageStart(id?: string) {
+  return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
+}
+
+function claudeMessageStop() {
+  return claudeStreamEvent({ type: "message_stop" });
+}
+
+function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_start",
+    ...(index === undefined ? {} : { index }),
+    content_block: contentBlock,
+  });
+}
+
+function claudeBlockStop(index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_stop",
+    ...(index === undefined ? {} : { index }),
+  });
+}
+
+function claudeTextDelta(text: string, index?: number | string) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "text_delta", text },
+  });
+}
+
+function claudeThinkingDelta(thinking: string, index?: number | string) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "thinking_delta", thinking },
+  });
+}
+
+function claudeInputJsonDelta(partialJson: string, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "input_json_delta", partial_json: partialJson },
+  });
+}
+
+function claudeAssistantSnapshot(id: string, content: unknown[]) {
+  return { type: "assistant", message: { id, content } };
+}
+
+function normalizedUsage(values: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+}) {
+  return {
+    input: values.input,
+    output: values.output,
+    cacheRead: values.cacheRead,
+    cacheWrite: values.cacheWrite,
+    total: values.total,
+  };
+}
+
 describe("parseCliJson", () => {
-  it("preserves Claude max-turn terminal context in JSON mode", () => {
-    const result = parseCliJson(
-      JSON.stringify({
+  it.each([
+    {
+      name: "preserves Claude max-turn terminal context in JSON mode",
+      input: {
         type: "result",
         subtype: "error_max_turns",
         session_id: "session-json-max-turns",
         terminal_reason: "max_turns",
         errors: ["Reached maximum number of turns (3)"],
-      }),
-      {
-        command: "claude",
-        output: "json",
-        sessionIdFields: ["session_id"],
       },
-      "claude-cli",
-    );
-
-    expect(result).toEqual({
-      text: "",
-      sessionId: "session-json-max-turns",
-      usage: undefined,
-      errorText: "Reached maximum number of turns (3)",
-      terminalFailure: { reason: "max_turns", limit: 3 },
-    });
-  });
-
-  it("classifies Claude is_error JSON results as provider errors", () => {
-    const result = parseCliJson(
-      JSON.stringify({
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-max-turns",
+        usage: undefined,
+        errorText: "Reached maximum number of turns (3)",
+        terminalFailure: { reason: "max_turns", limit: 3 },
+      },
+    },
+    {
+      name: "classifies Claude is_error JSON results as provider errors",
+      input: {
         type: "result",
         subtype: "success",
         is_error: true,
         result: 'API Error: 400 {"error":{"message":"Bad request"}}',
-      }),
-      {
-        command: "claude",
-        output: "json",
-        sessionIdFields: ["session_id"],
       },
-      "claude-cli",
-    );
-
-    expect(result).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "Bad request",
-    });
-  });
-
-  it("classifies generic is_error JSON results as provider errors", () => {
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: undefined,
+        usage: undefined,
+        errorText: "Bad request",
+      },
+    },
+    {
+      name: "classifies generic is_error JSON results as provider errors",
+      input: { is_error: true, result: "429 rate limit exceeded" },
+      command: "custom",
+      sessionIdFields: undefined,
+      providerId: "custom-cli",
+      expected: {
+        text: "",
+        sessionId: undefined,
+        usage: undefined,
+        errorText: "429 rate limit exceeded",
+      },
+    },
+    {
+      name: "keeps successful JSON result message payloads as assistant text",
+      input: { type: "result", message: "done" },
+      command: "custom",
+      sessionIdFields: undefined,
+      providerId: "custom-cli",
+      expected: { text: "done", sessionId: undefined, usage: undefined },
+    },
+    {
+      name: "does not classify null JSON result error fields as provider errors",
+      input: { type: "result", error: null, message: "done" },
+      command: "custom",
+      sessionIdFields: undefined,
+      providerId: "custom-cli",
+      expected: { text: "done", sessionId: undefined, usage: undefined },
+    },
+    {
+      name: "classifies JSON status error result payloads as provider errors",
+      input: { type: "result", status: "error", result: "rate limit" },
+      command: "custom",
+      sessionIdFields: undefined,
+      providerId: "custom-cli",
+      expected: {
+        text: "",
+        sessionId: undefined,
+        usage: undefined,
+        errorText: "rate limit",
+      },
+    },
+  ])("$name", ({ input, command, sessionIdFields, providerId, expected }) => {
     const result = parseCliJson(
-      JSON.stringify({
-        is_error: true,
-        result: "429 rate limit exceeded",
-      }),
-      {
-        command: "custom",
-        output: "json",
-      },
-      "custom-cli",
+      JSON.stringify(input),
+      { command, output: "json", ...(sessionIdFields ? { sessionIdFields } : {}) },
+      providerId,
     );
 
-    expect(result).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "429 rate limit exceeded",
-    });
-  });
-
-  it("keeps successful JSON result message payloads as assistant text", () => {
-    const result = parseCliJson(
-      JSON.stringify({
-        type: "result",
-        message: "done",
-      }),
-      {
-        command: "custom",
-        output: "json",
-      },
-      "custom-cli",
-    );
-
-    expect(result).toEqual({
-      text: "done",
-      sessionId: undefined,
-      usage: undefined,
-    });
-  });
-
-  it("does not classify null JSON result error fields as provider errors", () => {
-    const result = parseCliJson(
-      JSON.stringify({
-        type: "result",
-        error: null,
-        message: "done",
-      }),
-      {
-        command: "custom",
-        output: "json",
-      },
-      "custom-cli",
-    );
-
-    expect(result).toEqual({
-      text: "done",
-      sessionId: undefined,
-      usage: undefined,
-    });
-  });
-
-  it("classifies JSON status error result payloads as provider errors", () => {
-    const result = parseCliJson(
-      JSON.stringify({
-        type: "result",
-        status: "error",
-        result: "rate limit",
-      }),
-      {
-        command: "custom",
-        output: "json",
-      },
-      "custom-cli",
-    );
-
-    expect(result).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "rate limit",
-    });
+    expect(result).toEqual(expected);
   });
 
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -247,9 +281,10 @@ describe("parseCliJson", () => {
     });
   });
 
-  it("parses Gemini CLI response text and stats payloads", () => {
-    const result = parseCliJson(
-      JSON.stringify({
+  it.each([
+    {
+      name: "parses Gemini CLI response text and stats payloads",
+      input: {
         session_id: "gemini-session-123",
         response: "Gemini says hello",
         stats: {
@@ -259,25 +294,41 @@ describe("parseCliJson", () => {
           cached: 8,
           input: 5,
         },
-      }),
-      {
-        command: "gemini",
-        output: "json",
-        sessionIdFields: ["session_id"],
       },
-    );
-
-    expect(result).toEqual({
-      text: "Gemini says hello",
-      sessionId: "gemini-session-123",
-      usage: {
-        input: 5,
-        output: 5,
-        cacheRead: 8,
-        cacheWrite: undefined,
-        total: 21,
+      expected: {
+        text: "Gemini says hello",
+        sessionId: "gemini-session-123",
+        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
       },
+    },
+    {
+      name: "falls back to Gemini stats when usage exists without token fields",
+      input: {
+        session_id: "gemini-session-789",
+        response: "Gemini says hello",
+        usage: {},
+        stats: {
+          total_tokens: 21,
+          input_tokens: 13,
+          output_tokens: 5,
+          cached: 8,
+          input: 5,
+        },
+      },
+      expected: {
+        text: "Gemini says hello",
+        sessionId: "gemini-session-789",
+        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    const result = parseCliJson(JSON.stringify(input), {
+      command: "gemini",
+      output: "json",
+      sessionIdFields: ["session_id"],
     });
+
+    expect(result).toEqual(expected);
   });
 
   it("falls back to input_tokens minus cached when Gemini stats omit input", () => {
@@ -301,40 +352,6 @@ describe("parseCliJson", () => {
 
     expect(result?.usage?.input).toBe(5);
     expect(result?.usage?.cacheRead).toBe(8);
-  });
-
-  it("falls back to Gemini stats when usage exists without token fields", () => {
-    const result = parseCliJson(
-      JSON.stringify({
-        session_id: "gemini-session-789",
-        response: "Gemini says hello",
-        usage: {},
-        stats: {
-          total_tokens: 21,
-          input_tokens: 13,
-          output_tokens: 5,
-          cached: 8,
-          input: 5,
-        },
-      }),
-      {
-        command: "gemini",
-        output: "json",
-        sessionIdFields: ["session_id"],
-      },
-    );
-
-    expect(result).toEqual({
-      text: "Gemini says hello",
-      sessionId: "gemini-session-789",
-      usage: {
-        input: 5,
-        output: 5,
-        cacheRead: 8,
-        cacheWrite: undefined,
-        total: 21,
-      },
-    });
   });
 
   it("unwraps nested Claude result JSON from JSON output", () => {
@@ -453,73 +470,60 @@ describe("parseCliJson", () => {
 });
 
 describe("parseCliJsonl", () => {
-  it("parses Claude stream-json result events", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-123" }),
-        JSON.stringify({
+  it.each([
+    {
+      name: "parses Claude stream-json result events",
+      command: "claude",
+      jsonlDialect: undefined,
+      providerId: "claude-cli",
+      frames: [
+        { type: "init", session_id: "session-123" },
+        {
           type: "result",
           session_id: "session-123",
           result: "Claude says hello",
-          usage: {
-            input_tokens: 12,
-            output_tokens: 3,
-            cache_read_input_tokens: 4,
-          },
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
+          usage: { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 4 },
+        },
+      ],
+      expected: {
+        text: "Claude says hello",
+        sessionId: "session-123",
+        usage: normalizedUsage({ input: 12, output: 3, cacheRead: 4 }),
       },
-      "claude-cli",
-    );
-
-    expect(result).toEqual({
-      text: "Claude says hello",
-      sessionId: "session-123",
-      usage: {
-        input: 12,
-        output: 3,
-        cacheRead: 4,
-        cacheWrite: undefined,
-        total: undefined,
-      },
-    });
-  });
-
-  it("parses Claude stream-json result events for an explicit backend dialect", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-dialect" }),
-        JSON.stringify({
+    },
+    {
+      name: "parses Claude stream-json result events for an explicit backend dialect",
+      command: "local-cli",
+      jsonlDialect: "claude-stream-json" as const,
+      providerId: "local-cli",
+      frames: [
+        { type: "init", session_id: "session-dialect" },
+        {
           type: "result",
           session_id: "session-dialect",
           result: "dialect says hello",
           usage: { input_tokens: 5, output_tokens: 2 },
-        }),
-      ].join("\n"),
+        },
+      ],
+      expected: {
+        text: "dialect says hello",
+        sessionId: "session-dialect",
+        usage: normalizedUsage({ input: 5, output: 2 }),
+      },
+    },
+  ])("$name", ({ command, jsonlDialect, providerId, frames, expected }) => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(...frames),
       {
-        command: "local-cli",
+        command,
         output: "jsonl",
-        jsonlDialect: "claude-stream-json",
+        ...(jsonlDialect ? { jsonlDialect } : {}),
         sessionIdFields: ["session_id"],
       },
-      "local-cli",
+      providerId,
     );
 
-    expect(result).toEqual({
-      text: "dialect says hello",
-      sessionId: "session-dialect",
-      usage: {
-        input: 5,
-        output: 2,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        total: undefined,
-      },
-    });
+    expect(result).toEqual(expected);
   });
 
   it("keeps streamed pre-tool text over the final-message result in transcript reparses", () => {
@@ -655,185 +659,143 @@ describe("parseCliJsonl", () => {
     },
   );
 
-  it("parses Gemini stream-json message and result events", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({
+  it.each([
+    {
+      name: "parses Gemini stream-json message and result events",
+      frames: [
+        {
           type: "init",
           timestamp: "2026-06-16T19:36:46.000Z",
           session_id: "gemini-session-123",
           model: "gemini-3.1-pro-preview",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "message",
           timestamp: "2026-06-16T19:36:47.000Z",
           role: "assistant",
           content: "Gemini says ",
           delta: true,
-        }),
-        JSON.stringify({
+        },
+        {
           type: "message",
           timestamp: "2026-06-16T19:36:48.000Z",
           role: "assistant",
           content: "hello",
           delta: true,
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "success",
-          stats: {
-            total_tokens: 21,
-            input_tokens: 13,
-            output_tokens: 5,
-            cached: 8,
-            input: 5,
-          },
-        }),
-      ].join("\n"),
-      {
-        command: "gemini",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
-        sessionIdFields: ["session_id"],
+          stats: { total_tokens: 21, input_tokens: 13, output_tokens: 5, cached: 8, input: 5 },
+        },
+      ],
+      sessionIdFields: ["session_id"],
+      expected: {
+        text: "Gemini says hello",
+        sessionId: "gemini-session-123",
+        usage: normalizedUsage({ input: 5, output: 5, cacheRead: 8, total: 21 }),
       },
-      "google-gemini-cli",
-    );
-
-    expect(result).toEqual({
-      text: "Gemini says hello",
-      sessionId: "gemini-session-123",
-      usage: {
-        input: 5,
-        output: 5,
-        cacheRead: 8,
-        cacheWrite: undefined,
-        total: 21,
-      },
-    });
-  });
-
-  it("keeps Gemini tool-only stream-json output structured instead of raw JSONL", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({
+    },
+    {
+      name: "keeps Gemini tool-only stream-json output structured instead of raw JSONL",
+      frames: [
+        {
           type: "init",
           timestamp: "2026-06-16T19:36:46.000Z",
           session_id: "gemini-session-123",
           model: "gemini-3.1-pro-preview",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "tool_use",
           timestamp: "2026-06-16T19:36:47.000Z",
           tool_name: "mcp_openclaw_create_goal",
           tool_id: "tool-1",
           parameters: { objective: "Update files" },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "tool_result",
           timestamp: "2026-06-16T19:36:48.000Z",
           tool_id: "tool-1",
           status: "success",
           output: "created",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "success",
           stats: { total_tokens: 2, input_tokens: 1, output_tokens: 1 },
-        }),
-      ].join("\n"),
-      {
-        command: "gemini",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
-        sessionIdFields: ["session_id"],
+        },
+      ],
+      sessionIdFields: ["session_id"],
+      expected: {
+        text: "",
+        sessionId: "gemini-session-123",
+        usage: normalizedUsage({ input: 1, output: 1, total: 2 }),
       },
-      "google-gemini-cli",
-    );
-
-    expect(result).toEqual({
-      text: "",
-      sessionId: "gemini-session-123",
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        total: 2,
-      },
-    });
-  });
-
-  it("parses Gemini stream-json result errors as provider errors", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({
+    },
+    {
+      name: "parses Gemini stream-json result errors as provider errors",
+      frames: [
+        {
           type: "message",
           timestamp: "2026-06-16T19:36:47.000Z",
           role: "assistant",
           content: "partial output",
           delta: true,
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "error",
           error: { message: "Gemini stream failed" },
-        }),
-      ].join("\n"),
-      {
-        command: "gemini",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
+        },
+      ],
+      sessionIdFields: undefined,
+      expected: {
+        text: "",
+        sessionId: undefined,
+        usage: undefined,
+        errorText: "Gemini stream failed",
       },
-      "google-gemini-cli",
-    );
-
-    expect(result).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "Gemini stream failed",
-    });
-  });
-
-  it("keeps detailed Gemini stream-json error events over generic result errors", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({
+    },
+    {
+      name: "keeps detailed Gemini stream-json error events over generic result errors",
+      frames: [
+        {
           type: "error",
           timestamp: "2026-06-16T19:36:48.000Z",
           severity: "error",
           message: "Invalid stream payload",
-        }),
-        JSON.stringify({
+        },
+        {
           type: "result",
           timestamp: "2026-06-16T19:36:49.000Z",
           status: "error",
           stats: { total_tokens: 1 },
-        }),
-      ].join("\n"),
+        },
+      ],
+      sessionIdFields: undefined,
+      expected: {
+        text: "",
+        sessionId: undefined,
+        usage: normalizedUsage({ total: 1 }),
+        errorText: "Invalid stream payload",
+      },
+    },
+  ])("$name", ({ frames, sessionIdFields, expected }) => {
+    const result = parseCliJsonl(
+      joinJsonlFrames(...frames),
       {
         command: "gemini",
         output: "jsonl",
         jsonlDialect: "gemini-stream-json",
+        ...(sessionIdFields ? { sessionIdFields } : {}),
       },
       "google-gemini-cli",
     );
 
-    expect(result).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: {
-        input: undefined,
-        output: undefined,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        total: 1,
-      },
-      errorText: "Invalid stream payload",
-    });
+    expect(result).toEqual(expected);
   });
 
   it("keeps detailed Gemini stream-json result errors over generic error events", () => {
@@ -1027,92 +989,48 @@ describe("parseCliJsonl", () => {
     expect(result?.resumeCheckpointId).toBe("assistant-checkpoint-2");
   });
 
-  it("preserves Claude session metadata even when the final result text is empty", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-456" }),
-        JSON.stringify({
+  it.each([
+    {
+      name: "preserves Claude session metadata even when the final result text is empty",
+      raw: joinJsonlFrames(
+        { type: "init", session_id: "session-456" },
+        {
           type: "result",
           session_id: "session-456",
           result: "   ",
-          usage: {
-            input_tokens: 18,
-            output_tokens: 0,
-          },
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
+          usage: { input_tokens: 18, output_tokens: 0 },
+        },
+      ),
+      expected: {
+        text: "",
+        sessionId: "session-456",
+        usage: normalizedUsage({ input: 18 }),
       },
-      "claude-cli",
-    );
-
-    expect(result).toEqual({
-      text: "",
-      sessionId: "session-456",
-      usage: {
-        input: 18,
-        output: undefined,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        total: undefined,
-      },
-    });
-  });
-
-  it("preserves streamed Claude text when the final result text is empty", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-456" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Hello" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: " world" },
-          },
-        }),
-        JSON.stringify({
+    },
+    {
+      name: "preserves streamed Claude text when the final result text is empty",
+      raw: joinJsonlFrames(
+        { type: "init", session_id: "session-456" },
+        claudeTextDelta("Hello"),
+        claudeTextDelta(" world"),
+        {
           type: "result",
           session_id: "session-456",
           result: "",
           usage: { input_tokens: 18, output_tokens: 4 },
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
+        },
+      ),
+      expected: {
+        text: "Hello world",
+        sessionId: "session-456",
+        usage: normalizedUsage({ input: 18, output: 4 }),
       },
-      "claude-cli",
-    );
-
-    expect(result).toEqual({
-      text: "Hello world",
-      sessionId: "session-456",
-      usage: {
-        input: 18,
-        output: 4,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        total: undefined,
-      },
-    });
-  });
-
-  it("unwraps nested Claude agent result JSON from stream-json output", () => {
-    const result = parseCliJsonl(
-      [
-        JSON.stringify({ type: "init", session_id: "session-nested-jsonl" }),
-        JSON.stringify({
+    },
+    {
+      name: "unwraps nested Claude agent result JSON from stream-json output",
+      raw: joinJsonlFrames(
+        { type: "init", session_id: "session-nested-jsonl" },
+        {
           type: "result",
           session_id: "session-nested-jsonl",
           result: JSON.stringify({
@@ -1123,39 +1041,27 @@ describe("parseCliJsonl", () => {
               result: "actual response text",
             }),
           }),
-        }),
-      ].join("\n"),
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
+        },
+      ),
+      expected: {
+        text: "actual response text",
+        sessionId: "session-nested-jsonl",
+        usage: undefined,
       },
-      "claude-cli",
-    );
-
-    expect(result).toEqual({
-      text: "actual response text",
-      sessionId: "session-nested-jsonl",
-      usage: undefined,
-    });
-  });
-
-  it("parses multiple JSON objects embedded on the same line", () => {
+    },
+    {
+      name: "parses multiple JSON objects embedded on the same line",
+      raw: '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
+      expected: { text: "done", sessionId: "session-999", usage: undefined },
+    },
+  ])("$name", ({ raw, expected }) => {
     const result = parseCliJsonl(
-      '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
-      {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
+      raw,
+      { command: "claude", output: "jsonl", sessionIdFields: ["session_id"] },
       "claude-cli",
     );
 
-    expect(result).toEqual({
-      text: "done",
-      sessionId: "session-999",
-      usage: undefined,
-    });
+    expect(result).toEqual(expected);
   });
 
   it("captures the last Claude session_id when an ephemeral id precedes the canonical one", () => {
@@ -1305,18 +1211,30 @@ describe("parseCliJsonl", () => {
 });
 
 describe("parseCliOutput", () => {
-  it("uses streamed Claude assistant text when the result envelope is missing", () => {
-    const raw = [
-      JSON.stringify({ type: "init", session_id: "session-stream-missing-result" }),
-      JSON.stringify({
-        type: "stream_event",
-        event: {
-          type: "content_block_delta",
-          delta: { type: "text_delta", text: "partial answer" },
-        },
-      }),
-    ].join("\n");
-
+  it.each([
+    {
+      name: "uses streamed Claude assistant text when the result envelope is missing",
+      raw: joinJsonlFrames(
+        { type: "init", session_id: "session-stream-missing-result" },
+        claudeTextDelta("partial answer"),
+      ),
+      expected: {
+        text: "partial answer",
+        sessionId: "session-stream-missing-result",
+        usage: undefined,
+      },
+    },
+    {
+      name: "fails stream-json output without result or assistant text instead of returning raw JSONL",
+      raw: JSON.stringify({ type: "init", session_id: "session-empty" }),
+      expected: {
+        text: "",
+        sessionId: "session-empty",
+        usage: undefined,
+        errorText: "CLI stream-json output ended without a result event.",
+      },
+    },
+  ])("$name", ({ raw, expected }) => {
     const result = parseCliOutput({
       raw,
       backend: {
@@ -1328,33 +1246,7 @@ describe("parseCliOutput", () => {
       outputMode: "jsonl",
     });
 
-    expect(result).toEqual({
-      text: "partial answer",
-      sessionId: "session-stream-missing-result",
-      usage: undefined,
-    });
-  });
-
-  it("fails stream-json output without result or assistant text instead of returning raw JSONL", () => {
-    const raw = JSON.stringify({ type: "init", session_id: "session-empty" });
-
-    const result = parseCliOutput({
-      raw,
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      outputMode: "jsonl",
-    });
-
-    expect(result).toEqual({
-      text: "",
-      sessionId: "session-empty",
-      usage: undefined,
-      errorText: "CLI stream-json output ended without a result event.",
-    });
+    expect(result).toEqual(expected);
   });
 });
 
@@ -1479,7 +1371,34 @@ describe("createCliJsonlStreamingParser", () => {
     expect(sessionIds).toEqual(["session-stream"]);
   });
 
-  it("uses streamed Claude assistant text when no result envelope arrives", () => {
+  it.each([
+    {
+      name: "uses streamed Claude assistant text when no result envelope arrives",
+      frames: [
+        { type: "init", session_id: "session-stream-no-result" },
+        claudeTextDelta("streamed answer"),
+      ],
+      expected: {
+        text: "streamed answer",
+        sessionId: "session-stream-no-result",
+        usage: undefined,
+      },
+    },
+    {
+      name: "preserves streamed Claude text when the final result event is empty",
+      frames: [
+        { type: "init", session_id: "session-stream" },
+        claudeTextDelta("hello"),
+        claudeTextDelta(" world"),
+        { type: "result", session_id: "session-stream", result: "" },
+      ],
+      expected: {
+        text: "hello world",
+        sessionId: "session-stream",
+        usage: undefined,
+      },
+    },
+  ])("$name", ({ frames, expected }) => {
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -1491,67 +1410,10 @@ describe("createCliJsonlStreamingParser", () => {
       onAssistantDelta: () => {},
     });
 
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-stream-no-result" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "streamed answer" },
-          },
-        }),
-      ].join("\n") + "\n",
-    );
+    parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(parser.getOutput()).toEqual({
-      text: "streamed answer",
-      sessionId: "session-stream-no-result",
-      usage: undefined,
-    });
-  });
-
-  it("preserves streamed Claude text when the final result event is empty", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-stream" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "hello" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: " world" },
-          },
-        }),
-        JSON.stringify({ type: "result", session_id: "session-stream", result: "" }),
-        "",
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
-      text: "hello world",
-      sessionId: "session-stream",
-      usage: undefined,
-    });
+    expect(parser.getOutput()).toEqual(expected);
   });
 
   it("keeps streamed pre-tool text when the result envelope carries only the final message", () => {
@@ -1612,7 +1474,35 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas.at(-1)?.text).toBe("Marker caribou-lampion-473 explanation.\n\nTEST DONE");
   });
 
-  it("keeps pre-tool text when text, tool_use, and text share one assistant message", () => {
+  it.each([
+    {
+      name: "keeps pre-tool text when text, tool_use, and text share one assistant message",
+      frames: [
+        { type: "init", session_id: "session-single-message" },
+        claudeMessageStart(),
+        claudeTextDelta("Marker caribou-lampion-473 explanation."),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+        claudeTextDelta("TEST DONE"),
+        { type: "result", session_id: "session-single-message", result: "TEST DONE" },
+      ],
+      expectedText: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+    },
+    {
+      name: "keeps pre-tool text when a toolless closer message follows a tool-using message",
+      frames: [
+        { type: "init", session_id: "session-closer" },
+        claudeMessageStart(),
+        claudeTextDelta("Pre-tool analysis."),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+        claudeTextDelta("Post-tool summary."),
+        claudeMessageStop(),
+        claudeMessageStart(),
+        claudeTextDelta("DONE"),
+        { type: "result", session_id: "session-closer", result: "DONE" },
+      ],
+      expectedText: "Pre-tool analysis.\n\nPost-tool summary.\n\nDONE",
+    },
+  ])("$name", ({ frames, expectedText }) => {
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -1624,97 +1514,10 @@ describe("createCliJsonlStreamingParser", () => {
       onAssistantDelta: () => {},
     });
 
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-single-message" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Marker caribou-lampion-473 explanation." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "TEST DONE" },
-          },
-        }),
-        JSON.stringify({
-          type: "result",
-          session_id: "session-single-message",
-          result: "TEST DONE",
-        }),
-        "",
-      ].join("\n"),
-    );
+    parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(parser.getOutput()?.text).toBe("Marker caribou-lampion-473 explanation.\n\nTEST DONE");
-  });
-
-  it("keeps pre-tool text when a toolless closer message follows a tool-using message", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-closer" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Pre-tool analysis." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Post-tool summary." },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "DONE" },
-          },
-        }),
-        JSON.stringify({ type: "result", session_id: "session-closer", result: "DONE" }),
-        "",
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()?.text).toBe("Pre-tool analysis.\n\nPost-tool summary.\n\nDONE");
+    expect(parser.getOutput()?.text).toBe(expectedText);
   });
 
   it("judges post-interim-result segments on their own stream state", () => {
@@ -1782,7 +1585,63 @@ describe("createCliJsonlStreamingParser", () => {
     );
   });
 
-  it("does not duplicate existing newlines at message boundaries", () => {
+  it.each([
+    {
+      name: "does not duplicate existing newlines at message boundaries",
+      frames: [
+        { type: "init", session_id: "session-newlines" },
+        claudeMessageStart(),
+        claudeTextDelta("Pre-tool explanation.\n\n"),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+        claudeMessageStart(),
+        claudeTextDelta("TEST DONE"),
+        { type: "result", session_id: "session-newlines", result: "TEST DONE" },
+      ],
+      expectedText: "Pre-tool explanation.\n\nTEST DONE",
+    },
+    {
+      name: "keeps a later tool split's pre-tool text after an earlier ordinary boundary",
+      frames: [
+        { type: "init", session_id: "session-mixed" },
+        claudeMessageStart(),
+        claudeTextDelta("Superseded draft."),
+        claudeMessageStop(),
+        claudeMessageStart(),
+        claudeTextDelta("Important pre-tool text."),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+        claudeTextDelta("DONE"),
+        { type: "result", session_id: "session-mixed", result: "DONE" },
+      ],
+      expectedText: "Important pre-tool text.\n\nDONE",
+    },
+    {
+      name: "drops an earlier draft when a fresh message starts with a tool call",
+      frames: [
+        { type: "init", session_id: "session-tool-first" },
+        claudeMessageStart(),
+        claudeTextDelta("Superseded draft."),
+        claudeMessageStop(),
+        claudeMessageStart(),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+        claudeTextDelta("Fresh answer."),
+        { type: "result", session_id: "session-tool-first", result: "Fresh answer." },
+      ],
+      expectedText: "Fresh answer.",
+    },
+    {
+      name: "defers to the result envelope across message boundaries without a tool split",
+      frames: [
+        { type: "init", session_id: "session-draft" },
+        claudeMessageStart(),
+        claudeTextDelta("Superseded draft."),
+        claudeMessageStop(),
+        claudeMessageStart(),
+        claudeTextDelta("Final answer."),
+        { type: "result", session_id: "session-draft", result: "Final answer." },
+      ],
+      expectedText: "Final answer.",
+    },
+  ])("$name", ({ frames, expectedText }) => {
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -1794,42 +1653,41 @@ describe("createCliJsonlStreamingParser", () => {
       onAssistantDelta: () => {},
     });
 
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-newlines" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Pre-tool explanation.\n\n" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "TEST DONE" },
-          },
-        }),
-        JSON.stringify({ type: "result", session_id: "session-newlines", result: "TEST DONE" }),
-        "",
-      ].join("\n"),
-    );
+    parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(parser.getOutput()?.text).toBe("Pre-tool explanation.\n\nTEST DONE");
+    expect(parser.getOutput()?.text).toBe(expectedText);
   });
 
-  it("keeps a later tool split's pre-tool text after an earlier ordinary boundary", () => {
+  it.each([
+    {
+      name: "defers to the result envelope on a suffix match inside a single message",
+      frames: [
+        { type: "init", session_id: "session-suffix" },
+        claudeMessageStart(),
+        claudeTextDelta("discarded draft authoritative result"),
+        { type: "result", session_id: "session-suffix", result: "authoritative result" },
+      ],
+      expected: {
+        text: "authoritative result",
+        sessionId: "session-suffix",
+        usage: undefined,
+      },
+    },
+    {
+      name: "prefers the result envelope when streamed text diverges from it",
+      frames: [
+        { type: "init", session_id: "session-diverged" },
+        claudeTextDelta("draft wording"),
+        { type: "result", session_id: "session-diverged", result: "authoritative result" },
+      ],
+      expected: {
+        text: "authoritative result",
+        sessionId: "session-diverged",
+        usage: undefined,
+      },
+    },
+  ])("$name", ({ frames, expected }) => {
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -1841,219 +1699,10 @@ describe("createCliJsonlStreamingParser", () => {
       onAssistantDelta: () => {},
     });
 
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-mixed" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Superseded draft." },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Important pre-tool text." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "DONE" },
-          },
-        }),
-        JSON.stringify({ type: "result", session_id: "session-mixed", result: "DONE" }),
-        "",
-      ].join("\n"),
-    );
+    parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(parser.getOutput()?.text).toBe("Important pre-tool text.\n\nDONE");
-  });
-
-  it("drops an earlier draft when a fresh message starts with a tool call", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-tool-first" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Superseded draft." },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "session_status" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Fresh answer." },
-          },
-        }),
-        JSON.stringify({
-          type: "result",
-          session_id: "session-tool-first",
-          result: "Fresh answer.",
-        }),
-        "",
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()?.text).toBe("Fresh answer.");
-  });
-
-  it("defers to the result envelope across message boundaries without a tool split", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-draft" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Superseded draft." },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Final answer." },
-          },
-        }),
-        JSON.stringify({ type: "result", session_id: "session-draft", result: "Final answer." }),
-        "",
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()?.text).toBe("Final answer.");
-  });
-
-  it("defers to the result envelope on a suffix match inside a single message", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-suffix" }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "discarded draft authoritative result" },
-          },
-        }),
-        JSON.stringify({
-          type: "result",
-          session_id: "session-suffix",
-          result: "authoritative result",
-        }),
-        "",
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
-      text: "authoritative result",
-      sessionId: "session-suffix",
-      usage: undefined,
-    });
-  });
-
-  it("prefers the result envelope when streamed text diverges from it", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-diverged" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "draft wording" },
-          },
-        }),
-        JSON.stringify({
-          type: "result",
-          session_id: "session-diverged",
-          result: "authoritative result",
-        }),
-        "",
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(parser.getOutput()).toEqual({
-      text: "authoritative result",
-      sessionId: "session-diverged",
-      usage: undefined,
-    });
+    expect(parser.getOutput()).toEqual(expected);
   });
 
   it("promotes complete leading tagged Claude reasoning and keeps only the answer visible", () => {
@@ -2293,105 +1942,113 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()?.text).toBe("Before tool.\n\nFinal answer.");
   });
 
-  it("streams thinking deltas, skips signature deltas, and dedupes the snapshot", () => {
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "Let me think" },
-          },
+  it.each([
+    {
+      name: "streams thinking deltas, skips signature deltas, and dedupes the snapshot",
+      frames: [
+        claudeThinkingDelta("Let me think", 0),
+        claudeThinkingDelta(" harder.", 0),
+        claudeStreamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "opaque-signature" },
         }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: " harder." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "signature_delta", signature: "opaque-signature" },
-          },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            content: [
-              { type: "thinking", thinking: "Let me think harder.", signature: "opaque-signature" },
-              { type: "text", text: "Answer." },
-            ],
-          },
-        }),
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(thinking).toEqual([
-      { text: "Let me think", delta: "Let me think", isReasoningSnapshot: true },
-      { text: "Let me think harder.", delta: " harder.", isReasoningSnapshot: true },
-    ]);
-  });
-
-  it("emits snapshot thinking blocks when no thinking deltas streamed", () => {
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-
-    parser.push(
-      JSON.stringify({
-        type: "assistant",
-        message: {
-          id: "msg-1",
-          content: [
-            { type: "thinking", thinking: "Snapshot-only reasoning.", signature: "sig" },
-            { type: "redacted_thinking", data: "opaque-blob" },
-            { type: "text", text: "Answer." },
-          ],
+        claudeAssistantSnapshot("msg-1", [
+          { type: "thinking", thinking: "Let me think harder.", signature: "opaque-signature" },
+          { type: "text", text: "Answer." },
+        ]),
+      ],
+      expected: [
+        { text: "Let me think", delta: "Let me think", isReasoningSnapshot: true },
+        { text: "Let me think harder.", delta: " harder.", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "emits snapshot thinking blocks when no thinking deltas streamed",
+      frames: [
+        claudeAssistantSnapshot("msg-1", [
+          { type: "thinking", thinking: "Snapshot-only reasoning.", signature: "sig" },
+          { type: "redacted_thinking", data: "opaque-blob" },
+          { type: "text", text: "Answer." },
+        ]),
+      ],
+      expected: [
+        {
+          text: "Snapshot-only reasoning.",
+          delta: "Snapshot-only reasoning.",
+          isReasoningSnapshot: true,
         },
-      }),
-    );
-    parser.finish();
-
-    expect(thinking).toEqual([
-      {
-        text: "Snapshot-only reasoning.",
-        delta: "Snapshot-only reasoning.",
-        isReasoningSnapshot: true,
-      },
-    ]);
-  });
-
-  it("replaces per-index thinking when assistant snapshots revise non-prefix text", () => {
+      ],
+    },
+    {
+      name: "replaces per-index thinking when assistant snapshots revise non-prefix text",
+      frames: [
+        claudeThinkingDelta("rough draft", 0),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "thinking", thinking: "revised thought", signature: "sig" },
+          { type: "text", text: "Answer." },
+        ]),
+      ],
+      expected: [
+        { text: "rough draft", delta: "rough draft", isReasoningSnapshot: true },
+        { text: "revised thought", delta: "revised thought", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "dedupes per content-block index across multiple thinking blocks",
+      frames: [
+        claudeThinkingDelta("A", 0),
+        claudeThinkingDelta("B", 1),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "thinking", thinking: "A", signature: "sig-a" },
+          { type: "thinking", thinking: "B", signature: "sig-b" },
+        ]),
+      ],
+      expected: [
+        { text: "A", delta: "A", isReasoningSnapshot: true },
+        { text: "AB", delta: "B", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "dedupes snapshot thinking after tool-interleaved multi-block streaming",
+      frames: [
+        claudeThinkingDelta("A", 0),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "Read" }, 1),
+        claudeInputJsonDelta('{"file_path":"x"}', 1),
+        claudeBlockStop(1),
+        claudeThinkingDelta("B", 2),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "thinking", thinking: "A", signature: "sig-a" },
+          { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "x" } },
+          { type: "thinking", thinking: "B", signature: "sig-b" },
+        ]),
+      ],
+      expected: [
+        { text: "A", delta: "A", isReasoningSnapshot: true },
+        { text: "AB", delta: "B", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "streams indexless thinking deltas from content block framing",
+      frames: [
+        claudeMessageStart("msg-1"),
+        claudeBlockStart({ type: "thinking" }),
+        claudeThinkingDelta("A"),
+        claudeBlockStop(),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "Read" }),
+        claudeInputJsonDelta('{"file_path":"x"}'),
+        claudeBlockStop(),
+        claudeBlockStart({ type: "thinking" }),
+        claudeThinkingDelta("B"),
+        claudeBlockStop(),
+        claudeAssistantSnapshot("msg-1", [{ type: "text", text: "Answer." }]),
+      ],
+      expected: [
+        { text: "A", delta: "A", isReasoningSnapshot: true },
+        { text: "AB", delta: "B", isReasoningSnapshot: true },
+      ],
+    },
+  ])("$name", ({ frames, expected }) => {
     const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -2405,255 +2062,10 @@ describe("createCliJsonlStreamingParser", () => {
       onThinkingDelta: (delta) => thinking.push(delta),
     });
 
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "rough draft" },
-          },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            content: [
-              { type: "thinking", thinking: "revised thought", signature: "sig" },
-              { type: "text", text: "Answer." },
-            ],
-          },
-        }),
-      ].join("\n"),
-    );
+    parser.push(joinJsonlFrames(...frames));
     parser.finish();
 
-    expect(thinking).toEqual([
-      { text: "rough draft", delta: "rough draft", isReasoningSnapshot: true },
-      { text: "revised thought", delta: "revised thought", isReasoningSnapshot: true },
-    ]);
-  });
-
-  it("dedupes per content-block index across multiple thinking blocks", () => {
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "A" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 1,
-            delta: { type: "thinking_delta", thinking: "B" },
-          },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            content: [
-              { type: "thinking", thinking: "A", signature: "sig-a" },
-              { type: "thinking", thinking: "B", signature: "sig-b" },
-            ],
-          },
-        }),
-      ].join("\n"),
-    );
-    parser.finish();
-
-    // Snapshot blocks "A" (index 0) and "B" (index 1) were already streamed on
-    // their own indexes, so the snapshot must not re-emit either one.
-    expect(thinking).toEqual([
-      { text: "A", delta: "A", isReasoningSnapshot: true },
-      { text: "AB", delta: "B", isReasoningSnapshot: true },
-    ]);
-  });
-
-  it("dedupes snapshot thinking after tool-interleaved multi-block streaming", () => {
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "A" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 1,
-            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 1,
-            delta: { type: "input_json_delta", partial_json: '{"file_path":"x"}' },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 1 },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 2,
-            delta: { type: "thinking_delta", thinking: "B" },
-          },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            content: [
-              { type: "thinking", thinking: "A", signature: "sig-a" },
-              { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "x" } },
-              { type: "thinking", thinking: "B", signature: "sig-b" },
-            ],
-          },
-        }),
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(thinking).toEqual([
-      { text: "A", delta: "A", isReasoningSnapshot: true },
-      { text: "AB", delta: "B", isReasoningSnapshot: true },
-    ]);
-  });
-
-  it("streams indexless thinking deltas from content block framing", () => {
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { id: "msg-1" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "thinking" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "thinking_delta", thinking: "A" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop" },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "input_json_delta", partial_json: '{"file_path":"x"}' },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop" },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "thinking" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "thinking_delta", thinking: "B" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop" },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            content: [{ type: "text", text: "Answer." }],
-          },
-        }),
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(thinking).toEqual([
-      { text: "A", delta: "A", isReasoningSnapshot: true },
-      { text: "AB", delta: "B", isReasoningSnapshot: true },
-    ]);
+    expect(thinking).toEqual(expected);
   });
 
   it("emits token progress for Claude CLI 2.1 empty thinking deltas", () => {
@@ -2711,7 +2123,32 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
-  it("resets per-index thinking state on a new message within the same turn (tool round-trip)", () => {
+  it.each([
+    {
+      name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",
+      frames: [
+        claudeMessageStart("msg-A"),
+        claudeThinkingDelta("Hello ", 0),
+        claudeThinkingDelta("world", 0),
+        claudeAssistantSnapshot("msg-A", [{ type: "thinking", thinking: "Hello world" }]),
+        claudeMessageStart("msg-B"),
+        claudeThinkingDelta("New ", 0),
+        claudeThinkingDelta("thought", 0),
+        claudeAssistantSnapshot("msg-B", [{ type: "thinking", thinking: "New thought" }]),
+      ],
+      expected: [
+        { text: "Hello ", delta: "Hello ", isReasoningSnapshot: true },
+        { text: "Hello world", delta: "world", isReasoningSnapshot: true },
+        { text: "New ", delta: "New ", isReasoningSnapshot: true },
+        { text: "New thought", delta: "thought", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "ignores indexless thinking deltas without content block framing",
+      frames: [claudeThinkingDelta("orphaned"), claudeThinkingDelta("also orphaned", "0")],
+      expected: [],
+    },
+  ])("$name", ({ frames, expected }) => {
     const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -2725,116 +2162,10 @@ describe("createCliJsonlStreamingParser", () => {
       onThinkingDelta: (delta) => thinking.push(delta),
     });
 
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { id: "msg-A" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "Hello " },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "world" },
-          },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            id: "msg-A",
-            content: [{ type: "thinking", thinking: "Hello world" }],
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_start",
-            message: { id: "msg-B" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "New " },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "thought" },
-          },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          message: {
-            id: "msg-B",
-            content: [{ type: "thinking", thinking: "New thought" }],
-          },
-        }),
-      ].join("\n"),
-    );
+    parser.push(joinJsonlFrames(...frames));
     parser.finish();
 
-    expect(thinking).toEqual([
-      { text: "Hello ", delta: "Hello ", isReasoningSnapshot: true },
-      { text: "Hello world", delta: "world", isReasoningSnapshot: true },
-      { text: "New ", delta: "New ", isReasoningSnapshot: true },
-      { text: "New thought", delta: "thought", isReasoningSnapshot: true },
-    ]);
-  });
-
-  it("ignores indexless thinking deltas without content block framing", () => {
-    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "local-cli",
-      onAssistantDelta: () => {},
-      onThinkingDelta: (delta) => thinking.push(delta),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "thinking_delta", thinking: "orphaned" },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: "0",
-            delta: { type: "thinking_delta", thinking: "also orphaned" },
-          },
-        }),
-      ].join("\n"),
-    );
-    parser.finish();
-
-    expect(thinking).toEqual([]);
+    expect(thinking).toEqual(expected);
   });
 
   it("streams Gemini message deltas and tool events", () => {
@@ -3791,7 +3122,34 @@ describe("createCliJsonlStreamingParser", () => {
     expect(observedLines).toEqual([rawLine]);
   });
 
-  it("reassembles streamed tool args from input_json_delta chunks", () => {
+  it.each([
+    {
+      name: "reassembles streamed tool args from input_json_delta chunks",
+      frames: [
+        claudeBlockStart({ type: "tool_use", id: "toolu_chunked", name: "Bash", input: {} }, 0),
+        claudeInputJsonDelta('{"command":', 0),
+        claudeInputJsonDelta(' "echo hi"}', 0),
+        claudeBlockStop(0),
+      ],
+      expected: [
+        {
+          toolCallId: "toolu_chunked",
+          name: "Bash",
+          kind: "tool_use",
+          args: { command: "echo hi" },
+        },
+      ],
+    },
+    {
+      name: "emits empty args when streamed tool args are malformed",
+      frames: [
+        claudeBlockStart({ type: "tool_use", id: "toolu_bad", name: "Bash", input: {} }, 0),
+        claudeInputJsonDelta('{"command": "ls', 0),
+        claudeBlockStop(0),
+      ],
+      expected: [{ toolCallId: "toolu_bad", name: "Bash", kind: "tool_use", args: {} }],
+    },
+  ])("$name", ({ frames, expected }) => {
     const starts: CliToolUseStartDelta[] = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -3805,91 +3163,10 @@ describe("createCliJsonlStreamingParser", () => {
       onToolUseStart: (delta) => starts.push(delta),
     });
 
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "tool_use", id: "toolu_chunked", name: "Bash", input: {} },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "input_json_delta", partial_json: '{"command":' },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "input_json_delta", partial_json: ' "echo hi"}' },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-        }),
-      ].join("\n") + "\n",
-    );
+    parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(starts).toEqual([
-      {
-        toolCallId: "toolu_chunked",
-        name: "Bash",
-        kind: "tool_use",
-        args: { command: "echo hi" },
-      },
-    ]);
-  });
-
-  it("emits empty args when streamed tool args are malformed", () => {
-    const starts: CliToolUseStartDelta[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "local-cli",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
-      onToolUseStart: (delta) => starts.push(delta),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "tool_use", id: "toolu_bad", name: "Bash", input: {} },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "input_json_delta", partial_json: '{"command": "ls' },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-        }),
-      ].join("\n") + "\n",
-    );
-    parser.finish();
-
-    expect(starts).toEqual([{ toolCallId: "toolu_bad", name: "Bash", kind: "tool_use", args: {} }]);
+    expect(starts).toEqual(expected);
   });
 
   it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
@@ -4081,7 +3358,30 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
-  it("fires onCommentaryText with accumulated text before a tool_use block", () => {
+  it.each([
+    {
+      name: "fires onCommentaryText with accumulated text before a tool_use block",
+      frames: [
+        { type: "init", session_id: "session-commentary" },
+        claudeTextDelta("Let me check "),
+        claudeTextDelta("that for you."),
+        claudeBlockStart({ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }, 1),
+      ],
+      expectedCommentary: ["Let me check that for you."],
+      expectedDeltas: [],
+    },
+    {
+      name: "flushes Claude text as an assistant delta when no tool follows",
+      frames: [
+        { type: "init", session_id: "session-answer" },
+        claudeTextDelta("Final "),
+        claudeTextDelta("answer."),
+        claudeMessageStop(),
+      ],
+      expectedCommentary: [],
+      expectedDeltas: [{ text: "Final answer.", delta: "Final answer." }],
+    },
+  ])("$name", ({ frames, expectedCommentary, expectedDeltas }) => {
     const commentaryTexts: string[] = [];
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
@@ -4096,83 +3396,11 @@ describe("createCliJsonlStreamingParser", () => {
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
 
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-commentary" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Let me check " },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "that for you." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 1,
-            content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
-          },
-        }),
-      ].join("\n") + "\n",
-    );
+    parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(commentaryTexts).toEqual(["Let me check that for you."]);
-    expect(deltas).toEqual([]);
-  });
-
-  it("flushes Claude text as an assistant delta when no tool follows", () => {
-    const commentaryTexts: string[] = [];
-    const deltas: Array<{ text: string; delta: string }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
-      onCommentaryText: (text) => commentaryTexts.push(text),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-answer" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Final " },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "answer." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "message_stop",
-          },
-        }),
-      ].join("\n") + "\n",
-    );
-    parser.finish();
-
-    expect(commentaryTexts).toEqual([]);
-    expect(deltas).toEqual([{ text: "Final answer.", delta: "Final answer." }]);
+    expect(commentaryTexts).toEqual(expectedCommentary);
+    expect(deltas).toEqual(expectedDeltas);
   });
 
   it("keeps pre-tool text in assistant deltas when no commentary consumer is wired", () => {
@@ -4215,7 +3443,37 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
-  it("does not fire onCommentaryText when no text precedes tool_use", () => {
+  it.each([
+    {
+      name: "does not fire onCommentaryText when no text precedes tool_use",
+      frames: [
+        { type: "init", session_id: "session-no-commentary" },
+        claudeBlockStart({ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }, 0),
+      ],
+      expectedCommentary: [],
+    },
+    {
+      name: "does not duplicate commentary when consecutive tool_use blocks have no new text",
+      frames: [
+        { type: "init", session_id: "session-multi-commentary" },
+        claudeTextDelta("First, checking files."),
+        claudeBlockStart({ type: "tool_use", id: "toolu_1", name: "Read", input: {} }, 1),
+        claudeBlockStart({ type: "tool_use", id: "toolu_2", name: "Bash", input: {} }, 2),
+      ],
+      expectedCommentary: ["First, checking files."],
+    },
+    {
+      name: "emits only the new segment on text-tool-text-tool sequences",
+      frames: [
+        { type: "init", session_id: "session-segment" },
+        claudeTextDelta("Reading the file now."),
+        claudeBlockStart({ type: "tool_use", id: "toolu_a", name: "Read", input: {} }, 1),
+        claudeTextDelta(" Now searching."),
+        claudeBlockStart({ type: "tool_use", id: "toolu_b", name: "Grep", input: {} }, 3),
+      ],
+      expectedCommentary: ["Reading the file now.", "Now searching."],
+    },
+  ])("$name", ({ frames, expectedCommentary }) => {
     const commentaryTexts: string[] = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -4229,123 +3487,10 @@ describe("createCliJsonlStreamingParser", () => {
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
 
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-no-commentary" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
-          },
-        }),
-      ].join("\n") + "\n",
-    );
+    parser.push(joinJsonlFrames(...frames, ""));
     parser.finish();
 
-    expect(commentaryTexts).toEqual([]);
-  });
-
-  it("does not duplicate commentary when consecutive tool_use blocks have no new text", () => {
-    const commentaryTexts: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
-      onCommentaryText: (text) => commentaryTexts.push(text),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-multi-commentary" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "First, checking files." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 1,
-            content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 2,
-            content_block: { type: "tool_use", id: "toolu_2", name: "Bash", input: {} },
-          },
-        }),
-      ].join("\n") + "\n",
-    );
-    parser.finish();
-
-    expect(commentaryTexts).toEqual(["First, checking files."]);
-  });
-
-  it("emits only the new segment on text-tool-text-tool sequences", () => {
-    const commentaryTexts: string[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "claude",
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        sessionIdFields: ["session_id"],
-      },
-      providerId: "claude-cli",
-      onAssistantDelta: () => undefined,
-      onCommentaryText: (text) => commentaryTexts.push(text),
-    });
-
-    parser.push(
-      [
-        JSON.stringify({ type: "init", session_id: "session-segment" }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: "Reading the file now." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 1,
-            content_block: { type: "tool_use", id: "toolu_a", name: "Read", input: {} },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text: " Now searching." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 3,
-            content_block: { type: "tool_use", id: "toolu_b", name: "Grep", input: {} },
-          },
-        }),
-      ].join("\n") + "\n",
-    );
-    parser.finish();
-
-    expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
+    expect(commentaryTexts).toEqual(expectedCommentary);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

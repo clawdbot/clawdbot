@@ -113,6 +113,7 @@ jobs:
       run_openclawkit_tests: ${{ steps.manifest.outputs.run_openclawkit_tests }}
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
@@ -708,6 +709,7 @@ jobs:
             run_openclawkit_tests: runMacos && supportsOpenClawKitTests,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
+            use_compatible_android_ci: useCompatibleAndroidCi,
             run_protocol_event_coverage: runProtocolEventCoverage,
             android_matrix: createMatrix(
               runAndroid
@@ -3483,7 +3485,7 @@ jobs:
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
       - name: Setup Node environment for native resources
-        if: needs.preflight.outputs.compatibility_target != 'true'
+        if: needs.preflight.outputs.use_compatible_android_ci != 'true'
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"

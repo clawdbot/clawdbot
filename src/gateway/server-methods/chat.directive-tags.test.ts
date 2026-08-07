@@ -2489,6 +2489,72 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantEntries).toStrictEqual([]);
   });
 
+  it("broadcasts a block status once while ignoring an ordinary agent final", async () => {
+    await createTranscriptFixture("openclaw-chat-send-agent-block-status-notice-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "Model set to openai/gpt-5.5 for this session.",
+          isStatusNotice: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "ordinary provider final",
+        },
+      },
+    ];
+    const { context, send } = createChatRequestFixture();
+
+    const broadcast = await send({
+      idempotencyKey: "idem-agent-block-status-notice",
+      message: "/model openai/gpt-5.5 keep going",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-block-status-notice",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(extractFirstTextBlock(broadcast)).toBe("Model set to openai/gpt-5.5 for this session.");
+    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
+    expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
+  });
+
+  it("ignores non-status block and final payloads during source finalization", async () => {
+    await createTranscriptFixture("openclaw-chat-send-agent-non-status-replies-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          text: "ordinary block",
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: "ordinary final",
+        },
+      },
+    ];
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-agent-non-status-replies",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toStrictEqual([]);
+    expect(findAssistantTranscriptUpdates()).toStrictEqual([]);
+    expect(await readActiveAssistantTranscriptMessages()).toStrictEqual([]);
+  });
+
   it("does not duplicate media-bearing internal-ui source replies in the transcript", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-agent-source-reply-media-",
@@ -3247,7 +3313,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.triggerAgentRunStart = true;
     mockState.dispatchedReplies = [
       {
-        kind: "final",
+        kind: "block",
         payload: {
           text: "⚙️ Codex compaction started • Context 2k/200k",
           isStatusNotice: true,

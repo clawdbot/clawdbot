@@ -173,6 +173,7 @@ export type ClawWorkspaceSourceSnapshot = {
 
 type ClawSourceSnapshot = {
   workspaceSources: ClawWorkspaceSourceSnapshot[];
+  packageBootstrap?: ClawWorkspaceSourceSnapshot;
 };
 
 export type ClawReadResult =
@@ -180,6 +181,7 @@ export type ClawReadResult =
       ok: true;
       manifest: ClawManifest;
       clawMarkdownBody?: Buffer;
+      packageBootstrap?: ClawWorkspaceSourceSnapshot;
       openClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
@@ -191,7 +193,7 @@ export type ClawReadResult =
     };
 
 export type ClawAddPlanAction = {
-  kind: "agent" | "workspace" | "workspaceFile" | "package" | "mcpServer" | "cronJob";
+  kind: "agent" | "workspace" | "bootstrap" | "workspaceFile" | "package" | "mcpServer" | "cronJob";
   id: string;
   action: "create" | "write" | "install" | "configure" | "schedule";
   target: string;

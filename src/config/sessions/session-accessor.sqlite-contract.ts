@@ -15,6 +15,7 @@ import type {
   SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
@@ -133,6 +134,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 
 export type TranscriptMessageAppendResult<TMessage> = {
   appended: boolean;
+  anchor?: TranscriptEntryAnchor;
   effectiveParentId?: string | null;
   message: TMessage;
   messageId: string;

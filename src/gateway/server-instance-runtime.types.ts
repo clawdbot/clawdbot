@@ -11,10 +11,14 @@ export type GatewayApprovalEventPublisher = {
 export type GatewayRecoveryRuntime = {
   dispatchAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
   waitForAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
-  sendRecoveryNotice: <T = unknown>(
-    params: Record<string, unknown>,
-    timeoutMs?: number,
-  ) => Promise<T>;
+  sendRecoveryNotice: (params: {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+    text: string;
+    idempotencyKey: string;
+  }) => Promise<void>;
 };
 
 export type GatewayInstanceRuntime = {

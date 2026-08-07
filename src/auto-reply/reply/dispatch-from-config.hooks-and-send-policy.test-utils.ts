@@ -470,7 +470,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         },
       } as OpenClawConfig,
     },
-  ])("treats explicit NO_REPLY as intentional silence in $name", async ({ ctx, cfg }) => {
+  ])("records explicit NO_REPLY without a generic fallback in $name", async ({ ctx, cfg }) => {
     setNoAbort();
     const deliver = vi.fn(async () => {});
     const dispatcher = createReplyDispatcher({ deliver });
@@ -483,8 +483,13 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
+    expect(replyResolver).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      deliberateSilentTerminalReply: true,
+    });
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });

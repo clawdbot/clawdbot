@@ -301,6 +301,25 @@ describe("runMessageAction media behavior", () => {
     expect(sendArgs.asVoice).toBe(true);
   });
 
+  it("copies the normalized idempotency key into send execution context", async () => {
+    setTestPlugin(workspacePlugin, "workspace");
+
+    await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "hello",
+        idempotencyKey: " run-1:message-tool:send-1:fingerprint ",
+      },
+    });
+
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(requireRecord(sendArgs.ctx).idempotencyKey).toBe(
+      "run-1:message-tool:send-1:fingerprint",
+    );
+  });
+
   it("rejects plugin-declined attachment actions before loading media", async () => {
     const handleAction = vi.fn(async () => jsonResult({ ok: true }));
     const textOnlyPlugin: ChannelPlugin = {
