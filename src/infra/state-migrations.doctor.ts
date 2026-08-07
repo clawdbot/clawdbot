@@ -5,7 +5,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   discardLegacyRegistryWorktrees,
   hasLegacyRegistryWorktrees,
-  listRegistryWorktrees,
+  listRegistryWorktreesForMigration,
   rewriteRegistryWorktreePathsForMigration,
 } from "../agents/worktrees/registry.js";
 import { listBundledChannelLegacyStateMigrationDetectors } from "../channels/plugins/bundled.js";
@@ -338,7 +338,7 @@ async function detectManagedWorktreeStateMigration(params: {
   if (rawRoot === canonicalRoot || !hasCurrentSchema || !databaseExists) {
     return { hasLegacy, pathRewrites: [] };
   }
-  const pathRewrites = listRegistryWorktrees(stateEnv).flatMap((row) => {
+  const pathRewrites = listRegistryWorktreesForMigration(stateEnv).flatMap((row) => {
     const fromPath = path.join(rawRoot, row.repoFingerprint, row.name);
     return row.path === fromPath
       ? [

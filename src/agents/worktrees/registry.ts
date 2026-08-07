@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -117,6 +119,25 @@ export function listRegistryWorktrees(env: NodeJS.ProcessEnv): ManagedWorktreeRe
     .orderBy("created_at", "desc")
     .orderBy("id", "asc");
   return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
+}
+
+export function listRegistryWorktreesForMigration(env: NodeJS.ProcessEnv): ManagedWorktreeRecord[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        if (!tableExists(db, "worktrees")) {
+          return [];
+        }
+        const query = kyselyFor(db)
+          .selectFrom("worktrees")
+          .selectAll()
+          .orderBy("created_at", "desc")
+          .orderBy("id", "asc");
+        return executeSqliteQuerySync(db, query).rows.map(rowToRecord);
+      },
+      { env },
+    ) ?? []
+  );
 }
 
 export function getRegistryWorktree(
