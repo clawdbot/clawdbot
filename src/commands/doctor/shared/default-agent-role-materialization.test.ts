@@ -179,7 +179,7 @@ describe("default agent role materialization", () => {
     expect(resolveTalkSessionAgentId(config, "agent:ops:main")).toBe("ops");
   });
 
-  it("skips all channel-wide materialization once any binding already routes to the default agent to avoid identity collision in restoreEnvVarRefs", () => {
+  it("skips channel-wide materialization when a unique literal default-agent binding collides with env templates in restoreEnvVarRefs", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -192,20 +192,144 @@ describe("default agent role materialization", () => {
         telegram: { enabled: true },
         whatsapp: { enabled: true },
       },
+      // One literal main-route + env-template peer id is the trip-prone shape:
+      // restoreEnvVarRefs would find a unique authored `agentId: "main"` identity
+      // and reject the append because the new sibling doubles the incoming count.
       bindings: [
-        { agentId: "main", match: { channel: "telegram", peer: { kind: "direct", id: "owner" } } },
+        {
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "direct", id: "${TELEGRAM_OWNER_ID}" } },
+        },
         { agentId: "group", match: { channel: "telegram", peer: { kind: "group", id: "-1001" } } },
       ],
       talk: { agentId: "main", provider: "test" },
     };
 
-    // No "Bound ..." diagnostic is emitted: the migration refuses to materialize
-    // any defaultAgentId binding once one already exists. Per-channel skips are
-    // silent because the only useful signal is "nothing to do, leaving as is".
     const result = materializeDefaultAgentRoles(config);
     expect(result.config.bindings).toEqual(config.bindings);
-    expect(result.changes).toEqual([]);
-    expect(result.config).toBe(config);
+    expect(result.changes).toEqual([
+      "Skipped telegram, whatsapp: identity-collision guard against main would trip EnvRefArrayMutationError during write.",
+    ]);
+  });
+
+  it("still materializes sibling channels when an env-bearing binding resolves to the default agent without uniqueness tripping the matcher", () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { ops: { default: true }, research: {} } },
+      channels: {
+        telegram: { enabled: true },
+        slack: { enabled: true },
+        whatsapp: { enabled: true },
+      },
+      // Two env-bearing bindings on `slack` whose `agentId` resolves to
+      // "ops" after env substitution. Identity path detection skips
+      // env-bearing `agentId` values, so the matcher never sees a unique
+      // literal `agentId: "ops"` authored binding and the new sibling
+      // cannot collide. The per-channel env-ref skip keeps slack excluded
+      // while telegram and whatsapp are still materialized.
+      bindings: [
+        { agentId: "${OPS_AGENT_ID}", match: { channel: "slack", accountId: "work" } },
+        { agentId: "${OPS_AGENT_ID}", match: { channel: "slack", accountId: "personal" } },
+      ],
+    };
+    const result = materializeDefaultAgentRoles(config);
+    expect(result.config.bindings).toEqual([
+      ...config.bindings!,
+      { agentId: "ops", match: { channel: "telegram", accountId: "*" } },
+      { agentId: "ops", match: { channel: "whatsapp", accountId: "*" } },
+    ]);
+    expect(result.changes).toContain(
+      'Bound telegram, whatsapp unbound account routing to agent "ops".',
+    );
+    expect(result.changes).toContain(
+      "Skipped slack: existing binding uses an environment reference.",
+    );
+  });
+
+  it("materializes sibling channels when multiple literal default-agent bindings already exist", () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, group: {} } },
+      channels: {
+        telegram: { enabled: true },
+        slack: { enabled: true },
+        whatsapp: { enabled: true },
+      },
+      // Two literal `agentId: "main"` bindings on telegram + an env-template
+      // binding on a different channel. authoredCount for `agentId: "main"`
+      // is 2, so the matcher's identity path is skipped (authoredCount !== 1)
+      // and no append can collide. Doctor must still materialize the
+      // channel-wide default for each unbound channel.
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "direct", id: "owner-1" } },
+        },
+        {
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "direct", id: "owner-2" } },
+        },
+        {
+          agentId: "group",
+          match: { channel: "slack", peer: { kind: "group", id: "${SLACK_GROUP_ID}" } },
+        },
+      ],
+    };
+    const result = materializeDefaultAgentRoles(config);
+    expect(result.config.bindings).toEqual([
+      ...config.bindings!,
+      { agentId: "main", match: { channel: "telegram", accountId: "*" } },
+      { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    ]);
+  });
+
+  it("uses the resolved-only heuristic to skip when no parsed config is supplied", () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, group: {} } },
+      channels: {
+        telegram: { enabled: true },
+        whatsapp: { enabled: true },
+      },
+      // No env-template and a single literal `agentId: "main"` binding. The
+      // resolved-only fallback (no parsed config supplied) treats uniqueness
+      // as the trip-prone signal and conservatively skips channel-wide
+      // materialization; callers who can pass the parsed config can opt
+      // into the more permissive behavior.
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "direct", id: "owner-1" } },
+        },
+      ],
+    };
+    const result = materializeDefaultAgentRoles(config);
+    expect(result.config.bindings).toEqual(config.bindings);
+    expect(result.changes).toContain(
+      "Skipped telegram, whatsapp: identity-collision guard against main would trip EnvRefArrayMutationError during write.",
+    );
+  });
+
+  it("uses the parsed config to allow sibling materialization when no env-template is present in the parsed file", () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, group: {} } },
+      channels: {
+        telegram: { enabled: true },
+        whatsapp: { enabled: true },
+      },
+      // Single literal `agentId: "main"` binding. The parsed config has
+      // no env-template, so the env-preserve matcher would bypass the
+      // identity path entirely; the migration can safely append.
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "direct", id: "owner-1" } },
+        },
+      ],
+    };
+    const result = materializeDefaultAgentRoles(config, { parsed: config });
+    expect(result.config.bindings).toEqual([
+      ...config.bindings!,
+      { agentId: "main", match: { channel: "telegram", accountId: "*" } },
+      { agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    ]);
   });
 
   it("skips channels whose existing bindings carry ${VAR} environment references", () => {

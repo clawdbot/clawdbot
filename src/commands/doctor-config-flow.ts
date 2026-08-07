@@ -219,7 +219,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
     });
   }
-  applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
+  applyConfigMutation(materializeDefaultAgentRoles(state.candidate, { parsed: snapshot.parsed }), {
     fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
   });
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
