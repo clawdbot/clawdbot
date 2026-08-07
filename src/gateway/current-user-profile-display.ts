@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getUserProfileListItem } from "../state/user-profiles.js";
+import { getUserProfileDisplay } from "../state/user-profiles.js";
 import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 export type CurrentUserProfileDisplay =
@@ -16,13 +16,13 @@ export type CurrentUserProfileDisplayResolver = (senderId: string) => CurrentUse
 
 export function resolveCurrentUserProfileDisplay(senderId: string): CurrentUserProfileDisplay {
   try {
-    const profile = getUserProfileListItem(senderId);
+    const profile = getUserProfileDisplay(senderId);
     const label = normalizeOptionalString(profile.displayName);
     return {
       kind: "resolved",
       profileId: profile.id,
       ...(label ? { label } : {}),
-      avatarUrl: formatUserProfileAvatarPath(profile.id, profile.updatedAt),
+      avatarUrl: formatUserProfileAvatarPath(profile.id, profile.avatarRevision),
       hasUploadedAvatar: profile.hasAvatar,
     };
   } catch {

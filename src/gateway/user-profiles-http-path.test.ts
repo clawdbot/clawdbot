@@ -10,6 +10,9 @@ describe("formatUserProfileAvatarPath", () => {
     expect(formatUserProfileAvatarPath("profile/a b", 1_725_000_123_456)).toBe(
       "/api/users/profile%2Fa%20b/avatar?v=1725000123456",
     );
+    expect(formatUserProfileAvatarPath("profile/a b", "hash/image")).toBe(
+      "/api/users/profile%2Fa%20b/avatar?v=hash%2Fimage",
+    );
   });
 });
 

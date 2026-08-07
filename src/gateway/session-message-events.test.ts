@@ -31,6 +31,7 @@ import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -198,6 +199,15 @@ function attributedMessageProjection(value: unknown) {
       senderProfileAvatarUrl: metadata.senderProfileAvatarUrl,
     },
   };
+}
+
+function currentProfileAvatarUrl(profileId: string): string {
+  const display = resolveCurrentUserProfileDisplay(profileId);
+  expect(display.kind).toBe("resolved");
+  if (display.kind !== "resolved") {
+    throw new Error("expected a resolved current profile display");
+  }
+  return display.avatarUrl;
 }
 
 describe("session.message websocket events", () => {
@@ -932,8 +942,7 @@ describe("session.message websocket events", () => {
   });
 
   test("projects current revisioned sender avatars consistently across live events and RPC reads", async () => {
-    const OLD_REV = 1_800_000_000_000;
-    const NEW_REV = 1_900_000_000_000;
+    const SHARED_REV = 1_800_000_000_000;
     const storePath = await createSessionStoreFile();
     const sessionId = "sess-current-profile-display";
     const sessionKey = "agent:main:current-profile-display";
@@ -943,12 +952,13 @@ describe("session.message websocket events", () => {
       storePath,
     });
 
-    const profile = withMockedDateNow(OLD_REV, () => {
+    const profile = withMockedDateNow(SHARED_REV, () => {
       const created = ensureProfileForEmail("current-profile-display@example.com");
       setDisplayName(created.id, "Old Display Name");
       expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
       return created;
     });
+    const firstAvatarUrl = currentProfileAvatarUrl(profile.id);
 
     const ws = await harness.openWs();
     try {
@@ -1007,14 +1017,14 @@ describe("session.message websocket events", () => {
         expect(response.payload?.ok).toBe(true);
         return response.payload?.message;
       };
-      const expectedProjection = (text: string, senderName: string, revision: number) => ({
+      const expectedProjection = (text: string, senderName: string, avatarUrl: string) => ({
         role: "user",
         content: text,
         __openclaw: {
           senderId: profile.id,
           senderName,
           senderUsername: "ada",
-          senderProfileAvatarUrl: `/api/users/${profile.id}/avatar?v=${revision}`,
+          senderProfileAvatarUrl: avatarUrl,
         },
       });
       const expectRpcParity = async (messageId: string, expected: unknown) => {
@@ -1038,26 +1048,36 @@ describe("session.message websocket events", () => {
         senderName: "Historical Ada",
         text: "first attributed turn",
       });
-      const firstExpected = expectedProjection("first attributed turn", "Historical Ada", OLD_REV);
+      const firstExpected = expectedProjection(
+        "first attributed turn",
+        "Historical Ada",
+        firstAvatarUrl,
+      );
       await expectEmitterParity(first, firstExpected);
 
-      withMockedDateNow(NEW_REV, () => {
+      withMockedDateNow(SHARED_REV, () => {
         setDisplayName(profile.id, "Current Ada");
         expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
       });
+      const secondAvatarUrl = currentProfileAvatarUrl(profile.id);
+      expect(secondAvatarUrl).not.toBe(firstAvatarUrl);
 
       const second = await persistTurn({
         idempotencyKey: "current-profile-display:second",
         senderName: "Current Ada",
         text: "second attributed turn",
       });
-      const secondExpected = expectedProjection("second attributed turn", "Current Ada", NEW_REV);
+      const secondExpected = expectedProjection(
+        "second attributed turn",
+        "Current Ada",
+        secondAvatarUrl,
+      );
       await expectEmitterParity(second, secondExpected);
 
       const refreshedFirstExpected = expectedProjection(
         "first attributed turn",
         "Historical Ada",
-        NEW_REV,
+        secondAvatarUrl,
       );
       await expectRpcParity(first.persisted.messageId, refreshedFirstExpected);
     } finally {

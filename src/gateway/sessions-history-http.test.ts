@@ -19,6 +19,7 @@ import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-open
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { SSE_CONTENT_TYPE } from "./http-common.js";
 import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import { SessionHistorySseState } from "./session-history-state.js";
@@ -330,6 +331,15 @@ function withMockedDateNow<T>(now: number, run: () => T): T {
   } finally {
     clock.mockRestore();
   }
+}
+
+function currentProfileAvatarUrl(profileId: string): string {
+  const display = resolveCurrentUserProfileDisplay(profileId);
+  expect(display.kind).toBe("resolved");
+  if (display.kind !== "resolved") {
+    throw new Error("expected a resolved current profile display");
+  }
+  return display.avatarUrl;
 }
 
 async function readSseEvent(
@@ -698,6 +708,7 @@ describe("session history HTTP endpoints", () => {
       expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
       return created;
     });
+    const oldAvatarUrl = currentProfileAvatarUrl(profile.id);
     const persistAttributedTurn = async (id: string, senderName: string, text: string) => {
       const turn = await persistUserTurnTranscript({
         agentId: AGENT_ID,
@@ -735,7 +746,7 @@ describe("session history HTTP endpoints", () => {
             senderId: profile.id,
             senderName: "Historical Ada",
             senderUsername: "ada",
-            senderProfileAvatarUrl: `/api/users/${profile.id}/avatar?v=${OLD_REV}`,
+            senderProfileAvatarUrl: oldAvatarUrl,
           },
         };
         expect(attributedHistoryMessageProjection(initialRest.messages?.[0])).toEqual(oldExpected);
@@ -747,6 +758,8 @@ describe("session history HTTP endpoints", () => {
           setDisplayName(profile.id, "Current Ada");
           expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
         });
+        const newAvatarUrl = currentProfileAvatarUrl(profile.id);
+        expect(newAvatarUrl).not.toBe(oldAvatarUrl);
 
         const inlineEventPromise = readSseEvent(stream.reader, stream.streamState);
         const second = await persistAttributedTurn(
@@ -766,7 +779,7 @@ describe("session history HTTP endpoints", () => {
             senderId: profile.id,
             senderName: "Current Ada",
             senderUsername: "ada",
-            senderProfileAvatarUrl: `/api/users/${profile.id}/avatar?v=${NEW_REV}`,
+            senderProfileAvatarUrl: newAvatarUrl,
           },
         };
         expect(attributedHistoryMessageProjection(inlineMessage)).toEqual(newSecondExpected);
@@ -777,7 +790,7 @@ describe("session history HTTP endpoints", () => {
           ...oldExpected,
           __openclaw: {
             ...oldExpected["__openclaw"],
-            senderProfileAvatarUrl: `/api/users/${profile.id}/avatar?v=${NEW_REV}`,
+            senderProfileAvatarUrl: newAvatarUrl,
           },
         });
         expect(attributedHistoryMessageProjection(refreshedRest.messages?.[1])).toEqual(
