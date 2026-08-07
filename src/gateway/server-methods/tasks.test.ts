@@ -250,15 +250,107 @@ describe("tasks gateway handlers", () => {
     const page1 = await runTaskHandler("tasks.list", { limit: 2 });
     expect(page1.calls[0]?.[0]).toBe(true);
     expect(page1.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(0, 2));
-    expect(page1.payload?.nextCursor).toBe("2");
+    expect(page1.payload?.nextCursor).toEqual(expect.any(String));
 
-    const page2 = await runTaskHandler("tasks.list", { limit: 2, cursor: "2" });
+    const page2 = await runTaskHandler("tasks.list", {
+      limit: 2,
+      cursor: page1.payload?.nextCursor,
+    });
     expect(page2.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(2, 4));
-    expect(page2.payload?.nextCursor).toBe("4");
+    expect(page2.payload?.nextCursor).toEqual(expect.any(String));
 
-    const page3 = await runTaskHandler("tasks.list", { limit: 2, cursor: "4" });
+    const page3 = await runTaskHandler("tasks.list", {
+      limit: 2,
+      cursor: page2.payload?.nextCursor,
+    });
     expect(page3.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(4));
     expect(page3.payload?.nextCursor).toBeUndefined();
+  });
+
+  it("rejects a continuation when task activity reorders the ledger", async () => {
+    const snapshots = [
+      createSnapshotTask({ taskId: "task-a", runId: "run-a", lastEventAt: 4_000 }),
+      createSnapshotTask({ taskId: "task-b", runId: "run-b", lastEventAt: 3_000 }),
+      createSnapshotTask({ taskId: "task-c", runId: "run-c", lastEventAt: 2_000 }),
+      createSnapshotTask({ taskId: "task-d", runId: "run-d", lastEventAt: 1_000 }),
+    ];
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map(snapshots.map((task) => [task.taskId, task])),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+
+    const page1 = await runTaskHandler("tasks.list", { limit: 2 });
+    expect(page1.calls[0]?.[0]).toBe(true);
+    expect(page1.payload?.tasks?.map((task) => task.id)).toEqual(["task-a", "task-b"]);
+    expect(page1.payload?.nextCursor).toEqual(expect.any(String));
+
+    markTaskTerminalById({
+      taskId: "task-c",
+      status: "succeeded",
+      endedAt: Date.now(),
+      terminalSummary: "Task C moved ahead of the first page",
+    });
+
+    const page2 = await runTaskHandler("tasks.list", {
+      limit: 2,
+      cursor: page1.payload?.nextCursor,
+    });
+    expect(page2.calls[0]?.[0]).toBe(false);
+    expect(page2.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { code: "TASKS_LIST_CURSOR_STALE" },
+    });
+  });
+
+  it("rejects legacy numeric task cursors", async () => {
+    const result = await runTaskHandler("tasks.list", { cursor: "2" });
+
+    expect(result.calls[0]?.[0]).toBe(false);
+    expect(result.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "invalid tasks.list cursor",
+    });
+  });
+
+  it("rejects oversized task cursors before decoding", async () => {
+    const result = await runTaskHandler("tasks.list", { cursor: "a".repeat(1_025) });
+
+    expect(result.calls[0]?.[0]).toBe(false);
+    expect(result.calls[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  it("rejects a task cursor reused with different filters", async () => {
+    createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Running task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Second running task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+
+    const page1 = await runTaskHandler("tasks.list", { limit: 1 });
+    const page2 = await runTaskHandler("tasks.list", {
+      limit: 1,
+      status: "running",
+      cursor: page1.payload?.nextCursor,
+    });
+
+    expect(page2.calls[0]?.[0]).toBe(false);
+    expect(page2.calls[0]?.[2]).toMatchObject({
+      details: { code: "TASKS_LIST_CURSOR_STALE" },
+    });
   });
 
   it("uses task id as the stable activity-order tie break", async () => {
@@ -305,7 +397,7 @@ describe("tasks gateway handlers", () => {
       const { payload } = await runTaskHandler("tasks.list", { limit: 2 });
 
       expect(payload?.tasks).toHaveLength(2);
-      expect(payload?.nextCursor).toBe("2");
+      expect(payload?.nextCursor).toEqual(expect.any(String));
       expect(cloneSpy).toHaveBeenCalledTimes(2);
     } finally {
       cloneSpy.mockRestore();

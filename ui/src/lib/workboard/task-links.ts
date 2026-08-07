@@ -14,29 +14,48 @@ import { getWorkboardRuntime, type WorkboardHost } from "./runtime.ts";
 import type { WorkboardCard, WorkboardTaskLinkState, WorkboardTaskSummary } from "./types.ts";
 
 const WORKBOARD_TASKS_LIST_LIMIT = 500;
+const WORKBOARD_TASKS_LIST_MAX_ATTEMPTS = 3;
 const WORKBOARD_TASK_POLL_BATCH_SIZE = 32;
 const WORKBOARD_TASK_DISCOVERY_BATCH_SIZE = 4;
 export const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
 
+function isStaleTasksListCursorError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    isRecord(error.details) &&
+    error.details.code === "TASKS_LIST_CURSOR_STALE"
+  );
+}
+
 export async function listWorkboardTasks(
   client: GatewayBrowserClient,
 ): Promise<WorkboardTaskSummary[]> {
-  const tasks: WorkboardTaskSummary[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | null = null;
-  while (true) {
-    const payload = await client.request("tasks.list", {
-      limit: WORKBOARD_TASKS_LIST_LIMIT,
-      ...(cursor ? { cursor } : {}),
-    });
-    const page = normalizeTasksPage(payload);
-    tasks.push(...page.tasks);
-    if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
-      return tasks;
+  for (let attempt = 0; attempt < WORKBOARD_TASKS_LIST_MAX_ATTEMPTS; attempt++) {
+    const tasks: WorkboardTaskSummary[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    try {
+      while (true) {
+        const payload = await client.request("tasks.list", {
+          limit: WORKBOARD_TASKS_LIST_LIMIT,
+          ...(cursor ? { cursor } : {}),
+        });
+        const page = normalizeTasksPage(payload);
+        tasks.push(...page.tasks);
+        if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
+          return tasks;
+        }
+        seenCursors.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+    } catch (error) {
+      if (!isStaleTasksListCursorError(error) || attempt + 1 >= WORKBOARD_TASKS_LIST_MAX_ATTEMPTS) {
+        throw error;
+      }
     }
-    seenCursors.add(page.nextCursor);
-    cursor = page.nextCursor;
   }
+  return [];
 }
 
 export function taskUpdatedAtValue(task: WorkboardTaskSummary): number {
@@ -256,14 +275,27 @@ export async function getWorkboardTaskPollBatch(
       }
     }),
     ...discoveryQueries.map(async (query) => {
-      const payload = await client.request("tasks.list", {
-        ...query,
-        limit: WORKBOARD_TASKS_LIST_LIMIT,
-      });
+      let effectiveQuery = query;
+      let payload: unknown;
+      try {
+        payload = await client.request("tasks.list", {
+          ...effectiveQuery,
+          limit: WORKBOARD_TASKS_LIST_LIMIT,
+        });
+      } catch (error) {
+        if (!query.cursor || !isStaleTasksListCursorError(error)) {
+          throw error;
+        }
+        effectiveQuery = query.sessionKey ? { sessionKey: query.sessionKey } : {};
+        payload = await client.request("tasks.list", {
+          ...effectiveQuery,
+          limit: WORKBOARD_TASKS_LIST_LIMIT,
+        });
+      }
       const page = normalizeTasksPage(payload);
       return {
         tasks: page.tasks,
-        ...(query.sessionKey ? {} : { nextUnfilteredCursor: page.nextCursor ?? null }),
+        ...(effectiveQuery.sessionKey ? {} : { nextUnfilteredCursor: page.nextCursor ?? null }),
       };
     }),
   ]);

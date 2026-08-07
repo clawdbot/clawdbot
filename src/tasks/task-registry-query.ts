@@ -1,4 +1,6 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isActiveTaskStatus, ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
@@ -72,7 +74,7 @@ export function listTaskRecordPage(params: {
   statuses?: readonly TaskStatus[];
   agentId?: string;
   sessionKey?: string;
-}): { tasks: TaskRecord[]; hasMore: boolean } {
+}): { tasks: TaskRecord[]; hasMore: boolean; revision: string } {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
@@ -97,6 +99,7 @@ export function listTaskRecordPage(params: {
   return {
     tasks: selected.map((task) => cloneTaskRecord(task)),
     hasMore: params.offset + selected.length < matching.length,
+    revision: `sha256:${sha256Base64Url(stableStringify(matching.map((task) => task.taskId)))}`,
   };
 }
 

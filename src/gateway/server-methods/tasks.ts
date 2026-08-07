@@ -1,8 +1,10 @@
 // Task gateway methods expose detached task list/get/cancel operations with
 // bounded public summaries over the runtime task registry.
+import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
   type TaskSummary,
   type TasksListParams,
@@ -17,6 +19,7 @@ import {
   retrySubagentCompletionDelivery,
 } from "../../agents/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
+import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
@@ -26,6 +29,7 @@ import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
+const MAX_TASKS_LIST_CURSOR_LENGTH = 1024;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -46,17 +50,65 @@ function normalizeTaskStatusFilter(status: TasksListParams["status"]): Set<TaskS
   return new Set(statuses.flatMap((value) => LEDGER_STATUS_TO_TASK_STATUSES[value] ?? []));
 }
 
-// Cursor strings are offsets, not opaque tokens; reject malformed values so a
-// client cannot silently restart pagination at the first page.
-function parseCursor(cursor: string | undefined): number | null {
+type TasksListCursor = {
+  v: 1;
+  offset: number;
+  revision: string;
+  query: string;
+};
+
+function encodeCursor(cursor: TasksListCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function parseCursor(cursor: string | undefined): TasksListCursor | null | undefined {
   if (!cursor) {
-    return 0;
+    return undefined;
   }
-  if (!/^\d+$/.test(cursor.trim())) {
+  const normalized = cursor.trim();
+  if (
+    !normalized ||
+    normalized.length > MAX_TASKS_LIST_CURSOR_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/.test(normalized)
+  ) {
     return null;
   }
-  const parsed = Number(cursor);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  try {
+    const decoded = JSON.parse(Buffer.from(normalized, "base64url").toString("utf8")) as unknown;
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+      return null;
+    }
+    const candidate = decoded as Partial<TasksListCursor>;
+    if (
+      candidate.v !== 1 ||
+      !Number.isSafeInteger(candidate.offset) ||
+      (candidate.offset ?? -1) < 0 ||
+      typeof candidate.revision !== "string" ||
+      !candidate.revision ||
+      typeof candidate.query !== "string" ||
+      !candidate.query
+    ) {
+      return null;
+    }
+    const parsed = candidate as TasksListCursor;
+    return encodeCursor(parsed) === normalized ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveQueryFingerprint(params: {
+  statuses?: readonly TaskStatus[];
+  agentId?: string;
+  sessionKey?: string;
+}): string {
+  return `sha256:${sha256Base64Url(
+    stableStringify({
+      statuses: params.statuses?.toSorted() ?? [],
+      agentId: normalizeOptionalString(params.agentId) ?? null,
+      sessionKey: normalizeOptionalString(params.sessionKey) ?? null,
+    }),
+  )}`;
 }
 
 // Control UI task methods expose the stable gateway protocol shape; helpers
@@ -90,20 +142,46 @@ export const tasksHandlers: GatewayRequestHandlers = {
         sessionKey: requestedSessionKey,
       });
     }
-    // The ledger pages by last activity so an old long-running task that just
-    // finished still surfaces first. Selection stays inside the registry so
-    // only the bounded wire page pays for defensive record cloning.
-    const page = listTaskRecordPage({
-      offset: cursor,
-      limit,
-      statuses: statusFilter ? [...statusFilter] : undefined,
+    const statuses = statusFilter ? [...statusFilter] : undefined;
+    const queryFingerprint = resolveQueryFingerprint({
+      statuses,
       agentId: params.agentId,
       sessionKey,
     });
-    const nextOffset = cursor + page.tasks.length;
+    // The ledger pages by last activity so an old long-running task that just
+    // finished still surfaces first. Selection stays inside the registry so
+    // only the bounded wire page pays for defensive record cloning.
+    const offset = cursor?.offset ?? 0;
+    const page = listTaskRecordPage({
+      offset,
+      limit,
+      statuses,
+      agentId: params.agentId,
+      sessionKey,
+    });
+    if (cursor && (cursor.revision !== page.revision || cursor.query !== queryFingerprint)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "stale tasks.list cursor", {
+          details: { code: GatewayErrorDetailCodes.TASKS_LIST_CURSOR_STALE },
+        }),
+      );
+      return;
+    }
+    const nextOffset = offset + page.tasks.length;
     respond(true, {
       tasks: page.tasks.map((task) => mapTaskSummary(task)),
-      ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
+      ...(page.hasMore
+        ? {
+            nextCursor: encodeCursor({
+              v: 1,
+              offset: nextOffset,
+              revision: page.revision,
+              query: queryFingerprint,
+            }),
+          }
+        : {}),
     });
   },
   "tasks.get": ({ params, respond }) => {

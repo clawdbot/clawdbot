@@ -18,6 +18,7 @@ export const TransportProtocolSchemas = {
   ErrorShape: frames.ErrorShapeSchema,
   MissingScopeErrorDetails: errorCodes.MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: errorCodes.McpAppViewExpiredErrorDetailsSchema,
+  TasksListCursorStaleErrorDetails: errorCodes.TasksListCursorStaleErrorDetailsSchema,
   UnknownAgentIdErrorDetails: errorCodes.UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetails: errorCodes.WizardNotFoundErrorDetailsSchema,
   GatewayErrorDetails: errorCodes.GatewayErrorDetailsSchema,

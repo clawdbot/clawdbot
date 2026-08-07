@@ -71,13 +71,13 @@ export const TasksListParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-  cursor: Type.Optional(Type.String()),
+  cursor: Type.Optional(Type.String({ maxLength: 1024 })),
 });
 
 /** Task list page response. */
 export const TasksListResultSchema = closedObject({
   tasks: Type.Array(TaskSummarySchema),
-  nextCursor: Type.Optional(Type.String()),
+  nextCursor: Type.Optional(Type.String({ maxLength: 1024 })),
 });
 
 /** Lookup request for one task id. */

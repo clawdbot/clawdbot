@@ -21,6 +21,7 @@ export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  TasksListCursorStaleErrorDetails,
   WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";

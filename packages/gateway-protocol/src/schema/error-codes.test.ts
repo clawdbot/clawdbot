@@ -10,6 +10,7 @@ import {
   missingScopeErrorShape,
   readMissingScopeError,
   readMissingScopeErrorDetails,
+  TasksListCursorStaleErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
 } from "./error-codes.js";
@@ -35,6 +36,15 @@ describe("gateway error details", () => {
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(isMcpAppViewExpiredError({ details })).toBe(true);
     expect(isMcpAppViewExpiredError(new Error("upstream token expired"))).toBe(false);
+  });
+
+  it("validates stale task cursor details", () => {
+    const details = { code: GatewayErrorDetailCodes.TASKS_LIST_CURSOR_STALE };
+    expect(Value.Check(TasksListCursorStaleErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(TasksListCursorStaleErrorDetailsSchema, { ...details, offset: 2 })).toBe(
+      false,
+    );
   });
 
   it("validates unknown-agent details", () => {

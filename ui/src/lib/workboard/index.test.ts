@@ -28,6 +28,7 @@ import {
   type WorkboardTaskSummary,
 } from "./index.ts";
 import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
+import { getWorkboardTaskPollBatch, listWorkboardTasks } from "./task-links.ts";
 import {
   createDeferred,
   createGatewaySession,
@@ -2142,6 +2143,110 @@ describe("workboard controller", () => {
       cursor: "page-2",
     });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: "task-1" });
+  });
+
+  it("restarts paginated task loading after a stale cursor", async () => {
+    const linked = makeCard({
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+    });
+    let taskListCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return listResult([linked], ["todo", "done"]);
+      }
+      if (method === "tasks.list") {
+        taskListCalls += 1;
+        if (taskListCalls === 1) {
+          return {
+            tasks: [{ ...sampleTask, id: "partial-task", taskId: "partial-task" }],
+            nextCursor: "stale-page",
+          };
+        }
+        if (taskListCalls === 2) {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "stale tasks.list cursor",
+            details: { code: "TASKS_LIST_CURSOR_STALE" },
+          });
+        }
+        return { tasks: [sampleTask] };
+      }
+      return {};
+    });
+
+    await loadBoard(client);
+
+    expect(taskListCalls).toBe(3);
+    expect(client.request).toHaveBeenNthCalledWith(2, "tasks.list", { limit: 500 });
+    expect(client.request).toHaveBeenNthCalledWith(3, "tasks.list", {
+      limit: 500,
+      cursor: "stale-page",
+    });
+    expect(client.request).toHaveBeenNthCalledWith(4, "tasks.list", { limit: 500 });
+    expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: "task-1" });
+  });
+
+  it("restarts a saved discovery cursor from the first page when stale", async () => {
+    const staleError = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "stale tasks.list cursor",
+      details: { code: "TASKS_LIST_CURSOR_STALE" },
+    });
+    const client = createClient((method, params) => {
+      if (method !== "tasks.list") {
+        return {};
+      }
+      if ((params as { cursor?: string }).cursor) {
+        throw staleError;
+      }
+      return { tasks: [sampleTask], nextCursor: "fresh-page" };
+    });
+
+    const result = await getWorkboardTaskPollBatch(client, [], [{ cursor: "stale-page" }]);
+
+    expect(result).toMatchObject({
+      tasks: [sampleTask],
+      nextUnfilteredCursor: "fresh-page",
+      error: null,
+    });
+    expect(requestCalls(client, "tasks.list")).toEqual([
+      ["tasks.list", { cursor: "stale-page", limit: 500 }],
+      ["tasks.list", { limit: 500 }],
+    ]);
+  });
+
+  it("fails after bounded stale task pagination attempts", async () => {
+    let taskListCalls = 0;
+    const staleError = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "stale tasks.list cursor",
+      details: { code: "TASKS_LIST_CURSOR_STALE" },
+    });
+    const client = createClient((method) => {
+      if (method !== "tasks.list") {
+        return {};
+      }
+      taskListCalls += 1;
+      if (taskListCalls % 2 === 1) {
+        return {
+          tasks: [{ ...sampleTask, id: `partial-${taskListCalls}` }],
+          nextCursor: `stale-${taskListCalls}`,
+        };
+      }
+      throw staleError;
+    });
+
+    await expect(listWorkboardTasks(client)).rejects.toBe(staleError);
+    expect(taskListCalls).toBe(6);
+    expect(requestCalls(client, "tasks.list")).toEqual([
+      ["tasks.list", { limit: 500 }],
+      ["tasks.list", { limit: 500, cursor: "stale-1" }],
+      ["tasks.list", { limit: 500 }],
+      ["tasks.list", { limit: 500, cursor: "stale-3" }],
+      ["tasks.list", { limit: 500 }],
+      ["tasks.list", { limit: 500, cursor: "stale-5" }],
+    ]);
   });
 
   it("summarizes parent dependency readiness from loaded cards", () => {

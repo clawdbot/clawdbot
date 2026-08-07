@@ -17,6 +17,7 @@ export {
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
   type MissingScopeErrorDetails,
+  type TasksListCursorStaleErrorDetails,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
   isMcpAppViewExpiredError,
@@ -35,6 +36,10 @@ export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
 });
 
+export const TasksListCursorStaleErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.TASKS_LIST_CURSOR_STALE),
+});
+
 export const UnknownAgentIdErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.UNKNOWN_AGENT_ID),
   agentId: NonEmptyString,
@@ -48,6 +53,7 @@ export const WizardNotFoundErrorDetailsSchema = closedObject({
 export const GatewayErrorDetailsSchema = Type.Union([
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
+  TasksListCursorStaleErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
 ]);

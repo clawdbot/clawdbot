@@ -1542,6 +1542,20 @@ public struct McpAppViewExpiredErrorDetails: Codable, Sendable {
     }
 }
 
+public struct TasksListCursorStaleErrorDetails: Codable, Sendable {
+    public let code: String
+
+    public init(
+        code: String)
+    {
+        self.code = code
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+    }
+}
+
 public struct UnknownAgentIdErrorDetails: Codable, Sendable {
     public let code: String
     public let agentid: String
@@ -18116,6 +18130,7 @@ public enum BoardCommand: Codable, Sendable {
 public enum GatewayErrorDetails: Codable, Sendable {
     case missingScope(MissingScopeErrorDetails)
     case mcpAppViewExpired(McpAppViewExpiredErrorDetails)
+    case tasksListCursorStale(TasksListCursorStaleErrorDetails)
     case unknownAgentId(UnknownAgentIdErrorDetails)
     case wizardNotFound(WizardNotFoundErrorDetails)
 
@@ -18133,6 +18148,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): value.code
         case .mcpAppViewExpired(let value): value.code
+        case .tasksListCursorStale(let value): value.code
         case .unknownAgentId(let value): value.code
         case .wizardNotFound(let value): value.code
         }
@@ -18158,6 +18174,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch discriminator {
         case "MISSING_SCOPE": self = try .missingScope(MissingScopeErrorDetails(from: decoder))
         case "MCP_APP_VIEW_EXPIRED": self = try .mcpAppViewExpired(McpAppViewExpiredErrorDetails(from: decoder))
+        case "TASKS_LIST_CURSOR_STALE": self = try .tasksListCursorStale(TasksListCursorStaleErrorDetails(from: decoder))
         case "UNKNOWN_AGENT_ID": self = try .unknownAgentId(UnknownAgentIdErrorDetails(from: decoder))
         case "WIZARD_NOT_FOUND": self = try .wizardNotFound(WizardNotFoundErrorDetails(from: decoder))
         default:
@@ -18173,6 +18190,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): try value.encode(to: encoder)
         case .mcpAppViewExpired(let value): try value.encode(to: encoder)
+        case .tasksListCursorStale(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)
         }
