@@ -256,12 +256,9 @@ export function resolveCronPayloadOutcome(params: {
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
-  // A silent reply (NO_REPLY) is not a recovery signal — the agent chose to
-  // emit nothing, which does not prove an earlier error was overcome. Treat
-  // it as absent so a preceding error payload stays fatal. Use the canonical
-  // payload-text classifier (not the token-only one) so JSON/envelope and
-  // reasoning-wrapped silent replies also stay non-recovery, matching the
-  // cron finalization classifier for the same terminal field. (#116731)
+  // A silent reply is not a recovery signal — the agent chose to emit nothing,
+  // so a preceding error stays fatal. Use the canonical payload-text classifier
+  // (not token-only) to match the cron finalization classifier for this field.
   const hasRecoveringFinalAssistantText =
     normalizedFinalAssistantVisibleText !== undefined &&
     !isSilentReplyPayloadText(normalizedFinalAssistantVisibleText, SILENT_REPLY_TOKEN);
