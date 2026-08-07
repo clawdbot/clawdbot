@@ -32,11 +32,19 @@ class UsageStatusRuntimeTest {
     }
 
     runtime.refreshUsage()
-    waitUntil { runtime.usageSummary.value.providers.isNotEmpty() }
+    waitUntil {
+      runtime.usageSummary.value.providers
+        .isNotEmpty()
+    }
 
     assertEquals(2, calls.get())
     assertFalse(runtime.usageSummary.value.refreshing)
-    assertEquals("Claude", runtime.usageSummary.value.providers.single().displayName)
+    assertEquals(
+      "Claude",
+      runtime.usageSummary.value.providers
+        .single()
+        .displayName,
+    )
   }
 
   @Test
@@ -56,7 +64,10 @@ class UsageStatusRuntimeTest {
 
     assertEquals(4, calls.get())
     assertTrue(runtime.usageSummary.value.refreshing)
-    assertTrue(runtime.usageSummary.value.providers.isEmpty())
+    assertTrue(
+      runtime.usageSummary.value.providers
+        .isEmpty(),
+    )
   }
 
   @Test
