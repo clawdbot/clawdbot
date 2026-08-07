@@ -266,6 +266,33 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     );
   });
 
+  it("does not copy host-owned identity metadata into provider payloads", async () => {
+    const message = currentUserMsg("Provider payload identity sentinel", TS_TURN1) as AgentMsg & {
+      attribution?: unknown;
+      passportId?: string;
+      principalId?: string;
+    };
+    message.attribution = {
+      runId: "private-run-sentinel",
+      sessionKey: "private-session-key-sentinel",
+    };
+    message.passportId = "private-passport-sentinel";
+    message.principalId = "private-principal-sentinel";
+
+    const payloads = await Promise.all([
+      captureOpenAICompletionsPayload([message]),
+      captureOpenAIResponsesPayload([message]),
+    ]);
+
+    for (const payload of payloads) {
+      const wireBytes = JSON.stringify(payload);
+      expect(wireBytes).not.toContain("private-run-sentinel");
+      expect(wireBytes).not.toContain("private-session-key-sentinel");
+      expect(wireBytes).not.toContain("private-passport-sentinel");
+      expect(wireBytes).not.toContain("private-principal-sentinel");
+    }
+  });
+
   it("stamp derives from message timestamp, not wall-clock — repeated calls are byte-stable", () => {
     // Same message object (fixed timestamp) → identical serialization regardless
     // of when normalize is called. Guards against any "now"-based drift.

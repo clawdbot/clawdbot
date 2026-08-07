@@ -1,7 +1,9 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
+import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
 import { isGatewayAdmin } from "../session-sharing.js";
+import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
 import type { SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readSessionsMutationVersion } from "./session-change-event.js";
@@ -9,7 +11,9 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 type SessionListFence = {
   agentRunIndexVersion: number;
+  sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
+  titleProjectionUnavailableVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
 type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
@@ -25,14 +29,18 @@ const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListStat
 function readSessionListFence(context: GatewayRequestContext): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
+    sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
+    titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
   };
 }
 
 function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
   return (
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
-    value.sessionsMutationVersion === fence.sessionsMutationVersion
+    value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
+    value.sessionsMutationVersion === fence.sessionsMutationVersion &&
+    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion
   );
 }
 
@@ -108,8 +116,8 @@ export async function respondWithCachedSessionList(params: {
 }): Promise<void> {
   const workKey = sessionListWorkKey(params.request, params.client);
   const state = sessionListState(params.context, params.config);
-  // Every input that can change a projected row must fence reuse. Store mutations and
-  // live-run transitions have separate owners, so their monotonic counters stay separate.
+  // Every input that can change a projected row must fence reuse. Session identity,
+  // Gateway projection, and live-run mutations have separate monotonic owners.
   const fence = readSessionListFence(params.context);
   // Activity windows and child retention expire without mutations; hidden paginated rows
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.

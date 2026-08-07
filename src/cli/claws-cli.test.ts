@@ -499,7 +499,6 @@ describe("claws cli", () => {
       JSON.stringify({
         schemaVersion: 1,
         agent: { id: "demo-agent" },
-        metadata: { "openclaw.config": "profiles/openclaw.yml" },
         mcpServers: {
           docs: {
             command: "node",

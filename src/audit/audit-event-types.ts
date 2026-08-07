@@ -57,6 +57,8 @@ export type AuditOutboundMessageSuppressedReasonCode =
 type AuditEventInputBase = {
   /** Stable trusted-source identity used only for local replay deduplication. */
   sourceId: string;
+  /** Shipped generation-less identity adopted by the first versioned replay. */
+  legacySourceId?: string;
   sourceSequence: number;
   occurredAt: number;
 };

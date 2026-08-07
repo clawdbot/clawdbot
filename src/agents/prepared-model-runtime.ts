@@ -62,6 +62,28 @@ let refreshRequestEpoch = 0;
 let pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
 type AuthMutationEvent = { agentDir?: string; affectsInheritedStores: boolean };
 const pendingAuthMutations: AuthMutationEvent[] = [];
+type PreparedModelRuntimePublicationEvent =
+  | { phase: "invalidated" | "published" }
+  | { phase: "failed"; error: Error };
+const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
+
+/** Observes committed prepared model/auth generations without starting discovery. */
+export function registerPreparedModelRuntimePublicationListener(
+  listener: (event: PreparedModelRuntimePublicationEvent) => void,
+): () => void {
+  publicationListeners.add(listener);
+  return () => publicationListeners.delete(listener);
+}
+
+function notifyPreparedModelRuntimePublication(event: PreparedModelRuntimePublicationEvent): void {
+  for (const listener of publicationListeners) {
+    try {
+      listener(event);
+    } catch (error) {
+      log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
+    }
+  }
+}
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
@@ -469,6 +491,10 @@ export function markPreparedModelRuntimeSnapshotsStale(
     owner.needsRefresh = true;
     owner.refreshError = staleError;
   }
+  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+  if (!pendingModelRuntimeReplacement) {
+    notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
+  }
   return pendingModelRuntimeReplacement?.gateId;
 }
 
@@ -482,7 +508,9 @@ export function rejectPendingPreparedModelRuntimeReplacement(
     return;
   }
   pendingModelRuntimeReplacement = undefined;
-  replacement.reject(toError(error));
+  const replacementError = toError(error);
+  replacement.reject(replacementError);
+  notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
 
 /** Rebuilds active owners after config/plugin runtime publication. */
@@ -590,6 +618,9 @@ export function refreshPreparedModelRuntimeSnapshots(
       ) {
         pendingModelRuntimeReplacement = undefined;
         replacement.resolve();
+        // Publication listeners may synchronously read the committed owner. Clear the lifecycle
+        // gate before announcing availability so they cannot observe a false missing generation.
+        notifyPreparedModelRuntimePublication({ phase: "published" });
       }
     },
     (error: unknown) => {
@@ -611,6 +642,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       ) {
         pendingModelRuntimeReplacement = undefined;
         replacement.reject(refreshError);
+        notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
       }
       throw refreshError;
     },
@@ -681,12 +713,18 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     // mutation would immediately stale that initial generation even though no prior owner existed.
     return;
   }
+  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   pendingAuthMutations.push(normalizedEvent);
-  void enqueuePreparedModelRuntimePublication(drainPendingAuthMutations).catch((error: unknown) => {
+  void enqueuePreparedModelRuntimePublication(async () => {
+    await drainPendingAuthMutations();
+    notifyPreparedModelRuntimePublication({ phase: "published" });
+  }).catch((error: unknown) => {
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
       return;
     }
-    log.warn(`auth-triggered model runtime refresh failed: ${String(error)}`);
+    const refreshError = toError(error);
+    notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
+    log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
   });
 }
 
@@ -703,6 +741,7 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   refreshTail = Promise.resolve();
   refreshRequestEpoch = 0;
   pendingAuthMutations.length = 0;
+  publicationListeners.clear();
   modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 }
 

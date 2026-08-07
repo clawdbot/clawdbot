@@ -468,6 +468,213 @@ describe("SQLite lifecycle cleanup races", () => {
     expect(progressedDuringMaterialization).toBe(true);
   });
 
+  it("releases the store writer while a historical generation is archived", async () => {
+    const deletedKey = "agent:main:historical-race-deleted";
+    const currentSessionId = "historical-race-current";
+    const historicalSessionId = "historical-race-unplanned";
+    const writerKey = "agent:main:historical-race-writer";
+    await replaceSessionEntry(
+      { sessionKey: deletedKey, storePath },
+      { sessionId: currentSessionId, updatedAt: Date.now() },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: deletedKey, sessionId: currentSessionId, storePath },
+      [{ type: "session", id: currentSessionId, content: "current transcript" }],
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: deletedKey, sessionId: historicalSessionId, storePath },
+      [{ type: "session", id: historicalSessionId, content: "historical transcript" }],
+    );
+    await replaceSessionEntry(
+      { sessionKey: writerKey, storePath },
+      { sessionId: "historical-race-writer-session", updatedAt: Date.now() },
+    );
+
+    let markMaterializationStarted: () => void = () => undefined;
+    const materializationStarted = new Promise<void>((resolve) => {
+      markMaterializationStarted = resolve;
+    });
+    let releaseMaterialization: () => void = () => undefined;
+    const materializationGate = new Promise<void>((resolve) => {
+      releaseMaterialization = resolve;
+    });
+    archiveMaterializationHook.beforeMaterialize = async () => {
+      markMaterializationStarted();
+      await materializationGate;
+    };
+
+    const deletion = deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: { canonicalKey: deletedKey, storeKeys: [deletedKey] },
+    });
+    await materializationStarted;
+    const writer = replaceSessionEntry(
+      { sessionKey: writerKey, storePath },
+      {
+        sessionId: "historical-race-writer-session",
+        label: "progressed",
+        updatedAt: Date.now(),
+      },
+    );
+    const progressedDuringMaterialization = await Promise.race([
+      writer.then(() => true),
+      new Promise<false>((resolve) => {
+        setTimeout(() => resolve(false), 500);
+      }),
+    ]);
+    releaseMaterialization();
+
+    await expect(deletion).resolves.toMatchObject({ deleted: true });
+    await expect(writer).resolves.toMatchObject({ label: "progressed" });
+    expect(progressedDuringMaterialization).toBe(true);
+  });
+
+  it("releases the store writer while lifecycle cleanup archives a transcript", async () => {
+    const now = Date.now();
+    const deletedKey = "agent:main:cleanup-race-archived";
+    const deletedSessionId = "cleanup-race-archived-session";
+    const writerKey = "agent:main:cleanup-race-cleanup-writer";
+    await replaceSessionEntry(
+      { sessionKey: deletedKey, storePath },
+      { sessionId: deletedSessionId, updatedAt: now - 600_000 },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: deletedKey, sessionId: deletedSessionId, storePath },
+      [
+        {
+          runId: "cleanup-race-marker-archived",
+          timestamp: new Date(now - 600_000).toISOString(),
+          type: "metadata",
+        },
+      ],
+    );
+    await replaceSessionEntry(
+      { sessionKey: writerKey, storePath },
+      { sessionId: "cleanup-race-cleanup-writer-session", updatedAt: now },
+    );
+
+    let markMaterializationStarted: () => void = () => undefined;
+    const materializationStarted = new Promise<void>((resolve) => {
+      markMaterializationStarted = resolve;
+    });
+    let releaseMaterialization: () => void = () => undefined;
+    const materializationGate = new Promise<void>((resolve) => {
+      releaseMaterialization = resolve;
+    });
+    archiveMaterializationHook.beforeMaterialize = async () => {
+      markMaterializationStarted();
+      await materializationGate;
+    };
+
+    const cleanup = cleanupSessionLifecycleArtifacts({
+      storePath,
+      sessionKeySegmentPrefix: "cleanup-race-",
+      transcriptContentMarker: "cleanup-race-marker",
+      orphanTranscriptMinAgeMs: 300_000,
+      nowMs: now,
+    });
+    await materializationStarted;
+    const writer = replaceSessionEntry(
+      { sessionKey: writerKey, storePath },
+      {
+        sessionId: "cleanup-race-cleanup-writer-session",
+        label: "progressed",
+        updatedAt: now + 1,
+      },
+    );
+    const progressedDuringMaterialization = await Promise.race([
+      writer.then(() => true),
+      new Promise<false>((resolve) => {
+        setTimeout(() => resolve(false), 500);
+      }),
+    ]);
+    releaseMaterialization();
+
+    await expect(cleanup).resolves.toEqual({
+      removedEntries: 1,
+      archivedTranscriptArtifacts: 1,
+    });
+    await expect(writer).resolves.toMatchObject({ label: "progressed" });
+    expect(progressedDuringMaterialization).toBe(true);
+  });
+
+  it("releases the store writer while a lifecycle mutation archives a transcript", async () => {
+    const removedKey = "agent:main:lifecycle-race-archived";
+    const removedEntry: SessionEntry = {
+      sessionId: "lifecycle-race-archived-session",
+      updatedAt: Date.now(),
+    };
+    const writerKey = "agent:main:lifecycle-race-writer";
+    await replaceSessionEntry({ sessionKey: removedKey, storePath }, removedEntry);
+    const persistedRemovedEntry = loadSessionEntry({ sessionKey: removedKey, storePath });
+    if (!persistedRemovedEntry) {
+      throw new Error("expected persisted lifecycle removal entry");
+    }
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: removedKey, sessionId: removedEntry.sessionId, storePath },
+      [
+        {
+          type: "session",
+          id: removedEntry.sessionId,
+          content: "lifecycle mutation archive",
+        },
+      ],
+    );
+    await replaceSessionEntry(
+      { sessionKey: writerKey, storePath },
+      { sessionId: "lifecycle-race-writer-session", updatedAt: Date.now() },
+    );
+
+    let markMaterializationStarted: () => void = () => undefined;
+    const materializationStarted = new Promise<void>((resolve) => {
+      markMaterializationStarted = resolve;
+    });
+    let releaseMaterialization: () => void = () => undefined;
+    const materializationGate = new Promise<void>((resolve) => {
+      releaseMaterialization = resolve;
+    });
+    archiveMaterializationHook.beforeMaterialize = async () => {
+      markMaterializationStarted();
+      await materializationGate;
+    };
+
+    const mutation = applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        {
+          sessionKey: removedKey,
+          expectedEntry: persistedRemovedEntry,
+          archiveRemovedTranscript: true,
+        },
+      ],
+      skipMaintenance: true,
+    });
+    await materializationStarted;
+    const writer = replaceSessionEntry(
+      { sessionKey: writerKey, storePath },
+      {
+        sessionId: "lifecycle-race-writer-session",
+        label: "progressed",
+        updatedAt: Date.now(),
+      },
+    );
+    const progressedDuringMaterialization = await Promise.race([
+      writer.then(() => true),
+      new Promise<false>((resolve) => {
+        setTimeout(() => resolve(false), 500);
+      }),
+    ]);
+    releaseMaterialization();
+
+    await expect(mutation).resolves.toMatchObject({
+      removedEntries: 1,
+      removedSessionKeys: [removedKey],
+    });
+    await expect(writer).resolves.toMatchObject({ label: "progressed" });
+    expect(progressedDuringMaterialization).toBe(true);
+  });
+
   it("retains unplanned historical windows behind a placeholder node", async () => {
     const sessionKey = "agent:main:unplanned-history";
     const currentEntry: SessionEntry = {

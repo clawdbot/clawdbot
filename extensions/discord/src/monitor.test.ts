@@ -1,6 +1,6 @@
 // Discord tests cover monitor plugin behavior.
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
 import {
@@ -949,12 +949,7 @@ function firstMockArg(mock: MockWithCalls, label: string) {
   return firstMockCall(mock, label)[0];
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;

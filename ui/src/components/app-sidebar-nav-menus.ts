@@ -234,6 +234,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
 type SidebarCustomizeMenuParams = {
   position: SidebarMenuPosition | null;
   sidebarEntries: readonly string[];
+  preferencesBrowserOnly: boolean;
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   workboardBoards: readonly SidebarWorkboardBoard[];
   workboardRenderers?: SidebarWorkboardRenderers;
@@ -284,6 +285,11 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
+        ${params.preferencesBrowserOnly
+          ? html`<div class="sidebar-customize-menu__provenance" role="note">
+              ${t("quickSettings.personal.browserOnly")}
+            </div>`
+          : nothing}
         ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
           const visible = params.sidebarEntries.includes(
             serializeSidebarEntry({ type: "route", route: routeId }),

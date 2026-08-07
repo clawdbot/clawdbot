@@ -1,27 +1,24 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
-  type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI sidebar customization mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(
   process.cwd(),
@@ -97,39 +94,24 @@ async function holdUiProof(page: Page, durationMs = 600) {
 }
 
 async function openSidebarTestPage() {
-  const context = await browser.newContext({
+  const context = await suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
   });
   const page = await context.newPage();
   await installMockGateway(page);
-  await page.goto(`${server.baseUrl}chat`);
+  await page.goto(`${suite.server.baseUrl}chat`);
   await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
   return { context, page };
 }
 
-describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
         ? { dir: path.join(uiProofArtifactDir, "video"), size: { height: 900, width: 1300 } }
@@ -180,7 +162,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(
@@ -434,7 +416,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await captureUiProof(page, "01-default-pinned.png");
 
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
@@ -608,111 +590,110 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
   });
 
   it("shows the Workboard route when the plugin is enabled in config", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "config.get": {
-          config: { plugins: { entries: { workboard: { enabled: true } } } },
-        },
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
       },
-    });
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": {
+              config: { plugins: { entries: { workboard: { enabled: true } } } },
+            },
+          },
+        });
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      await expect
-        .poll(() =>
-          trimmedTextContents(
-            sidebar.locator("wa-dropdown.sidebar-more-menu").getByRole("menuitem"),
-          ),
-        )
-        .toContain("Workboard");
-    } finally {
-      await context.close();
-    }
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        await sidebar.locator(".sidebar-nav__head-action").click();
+        await expect
+          .poll(() =>
+            trimmedTextContents(
+              sidebar.locator("wa-dropdown.sidebar-more-menu").getByRole("menuitem"),
+            ),
+          )
+          .toContain("Workboard");
+      },
+    );
   });
 
   it("opens the start screen from the sidebar action without carrying the active session", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page);
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page);
 
-    try {
-      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:work"));
-      await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"));
+        await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
 
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
-      await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
-      await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
-      await captureUiProof(page, "07-sidebar-start-screen.png");
-    } finally {
-      await context.close();
-    }
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+        await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
+        await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
+        await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
+        await captureUiProof(page, "07-sidebar-start-screen.png");
+      },
+    );
   });
 
   it("passes failed run outcomes through the desktop and drawer sidebar", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-          },
-          path: "",
-          sessions: [
-            {
-              endedAt: 100,
-              key: "main",
-              kind: "direct",
-              status: "failed",
-              updatedAt: 100,
-            },
-          ],
-          ts: 100,
-        },
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
       },
-    });
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: {
+                contextTokens: null,
+                model: "gpt-5.5",
+                modelProvider: "openai",
+              },
+              path: "",
+              sessions: [
+                {
+                  endedAt: 100,
+                  key: "main",
+                  kind: "direct",
+                  status: "failed",
+                  updatedAt: 100,
+                },
+              ],
+              ts: 100,
+            },
+          },
+        });
 
-    const outcome = (locator: Locator) =>
-      locator.evaluate((element) => (element as HTMLElement & { runOutcome: string }).runOutcome);
+        const outcome = (locator: Locator) =>
+          locator.evaluate(
+            (element) => (element as HTMLElement & { runOutcome: string }).runOutcome,
+          );
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const pet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
-      await expect.poll(() => pet.count()).toBe(1);
-      await expect.poll(() => outcome(pet)).toBe("error");
-      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const pet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
+        await expect.poll(() => pet.count()).toBe(1);
+        await expect.poll(() => outcome(pet)).toBe("error");
+        await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-      await page.setViewportSize({ height: 900, width: 900 });
-      const drawerButton = visibleDrawerButton(page);
-      await expect.poll(() => drawerButton.isVisible()).toBe(true);
-      await drawerButton.click();
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expect.poll(() => pet.count()).toBe(1);
-      await expect.poll(() => outcome(pet)).toBe("error");
-    } finally {
-      await context.close();
-    }
+        await page.setViewportSize({ height: 900, width: 900 });
+        const drawerButton = visibleDrawerButton(page);
+        await expect.poll(() => drawerButton.isVisible()).toBe(true);
+        await drawerButton.click();
+        await expect.poll(() => sidebar.isVisible()).toBe(true);
+        await expect.poll(() => pet.count()).toBe(1);
+        await expect.poll(() => outcome(pet)).toBe("error");
+      },
+    );
   });
 
   it("keeps the lobster on the footer ledge across desktop and drawer layouts", async () => {

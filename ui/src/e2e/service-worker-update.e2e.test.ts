@@ -115,27 +115,32 @@ async function fetchControlledAsset(
   assetPath: string,
 ): Promise<{ controllerState: string | null; sha256: string }> {
   return page.evaluate(async (relativePath) => {
-    const controller = navigator.serviceWorker.controller;
-    if (controller && controller.state !== "activated") {
-      await new Promise<void>((resolve) => {
-        controller.addEventListener(
-          "statechange",
-          () => {
-            if (controller.state === "activated") {
-              resolve();
-            }
-          },
-          { once: true },
-        );
-      });
-    }
     const response = await fetch(new URL(relativePath, window.location.href));
     if (!response.ok) {
       throw new Error(`Build asset request failed with HTTP ${response.status}`);
     }
     const digest = await crypto.subtle.digest("SHA-256", await response.arrayBuffer());
+    await new Promise<void>((resolve) => {
+      let observedController: ServiceWorker | null = null;
+      const observeController = () => {
+        const controller = navigator.serviceWorker.controller;
+        if (controller !== observedController) {
+          observedController?.removeEventListener("statechange", observeController);
+          observedController = controller;
+          observedController?.addEventListener("statechange", observeController);
+        }
+        if (controller?.state !== "activated") {
+          return;
+        }
+        observedController?.removeEventListener("statechange", observeController);
+        navigator.serviceWorker.removeEventListener("controllerchange", observeController);
+        resolve();
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", observeController);
+      observeController();
+    });
     return {
-      controllerState: controller?.state ?? null,
+      controllerState: navigator.serviceWorker.controller?.state ?? null,
       sha256: [...new Uint8Array(digest)]
         .map((byte) => byte.toString(16).padStart(2, "0"))
         .join(""),

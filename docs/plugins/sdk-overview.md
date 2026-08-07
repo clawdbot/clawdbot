@@ -623,6 +623,15 @@ For an end-to-end authoring guide, see
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
 | `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
 
+To participate in durable admitted turns, context engines must declare
+`currentTurnFence: "before-current-turn-entry-v1"` and
+`turnAdvancementIdempotency: "atomic-idempotent-v1"` under
+`info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic,
+idempotent write keyed by `advancementKey`. Without the full contract, OpenClaw
+uses the legacy context path for the whole logical turn and its retries, leaves
+the configured engine unchanged, and tries that engine again on the next
+logical turn.
+
 ### Deprecated memory embedding adapters
 
 | Method                                         | What it registers                              |

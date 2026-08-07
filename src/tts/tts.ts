@@ -35,7 +35,6 @@ export {
   listSpeechVoices,
   listTtsPersonas,
   resolveExplicitTtsOverrides,
-  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,

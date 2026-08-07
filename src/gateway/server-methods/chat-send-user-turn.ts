@@ -178,6 +178,7 @@ function buildChatSendMessageContext(params: {
           authorized: false,
           body: commandBody,
         },
+    ...(params.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: params.clientRunId,
     SessionCreation: resolveOperatorSessionCreation(params.client),
     ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,

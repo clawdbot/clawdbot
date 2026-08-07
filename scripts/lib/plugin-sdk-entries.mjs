@@ -84,6 +84,10 @@ export const packagedPrivatePluginSdkRuntimeEntrypoints =
     productionPluginSdkEntrypointSet.has(entry),
   );
 
+const ownerRestrictedPrivatePluginSdkRuntimeEntrypointSet = new Set([
+  "agent-harness-tool-authority-runtime",
+]);
+
 /** Private entrypoints reserved for local tests and QA builds. */
 const nonProductionPrivatePluginSdkEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
   (entry) => !productionPluginSdkEntrypointSet.has(entry),
@@ -131,7 +135,10 @@ export function buildPluginSdkPackageExports() {
           ],
         ];
       }
-      if (packagedPrivatePluginSdkRuntimeEntrypoints.includes(entry)) {
+      if (
+        packagedPrivatePluginSdkRuntimeEntrypoints.includes(entry) &&
+        !ownerRestrictedPrivatePluginSdkRuntimeEntrypointSet.has(entry)
+      ) {
         // Official plugins ship separately but execute against the host's private runtime.
         // Their declarations stay pack-excluded by listUnpackagedPrivatePluginSdkDistArtifacts.
         return [

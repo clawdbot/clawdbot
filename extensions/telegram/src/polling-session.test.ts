@@ -120,7 +120,7 @@ let claimNextTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.test
 let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.test-support.js").listTelegramSpooledUpdateClaims;
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.test-support.js").listTelegramSpooledUpdates;
 let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.test-support.js").recoverStaleTelegramSpooledUpdateClaims;
-let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
+let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.test-support.js").writeTelegramSpooledUpdate;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 type TelegramMessageProcessingResult =
   import("./bot-processing-outcome.js").TelegramMessageProcessingResult;
@@ -852,12 +852,12 @@ function startIsolatedIngressSession(params: {
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
     ({ TelegramPollingSession } = await import("./polling-session.js"));
-    ({ writeTelegramSpooledUpdate } = await import("./telegram-ingress-spool.js"));
     ({
       claimNextTelegramSpooledUpdate,
       listTelegramSpooledUpdateClaims,
       listTelegramSpooledUpdates,
       recoverStaleTelegramSpooledUpdateClaims,
+      writeTelegramSpooledUpdate,
     } = await import("./telegram-ingress-spool.test-support.js"));
     ({ createTelegramSpooledReplayDeferredParticipant } =
       await import("./bot-processing-outcome.js"));
@@ -1730,6 +1730,9 @@ describe("TelegramPollingSession", () => {
           update: { update_id: 2, message: { text: "during-drain" } },
           queued: 1,
         });
+        expect(worker.ackSpooledUpdate).not.toHaveBeenCalledWith("write-2", expect.anything());
+        releaseFirstClaim?.();
+        releaseFirstClaim = undefined;
         await waitForTelegramTestState(() =>
           expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("write-2", {
             ok: true,
@@ -1737,8 +1740,6 @@ describe("TelegramPollingSession", () => {
           }),
         );
         worker.emit({ type: "spooled", updateId: 2, queued: 1 });
-        releaseFirstClaim?.();
-        releaseFirstClaim = undefined;
 
         await waitForTelegramTestState(() =>
           expect(handleUpdate).toHaveBeenCalledWith({

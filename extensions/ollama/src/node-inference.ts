@@ -1,4 +1,4 @@
-import { jsonResult, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama node inference exposes local models to agents through paired node hosts.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -18,8 +18,22 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import {
+  DEFAULT_INFERENCE_TIMEOUT_MS,
+  DEFAULT_MAX_TOKENS,
+  DISCOVERY_TRANSPORT_TIMEOUT_MS,
+  MAX_INFERENCE_TIMEOUT_MS,
+  MAX_PROMPT_CHARS,
+  MAX_SYSTEM_PROMPT_CHARS,
+  MAX_TOKENS,
+  OLLAMA_CHAT_COMMAND,
+  OLLAMA_MODELS_COMMAND,
+  OLLAMA_NODE_INFERENCE_CAPABILITY,
+  OLLAMA_NODE_INFERENCE_COMMANDS,
+  OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS,
+  ollamaNodeInferenceToolDefinition,
+} from "./node-inference-contract.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   enrichOllamaCompletionModels,
@@ -31,18 +45,6 @@ import {
   throwIfOllamaRequestAborted,
 } from "./provider-models.js";
 
-const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
-const OLLAMA_MODELS_COMMAND = "ollama.models";
-const OLLAMA_CHAT_COMMAND = "ollama.chat";
-const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
-
-const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_TOKENS = 512;
-const DISCOVERY_TRANSPORT_TIMEOUT_MS = 90_000;
-const MAX_INFERENCE_TIMEOUT_MS = 10 * 60_000;
-const MAX_TOKENS = 8192;
-const MAX_PROMPT_CHARS = 128_000;
-const MAX_SYSTEM_PROMPT_CHARS = 32_000;
 const MAX_ERROR_BODY_BYTES = 500;
 
 type NodeModel = {
@@ -378,7 +380,7 @@ export function createOllamaNodeHostCommands(options?: {
 export function createOllamaNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
   return {
     commands: [...OLLAMA_NODE_INFERENCE_COMMANDS],
-    defaultPlatforms: ["macos", "linux", "windows"],
+    defaultPlatforms: [...OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS],
     handle: async (ctx) => await ctx.invokeNode(),
   };
 }
@@ -429,30 +431,6 @@ async function invokeNode(
   });
   return parseInvokePayload(raw);
 }
-
-const ollamaNodeInferenceToolDefinition = {
-  name: "node_inference",
-  label: "Node Inference",
-  description:
-    "Discover and run chat-capable Ollama models installed on paired desktop/server nodes. Use action=discover first, then action=run with a node and model from that result. Inference stays on the selected node.",
-  parameters: Type.Object(
-    {
-      action: stringEnum(["discover", "run"] as const),
-      node: Type.Optional(
-        Type.String({ description: "Connected node id or display name. Required when ambiguous." }),
-      ),
-      model: Type.Optional(
-        Type.String({ description: "Exact local model name returned by discover." }),
-      ),
-      prompt: Type.Optional(Type.String({ description: "Prompt for action=run." })),
-      system: Type.Optional(Type.String({ description: "Optional system prompt for action=run." })),
-      temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
-      maxTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TOKENS })),
-      timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_INFERENCE_TIMEOUT_MS })),
-    },
-    { additionalProperties: false },
-  ),
-} as const;
 
 export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentTool {
   return {

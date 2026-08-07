@@ -150,6 +150,15 @@ two-party event loops that do not go through the shared inbound reply runner.
       // pass level to an embedded run
     }
 
+    // Resolve a synchronous create target for a session catalog
+    const target = api.runtime.agent.resolveSessionCatalogCreateTarget({
+      config: api.runtime.config.current(),
+      requestedAgentId: agentId,
+      provider: "example",
+      modelIds: ["example-model"],
+      agentRuntime: "example-cli",
+    });
+
     // Get agent timeout
     const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 
@@ -175,6 +184,8 @@ two-party event loops that do not go through the shared inbound reply runner.
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
+
+    `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy seam for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
 
     **Session store helpers** are under `api.runtime.agent.session`:
 

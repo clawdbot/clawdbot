@@ -5,6 +5,7 @@ import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/se
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePath,
@@ -382,7 +383,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: preparedSessionState.sessionEntry?.authProfileOverrideSource,
+        authProfileIdSource: resolveSessionAuthProfileOverrideSource(
+          preparedSessionState.sessionEntry,
+        ),
       };
     }
     const shouldUseEphemeralSession = params.autoFallbackPrimaryProbe !== undefined;
@@ -413,7 +416,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       authProfileId: resolvedAuthProfileId,
       authProfileIdSource:
         resolvedAuthProfileId && authSessionEntry?.authProfileOverride === resolvedAuthProfileId
-          ? authSessionEntry.authProfileOverrideSource
+          ? resolveSessionAuthProfileOverrideSource(authSessionEntry)
           : undefined,
     };
   };

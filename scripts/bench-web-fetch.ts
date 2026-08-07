@@ -156,8 +156,11 @@ function parsePositiveInteger(flag: string, fallback: number, args: string[]): n
     return fallback;
   }
   const raw = args[index + 1];
+  if (!/^\d+$/u.test(raw ?? "")) {
+    throw new CliArgumentError(`${flag} must be a positive integer`);
+  }
   const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
     throw new CliArgumentError(`${flag} must be a positive integer`);
   }
   return value;
@@ -169,8 +172,11 @@ function parseNonNegativeInteger(flag: string, fallback: number, args: string[])
     return fallback;
   }
   const raw = args[index + 1];
+  if (!/^\d+$/u.test(raw ?? "")) {
+    throw new CliArgumentError(`${flag} must be a non-negative integer`);
+  }
   const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new CliArgumentError(`${flag} must be a non-negative integer`);
   }
   return value;

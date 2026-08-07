@@ -1,5 +1,5 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { generatePKCE } from "./openai-chatgpt-pkce.runtime.js";
+import { generatePKCE } from "openclaw/plugin-sdk/provider-oauth-runtime";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";

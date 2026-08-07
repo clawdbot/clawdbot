@@ -3,6 +3,7 @@
  * Covers provider plugin profiles, external CLI scoped discovery, persistence
  * rules, and external CLI bootstrap policy.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
@@ -46,12 +47,7 @@ function createUsableOAuthExpiry(): number {
   return Date.now() + 30 * 60 * 1000;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireProfile(store: AuthProfileStore, profileId: string): Record<string, unknown> {
   return requireRecord(store.profiles[profileId], profileId);

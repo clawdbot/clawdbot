@@ -1154,6 +1154,26 @@ export function buildGatewayCronService(params: {
         }),
       );
     },
+    updateWatcherState: async (job, patch) =>
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        try {
+          // Same identity guard as persistCompletion: a watcher whose job was
+          // edited/replaced must not write failure state onto the successor
+          // (which could push it into failure backoff or auto-disable).
+          return await cron.updateWithPrecondition(job.id, { state: patch }, (current) => {
+            if (
+              !current.enabled ||
+              current.schedule.kind !== "on-exit" ||
+              current.updatedAtMs !== job.updatedAtMs
+            ) {
+              throw new Error("cron on-exit job changed before watcher-state write");
+            }
+          });
+        } catch {
+          // Stale watcher identity is a no-op, not an error to surface.
+          return undefined;
+        }
+      }),
     logger: cronLogger,
   });
   const updateCron = cron.update.bind(cron);
