@@ -1021,7 +1021,7 @@ describe("dispatchAgentHook trust handling", () => {
     // target the accepted agent — the one the isolated run actually used —
     // not the freshly resolved default.
     const dispatch = resolveDispatchAgentHook();
-    let currentConfig = {
+    let currentConfig: OpenClawConfig = {
       agents: { entries: { main: { default: true }, work: { default: false } } },
       session: { scope: "global" },
     };
@@ -1054,7 +1054,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("keeps the global failure wake on the dispatch-time agent after a default-agent reload", async () => {
     const dispatch = resolveDispatchAgentHook();
-    let currentConfig = {
+    let currentConfig: OpenClawConfig = {
       agents: { entries: { main: { default: true }, work: { default: false } } },
       session: { scope: "global" },
     };
