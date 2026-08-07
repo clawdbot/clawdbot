@@ -1,5 +1,5 @@
 ---
-summary: "Meta setup (auth + muse-spark-1.1 model selection)"
+summary: "Meta setup, authentication, and Muse Spark model selection"
 title: "Meta"
 read_when:
   - You want to use Meta with OpenClaw
@@ -7,20 +7,20 @@ read_when:
 ---
 
 The **Meta API** uses the OpenAI-compatible **Responses API** (`POST /v1/responses`)
-for the `muse-spark-1.1` reasoning model. OpenClaw provides Meta as an official
-external plugin.
+for the Muse Spark reasoning models. OpenClaw provides Meta as an official external
+plugin.
 
-| Property          | Value                              |
-| ----------------- | ---------------------------------- |
-| Provider id       | `meta`                             |
-| Plugin            | `@openclaw/meta-provider`          |
-| Auth env var      | `MODEL_API_KEY`                    |
-| Onboarding flag   | `--auth-choice meta-api-key`       |
-| Direct CLI flag   | `--meta-api-key <key>`             |
-| API               | Responses API (`openai-responses`) |
-| Base URL          | `https://api.meta.ai/v1`           |
-| Default model     | `meta/muse-spark-1.1`              |
-| Default reasoning | `high` (`reasoning.effort`)        |
+| Property                   | Value                              |
+| -------------------------- | ---------------------------------- |
+| Provider id                | `meta`                             |
+| Plugin                     | `@openclaw/meta-provider`          |
+| Auth env var               | `MODEL_API_KEY`                    |
+| Onboarding flag            | `--auth-choice meta-api-key`       |
+| Direct CLI flag            | `--meta-api-key <key>`             |
+| API                        | Responses API (`openai-responses`) |
+| Base URL                   | `https://api.meta.ai/v1`           |
+| Default model              | `meta/muse-spark-1.1`              |
+| OpenClaw reasoning default | `high` (`reasoning.effort`)        |
 
 ## Getting started
 
@@ -56,7 +56,7 @@ export MODEL_API_KEY=<key>
     openclaw models list --provider meta
     ```
 
-    Lists the static `muse-spark-1.1` catalog entry. If `MODEL_API_KEY` is unresolved,
+    Lists the static Muse Spark catalog entries. If `MODEL_API_KEY` is unresolved,
     `openclaw models status --json` reports the missing credential under
     `auth.unusableProfiles`.
 
@@ -74,19 +74,49 @@ openclaw onboard --non-interactive --accept-risk \
 
 ## Built-in catalog
 
-| Model ref             | Name           | Input       | Reasoning | Context window | Max output | Input / cached input / output per 1M tokens |
-| --------------------- | -------------- | ----------- | --------- | -------------- | ---------- | ------------------------------------------- |
-| `meta/muse-spark-1.1` | Muse Spark 1.1 | text, image | yes       | 1,048,576      | 131,072    | $1.25 / $0.15 / $4.25                       |
+Prices and data-use terms come from Meta's
+[pricing and rate limits](https://dev.meta.ai/docs/pricing-rate-limits/)
+documentation.
+
+| Model ref                         | Name                       | OpenClaw input | Reasoning | Context window | Input / cached input / output per 1M tokens |
+| --------------------------------- | -------------------------- | -------------- | --------- | -------------- | ------------------------------------------- |
+| `meta/muse-spark-1.1`             | Muse Spark 1.1             | text, image    | yes       | 1M             | $1.25 / $0.15 / $4.25                       |
+| `meta/muse-spark-1.2`             | Muse Spark 1.2             | text, image    | yes       | 1M             | $1.25 / $0.15 / $4.25                       |
+| `meta/muse-spark-1.2-contributor` | Muse Spark 1.2 Contributor | text, image    | yes       | 1M             | $0.10 / $0.002 / $0.20                      |
+
+<Warning>
+Official Meta language:
+
+- Contributor tier: “Heavily discounted token pricing in exchange for permission to
+  use your prompts and completions to train future Meta models.”
+- Standard: “Not used to improve our products.”
+- Contributor: “Used to improve our products.”
+- Availability: “Available in select countries.”
+
+Sources: [pricing documentation](https://dev.meta.ai/docs/pricing-rate-limits/),
+[Muse Spark 1.2](https://developer.meta.com/ai/models/muse-spark/), and
+[Muse Code announcement](https://developer.meta.com/ai/resources/blog/build-with-muse-code/).
+</Warning>
 
 Capabilities:
 
-- Text and image input
+- Text and image input through OpenClaw
 - Tool calling and streaming
-- Reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh` (default: `high`)
+- Reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh` (OpenClaw default: `high`)
 - Stateless encrypted reasoning replay (`store: false`, `include: ["reasoning.encrypted_content"]`)
 
+The OpenClaw plugin currently sends text and image input. Meta's public
+[Muse Spark 1.2 page](https://developer.meta.com/ai/models/muse-spark/) does not
+currently enumerate the model's input modalities, so this table describes OpenClaw's
+implemented transport rather than an exhaustive upstream capability list.
+
+OpenClaw explicitly selects `high` when no thinking level is configured. This is an
+OpenClaw default, not Meta's omitted-parameter behavior: Meta's
+[reasoning documentation](https://dev.meta.ai/docs/features/reasoning/) says that when
+`reasoning.effort` is omitted, the model reasons at a model-determined level.
+
 <Warning>
-`muse-spark-1.1` does not accept `reasoning.effort: "none"`. OpenClaw maps
+Muse Spark does not accept `reasoning.effort: "none"`. OpenClaw maps
 `--thinking off` to `minimal` for this provider.
 </Warning>
 
@@ -121,7 +151,14 @@ export MODEL_API_KEY=<key>
 pnpm test:live -- extensions/meta/meta.live.test.ts
 ```
 
-Live tests use `muse-spark-1.1` against `POST /v1/responses`.
+The standard live tests exercise `muse-spark-1.1` and `muse-spark-1.2` against
+`POST /v1/responses`. Contributor testing is separately opt-in because of its data-use
+terms:
+
+```bash
+export OPENCLAW_LIVE_META_CONTRIBUTOR=1
+pnpm test:live -- extensions/meta/meta.live.test.ts
+```
 
 ## Related
 
@@ -130,7 +167,7 @@ Live tests use `muse-spark-1.1` against `POST /v1/responses`.
     Choosing providers, model refs, and failover behavior.
   </Card>
   <Card title="Thinking modes" href="/tools/thinking" icon="brain">
-    Reasoning effort levels for muse-spark-1.1.
+    Reasoning effort levels for Muse Spark.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Agent defaults and model configuration.

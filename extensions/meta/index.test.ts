@@ -54,25 +54,95 @@ describe("meta provider", () => {
     });
   });
 
-  it("advertises a high default thinking profile for muse-spark-1.1", () => {
+  it("builds the muse-spark-1.2 catalog entry over openai-responses", () => {
+    const providerConfig = buildMetaProvider();
+    expect(providerConfig.baseUrl).toBe("https://api.meta.ai/v1");
+    expect(providerConfig.api).toBe("openai-responses");
+    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.2");
+    if (!model) {
+      throw new Error("Expected muse-spark-1.2 model");
+    }
+    expect(model.contextWindow).toBe(1000000);
+    expect(model.maxTokens).toBe(131072);
+    expect(model.reasoning).toBe(true);
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual({
+      input: 1.25,
+      output: 4.25,
+      cacheRead: 0.15,
+      cacheWrite: 0,
+    });
+  });
+
+  it("builds the discounted muse-spark-1.2-contributor catalog entry", () => {
+    const providerConfig = buildMetaProvider();
+    const model = providerConfig.models.find((m) => m.id === "muse-spark-1.2-contributor");
+    if (!model) {
+      throw new Error("Expected muse-spark-1.2-contributor model");
+    }
+    expect(model.contextWindow).toBe(1000000);
+    expect(model.maxTokens).toBe(131072);
+    expect(model.reasoning).toBe(true);
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.cost).toEqual({
+      input: 0.1,
+      output: 0.2,
+      cacheRead: 0.002,
+      cacheWrite: 0,
+    });
+    expect(model.name).toBe("Muse Spark 1.2 Contributor");
+  });
+
+  it("advertises a high default thinking profile for every reasoning model", () => {
     const captured = capturePluginRegistration(plugin);
     const [provider] = captured.providers;
     if (!provider) {
       throw new Error("Expected Meta provider");
     }
     const resolveThinkingProfile = requireThinkingProfileResolver(provider);
-    const profile = resolveThinkingProfile({
-      provider: "meta",
-      modelId: "muse-spark-1.1",
-    } as never);
-    expect(profile?.defaultLevel).toBe("high");
-    expect(profile?.levels.map((level) => level.id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
+    const reasoningModels = buildMetaProvider().models.filter((model) => model.reasoning);
+    expect(reasoningModels.map((model) => model.id)).toEqual([
+      "muse-spark-1.1",
+      "muse-spark-1.2",
+      "muse-spark-1.2-contributor",
     ]);
+    for (const model of reasoningModels) {
+      const profile = resolveThinkingProfile({
+        provider: "meta",
+        modelId: model.id,
+        reasoning: model.reasoning,
+      });
+      expect(profile?.defaultLevel).toBe("high");
+      expect(profile?.levels.map((level) => level.id)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ]);
+      expect(
+        resolveThinkingProfile({
+          provider: "meta",
+          modelId: model.id,
+        })?.defaultLevel,
+      ).toBe("high");
+    }
+  });
+
+  it("respects an explicit non-reasoning catalog fact", () => {
+    const captured = capturePluginRegistration(plugin);
+    const [provider] = captured.providers;
+    if (!provider) {
+      throw new Error("Expected Meta provider");
+    }
+    const resolveThinkingProfile = requireThinkingProfileResolver(provider);
+    expect(
+      resolveThinkingProfile({
+        provider: "meta",
+        modelId: "muse-spark-1.2",
+        reasoning: false,
+      }),
+    ).toBeUndefined();
   });
 });

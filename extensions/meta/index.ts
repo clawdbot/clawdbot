@@ -31,6 +31,6 @@ export default defineSingleProviderPluginEntry({
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: wrapMetaProviderStream,
-    resolveThinkingProfile: ({ modelId }) => resolveMetaThinkingProfile(modelId),
+    resolveThinkingProfile: resolveMetaThinkingProfile,
   },
 });
