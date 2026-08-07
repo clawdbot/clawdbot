@@ -1,9 +1,12 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
+
+export { rejectConfigNonFiniteNumbers };
 
 export type PathSegment = string;
 
@@ -155,26 +158,6 @@ export function parseConfigSetPath(path: string): string[] {
   }
   validatePathSegments(parsedPath);
   return parsedPath;
-}
-
-export function rejectConfigNonFiniteNumbers(value: unknown): void {
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error(`Value must be a finite number, got ${String(value)}`);
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      rejectConfigNonFiniteNumbers(entry);
-    }
-    return;
-  }
-  if (isPlainRecord(value)) {
-    for (const entry of Object.values(value)) {
-      rejectConfigNonFiniteNumbers(entry);
-    }
-  }
 }
 
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {

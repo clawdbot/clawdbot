@@ -3,6 +3,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -24,7 +25,6 @@ import { formatCliCommand } from "./command-format.js";
 import {
   parseConfigSetPath,
   parseConfigSetValue,
-  rejectConfigNonFiniteNumbers,
   type PathSegment,
   toDotPath,
   validatePathSegments,
@@ -233,7 +233,6 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(mode ? { mode } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
-      ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
     };
   } else {
     const command = opts.providerCommand?.trim();
@@ -255,8 +254,6 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(opts.providerTrustedDir?.length
         ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
         : {}),
-      ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
-      ...(opts.providerAllowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
     };
   }
 

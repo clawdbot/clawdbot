@@ -40,6 +40,7 @@ import {
   hashConfigRaw,
   hasConfigMeta,
   parseConfigJson5,
+  rejectConfigNonFiniteNumbers,
   resolveConfigSnapshotHash,
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
@@ -255,6 +256,7 @@ export async function writeConfigFileFromContext(
     options.lastTouchedVersionOverride,
     snapshot.exists ? snapshot.parsed : null,
   );
+  rejectConfigNonFiniteNumbers(stampedOutputConfig);
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = resolveConfigSnapshotHash(snapshot);

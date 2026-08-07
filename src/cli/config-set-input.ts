@@ -5,9 +5,9 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
-import { rejectConfigNonFiniteNumbers } from "./config-cli-path.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -34,8 +34,6 @@ export type ConfigSetOptions = {
   providerEnv?: string[];
   providerPassEnv?: string[];
   providerTrustedDir?: string[];
-  providerAllowInsecurePath?: boolean;
-  providerAllowSymlinkCommand?: boolean;
   batchJson?: string;
   batchFile?: string;
 };
@@ -98,9 +96,7 @@ export function hasProviderBuilderOptions(opts: ConfigSetOptions): boolean {
     opts.providerJsonOnly ||
     opts.providerEnv?.length ||
     opts.providerPassEnv?.length ||
-    opts.providerTrustedDir?.length ||
-    opts.providerAllowInsecurePath ||
-    opts.providerAllowSymlinkCommand,
+    opts.providerTrustedDir?.length,
   );
 }
 
