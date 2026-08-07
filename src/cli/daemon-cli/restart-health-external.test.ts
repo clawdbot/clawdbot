@@ -147,6 +147,54 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("timeout");
   });
 
+  it("reports timeout instead of still-starting when the boot lifecycle recorded startup_failed", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const { readLatestGatewayBootOutcome } = await import("./restart-health.test-helpers.js");
+    readLatestGatewayBootOutcome.mockReturnValue("startup_failed");
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 1,
+      delayMs: 500,
+      previousOwnerPid: 4200,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(killSpy).toHaveBeenCalledWith(4200, 0);
+    expect(readLatestGatewayBootOutcome).toHaveBeenCalled();
+  });
+
+  it("keeps still-starting when the boot lifecycle has no recorded failure", async () => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    const { readLatestGatewayBootOutcome } = await import("./restart-health.test-helpers.js");
+    readLatestGatewayBootOutcome.mockReturnValue(null);
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      attempts: 1,
+      delayMs: 500,
+      previousOwnerPid: 4200,
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.waitOutcome).toBe("still-starting");
+  });
+
   it("keeps the healthy outcome for a reachable listener", async () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,

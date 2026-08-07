@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { readLatestGatewayBootOutcome } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 import {
@@ -37,7 +38,12 @@ function withWaitOutcome(
   if (
     previousOwnerPid !== undefined &&
     snapshot.portUsage.status === "free" &&
-    isProcessAlive(previousOwnerPid)
+    isProcessAlive(previousOwnerPid) &&
+    // The boot lifecycle also records terminal failures: a restart loop that
+    // already recorded startup_failed keeps the process alive (so the port
+    // stays free) but is NOT still starting — report it as a timeout so
+    // operators see the failed restart instead of a false success.
+    readLatestGatewayBootOutcome() !== "startup_failed"
   ) {
     return { ...snapshot, waitOutcome: "still-starting", elapsedMs };
   }

@@ -274,6 +274,39 @@ export function completeGatewayBootLifecycle(
   }
 }
 
+/**
+ * Reads the most recently recorded boot lifecycle outcome for the current
+ * state directory. Returns `null` when the newest boot row is still open
+ * (in progress), the outcome string otherwise, and `undefined` when the
+ * lifecycle table cannot be read (fail-open — callers keep their default
+ * behavior when lifecycle state is unavailable).
+ */
+export function readLatestGatewayBootOutcome(
+  env: NodeJS.ProcessEnv = process.env,
+): GatewayBootLifecycleOutcome | null | undefined {
+  try {
+    const { db } = openOpenClawStateDatabase({ env });
+    const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("gateway_boot_lifecycle")
+        .select("outcome")
+        .orderBy("started_at_ms", "desc")
+        .limit(1),
+    );
+    const outcome = row?.outcome;
+    return outcome === null || outcome === undefined
+      ? null
+      : (outcome as GatewayBootLifecycleOutcome);
+  } catch (err) {
+    gatewayLifecycleLog.warn(
+      `failed to read latest gateway boot outcome; fail-open: ${String(err)}`,
+    );
+    return undefined;
+  }
+}
+
 export function repairGatewayAgentMediaMigrationStartupFailures(params: {
   databasePaths: readonly string[];
   env?: NodeJS.ProcessEnv;
