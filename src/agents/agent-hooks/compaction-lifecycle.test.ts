@@ -14,12 +14,19 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/legacy-sqlite-marker.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import {
   clearCompactionProviders,
   registerCompactionProvider,
 } from "../../plugins/compaction-provider.js";
-import { loadCliSessionContextEngineMessages } from "../cli-runner/session-history.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { setCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "./compaction-safeguard.js";
 import { testing } from "./compaction-safeguard.test-support.js";
@@ -209,50 +216,62 @@ describe("compaction artifact lifecycle", () => {
     expect(stored).toContain("<modified-files>");
   });
 
-  it("rebuilds the summary body into the next run's first message", async () => {
-    const stored = await runHandler();
-
-    const store = fs.mkdtempSync(path.join(os.tmpdir(), "compaction-lifecycle-"));
-    tmpDirs.push(store);
+  it("rebuilds the summary body into the next run's context through the real writer", async () => {
+    // Nothing here is hand-written. The transcript is produced by the same
+    // SessionManager.appendCompaction the runtime calls
+    // (agent-session-compaction.ts), and the next run's messages come from the
+    // same buildSessionContext the runtime assigns to agent.state.messages.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "compaction-lifecycle-"));
+    tmpDirs.push(dir);
+    const storePath = path.join(dir, "sessions.json");
     const sessionId = "lifecycle-session";
-    const sessionFile = path.join(store, `${sessionId}.jsonl`);
-    fs.writeFileSync(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "message",
-          message: { role: "user", content: "before compaction", timestamp: 1 },
-        }),
-        JSON.stringify({
-          type: "compaction",
-          summary: stored,
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 400_000,
-          timestamp: 2,
-        }),
-        JSON.stringify({
-          type: "message",
-          message: { role: "user", content: "after compaction", timestamp: 3 },
-        }),
-      ].join("\n"),
-      "utf8",
+    const sessionKey = "agent:main:lifecycle";
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { cwd: dir, message: { role: "user", content: "before compaction" } },
     );
 
-    const config = { session: { store } } as unknown as OpenClawConfig;
-    const nextRunMessages = (await loadCliSessionContextEngineMessages({
-      sessionId,
-      sessionFile,
-      config,
-    })) as { role?: string; summary?: string }[];
+    const target = parseSqliteSessionFileMarker(marker);
+    if (!target) {
+      throw new Error("expected SQLite transcript marker fixture");
+    }
+    const sessionManager = SessionManager.open({ ...target, sessionKey }, dir);
+    const firstKeptEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "after compaction",
+      timestamp: 1_000,
+    });
 
-    const head = nextRunMessages[0];
-    expect(head?.role).toBe("compactionSummary");
+    const stored = await runHandler();
+
+    // The real writer, with fromHook=true as the safeguard path passes it.
+    sessionManager.appendCompaction(stored, firstKeptEntryId, 400_000, undefined, true);
+
+    // The real next-run context builder.
+    const nextRunMessages = sessionManager.buildSessionContext().messages as {
+      role?: string;
+      summary?: string;
+    }[];
+
+    const head = nextRunMessages.find((message) => message.role === "compactionSummary");
+    expect(head, "expected a compactionSummary message in the rebuilt context").toBeDefined();
     // This is the assertion the whole PR exists for: what the next run actually
     // reads still contains the summary, not just the appended context.
     expect(head?.summary).toContain(BODY_MARKER);
     // And the verbatim preserved turn keeps its own line structure.
     expect(head?.summary).toContain("PRESERVED line one\nPRESERVED line two");
-    // The rest of the transcript after the compaction point still follows.
-    expect(JSON.stringify(nextRunMessages.slice(1))).toContain("after compaction");
+    // The artifact really did round-trip through storage rather than being
+    // read back out of the object we passed in.
+    const persisted = SessionManager.open({ ...target, sessionKey }, dir);
+    const reloaded = persisted.getEntries().find((entry) => entry.type === "compaction") as
+      | { summary?: string }
+      | undefined;
+    expect(reloaded?.summary).toContain(BODY_MARKER);
   });
 });
