@@ -18,6 +18,34 @@ Plaintext still works. SecretRefs are opt-in per credential.
 Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast radius once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
 </Warning>
 
+## Safe migration quick path
+
+To move supported credentials out of plaintext, follow this three-step workflow:
+
+<Steps>
+  <Step title="Audit current state">
+    ```bash
+    openclaw secrets audit --check
+    ```
+  </Step>
+  <Step title="Configure and apply SecretRefs">
+    ```bash
+    openclaw secrets configure --apply
+    ```
+  </Step>
+  <Step title="Re-audit">
+    ```bash
+    openclaw secrets audit --check
+    ```
+  </Step>
+</Steps>
+
+Do not treat the migration as complete until the re-audit is clean. If the audit still reports plaintext values at rest, the agent-access risk remains even when runtime APIs return redacted values.
+
+If you save a plan instead of applying during `configure`, apply that saved plan with `openclaw secrets apply --from <plan-path>` before the re-audit.
+
+For supported credential fields, see [SecretRef Credential Surface](/reference/secretref-credential-surface). For command details, see [Audit and configure workflow](#audit-and-configure-workflow) below.
+
 ## Runtime model
 
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
@@ -653,29 +681,7 @@ Other notes:
 
 ## Audit and configure workflow
 
-Default operator flow:
-
-<Steps>
-  <Step title="Audit current state">
-    ```bash
-    openclaw secrets audit --check
-    ```
-  </Step>
-  <Step title="Configure and apply SecretRefs">
-    ```bash
-    openclaw secrets configure --apply
-    ```
-  </Step>
-  <Step title="Re-audit">
-    ```bash
-    openclaw secrets audit --check
-    ```
-  </Step>
-</Steps>
-
-Do not treat the migration as complete until the re-audit is clean. If the audit still reports plaintext values at rest, the agent-access risk remains even when runtime APIs return redacted values.
-
-If you save a plan instead of applying during `configure`, apply that saved plan with `openclaw secrets apply --from <plan-path>` before the re-audit.
+For the high-level safe-migration flow, see [Safe migration quick path](#safe-migration-quick-path). The sections below detail each `secrets` command used in the workflow.
 
 <AccordionGroup>
   <Accordion title="secrets audit">
