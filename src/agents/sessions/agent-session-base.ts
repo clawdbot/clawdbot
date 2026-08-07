@@ -58,6 +58,21 @@ type ActiveToolPromptMetadata = {
   promptGuidelines: string[];
 };
 
+export type AgentSessionSteerReceipt = {
+  committed: Promise<void>;
+  cancel(): boolean;
+};
+
+type SteeringItem = {
+  text: string;
+  message: AgentMessage;
+  started: boolean;
+  queueReceipt?: { cancel(): boolean };
+  sessionReceipt?: AgentSessionSteerReceipt;
+  resolveCommitted?: () => void;
+  rejectCommitted?: (error: unknown) => void;
+};
+
 export abstract class AgentSessionBase {
   readonly agent: Agent;
   readonly sessionManager: SessionManager;
@@ -69,8 +84,8 @@ export abstract class AgentSessionBase {
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
 
-  /** Tracks pending steering text and its exact queue receipt. Removed when delivered. */
-  protected steeringItems: Array<{ text: string; receipt: AgentMessage }> = [];
+  /** Tracks steering UI state and durable commit receipts by private message identity. */
+  protected steeringItems: SteeringItem[] = [];
   /** Tracks pending follow-up messages for UI display. Removed when delivered. */
   protected followUpMessages: string[] = [];
   /** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -301,9 +316,91 @@ export abstract class AgentSessionBase {
   protected emitQueueUpdate(): void {
     this.emit({
       type: "queue_update",
-      steering: this.steeringItems.map((item) => item.text),
+      steering: this.steeringItems.filter((item) => !item.started).map((item) => item.text),
       followUp: [...this.followUpMessages],
     });
+  }
+
+  protected trackSteeringMessage(
+    text: string,
+    message: AgentMessage,
+    queueReceipt?: { cancel(): boolean },
+  ): AgentSessionSteerReceipt | undefined {
+    const item: SteeringItem = { text, message, started: false, queueReceipt };
+    if (queueReceipt) {
+      let resolveCommitted!: () => void;
+      let rejectCommitted!: (error: unknown) => void;
+      const committed = new Promise<void>((resolve, reject) => {
+        resolveCommitted = resolve;
+        rejectCommitted = reject;
+      });
+      // Lifecycle cleanup may reject before the caller starts awaiting.
+      void committed.catch(() => {});
+      item.resolveCommitted = resolveCommitted;
+      item.rejectCommitted = rejectCommitted;
+      item.sessionReceipt = {
+        committed,
+        cancel: () => this.cancelSteeringItem(item),
+      };
+    }
+    this.steeringItems.push(item);
+    this.emitQueueUpdate();
+    return item.sessionReceipt;
+  }
+
+  private removeSteeringItem(item: SteeringItem): void {
+    const index = this.steeringItems.indexOf(item);
+    if (index !== -1) {
+      this.steeringItems.splice(index, 1);
+    }
+  }
+
+  private rejectSteeringItem(item: SteeringItem, error: unknown): void {
+    this.removeSteeringItem(item);
+    item.rejectCommitted?.(error);
+  }
+
+  private cancelSteeringItem(item: SteeringItem): boolean {
+    if (!item.queueReceipt?.cancel()) {
+      return false;
+    }
+    this.rejectSteeringItem(item, new Error("queued steering message was cancelled"));
+    this.emitQueueUpdate();
+    return true;
+  }
+
+  protected clearPendingSteeringItems(): string[] {
+    const cleared: string[] = [];
+    for (const item of [...this.steeringItems]) {
+      if (item.started) {
+        continue;
+      }
+      if (item.queueReceipt && !item.queueReceipt.cancel()) {
+        // Already drained entries remain owned by transcript persistence.
+        item.started = true;
+        continue;
+      }
+      cleared.push(item.text);
+      this.rejectSteeringItem(item, new Error("queued steering message was cleared"));
+    }
+    return cleared;
+  }
+
+  private rejectSteeringMessage(message: AgentMessage, error: unknown): void {
+    const item = this.steeringItems.find((candidate) => candidate.message === message);
+    if (item) {
+      this.rejectSteeringItem(item, error);
+      this.emitQueueUpdate();
+    }
+  }
+
+  private resolveSteeringMessage(message: AgentMessage): void {
+    const item = this.steeringItems.find((candidate) => candidate.message === message);
+    if (!item) {
+      return;
+    }
+    this.removeSteeringItem(item);
+    item.resolveCommitted?.();
   }
 
   // Track last assistant message for auto-compaction check
@@ -313,19 +410,26 @@ export abstract class AgentSessionBase {
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
   protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
-    if (event.type === "agent_end") {
-      const reason: unknown = signal?.reason;
-      this.lastRunEndedForTurnHandoff =
-        signal?.aborted === true &&
-        typeof reason === "object" &&
-        reason !== null &&
-        (reason as { turnHandoff?: unknown }).turnHandoff === true;
+    try {
+      if (event.type === "agent_end") {
+        const reason: unknown = signal?.reason;
+        this.lastRunEndedForTurnHandoff =
+          signal?.aborted === true &&
+          typeof reason === "object" &&
+          reason !== null &&
+          (reason as { turnHandoff?: unknown }).turnHandoff === true;
+      }
+      if (this.eventMayWriteSession(event)) {
+        await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
+        return;
+      }
+      await this.handleAgentEventUnlocked(event);
+    } catch (error) {
+      if (event.type === "message_start" || event.type === "message_end") {
+        this.rejectSteeringMessage(event.message, error);
+      }
+      throw error;
     }
-    if (this.eventMayWriteSession(event)) {
-      await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
-      return;
-    }
-    await this.handleAgentEventUnlocked(event);
   };
 
   private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
@@ -337,13 +441,13 @@ export abstract class AgentSessionBase {
     // This ensures the UI sees the updated queue state
     if (event.type === "message_start" && event.message.role === "user") {
       this.overflowRecoveryAttempted = false;
-      const receiptIndex = this.steeringItems.findIndex((item) => item.receipt === event.message);
-      if (receiptIndex !== -1) {
-        this.steeringItems.splice(receiptIndex, 1);
+      const steeringItem = this.steeringItems.find((item) => item.message === event.message);
+      if (steeringItem) {
+        steeringItem.started = true;
         this.emitQueueUpdate();
       }
       const messageText = extractTextContent(event.message.content);
-      if (receiptIndex === -1 && messageText) {
+      if (!steeringItem && messageText) {
         const followUpIndex = this.followUpMessages.indexOf(messageText);
         if (followUpIndex !== -1) {
           this.followUpMessages.splice(followUpIndex, 1);
@@ -392,6 +496,9 @@ export abstract class AgentSessionBase {
         });
         if (event.message.role === "assistant") {
           this.lastAssistantEntryId = entryId;
+        }
+        if (event.message.role === "user") {
+          this.resolveSteeringMessage(event.message);
         }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -583,6 +690,10 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    for (const item of [...this.steeringItems]) {
+      item.queueReceipt?.cancel();
+      this.rejectSteeringItem(item, new Error("agent session was disposed"));
+    }
     const abortOperations = [
       () => this.abortRetry(),
       () => this.abortCompaction(),

@@ -14,7 +14,7 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
-import { AgentSessionBase } from "./agent-session-base.js";
+import { AgentSessionBase, type AgentSessionSteerReceipt } from "./agent-session-base.js";
 import type { PromptOptions } from "./agent-session-types.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
 import type { CustomMessage } from "./messages.js";
@@ -341,27 +341,42 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<AgentMessage> {
-    // Check for extension commands (cannot be queued)
-    if (text.startsWith("/")) {
-      this.throwIfExtensionCommand(text);
-    }
-
-    // Expand skill commands and prompt templates
-    let expandedText = this.expandSkillCommand(text);
-    expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-
-    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
-    return await this.queueSteer(
-      expandedText,
+  ): Promise<void> {
+    const prepared = await this.prepareSteer(
+      text,
       images,
-      preparedMessage && userTurnTranscriptRecorder
-        ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
-        : undefined,
+      userTurnTranscriptRecorder,
       media,
       imageOrder,
       inputProvenance,
     );
+    this.agent.steer(prepared.message);
+    this.trackSteeringMessage(prepared.text, prepared.message);
+  }
+
+  /** Queue steering with exact cancellation and durable transcript acknowledgment. */
+  async steerWithReceipt(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
+    inputProvenance?: InputProvenance,
+  ): Promise<AgentSessionSteerReceipt> {
+    const prepared = await this.prepareSteer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      inputProvenance,
+    );
+    const queueReceipt = this.agent.steerWithReceipt(prepared.message);
+    const receipt = this.trackSteeringMessage(prepared.text, prepared.message, queueReceipt);
+    if (!receipt) {
+      throw new Error("failed to create steering receipt");
+    }
+    return receipt;
   }
 
   /**
@@ -384,48 +399,37 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     await this.queueFollowUp(expandedText, images);
   }
 
-  /**
-   * Internal: Queue a steering message (already expanded, no extension command check).
-   */
-  private async queueSteer(
+  private async prepareSteer(
     text: string,
     images?: ImageContent[],
-    transcriptContext?: {
-      message: PersistedUserTurnMessage;
-      recorder: UserTurnTranscriptRecorder;
-    },
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<AgentMessage> {
+  ): Promise<{ text: string; message: AgentMessage }> {
+    if (text.startsWith("/")) {
+      this.throwIfExtensionCommand(text);
+    }
+    let expandedText = this.expandSkillCommand(text);
+    expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+    const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
     const runtimeMessage = applyInputProvenanceToUserMessage(
-      this.createUserMessage(text, images),
+      this.createUserMessage(expandedText, images),
       inputProvenance,
     ) as PersistedUserTurnMessage;
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
-    const receipt = this.agent.steer(
-      transcriptContext
-        ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
-        : promptMessage,
-    );
-    this.steeringItems.push({ text, receipt });
-    this.emitQueueUpdate();
-    return receipt;
-  }
-
-  /** Remove one exact pending steering message admitted by steer(). */
-  cancelSteer(receipt: AgentMessage): boolean {
-    if (!this.agent.cancelSteer(receipt)) {
-      return false;
-    }
-    const index = this.steeringItems.findIndex((item) => item.receipt === receipt);
-    if (index !== -1) {
-      this.steeringItems.splice(index, 1);
-      this.emitQueueUpdate();
-    }
-    return true;
+    return {
+      text: expandedText,
+      message:
+        preparedMessage && userTurnTranscriptRecorder
+          ? attachRuntimeUserTurnTranscriptContext(promptMessage, {
+              message: preparedMessage,
+              recorder: userTurnTranscriptRecorder,
+            })
+          : promptMessage,
+    };
   }
 
   /**
@@ -551,9 +555,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @returns Object with steering and followUp arrays
    */
   clearQueue(): { steering: string[]; followUp: string[] } {
-    const steering = this.steeringItems.map((item) => item.text);
+    const steering = this.clearPendingSteeringItems();
     const followUp = [...this.followUpMessages];
-    this.steeringItems = [];
     this.followUpMessages = [];
     this.agent.clearAllQueues();
     this.emitQueueUpdate();
@@ -562,12 +565,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /** Number of pending messages (includes both steering and follow-up) */
   get pendingMessageCount(): number {
-    return this.steeringItems.length + this.followUpMessages.length;
+    return this.steeringItems.filter((item) => !item.started).length + this.followUpMessages.length;
   }
 
   /** Get pending steering messages (read-only) */
   getSteeringMessages(): readonly string[] {
-    return this.steeringItems.map((item) => item.text);
+    return this.steeringItems.filter((item) => !item.started).map((item) => item.text);
   }
 
   /** Get pending follow-up messages (read-only) */

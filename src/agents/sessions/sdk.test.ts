@@ -401,7 +401,7 @@ describe("AgentSession queued user turns", () => {
       sourceChannel: "internal",
       sourceTool: "sessions_send",
     };
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation((message) => message);
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
 
     await session.steer("delegated work", undefined, undefined, undefined, undefined, origin);
 
@@ -478,19 +478,89 @@ describe("AgentSession queued user turns", () => {
 
   it("cancels identical queued text by exact receipt", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
-    const first = await session.steer("same delegated prompt");
-    const second = await session.steer("same delegated prompt");
+    const first = await session.steerWithReceipt("same delegated prompt");
+    const second = await session.steerWithReceipt("same delegated prompt");
 
     expect(session.getSteeringMessages()).toEqual([
       "same delegated prompt",
       "same delegated prompt",
     ]);
-    expect(session.cancelSteer(second)).toBe(true);
-    expect(session.cancelSteer(second)).toBe(false);
+    expect(second.cancel()).toBe(true);
+    expect(second.cancel()).toBe(false);
     expect(session.getSteeringMessages()).toEqual(["same delegated prompt"]);
-    expect(session.cancelSteer(first)).toBe(true);
+    expect(first.cancel()).toBe(true);
     expect(session.getSteeringMessages()).toEqual([]);
+    await expect(first.committed).rejects.toThrow("cancelled");
+    await expect(second.committed).rejects.toThrow("cancelled");
     session.dispose();
+  });
+
+  it("settles a steering receipt only after user-message persistence", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const session = await createSessionFromManager(sessionManager);
+    const coreSteer = vi.spyOn(session.agent, "steerWithReceipt");
+    const receipt = await session.steerWithReceipt("durable delegated prompt");
+    const message = coreSteer.mock.calls[0]?.[0];
+    if (!message) {
+      throw new Error("expected queued steering message");
+    }
+    const handleAgentEvent = (
+      session as unknown as { handleAgentEvent(event: unknown): Promise<void> }
+    )["handleAgentEvent"];
+    let committed = false;
+    void receipt.committed.then(() => {
+      committed = true;
+    });
+
+    await handleAgentEvent({ type: "message_start", message });
+    expect(committed).toBe(false);
+    expect(session.getSteeringMessages()).toEqual([]);
+
+    const appendMessage = vi.spyOn(sessionManager, "appendMessage");
+    await handleAgentEvent({ type: "message_end", message });
+    await receipt.committed;
+
+    expect(appendMessage).toHaveBeenCalledWith(message, {
+      invalidateSerializedPrefixCache: false,
+    });
+    expect(committed).toBe(true);
+    session.dispose();
+  });
+
+  it("rejects steering receipts when persistence, clear, or disposal prevents commit", async () => {
+    const persistenceManager = SessionManager.inMemory();
+    const persistenceSession = await createSessionFromManager(persistenceManager);
+    const coreSteer = vi.spyOn(persistenceSession.agent, "steerWithReceipt");
+    const persistenceReceipt = await persistenceSession.steerWithReceipt(
+      "persistence must succeed",
+    );
+    const message = coreSteer.mock.calls[0]?.[0];
+    if (!message) {
+      throw new Error("expected queued steering message");
+    }
+    const handleAgentEvent = (
+      persistenceSession as unknown as { handleAgentEvent(event: unknown): Promise<void> }
+    )["handleAgentEvent"];
+    await handleAgentEvent({ type: "message_start", message });
+    const persistenceError = new Error("transcript write failed");
+    vi.spyOn(persistenceManager, "appendMessage").mockImplementationOnce(() => {
+      throw persistenceError;
+    });
+
+    await expect(handleAgentEvent({ type: "message_end", message })).rejects.toBe(persistenceError);
+    await expect(persistenceReceipt.committed).rejects.toBe(persistenceError);
+    persistenceSession.dispose();
+
+    const clearSession = await createSessionFromManager(SessionManager.inMemory());
+    const clearReceipt = await clearSession.steerWithReceipt("clear me");
+    expect(clearSession.clearQueue().steering).toEqual(["clear me"]);
+    await expect(clearReceipt.committed).rejects.toThrow("cleared");
+    clearSession.dispose();
+
+    const disposeSession = await createSessionFromManager(SessionManager.inMemory());
+    const disposeReceipt = await disposeSession.steerWithReceipt("dispose me");
+    disposeSession.dispose();
+    await expect(disposeReceipt.committed).rejects.toThrow("disposed");
   });
 });
 

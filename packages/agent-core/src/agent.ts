@@ -163,48 +163,50 @@ export interface AgentOptions {
 }
 
 class PendingMessageQueue {
-  private messages: AgentMessage[] = [];
+  private entries: Array<{ message: AgentMessage }> = [];
   public mode: QueueMode;
 
   constructor(mode: QueueMode) {
     this.mode = mode;
   }
 
-  enqueue(message: AgentMessage): void {
-    this.messages.push(message);
-  }
-
-  remove(message: AgentMessage): boolean {
-    const index = this.messages.indexOf(message);
-    if (index === -1) {
-      return false;
-    }
-    this.messages.splice(index, 1);
-    return true;
+  enqueue(message: AgentMessage): { cancel(): boolean } {
+    const entry = { message };
+    this.entries.push(entry);
+    return {
+      cancel: () => {
+        const index = this.entries.indexOf(entry);
+        if (index === -1) {
+          return false;
+        }
+        this.entries.splice(index, 1);
+        return true;
+      },
+    };
   }
 
   hasItems(): boolean {
-    return this.messages.length > 0;
+    return this.entries.length > 0;
   }
 
   drain(): AgentMessage[] {
     if (this.mode === "all") {
-      const drained = this.messages.slice();
-      this.messages = [];
-      return drained;
+      const drained = this.entries;
+      this.entries = [];
+      return drained.map((entry) => entry.message);
     }
 
     // one-at-a-time preserves later queued messages for subsequent loop turns.
-    const first = this.messages[0];
+    const first = this.entries[0];
     if (!first) {
       return [];
     }
-    this.messages = this.messages.slice(1);
-    return [first];
+    this.entries = this.entries.slice(1);
+    return [first.message];
   }
 
   clear(): void {
-    this.messages = [];
+    this.entries = [];
   }
 }
 
@@ -340,14 +342,13 @@ export class Agent {
   }
 
   /** Queue a message to be injected after the current assistant turn finishes. */
-  steer(message: AgentMessage): AgentMessage {
+  steer(message: AgentMessage): void {
     this.steeringQueue.enqueue(message);
-    return message;
   }
 
-  /** Remove one exact pending steering message. */
-  cancelSteer(message: AgentMessage): boolean {
-    return this.steeringQueue.remove(message);
+  /** Queue a steering message and return exact pending-entry cancellation. */
+  steerWithReceipt(message: AgentMessage): { cancel(): boolean } {
+    return this.steeringQueue.enqueue(message);
   }
 
   /** Queue a message to run only after the agent would otherwise stop. */

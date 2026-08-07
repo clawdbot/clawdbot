@@ -33,6 +33,30 @@ vi.mock("../../harness/lifecycle-hook-helpers.js", () => ({
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 
+type AgentSessionSteerReceipt = {
+  committed: Promise<void>;
+  cancel(): boolean;
+};
+
+function createDeferredReceipt(cancel: () => boolean = () => false): {
+  receipt: AgentSessionSteerReceipt;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const committed = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  void committed.catch(() => {});
+  return {
+    receipt: { committed, cancel },
+    resolve,
+    reject,
+  };
+}
+
 function prepareCatalogExecutor(
   projections: ToolSearchTargetTranscriptProjection[],
   options?: {
@@ -253,7 +277,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       sourceChannel: "internal",
       sourceTool: "sessions_send",
     };
-    let emit!: (event: unknown) => void;
+    const deferred = createDeferredReceipt();
     const message = {
       role: "user" as const,
       content: [{ type: "text" as const, text: "delegated work" }],
@@ -268,12 +292,9 @@ describe("prepareEmbeddedAttemptStream", () => {
       isStreaming: true,
       messages: [message],
       pendingMessageCount: 1,
-      steer: vi.fn(async () => message),
-      cancelSteer: vi.fn(() => false),
-      subscribe: vi.fn((listener: (event: unknown) => void) => {
-        emit = listener;
-        return () => undefined;
-      }),
+      steer: vi.fn(async () => undefined),
+      steerWithReceipt: vi.fn(async () => deferred.receipt),
+      subscribe: vi.fn(() => () => undefined),
     };
     const recordEvent = vi.fn();
     const prepared = prepareEmbeddedAttemptStream({
@@ -313,10 +334,10 @@ describe("prepareEmbeddedAttemptStream", () => {
       waitForTranscriptCommit: true,
       inputProvenance: origin,
     });
-    await vi.waitFor(() => expect(activeSession.steer).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(activeSession.steerWithReceipt).toHaveBeenCalledOnce());
     expect(recordEvent).not.toHaveBeenCalled();
 
-    emit({ type: "message_end", message });
+    deferred.resolve();
     await queued;
 
     expect(recordEvent).toHaveBeenCalledOnce();
@@ -351,19 +372,17 @@ describe("prepareEmbeddedAttemptStream", () => {
       timestamp: 2,
       provenance: secondOrigin,
     };
-    const receipts = [firstMessage, secondMessage];
-    const listeners = new Set<(event: unknown) => void>();
+    const firstReceipt = createDeferredReceipt();
+    const secondReceipt = createDeferredReceipt();
+    const receipts = [firstReceipt.receipt, secondReceipt.receipt];
     const activeSession = {
       agent: { hasQueuedMessages: () => true },
       isStreaming: true,
       messages: [firstMessage, secondMessage],
       pendingMessageCount: 2,
-      steer: vi.fn(async () => receipts.shift()!),
-      cancelSteer: vi.fn(() => false),
-      subscribe: vi.fn((listener: (event: unknown) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      }),
+      steer: vi.fn(async () => undefined),
+      steerWithReceipt: vi.fn(async () => receipts.shift()!),
+      subscribe: vi.fn(() => () => undefined),
     };
     const recordEvent = vi.fn();
     const prepared = prepareEmbeddedAttemptStream({
@@ -406,11 +425,9 @@ describe("prepareEmbeddedAttemptStream", () => {
       waitForTranscriptCommit: true,
       inputProvenance: secondOrigin,
     });
-    await vi.waitFor(() => expect(activeSession.steer).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(activeSession.steerWithReceipt).toHaveBeenCalledTimes(2));
 
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: firstMessage });
-    }
+    firstReceipt.resolve();
     await firstQueued;
     expect(recordEvent).toHaveBeenCalledTimes(1);
     expect(recordEvent).toHaveBeenLastCalledWith(
@@ -418,9 +435,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect.objectContaining({ origin: firstOrigin }),
     );
 
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: secondMessage });
-    }
+    secondReceipt.resolve();
     await secondQueued;
     expect(recordEvent).toHaveBeenCalledTimes(2);
     expect(recordEvent).toHaveBeenLastCalledWith(
@@ -433,6 +448,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     {
       name: "runtime rejection",
       runtimeReject: true,
+      persistenceReject: false,
       cancelResult: false,
       timeoutMs: 10_000,
       expectedError: "steering rejected",
@@ -440,6 +456,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     {
       name: "transcript timeout",
       runtimeReject: false,
+      persistenceReject: false,
       cancelResult: true,
       timeoutMs: 1,
       expectedError: "before timeout",
@@ -447,9 +464,18 @@ describe("prepareEmbeddedAttemptStream", () => {
     {
       name: "accepted without transcript confirmation",
       runtimeReject: false,
+      persistenceReject: false,
       cancelResult: false,
       timeoutMs: 1,
       expectedError: undefined,
+    },
+    {
+      name: "transcript persistence failure",
+      runtimeReject: false,
+      persistenceReject: true,
+      cancelResult: false,
+      timeoutMs: 10_000,
+      expectedError: "transcript write failed",
     },
   ])("does not record queued prompt provenance after $name", async (testCase) => {
     vi.useFakeTimers();
@@ -459,15 +485,12 @@ describe("prepareEmbeddedAttemptStream", () => {
         sourceSessionKey: "agent:sender:main",
         sourceTool: "sessions_send",
       };
-      const queuedMessage = {
-        role: "user" as const,
-        content: [{ type: "text" as const, text: "delegated work" }],
-      };
-      const steer = testCase.runtimeReject
+      const deferred = createDeferredReceipt(() => testCase.cancelResult);
+      const steerWithReceipt = testCase.runtimeReject
         ? vi.fn(async () => {
             throw new Error("steering rejected");
           })
-        : vi.fn(async () => queuedMessage);
+        : vi.fn(async () => deferred.receipt);
       const recordEvent = vi.fn();
       const prepared = prepareEmbeddedAttemptStream({
         attempt: {
@@ -478,15 +501,13 @@ describe("prepareEmbeddedAttemptStream", () => {
         activeSession: {
           agent: {
             hasQueuedMessages: () => true,
-            steeringQueue: { messages: [queuedMessage] },
           },
           isStreaming: true,
           messages: [],
           pendingMessageCount: 1,
-          steer,
-          cancelSteer: vi.fn(() => testCase.cancelResult),
+          steer: vi.fn(async () => undefined),
+          steerWithReceipt,
           subscribe: vi.fn(() => () => undefined),
-          getSteeringMessages: () => ["delegated work"],
         } as never,
         hookRunner: undefined as never,
         hookAgentId: "receiver",
@@ -521,6 +542,10 @@ describe("prepareEmbeddedAttemptStream", () => {
       const outcome = testCase.expectedError
         ? expect(queued).rejects.toThrow(testCase.expectedError)
         : expect(queued).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+      if (testCase.persistenceReject) {
+        await vi.waitFor(() => expect(steerWithReceipt).toHaveBeenCalledOnce());
+        deferred.reject(new Error("transcript write failed"));
+      }
       await vi.advanceTimersByTimeAsync(testCase.timeoutMs + 1);
 
       await outcome;

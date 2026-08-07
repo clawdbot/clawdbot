@@ -11,12 +11,16 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
 import type {
   EmbeddedAgentQueueMessageOptions,
   EmbeddedAgentQueueMessageResult,
 } from "../run-state.js";
+
+type AgentSessionSteerReceipt = {
+  committed: Promise<void>;
+  cancel(): boolean;
+};
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
@@ -30,8 +34,15 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
-  ): Promise<AgentMessage>;
-  cancelSteer(receipt: AgentMessage): boolean;
+  ): Promise<void>;
+  steerWithReceipt(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
+    inputProvenance?: InputProvenance,
+  ): Promise<AgentSessionSteerReceipt>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
@@ -53,31 +64,15 @@ function steerActiveSession(
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
   inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
-): Promise<AgentMessage> {
-  if (inputProvenance) {
-    return activeSession.steer(
-      text,
-      images,
-      userTurnTranscriptRecorder,
-      media,
-      imageOrder,
-      inputProvenance,
-    );
-  }
-  if (media?.length) {
-    return activeSession.steer(text, images, userTurnTranscriptRecorder, media, imageOrder);
-  }
-  return userTurnTranscriptRecorder
-    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
-    : activeSession.steer(text, images);
-}
-
-function isQueuedUserMessageEnd(event: unknown, receipt: AgentMessage): boolean {
-  if (!event || typeof event !== "object") {
-    return false;
-  }
-  const record = event as { message?: unknown; type?: unknown };
-  return record.type === "message_end" && record.message === receipt;
+): Promise<void> {
+  return activeSession.steer(
+    text,
+    images,
+    userTurnTranscriptRecorder,
+    media,
+    imageOrder,
+    inputProvenance,
+  );
 }
 
 function isTerminalActiveSessionEvent(event: unknown): boolean {
@@ -99,9 +94,8 @@ function isCompactionStartEvent(event: unknown): boolean {
 }
 
 /**
- * Sends a steering message and resolves only after the exact queued user
- * `message_end` event appears. If the run ends or times out first, the pending
- * queue entry is removed so an abandoned steer does not leak into a later turn.
+ * Sends a steering message and resolves only after its session-owned receipt
+ * confirms transcript persistence. Terminal events only drive timely cleanup.
  */
 async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
@@ -115,9 +109,8 @@ async function steerAndWaitForTranscriptCommit(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    let receipt: AgentMessage | undefined;
+    let receipt: AgentSessionSteerReceipt | undefined;
     let cancellationMessage: string | undefined;
-    const committedBeforeAdmission = new Set<AgentMessage>();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let terminalTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err?: unknown) => {
@@ -143,10 +136,8 @@ async function steerAndWaitForTranscriptCommit(
         cancellationMessage = message;
         return;
       }
-      // Cancellation is best-effort but must finish before rejecting so callers
-      // do not return while a stale queued message can leak into the next turn.
       try {
-        if (!activeSession.cancelSteer(receipt)) {
+        if (!receipt.cancel()) {
           log.warn("failed to find queued steering receipt for cancellation");
           finish(new EmbeddedSteeringAcceptedUnconfirmedError(message));
           return;
@@ -190,19 +181,6 @@ async function steerAndWaitForTranscriptCommit(
         }
         return;
       }
-      if (
-        event &&
-        typeof event === "object" &&
-        (event as { type?: unknown }).type === "message_end"
-      ) {
-        const message = (event as { message?: unknown }).message;
-        if (receipt && isQueuedUserMessageEnd(event, receipt)) {
-          finish();
-        } else if (!receipt && message && typeof message === "object") {
-          committedBeforeAdmission.add(message as AgentMessage);
-        }
-        return;
-      }
       if (isTerminalActiveSessionEvent(event)) {
         // AgentSession emits agent_end before announcing auto-retry or
         // auto-compaction continuations. Defer cancellation one tick so those
@@ -210,29 +188,36 @@ async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    void steerActiveSession(
-      activeSession,
-      text,
-      images,
-      userTurnTranscriptRecorder,
-      media,
-      imageOrder,
-      inputProvenance,
-    ).then(
-      (queuedReceipt) => {
-        receipt = queuedReceipt;
-        if (committedBeforeAdmission.has(queuedReceipt)) {
-          finish();
-          return;
-        }
-        if (cancellationMessage) {
-          rejectAfterCancellation(cancellationMessage);
-          return;
-        }
-        startCommitTimer();
-      },
-      (error: unknown) => finish(error),
-    );
+    void activeSession
+      .steerWithReceipt(
+        text,
+        images,
+        userTurnTranscriptRecorder,
+        media,
+        imageOrder,
+        inputProvenance,
+      )
+      .then(
+        (sessionReceipt) => {
+          receipt = sessionReceipt;
+          void receipt.committed.then(
+            () => finish(),
+            (error: unknown) => finish(error),
+          );
+          if (cancellationMessage) {
+            // An already-settled commit wins over a terminal event observed
+            // before steerWithReceipt returned.
+            queueMicrotask(() => {
+              if (!settled && cancellationMessage) {
+                rejectAfterCancellation(cancellationMessage);
+              }
+            });
+            return;
+          }
+          startCommitTimer();
+        },
+        (error: unknown) => finish(error),
+      );
   });
 }
 
