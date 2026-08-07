@@ -2,7 +2,8 @@ import { containerRpcRequest } from "../../extensions/signal/src/client-containe
 
 async function run(body: Uint8Array): Promise<string> {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(body, { status: 200 })) as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response(body as unknown as BodyInit, { status: 200 })) as typeof fetch;
   try {
     const out = await containerRpcRequest("version", undefined, {
       baseUrl: "http://localhost:8080",
