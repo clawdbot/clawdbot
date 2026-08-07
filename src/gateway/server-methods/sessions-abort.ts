@@ -31,7 +31,10 @@ import { resolveWorkerSessionTarget } from "../worker-environments/session-targe
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { requireSessionKey } from "./sessions-shared.js";
+import {
+  rejectPluginRuntimeSessionOwnershipMismatch,
+  requireSessionKey,
+} from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

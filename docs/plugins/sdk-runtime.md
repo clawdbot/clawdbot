@@ -402,11 +402,27 @@ two-party event loops that do not go through the shared inbound reply runner.
       limit: 10,
     });
 
+    // Stop whatever is running on a session, KEEPING the session + transcript
+    await api.runtime.subagent.abortSession({
+      sessionKey: "agent:main:subagent:search-helper",
+    });
+
     // Delete a session
     await api.runtime.subagent.deleteSession({
       sessionKey: "agent:main:subagent:search-helper",
     });
     ```
+
+    `abortSession` and `deleteSession` both end an in-flight run, and they are
+    not interchangeable. `abortSession` cancels the run and leaves the session
+    entry and its transcript in place, so the next message continues the same
+    conversation — this is what a user-facing "stop" control wants.
+    `deleteSession` discards the session itself, so the next message starts a
+    fresh one. Reach for `deleteSession` only when the conversation should end,
+    not merely the work.
+
+    Both are restricted to sessions your plugin owns: calling either on a
+    session created by another plugin is rejected.
 
     <Warning>
     Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.

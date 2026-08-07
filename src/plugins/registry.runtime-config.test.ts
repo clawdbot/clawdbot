@@ -716,6 +716,11 @@ describe("plugin registry runtime config scope", () => {
     await expect(
       otherApi.runtime.subagent.abortSession({ sessionKey: reservedKey }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    // ...and the owner itself may abort it, so the guard rejects the foreign
+    // caller rather than the operation.
+    subagent.abortSession.mockClear();
+    await ownerApi.runtime.subagent.abortSession({ sessionKey: reservedKey });
+    expect(subagent.abortSession).toHaveBeenCalledWith({ sessionKey: reservedKey });
     await expect(
       otherApi.runtime.gateway.request("sessions.patch", {
         key: reservedKey,

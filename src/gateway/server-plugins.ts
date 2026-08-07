@@ -507,12 +507,12 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
               : {}),
           }
         : undefined;
+      // Deliberately no runId: the session is what was authorized. Forwarding a
+      // caller-supplied run id under the synthetic admin client would let a
+      // plugin pair its own key with another plugin's run and cancel that.
       await dispatchGatewayMethodInProcess(
         "sessions.abort",
-        {
-          key: params.sessionKey,
-          ...(params.runId ? { runId: params.runId } : {}),
-        },
+        { key: params.sessionKey },
         pluginOwnedAbortOptions,
       );
     },

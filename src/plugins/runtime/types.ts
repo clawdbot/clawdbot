@@ -70,8 +70,6 @@ type SubagentGetSessionMessagesResult = {
  */
 type SubagentAbortSessionParams = {
   sessionKey: string;
-  /** Abort only this run; omit to abort whatever is currently running. */
-  runId?: string;
 };
 
 type SubagentDeleteSessionParams = {
