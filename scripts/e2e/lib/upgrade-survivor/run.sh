@@ -895,6 +895,13 @@ const output = fs.openSync(daemonLog, "a");
 const childEnv = { ...process.env };
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
 delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
+// systemd does not pass transient systemctl-caller update state into the service.
+for (const key of Object.keys(childEnv)) {
+  if (key.startsWith("OPENCLAW_UPDATE_")) {
+    delete childEnv[key];
+  }
+}
+delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;
 let child;
 let stopping = false;
 
