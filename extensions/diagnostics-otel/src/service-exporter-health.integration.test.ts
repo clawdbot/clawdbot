@@ -300,6 +300,41 @@ test("records a final failure after persistent real OTLP 503 responses", async (
   }
 }, 15_000);
 
+test.each([400, 408, 500] as const)(
+  "records one final failure for a non-retryable real OTLP HTTP $statusCode response",
+  async (statusCode) => {
+    const receiver = await startExporterHealthReceiver((_request, response) => {
+      response.writeHead(statusCode);
+      response.end();
+    });
+    const capture = captureExporterEvents();
+    const { service, ctx } = await startTraceExporterHealthService(receiver.endpoint, "1000");
+
+    try {
+      emitExporterHealthSpan(`http-${statusCode}`);
+      await waitForDiagnosticEventsDrained();
+      await Promise.resolve(service.stop?.(ctx)).catch(() => {});
+      await waitForDiagnosticEventsDrained();
+      expect(receiver.requestCount).toBe(1);
+      expect(
+        capture.events.filter(
+          (event) => event.status === "failure" && event.reason === "emit_failed",
+        ),
+      ).toHaveLength(1);
+      expect(
+        getReportedExporterHealth(ctx).filter(
+          (event) => event.status === "failure" && event.reason === "export_failed",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      capture.unsubscribe();
+      await service.stop?.(ctx);
+      await receiver.close();
+    }
+  },
+  15_000,
+);
+
 test("records a final failure for a real OTLP connection reset", async () => {
   const receiver = await startExporterHealthReceiver((request) => {
     request.socket.destroy();
