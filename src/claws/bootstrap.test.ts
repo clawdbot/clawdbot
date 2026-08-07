@@ -139,7 +139,43 @@ describe("package-root BOOTSTRAP.md", () => {
     });
   });
 
-  it("keeps a failed pre-publication bootstrap seed removable", async () => {
+  it("seeds the consented package bootstrap before the agent config is published", async () => {
+    const root = await createPackage();
+    const read = await readClawManifestFile(root);
+    if (!read.ok || !read.packageBootstrap) {
+      throw new Error("expected package bootstrap");
+    }
+    const workspace = join(root, "workspace");
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const plan = await buildClawAddPlan({
+      manifest: read.manifest,
+      clawMarkdownBody: read.clawMarkdownBody,
+      packageBootstrap: read.packageBootstrap,
+      source: read.source,
+      context: { workspace },
+    });
+    let config: OpenClawConfig = {};
+    const order: string[] = [];
+
+    const added = await applyClawAddPlan(plan, {
+      env,
+      nowMs: 1_000,
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        order.push("config-commit");
+        config = transform(config);
+      },
+      seedPackageBootstrap: async (seedPlan, seedOptions) => {
+        order.push("bootstrap-seed");
+        return await seedClawPackageBootstrap(seedPlan, seedOptions);
+      },
+    });
+
+    expect(added.status).toBe("complete");
+    expect(order).toEqual(["bootstrap-seed", "config-commit"]);
+  });
+
+  it("keeps the agent unpublished and resumable when package bootstrap seeding fails", async () => {
     const root = await createPackage();
     const read = await readClawManifestFile(root);
     if (!read.ok || !read.packageBootstrap) {
@@ -174,15 +210,75 @@ describe("package-root BOOTSTRAP.md", () => {
       error: { code: "bootstrap_write_failed" },
     });
     expect(config).toEqual({});
+    expect(readClawInstallRecord("bootstrap-worker", { env })?.status).toBe("workspace_ready");
     expect(readWorkspaceStateSnapshot(workspace, { env }).setup.bootstrapSeededAt).toBeUndefined();
     await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).rejects.toThrow();
+
+    const resumed = await applyClawAddPlan(plan, {
+      env,
+      nowMs: 2_000,
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(resumed.status).toBe("complete");
+    await expect(readFile(join(workspace, "BOOTSTRAP.md"), "utf8")).resolves.toContain(
+      "which repositories",
+    );
     await expect(readClawStatus("bootstrap-worker", { env, config })).resolves.toMatchObject({
-      records: [
-        {
-          bootstrapState: "missing",
-          bootstrap: { state: "missing", path: "BOOTSTRAP.md" },
-        },
-      ],
+      records: [{ bootstrapState: "pending" }],
+    });
+  });
+
+  it("recovers from a stock bootstrap seeded by a concurrent session", async () => {
+    const root = await createPackage();
+    const read = await readClawManifestFile(root);
+    if (!read.ok || !read.packageBootstrap) {
+      throw new Error("expected package bootstrap");
+    }
+    const workspace = join(root, "workspace");
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const plan = await buildClawAddPlan({
+      manifest: read.manifest,
+      clawMarkdownBody: read.clawMarkdownBody,
+      packageBootstrap: read.packageBootstrap,
+      source: read.source,
+      context: { workspace },
+    });
+    let config: OpenClawConfig = {};
+
+    const added = await applyClawAddPlan(plan, {
+      env,
+      nowMs: 1_000,
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+      seedPackageBootstrap: async (seedPlan, seedOptions) => {
+        await writeFile(join(workspace, "BOOTSTRAP.md"), "# Stock onboarding\n", "utf8");
+        return await seedClawPackageBootstrap(seedPlan, seedOptions);
+      },
+    });
+
+    expect(added).toMatchObject({ status: "partial", configCommitted: false });
+    expect(config).toEqual({});
+    expect(readClawInstallRecord("bootstrap-worker", { env })?.status).toBe("workspace_ready");
+
+    await rm(join(workspace, "BOOTSTRAP.md"));
+    const resumed = await applyClawAddPlan(plan, {
+      env,
+      nowMs: 2_000,
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(resumed.status).toBe("complete");
+    await expect(readClawStatus("bootstrap-worker", { env, config })).resolves.toMatchObject({
+      records: [{ bootstrapState: "pending" }],
     });
   });
 

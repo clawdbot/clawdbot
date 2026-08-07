@@ -163,6 +163,81 @@ describe("buildClawUpdatePlan", () => {
     expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
   });
 
+  it("moves a portable plugin dependency into a profile extension edge without reinstalling", async () => {
+    const current = await fixture();
+    const parsed = parseClawManifest({
+      ...current.manifest,
+      packages: current.manifest.packages.filter((pkg) => pkg.ref !== "obsolete"),
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: parsed.manifest,
+      targetOpenClawProfile: {
+        schemaVersion: 1,
+        agent: {},
+        extensions: [
+          {
+            id: "obsolete-tools",
+            kind: "plugin",
+            format: "claude",
+            source: "clawhub",
+            ref: "obsolete",
+            version: "1.0.0",
+          },
+        ],
+      },
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      config: current.config,
+      sourceMcpServers: current.config.mcp?.servers ?? {},
+      stateOptions: {
+        env: current.env,
+        packageDeps: {
+          resolvePlugin: async () => ({
+            status: "found" as const,
+            pluginId: "obsolete",
+            installedVersion: "1.0.0",
+            record: { source: "clawhub", integrity: `sha256:${"a".repeat(64)}` },
+          }),
+        },
+      },
+      packagePreflight: async () => ({
+        ok: true,
+        action: "reuse",
+        integrity: `sha256:${"a".repeat(64)}`,
+        installId: "obsolete",
+        detectedFormat: "claude",
+        mapped: ["skills"],
+        unavailable: ["agents"],
+        adapterIdentity: "openclaw/test",
+      }),
+    });
+
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "package",
+        id: "plugin:obsolete",
+        action: "change",
+        reason: expect.stringContaining("without reinstalling"),
+      }),
+    );
+    expect(plan.actions).not.toContainEqual(
+      expect.objectContaining({ kind: "package", id: "plugin:obsolete", action: "release" }),
+    );
+    const extensionChange = plan.capabilityChanges.find(
+      (change) => change.kind === "package" && change.id === "plugin:obsolete",
+    );
+    expect(extensionChange?.effect.extension).toMatchObject({
+      id: "obsolete-tools",
+      mapped: ["skills"],
+      unavailable: ["agents"],
+    });
+    expect(extensionChange?.current?.digest).not.toBe(extensionChange?.desired?.digest);
+  });
+
   it("plans missing package restoration without mutating state", async () => {
     const current = await fixture();
     const beforeConfig = structuredClone(current.config);

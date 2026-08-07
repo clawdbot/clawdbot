@@ -197,7 +197,15 @@ describe("claws cli", () => {
     mocks.stateTableGet.mockReturnValue({ 1: 1 });
     mocks.openExistingOpenClawStateDatabaseReadOnly.mockReset();
     mocks.openExistingOpenClawStateDatabaseReadOnly.mockReturnValue({
-      db: { prepare: () => ({ get: mocks.stateTableGet }) },
+      db: {
+        prepare: (sql: string) => ({
+          get: sql.includes("sqlite_master") ? mocks.stateTableGet : vi.fn(() => undefined),
+          all: vi.fn(() => [
+            { name: "bootstrap_source_path" },
+            { name: "bootstrap_content_digest" },
+          ]),
+        }),
+      },
       path: "state.sqlite",
       walMaintenance: { checkpoint: () => false, close: mocks.closeReadOnlyDatabase },
     });
