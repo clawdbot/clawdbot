@@ -370,6 +370,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result).toMatchObject({ ok: true, compacted: true });
     expect(redriveSuspendedSubagentCompletionsForRequesterMock).toHaveBeenCalledWith(
       TEST_SESSION_KEY,
+      expect.objectContaining({ heldFrom: expect.any(Number), releasedAt: expect.any(Number) }),
     );
   });
 
@@ -383,6 +384,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result).toMatchObject({ ok: true, compacted: true });
     expect(redriveSuspendedSubagentCompletionsForRequesterMock).toHaveBeenCalledWith(
       TEST_SESSION_KEY,
+      expect.objectContaining({ heldFrom: expect.any(Number), releasedAt: expect.any(Number) }),
     );
   });
 

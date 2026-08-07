@@ -131,6 +131,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }),
         }),
       }));
+    // Record when this compaction actually held the write-lock so the
+    // post-release redrive can attribute subagent suspensions to this lock hold.
+    const lockHeldFromMs = Date.now();
     try {
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
       const sessionManager = guardSessionManager(SessionManager.open(sessionTarget), {
@@ -560,13 +563,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     } finally {
       await runtime.disposeToolRuntimes();
       await sessionLock.release();
-      // #118625: subagent announces that gave up while this compaction held
-      // the session write-lock can now be redriven since the lock is free.
+      // #118625: subagent announces that gave up while this compaction held the
+      // session write-lock (suspended inside the held window) can now be
+      // redriven since the lock is free. Entries suspended outside the window
+      // keep their own cause and are left untouched.
       if (params.sessionKey) {
         try {
           const { redriveSuspendedSubagentCompletionsForRequester } =
             await import("../subagent-completion-redrive.runtime.js");
-          await redriveSuspendedSubagentCompletionsForRequester(params.sessionKey);
+          await redriveSuspendedSubagentCompletionsForRequester(params.sessionKey, {
+            heldFrom: lockHeldFromMs,
+            releasedAt: Date.now(),
+          });
         } catch (redriveError) {
           log.warn(
             `[compaction] failed to redrive suspended subagent completions: ${String(redriveError)}`,
