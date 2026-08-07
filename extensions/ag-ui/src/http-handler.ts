@@ -142,6 +142,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
     await dispatchAuthenticatedAguiRequest(req, res, runtime, {
       id: deviceId,
       fromLabel: `ag-ui:${deviceId}`,
+      canSelectAgent: false,
     });
   };
 }
@@ -192,6 +193,7 @@ export function createOperatorAguiHttpHandler(api: OpenClawPluginApi) {
     await dispatchAuthenticatedAguiRequest(req, res, runtime, {
       id: OPERATOR_CALLER_ID,
       fromLabel: "ag-ui:operator",
+      canSelectAgent: true,
     });
   };
 }
@@ -207,6 +209,16 @@ interface AuthenticatedCaller {
   id: string;
   /** Envelope "From" label (typically `ag-ui:<id>`). */
   fromLabel: string;
+  /**
+   * Whether this caller may pick the agent with `X-OpenClaw-Agent-Id`.
+   *
+   * Only the gateway-authenticated operator route may. A paired device is an
+   * UNTRUSTED caller whose agent is decided by its peer/channel binding, so
+   * honouring the header there would let a device bound to one agent run
+   * another agent's workspace, tools, and credentials — the binding would
+   * describe nothing. Its agent comes from the binding alone.
+   */
+  canSelectAgent: boolean;
 }
 
 async function dispatchAuthenticatedAguiRequest(
@@ -281,6 +293,29 @@ async function dispatchAuthenticatedAguiRequest(
       return;
     }
     userKey = validated;
+  }
+
+  const agentIdHeader =
+    typeof req.headers["x-openclaw-agent-id"] === "string"
+      ? req.headers["x-openclaw-agent-id"]
+      : undefined;
+  // Checked BEFORE the empty-messages early return below: an init/sync request
+  // carrying this header must be refused too, or the rule holds on some request
+  // paths and not others.
+  //
+  // Refuse rather than ignore: silently routing to the bound agent would answer
+  // a request the caller believes targeted a different agent, and the mismatch
+  // would never surface. Failing closed keeps the binding authoritative and
+  // tells the caller its request was not honoured.
+  if (agentIdHeader !== undefined && !caller.canSelectAgent) {
+    sendJson(res, 400, {
+      error: {
+        message:
+          "X-OpenClaw-Agent-Id is not accepted on this route. A paired device runs the agent its binding selects; use the operator route to choose an agent.",
+        type: "invalid_request_error",
+      },
+    });
+    return;
   }
 
   const hasUserMessage = messages.some((m) => m.role === "user");
@@ -372,10 +407,6 @@ async function dispatchAuthenticatedAguiRequest(
 
   // Resolve agent route
   const cfg = runtime.config.current() as OpenClawConfig;
-  const agentIdHeader =
-    typeof req.headers["x-openclaw-agent-id"] === "string"
-      ? req.headers["x-openclaw-agent-id"]
-      : undefined;
 
   const routeResolution = resolveAguiAgentRoute({
     runtime,

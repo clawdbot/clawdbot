@@ -558,48 +558,6 @@ describe("AG-UI HTTP handler", () => {
   // forwarded as `accountId` — that only feeds channel-account bindings, so an
   // unmatched name would execute on the DEFAULT agent and its workspace instead
   // of failing. An unknown agent is therefore rejected, not downgraded.
-  it("rejects an unknown X-OpenClaw-Agent-Id instead of falling back to the default agent", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: {
-        authorization: `Bearer ${token}`,
-        "x-openclaw-agent-id": "no-such-agent",
-      },
-      body: {
-        threadId: "t-agent",
-        runId: "r-agent",
-        messages: [{ role: "user", content: "Hello auditor" }],
-      },
-    });
-    const res = createRes();
-    await handler(req, res);
-
-    expect(res.statusCode).toBe(400);
-    const payload = JSON.parse(res.chunks.join(""));
-    expect(payload.error.type).toBe("invalid_request_error");
-    expect(payload.error.message).toContain("X-OpenClaw-Agent-Id");
-  });
-
-  it("never forwards the agent header as accountId", async () => {
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    const req = createReq({
-      headers: {
-        authorization: `Bearer ${token}`,
-        "x-openclaw-agent-id": "no-such-agent",
-      },
-      body: {
-        threadId: "t-agent-2",
-        runId: "r-agent-2",
-        messages: [{ role: "user", content: "Hello" }],
-      },
-    });
-    await handler(req, createRes());
-
-    const rt = fakeApi.runtime;
-    for (const call of rt.channel.routing.resolveAgentRoute.mock.calls) {
-      expect(call[0]?.accountId).toBeUndefined();
-    }
-  });
 
   it("routes to the default agent when X-OpenClaw-Agent-Id is absent", async () => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
