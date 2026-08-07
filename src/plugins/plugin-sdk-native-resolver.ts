@@ -48,7 +48,6 @@ type InstallOpenClawPluginSdkNativeResolverOptions = {
   moduleUrl?: string;
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  trustedInstalledPrivateSdkOwner?: string;
 };
 
 const moduleWithResolver = Module as ModuleWithResolver;
@@ -303,7 +302,6 @@ function listPluginSdkNativeAliases(
     // plugin loader itself is configured to prefer source imports.
     "dist",
     options.devSourceRoot,
-    options.trustedInstalledPrivateSdkOwner,
   );
   const cached = pluginSdkNativeAliasesByMap.get(aliasMap);
   if (cached) {

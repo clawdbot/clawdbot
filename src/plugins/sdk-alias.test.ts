@@ -413,7 +413,6 @@ function listPluginSdkExportedSubpaths(params: {
   moduleUrl?: string;
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  trustedInstalledPrivateSdkOwner?: string;
 }): string[] {
   return Object.keys(
     buildPluginLoaderAliasMap(
@@ -422,7 +421,6 @@ function listPluginSdkExportedSubpaths(params: {
       params.moduleUrl,
       params.pluginSdkResolution,
       params.devSourceRoot,
-      params.trustedInstalledPrivateSdkOwner,
     ),
   )
     .filter((key) => key.startsWith("openclaw/plugin-sdk/"))
@@ -632,15 +630,6 @@ describe("plugin sdk alias helpers", () => {
         }),
       ),
     );
-    const trustedInstalledCodexSubpaths = withCwd(installedCodexRoot, () =>
-      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
-        listPluginSdkExportedSubpaths({
-          modulePath: installedCodexEntry,
-          argv1: path.join(fixture.root, "openclaw.mjs"),
-          trustedInstalledPrivateSdkOwner: "codex",
-        }),
-      ),
-    );
     const installedOtherSubpaths = withCwd(installedOtherRoot, () =>
       withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
         listPluginSdkExportedSubpaths({
@@ -659,14 +648,13 @@ describe("plugin sdk alias helpers", () => {
     );
 
     expect(codexSubpaths).toEqual(["codex-mcp-projection", "core"]);
-    expect(installedCodexSubpaths).toEqual(["core"]);
-    expect(trustedInstalledCodexSubpaths).toEqual(["codex-mcp-projection", "core"]);
+    expect(installedCodexSubpaths).toEqual(["codex-mcp-projection", "core"]);
     expect(otherSubpaths).toEqual(["core"]);
     expect(installedOtherSubpaths).toEqual(["core"]);
     expect(shadowCodexSubpaths).toEqual(["core"]);
   });
 
-  it("aliases harness tool authority only for host-verified official harness plugins", () => {
+  it("aliases harness tool authority only for trusted official harness plugins", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -727,30 +715,12 @@ describe("plugin sdk alias helpers", () => {
     const sourceOtherPrivateQaAliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
       buildPluginLoaderAliasMap(sourceOtherEntry),
     );
-    const spoofedCodexAliases = withCwd(installedCodexRoot, () =>
-      buildPluginLoaderAliasMap(
-        installedCodexEntry,
-        path.join(fixture.root, "openclaw.mjs"),
-        undefined,
-        "dist",
-      ),
-    );
-    const spoofedCopilotAliases = withCwd(installedCopilotRoot, () =>
-      buildPluginLoaderAliasMap(
-        installedCopilotEntry,
-        path.join(fixture.root, "openclaw.mjs"),
-        undefined,
-        "dist",
-      ),
-    );
     const installedCodexAliases = withCwd(installedCodexRoot, () =>
       buildPluginLoaderAliasMap(
         installedCodexEntry,
         path.join(fixture.root, "openclaw.mjs"),
         undefined,
         "dist",
-        undefined,
-        "codex",
       ),
     );
     const installedCopilotAliases = withCwd(installedCopilotRoot, () =>
@@ -759,8 +729,6 @@ describe("plugin sdk alias helpers", () => {
         path.join(fixture.root, "openclaw.mjs"),
         undefined,
         "dist",
-        undefined,
-        "copilot",
       ),
     );
     const installedOtherAliases = withCwd(installedOtherRoot, () =>
@@ -795,8 +763,6 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(installedCopilotAliases[specifier] ?? "")).toBe(
       fs.realpathSync(distAuthorityPath),
     );
-    expect(spoofedCodexAliases[specifier]).toBeUndefined();
-    expect(spoofedCopilotAliases[specifier]).toBeUndefined();
     expect(sourceOtherAliases[specifier]).toBeUndefined();
     expect(sourceOtherPrivateQaAliases[specifier]).toBeUndefined();
     expect(installedOtherAliases[specifier]).toBeUndefined();
@@ -1067,16 +1033,6 @@ describe("plugin sdk alias helpers", () => {
           devFixture.root,
         ),
     );
-    const spoofedInstalledAliases = withCwd(installedCodexRoot, () =>
-      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
-        buildPluginLoaderAliasMap(
-          installedCodexEntry,
-          path.join(fixture.root, "openclaw.mjs"),
-          undefined,
-          "dist",
-        ),
-      ),
-    );
     const installedAliases = withCwd(installedCodexRoot, () =>
       withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(
@@ -1084,8 +1040,6 @@ describe("plugin sdk alias helpers", () => {
           path.join(fixture.root, "openclaw.mjs"),
           undefined,
           "dist",
-          undefined,
-          "codex",
         ),
       ),
     );
@@ -1116,7 +1070,6 @@ describe("plugin sdk alias helpers", () => {
     expect(
       fs.realpathSync(installedAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? ""),
     ).toBe(fs.realpathSync(distCodexMcpProjectionPath));
-    expect(spoofedInstalledAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
     expect(fs.realpathSync(devRootAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? "")).toBe(
       fs.realpathSync(devCodexMcpProjectionPath),
     );

@@ -396,13 +396,7 @@ export function loadRuntimePluginCandidate(params: {
     mod = withProfile(
       { pluginId: record.id, source: safeSource },
       registrationPlan.mode,
-      () =>
-        params.loadPluginModule(
-          safeSource,
-          manifestRecord.trustedOfficialInstall
-            ? { trustedInstalledPrivateSdkOwner: manifestRecord.id }
-            : undefined,
-        ) as OpenClawPluginModule,
+      () => params.loadPluginModule(safeSource) as OpenClawPluginModule,
     );
   } catch (error) {
     recordPluginError({
