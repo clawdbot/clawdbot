@@ -7,6 +7,11 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveAguiAgentRoute } from "./agent-route.js";
+import {
+  MAX_CLIENT_TOOL_SCHEMA_CHARS,
+  findDeclaredToolConflicts,
+  parseDeclaredTools,
+} from "./client-tools.js";
 import { applyCorsAndHandlePreflight } from "./cors.js";
 import { authenticateAguiDevice } from "./device-auth.js";
 import { observeDisconnect } from "./disconnect.js";
@@ -38,54 +43,6 @@ import {
   setRunWriter,
   wasClientToolCalled,
 } from "./tool-store.js";
-
-/**
- * Ceiling on browser-declared tool schemas, which reach the model as tool
- * definitions. Companion to the `context`/`state` caps in prompt-builder.ts —
- * the request body limit alone (~1 MiB) would let one page spend the agent's
- * whole context window on tool definitions.
- */
-const MAX_CLIENT_TOOL_SCHEMA_CHARS = 24_000;
-
-type DeclaredToolsResult =
-  | { ok: true; tools: Array<{ name: string; description?: string; parameters?: unknown }> }
-  | { ok: false; message: string };
-
-/**
- * Validates the browser-declared `tools` array before the run is admitted.
- *
- * Mirrors the invariant core enforces on the equivalent surface
- * (`extractClientToolsFromChatRequest`, src/gateway/openai-http.ts): tools must
- * be an array, every entry an object, and every entry must name a tool. Doing
- * this up front is what keeps a malformed payload on the documented 400 path
- * instead of failing later as a committed SSE stream.
- */
-function parseDeclaredTools(rawTools: unknown): DeclaredToolsResult {
-  if (rawTools == null) {
-    return { ok: true, tools: [] };
-  }
-  if (!Array.isArray(rawTools)) {
-    return { ok: false, message: "`tools` must be an array." };
-  }
-  const tools: Array<{ name: string; description?: string; parameters?: unknown }> = [];
-  for (const [index, tool] of rawTools.entries()) {
-    if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
-      return { ok: false, message: `\`tools[${index}]\` must be an object.` };
-    }
-    const rawName = (tool as { name?: unknown }).name;
-    const name = typeof rawName === "string" ? rawName.trim() : "";
-    if (!name) {
-      return { ok: false, message: `\`tools[${index}].name\` is required.` };
-    }
-    const description = (tool as { description?: unknown }).description;
-    tools.push({
-      name,
-      ...(typeof description === "string" ? { description } : {}),
-      parameters: (tool as { parameters?: unknown }).parameters,
-    });
-  }
-  return { ok: true, tools };
-}
 
 // ---------------------------------------------------------------------------
 // HTTP handler factory
@@ -342,6 +299,61 @@ async function dispatchAuthenticatedAguiRequest(
     return;
   }
 
+  const { specs: stateWriterSpecs, schemas: stateWriterSchemas } = parseStateWriterTools(
+    input.forwardedProps,
+  );
+
+  // the agent can call something it can never see.
+  // Validate the SHAPE first, and keep the validated array — measuring a
+  // coerced copy while the run later mapped over `input.tools` let a malformed
+  // payload past this gate and blow up after admission, headers, and the
+  // session upsert, turning a 400 into a committed SSE 200 + RUN_ERROR with a
+  // session entry already written. Core enforces the same invariant at the
+  // equivalent boundary (`extractClientToolsFromChatRequest` in
+  // src/gateway/openai-http.ts), so this surface matches it.
+  const declaredTools = parseDeclaredTools(input.tools);
+  if (!declaredTools.ok) {
+    sendJson(res, 400, {
+      error: { message: declaredTools.message, type: "invalid_request_error" },
+    });
+    return;
+  }
+  // The set the model actually receives is the declared tools PLUS the
+  // state-writer tools this handler injects. Core rejects a colliding set, but
+  // only inside the run — after SSE is committed and the session may already be
+  // upserted — so the caller would get a 200/RUN_ERROR instead of the
+  // documented 400. Check the combined set here, while a JSON status is still
+  // possible.
+  const toolConflicts = findDeclaredToolConflicts(
+    declaredTools.tools.map((t) => t.name),
+    stateWriterSchemas.map((s) => s.function.name),
+  );
+  if (toolConflicts.length > 0) {
+    sendJson(res, 400, {
+      error: {
+        message: `Conflicting tool names: ${toolConflicts.join(", ")}. Each declared tool needs a distinct name, and none may collide with a declared state-writer tool.`,
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
+  const declaredToolsChars =
+    JSON.stringify(declaredTools.tools).length + JSON.stringify(stateWriterSchemas).length;
+  if (declaredToolsChars > MAX_CLIENT_TOOL_SCHEMA_CHARS) {
+    sendJson(res, 400, {
+      error: {
+        message: `Declared tool schemas are too large (${declaredToolsChars} chars, limit ${MAX_CLIENT_TOOL_SCHEMA_CHARS}). Send fewer tools or shorter descriptions/parameter schemas.`,
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
+  // Validated BEFORE the empty-messages early return: an init/sync request that
+  // declares a bad tool set must be refused too, or the contract holds on turns
+  // that run an agent and silently lapses on the ones that do not.
+
   const hasUserMessage = messages.some((m) => m.role === "user");
   const hasToolMessage = messages.some((m) => m.role === "tool");
   if (!hasUserMessage && !hasToolMessage) {
@@ -367,9 +379,6 @@ async function dispatchAuthenticatedAguiRequest(
   // via forwardedProps.stateWriterTools; we inject them into clientTools below
   // and intercept the calls into STATE_SNAPSHOTs. Inbound state is rendered
   // into the prompt so the model can read (and knows how to change) it.
-  const { specs: stateWriterSpecs, schemas: stateWriterSchemas } = parseStateWriterTools(
-    input.forwardedProps,
-  );
   const stateWriterNames = [...stateWriterSpecs.keys()];
   const sharedStateSuffix = formatSharedState(input.state, stateWriterNames);
   // Run-scoped shared-state store, seeded from inbound state so snapshots
@@ -402,33 +411,6 @@ async function dispatchAuthenticatedAguiRequest(
   // (root prompt-budget policy: every model-visible injected item is bounded).
   // Checked HERE, before the SSE headers are committed, so an oversized toolset
   // gets a clean 400 — silently dropping tools would leave the page believing
-  // the agent can call something it can never see.
-  // Validate the SHAPE first, and keep the validated array — measuring a
-  // coerced copy while the run later mapped over `input.tools` let a malformed
-  // payload past this gate and blow up after admission, headers, and the
-  // session upsert, turning a 400 into a committed SSE 200 + RUN_ERROR with a
-  // session entry already written. Core enforces the same invariant at the
-  // equivalent boundary (`extractClientToolsFromChatRequest` in
-  // src/gateway/openai-http.ts), so this surface matches it.
-  const declaredTools = parseDeclaredTools(input.tools);
-  if (!declaredTools.ok) {
-    sendJson(res, 400, {
-      error: { message: declaredTools.message, type: "invalid_request_error" },
-    });
-    return;
-  }
-  const declaredToolsChars =
-    JSON.stringify(declaredTools.tools).length + JSON.stringify(stateWriterSchemas).length;
-  if (declaredToolsChars > MAX_CLIENT_TOOL_SCHEMA_CHARS) {
-    sendJson(res, 400, {
-      error: {
-        message: `Declared tool schemas are too large (${declaredToolsChars} chars, limit ${MAX_CLIENT_TOOL_SCHEMA_CHARS}). Send fewer tools or shorter descriptions/parameter schemas.`,
-        type: "invalid_request_error",
-      },
-    });
-    return;
-  }
-
   // Resolve agent route
   const cfg = runtime.config.current() as OpenClawConfig;
 

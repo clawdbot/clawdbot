@@ -96,6 +96,131 @@ describe("AG-UI multimodal image forwarding", () => {
     expect(fakeApi.runtime.agent.runEmbeddedAgent).toHaveBeenCalled();
   });
 
+  // Core rejects a colliding tool set, but only inside the run — after SSE is
+  // committed and the session may already be upserted. These must land on the
+  // documented 400 with no stream and no run.
+  it.each([
+    [
+      "two tools with the same name",
+      [
+        { name: "dupe", description: "a", parameters: {} },
+        { name: "dupe", description: "b", parameters: {} },
+      ],
+      undefined,
+    ],
+    [
+      "names differing only by case",
+      [
+        { name: "Dupe", description: "a", parameters: {} },
+        { name: "dupe", description: "b", parameters: {} },
+      ],
+      undefined,
+    ],
+    [
+      "a tool colliding with an injected state-writer",
+      [{ name: "set_notes", description: "a", parameters: {} }],
+      { stateWriterTools: [{ name: "set_notes", stateKey: "notes" }] },
+    ],
+  ])("rejects %s before opening the stream", async (_label, tools, forwardedProps) => {
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-conflict",
+          runId: "r-conflict",
+          messages: [{ role: "user", content: "hi" }],
+          tools,
+          ...(forwardedProps ? { forwardedProps } : {}),
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(JSON.parse(res.chunks[0]!).error.message).toContain("Conflicting tool names");
+    expect(parseEvents(res.chunks)).toHaveLength(0);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects two state writers sharing a name", async () => {
+    // Both halves of the combined set are injected into the same clientTools
+    // array, so state writers can collide with each other, not just with the
+    // browser's declared tools.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-sw-dupe",
+          runId: "r-sw-dupe",
+          messages: [{ role: "user", content: "hi" }],
+          forwardedProps: {
+            stateWriterTools: [
+              { name: "set_notes", stateKey: "notes" },
+              { name: "set_notes", stateKey: "other" },
+            ],
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.chunks[0]!).error.message).toContain("Conflicting tool names");
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("validates tools on an empty init/sync request too", async () => {
+    // The empty-messages path returns a 200 empty run early. Tool validation has
+    // to precede it, or the contract holds on turns that run an agent and
+    // silently lapses on session init.
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-init-tools",
+          runId: "r-init-tools",
+          messages: [],
+          tools: [
+            { name: "dupe", description: "a", parameters: {} },
+            { name: "dupe", description: "b", parameters: {} },
+          ],
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(parseEvents(res.chunks)).toHaveLength(0);
+  });
+
+  it("accepts distinct tool names alongside a state writer", async () => {
+    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
+    const res = createRes();
+    await handler(
+      createReq({
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          threadId: "t-ok",
+          runId: "r-ok",
+          messages: [{ role: "user", content: "hi" }],
+          tools: [{ name: "change_background", description: "a", parameters: {} }],
+          forwardedProps: { stateWriterTools: [{ name: "set_notes", stateKey: "notes" }] },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).toHaveBeenCalled();
+  });
+
   it("rejects an oversized declared toolset before committing the stream", async () => {
     // Tool schemas reach the model verbatim, so they are capped like context and
     // state. The rejection must be a clean 400, not a half-written SSE stream.
