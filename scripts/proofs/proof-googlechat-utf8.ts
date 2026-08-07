@@ -44,7 +44,9 @@ async function readJsonOverHttp(bytes: Uint8Array): Promise<unknown> {
     }
   } finally {
     server.closeAllConnections?.();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
