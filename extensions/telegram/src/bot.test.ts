@@ -5911,7 +5911,7 @@ describe("createTelegramBot", () => {
       makeTelegramConfig(
         {
           dmPolicy: "pairing",
-          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" } as never,
         },
         { commands: { native: true } },
       ),
