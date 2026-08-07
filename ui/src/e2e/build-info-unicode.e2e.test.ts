@@ -69,16 +69,21 @@ async function openBuildDetails(page: Page) {
   if (!buildLinkHandle) {
     throw new Error("Expected the identity-menu build link to be attached");
   }
-  await Promise.all([
-    tooltip.evaluate(
-      (element) =>
-        new Promise<void>((resolve) => {
-          element.addEventListener("wa-after-hide", () => resolve(), { once: true });
-        }),
-    ),
-    page.mouse.down(),
-  ]);
+  const afterHideMarker = "data-openclaw-test-after-hide";
+  await tooltip.evaluate((element, marker) => {
+    element.removeAttribute(marker);
+    element.addEventListener("wa-after-hide", () => element.setAttribute(marker, ""), {
+      once: true,
+    });
+  }, afterHideMarker);
+  await page.mouse.down();
+  await expect
+    .poll(() =>
+      tooltip.evaluate((element, marker) => element.hasAttribute(marker), afterHideMarker),
+    )
+    .toBe(true);
   expect(await buildLinkHandle.evaluate((element) => element.isConnected)).toBe(true);
+  await tooltip.evaluate((element, marker) => element.removeAttribute(marker), afterHideMarker);
   await page.mouse.up();
   await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/about");
 }
