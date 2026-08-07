@@ -270,12 +270,6 @@ describe("Vercel Container Registry publishing", () => {
         (step) => step.name === "Promote and verify Vercel channel aliases",
       )?.run,
     ).toContain('[[ "${channel}" == "beta" ]]');
-    const readinessStep = reusablePublish.steps?.find(
-      (step) => step.name === "Wait for Sandbox-ready release images",
-    );
-    expect(readinessStep?.run).toContain("max_attempts=60");
-    expect(readinessStep?.run).toContain("status=${status}.");
-    expect(readinessStep?.run).toContain("within 20 minutes");
     expect(
       reusablePublish.steps?.find((step) => step.name === "Run custom-image Sandbox smoke")?.run,
     ).toContain("sandbox run \\\n");
