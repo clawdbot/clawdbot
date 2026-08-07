@@ -10,7 +10,6 @@ import {
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
-  testState,
 } from "../../gateway/test-helpers.js";
 import { testConfigRoot } from "../../gateway/test-helpers.runtime-state.js";
 
@@ -18,12 +17,13 @@ installGatewayTestHooks({ scope: "suite" });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const entry = path.join(repoRoot, "src/entry.ts");
+const CLI_CHILD_TIMEOUT_MS = 60_000;
 
 async function runCli(
   args: string[],
   env: NodeJS.ProcessEnv,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  return await new Promise((resolve) => {
+  return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", entry, ...args], {
       cwd: repoRoot,
       env,
@@ -31,14 +31,41 @@ async function runCli(
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result: { code: number; stdout: string; stderr: string }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(
+        Object.assign(new Error("CLI process did not exit before the deadlock guard"), {
+          stdout,
+          stderr,
+        }),
+      );
+    }, CLI_CHILD_TIMEOUT_MS);
+    timer.unref();
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
     });
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
     child.on("close", (code) => {
-      resolve({ code: code ?? 1, stdout, stderr });
+      finish({ code: code ?? 1, stdout, stderr });
     });
   });
 }
@@ -60,30 +87,17 @@ function jobIdFromCronAdd(payload: unknown): string {
 describe("cron edit trigger-once CLI→gateway", () => {
   let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
   let tempRoot = "";
-  let previousCronEnabled: boolean | undefined;
-  let previousSkipCron: string | undefined;
   const token = "proof-trigger-once-token";
 
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trigger-once-proof-"));
-    previousCronEnabled = testState.cronEnabled;
-    previousSkipCron = process.env.OPENCLAW_SKIP_CRON;
-    process.env.OPENCLAW_SKIP_CRON = "0";
-    testState.cronEnabled = true;
+    // Allow trigger payloads on cron.add without enabling the scheduler /
+    // trigger-watcher lifecycle (default SKIP_CRON + cronEnabled=false).
     const configPath = path.join(testConfigRoot.value, "openclaw.json");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
       configPath,
-      `${JSON.stringify(
-        {
-          cron: {
-            enabled: true,
-            triggers: { enabled: true },
-          },
-        },
-        null,
-        2,
-      )}\n`,
+      `${JSON.stringify({ cron: { triggers: { enabled: true } } }, null, 2)}\n`,
       "utf8",
     );
     started = await startServerWithClient(token);
@@ -96,12 +110,6 @@ describe("cron edit trigger-once CLI→gateway", () => {
       await started.server.close().catch(() => undefined);
       started.envSnapshot.restore();
     }
-    testState.cronEnabled = previousCronEnabled;
-    if (previousSkipCron === undefined) {
-      delete process.env.OPENCLAW_SKIP_CRON;
-    } else {
-      process.env.OPENCLAW_SKIP_CRON = previousSkipCron;
-    }
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -111,14 +119,23 @@ describe("cron edit trigger-once CLI→gateway", () => {
     expect(started).toBeDefined();
     const { ws, port } = started!;
     const url = `ws://127.0.0.1:${port}`;
-    const env = {
+    // Keep the spawned source-entry CLI single-process: host CI may export
+    // NODE_COMPILE_CACHE / VITEST from the runner.
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: tempRoot,
       OPENCLAW_HOME: tempRoot,
       OPENCLAW_STATE_DIR: path.join(tempRoot, ".openclaw"),
       OPENCLAW_CONFIG_PATH: path.join(tempRoot, ".openclaw", "openclaw.json"),
       OPENCLAW_GATEWAY_TOKEN: token,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_NO_RESPAWN: "1",
     };
+    delete env.OPENCLAW_GATEWAY_PORT;
+    delete env.NODE_COMPILE_CACHE;
+    delete env.NODE_COMPILE_CACHE_PORTABLE;
+    delete env.VITEST;
+    delete env.NODE_OPTIONS;
 
     const add = await rpcReq(ws, "cron.add", {
       name: "proof-trigger-once",
