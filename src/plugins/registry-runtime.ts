@@ -283,16 +283,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           sessionKeys.add(sessionKey);
         }
       }
-      // The session ownership checks below list persisted entries to locate the
-      // claimed session ids/files. Those listings need a concrete agent scope;
-      // when the caller did not pass one (embedded runs are key-driven), derive
-      // it from the session key so the ownership check stays scoped to the agent
-      // that actually owns the target session instead of failing to resolve.
-      const scopedAgentId =
-        agentId ??
-        [...sessionKeys]
-          .map((key) => parseAgentSessionKey(key)?.agentId)
-          .find((value): value is string => Boolean(value));
       for (const sessionKey of sessionKeys) {
         assertStoredSessionEntryOwned({
           action: params.action,
@@ -320,7 +310,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return;
       }
       const entries = registryParams.runtime.agent.session.listSessionEntries({
-        ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
+        ...(agentId ? { agentId } : {}),
         ...(storePath ? { storePath } : {}),
         readOnly: true,
       });
@@ -464,7 +454,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        // Embedded runs are key-driven and reach here with an exact one session
+        // key; scope the ownership listing to that key's agent so the persisted
+        // id/file check stays pinned to the agent that owns the target session
+        // instead of relying on the caller to name it.
+        agentId: agentId ?? (sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined),
         sessionFiles: [params.sessionFile],
         sessionIds: [target?.sessionId ?? params.sessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
