@@ -80,7 +80,11 @@ describe("TrajectoryProvenanceSanitizer", () => {
         content: [{ type: "text", text: `assistant echo ${originTextHash}` }],
       },
     ]);
-    expect(sanitized.arbitrary).toEqual(data.arbitrary);
+    expect(sanitized.arbitrary).toEqual({
+      origin: { kind: "inter_session" },
+      provenance: { kind: "inter_session" },
+      echo: "not-learned-origin not-learned-provenance",
+    });
     const serialized = JSON.stringify(sanitized);
     expect(serialized).toContain(sourceTextHash);
     expect(serialized).toContain(originTextHash);
@@ -169,7 +173,7 @@ describe("TrajectoryProvenanceSanitizer", () => {
     });
     expect(sanitized.runtimeEvents[2]?.data?.origin).toEqual({
       kind: "inter_session",
-      sourceSessionHash: canonicalRaw,
+      sourceSessionHash: expectedHash(SOURCE_SESSION_HASH_DOMAIN, canonicalRaw),
     });
     expect(sanitized.runtimeEvents[3]?.data?.origin).toEqual({
       kind: "external_user",
@@ -179,7 +183,7 @@ describe("TrajectoryProvenanceSanitizer", () => {
     expect(JSON.stringify(sanitized)).not.toContain(spoofedHash);
   });
 
-  it("hashes short structured identifiers and fails closed on unsafe identity state", () => {
+  it("fails closed on short, oversized, and excess identity state", () => {
     const shortIdentity = "short";
     const shortSanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
     const shortResult = shortSanitizer.sanitizeEventData("prompt.submitted", {
@@ -190,11 +194,8 @@ describe("TrajectoryProvenanceSanitizer", () => {
       },
     });
     expect(shortResult).toEqual({
-      prompt: `echo ${shortIdentity}`,
-      origin: {
-        kind: "inter_session",
-        sourceSessionHash: expectedHash(SOURCE_SESSION_HASH_DOMAIN, shortIdentity),
-      },
+      redacted: true,
+      reason: "trajectory-provenance-sanitization-limit",
     });
 
     const oversizedIdentity = "x".repeat(4097);
@@ -236,5 +237,22 @@ describe("TrajectoryProvenanceSanitizer", () => {
       redacted: true,
       reason: "trajectory-provenance-sanitization-limit",
     });
+  });
+
+  it("keeps provenance-free payload bytes equivalent while cloning them", () => {
+    const data = {
+      prompt: "ordinary prompt",
+      messagesSnapshot: [
+        { role: "user", content: [{ type: "text", text: "hello" }] },
+        { role: "assistant", content: [{ type: "text", text: "world" }] },
+      ],
+    };
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+
+    const sanitized = sanitizer.sanitizeEventData("model.completed", data);
+
+    expect(JSON.stringify(sanitized)).toBe(JSON.stringify(data));
+    expect(sanitized).not.toBe(data);
+    expect(sanitized.messagesSnapshot).not.toBe(data.messagesSnapshot);
   });
 });

@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
@@ -13,6 +14,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import {
+  applyInputProvenanceToUserMessage,
+  type InputProvenance,
+} from "../sessions/input-provenance.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -60,7 +65,7 @@ const emptyUsage: Usage = {
   },
 };
 
-function userMessage(content: string): Message {
+function userMessage(content: string): Extract<AgentMessage, { role: "user" }> {
   return {
     role: "user",
     content,
@@ -98,7 +103,7 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
 
 function writeSimpleSessionFile(
   sessionFile: string,
-  params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
+  params: { userEntryTimestamp?: string | number; userMessage?: AgentMessage } = {},
 ): void {
   const header = {
     type: "session",
@@ -770,6 +775,7 @@ describe("exportTrajectoryBundle", () => {
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
+    const opaqueRoutingSecret = "opaque-routing-credential-value";
     const rawSecrets = [
       "sk-exported-session-secret",
       "ghp_123456789012345678901234",
@@ -829,9 +835,35 @@ describe("exportTrajectoryBundle", () => {
       summary: `branch summary saw ${rawSecrets[4]}`,
       details: { token: rawSecrets[0] },
     };
+    const customEntry = {
+      type: "custom",
+      id: "entry-custom",
+      parentId: "entry-branch-summary",
+      timestamp: "2026-04-01T05:46:44.000Z",
+      customType: "diagnostic",
+      data: { sessionKey: opaqueRoutingSecret },
+    };
+    const customMessageEntry = {
+      type: "custom_message",
+      id: "entry-custom-message",
+      parentId: "entry-custom",
+      timestamp: "2026-04-01T05:46:45.000Z",
+      customType: "diagnostic",
+      content: "custom diagnostic",
+      details: { nested: { sourceSessionKey: opaqueRoutingSecret } },
+      display: false,
+    };
     fs.writeFileSync(
       sessionFile,
-      `${[header, userEntry, assistantEntry, compactionEntry, branchSummaryEntry]
+      `${[
+        header,
+        userEntry,
+        assistantEntry,
+        compactionEntry,
+        branchSummaryEntry,
+        customEntry,
+        customMessageEntry,
+      ]
         .map((entry) => JSON.stringify(entry))
         .join("\n")}\n`,
       "utf8",
@@ -928,6 +960,7 @@ describe("exportTrajectoryBundle", () => {
     for (const secret of rawSecrets) {
       expect(exportedBundleText).not.toContain(secret);
     }
+    expect(exportedBundleText).not.toContain(opaqueRoutingSecret);
     expect(JSON.stringify(bundle.events)).not.toContain(rawSecrets[5]);
     expect(JSON.stringify(bundle.manifest)).not.toContain(rawSecrets[5]);
   });
@@ -942,13 +975,13 @@ describe("exportTrajectoryBundle", () => {
     const canonicalSourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "canonical-source");
     const canonicalOriginHash = expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, "canonical-origin");
     writeSimpleSessionFile(sessionFile, {
-      userMessage: {
-        ...userMessage(`transcript echo ${rawSessionKey}`),
-        provenance: {
+      userMessage: applyInputProvenanceToUserMessage(
+        userMessage(`transcript echo ${rawSessionKey}`),
+        {
           kind: "inter_session",
           sourceSessionKey: rawSessionKey,
         },
-      } as Message,
+      ),
     });
     const origins: unknown[] = [
       {
@@ -989,7 +1022,13 @@ describe("exportTrajectoryBundle", () => {
         seq: 1,
         sourceSeq: 1,
         sessionId: "session-1",
-        data: { prompt: `earlier echo ${rawSessionKey}` },
+        data: {
+          prompt: `earlier echo ${rawSessionKey}`,
+          dynamicToolArgs: {
+            sessionKey: "legacy-opaque-session-credential",
+            sourceSessionKey: "legacy-opaque-source-session-credential",
+          },
+        },
       },
       ...origins.map(
         (origin, index): TrajectoryEvent => ({
@@ -1048,6 +1087,8 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedText).not.toContain(spoofedHash);
     expect(exportedText).not.toContain("nested-secret");
     expect(exportedText).not.toContain("drop-me");
+    expect(exportedText).not.toContain("legacy-opaque-session-credential");
+    expect(exportedText).not.toContain("legacy-opaque-source-session-credential");
     expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionBytes);
     expect(fs.readFileSync(runtimeFile, "utf8")).toBe(runtimeBytes);
     expect(sessionBytes).toContain(rawSessionKey);
@@ -1061,8 +1102,8 @@ describe("exportTrajectoryBundle", () => {
     const sessionId = "session-1";
     const sessionKey = "agent:main:session-1";
     const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
-    const inputProvenance = {
-      kind: "inter_session" as const,
+    const inputProvenance: InputProvenance = {
+      kind: "inter_session",
       sourceSessionKey: rawSessionKey,
       sourceChannel: "discord",
       sourceTool: "sessions_send",
@@ -1086,10 +1127,10 @@ describe("exportTrajectoryBundle", () => {
         id: "entry-user",
         parentId: null,
         timestamp: "2026-04-01T05:46:40.000Z",
-        message: {
-          ...userMessage(`canonical transcript ${rawSessionKey}`),
-          provenance: inputProvenance,
-        } as Message,
+        message: applyInputProvenanceToUserMessage(
+          userMessage(`canonical transcript ${rawSessionKey}`),
+          inputProvenance,
+        ),
       },
       {
         type: "message",
@@ -1204,6 +1245,11 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it.each([
+    {
+      name: "short identity",
+      identities: ["short"],
+      error: /identity shorter than 8 characters/u,
+    },
     {
       name: "oversized identity",
       identities: ["x".repeat(4097)],

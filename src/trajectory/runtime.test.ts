@@ -80,6 +80,10 @@ describe("trajectory runtime", () => {
       command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
       oauth: "ya29.fake-access-token-with-enough-length",
       apple: "abcd-efgh-ijkl-mnop",
+      dynamicToolArgs: {
+        sessionKey: "opaque-session-credential",
+        sourceSessionKey: "opaque-source-session-credential",
+      },
       tools: toTrajectoryToolDefinitions([
         { name: "z-tool", parameters: { z: 1 } },
         { name: "a-tool", description: "alpha", parameters: { a: 1 } },
@@ -100,6 +104,9 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(parsed.data.dynamicToolArgs).toEqual({});
+    expect(JSON.stringify(parsed.data)).not.toContain("opaque-session-credential");
+    expect(JSON.stringify(parsed.data)).not.toContain("opaque-source-session-credential");
   });
 
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {

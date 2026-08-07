@@ -167,7 +167,8 @@ trajectory persistence. Known identifiers are also replaced in diagnostic text
 and object keys. Export sanitizes cloned data and does not rewrite the canonical
 session transcript. Matching identifiers remain correlatable across events.
 This is pseudonymization, not anonymity, so treat the hashes as sensitive
-metadata.
+metadata. Capture and export fail closed when provenance contains too many
+identifiers or identifiers that are unsafe for deterministic text replacement.
 
 The exporter also bounds input size:
 
