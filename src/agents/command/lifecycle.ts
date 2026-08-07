@@ -5,6 +5,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   type AgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
 import {
   resolveAgentRunAbortLifecycleFields,
@@ -79,6 +80,7 @@ export function createAgentCommandLifecycle(params: {
     fallbackExhausted?: boolean,
   ) => {
     const { aborted, yielded, replayInvalid, terminalReply } = terminal.metadata;
+    const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
     emitAgentEvent({
       runId: params.runId,
@@ -97,6 +99,7 @@ export function createAgentCommandLifecycle(params: {
         ...(providerStarted !== undefined ? { providerStarted } : {}),
         ...(error ? { error: formatErrorMessage(error) } : {}),
         ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
+        ...(terminalReceipt ? { terminalReceipt } : {}),
         ...(terminalReply ? { terminalReply } : {}),
         ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
       },

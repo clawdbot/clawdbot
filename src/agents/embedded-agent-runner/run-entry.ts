@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
@@ -189,6 +190,7 @@ function buildTerminal(params: {
   result: EmbeddedAgentRunResult;
   fallbackExhausted: boolean;
   behavior: RunEntryBehavior;
+  runId: string;
 }): EmbeddedAgentRunEntryTerminal {
   const meta = params.result.meta;
   const outcome = buildAgentRunTerminalOutcome({
@@ -200,6 +202,12 @@ function buildTerminal(params: {
     providerStarted: meta.providerStarted,
   });
   const metadata: Record<string, unknown> = {};
+  const terminalReceipt = normalizeAgentRunTerminalReceipt(
+    (meta.agentMeta as { terminalReceipt?: unknown } | undefined)?.terminalReceipt,
+  );
+  if (terminalReceipt?.runId === params.runId) {
+    metadata.terminalReceipt = terminalReceipt;
+  }
   metadata.terminalReply =
     normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
     buildAgentRunTerminalReplySnapshot({
@@ -447,6 +455,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       result,
       fallbackExhausted: settledResult.outcome === "exhausted",
       behavior: params.behavior,
+      runId: params.identity.runId,
     });
     if (fallbackResult.result.turnAttempt) {
       if (

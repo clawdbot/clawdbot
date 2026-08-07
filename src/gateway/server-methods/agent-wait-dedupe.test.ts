@@ -33,6 +33,19 @@ function completeRun(dedupe: Map<string, DedupeEntry>, runId: string): void {
   });
 }
 
+function terminalReceipt(runId: string) {
+  return {
+    runId,
+    sessionId: "session-1",
+    turnId: "turn-1",
+    requested: { provider: "openai", model: "gpt-primary" },
+    effective: { provider: "openai", model: "gpt-alternate", responseModel: "gpt-alternate" },
+    successfulToolNames: ["read"],
+    rerouted: true,
+    terminalDisposition: "visible",
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -161,6 +174,7 @@ describe("agent.wait gateway dedupe observations", () => {
             phase: "end",
             startedAt: 100,
             endedAt: 300,
+            terminalReceipt: terminalReceipt(runId),
             terminalReply: { disposition: "visible", text: "canonical reply" },
           },
         });
@@ -194,6 +208,7 @@ describe("agent.wait gateway dedupe observations", () => {
         expect.objectContaining({
           runId,
           status: "timeout",
+          terminalReceipt: terminalReceipt(runId),
           terminalReply: { disposition: "visible", text: "canonical reply" },
         }),
       );

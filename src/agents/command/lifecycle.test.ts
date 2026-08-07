@@ -149,6 +149,7 @@ describe("createAgentCommandLifecycle", () => {
           providerStarted: malicious,
           livenessState: malicious,
           replayInvalid: malicious,
+          terminalReceipt: malicious,
           error: malicious,
           unknownMetadata: malicious,
         },
@@ -172,6 +173,7 @@ describe("createAgentCommandLifecycle", () => {
         "providerStarted",
         "livenessState",
         "replayInvalid",
+        "terminalReceipt",
         "unknownMetadata",
       ]) {
         expect(event.data).not.toHaveProperty(field);

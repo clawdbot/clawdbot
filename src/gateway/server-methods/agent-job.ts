@@ -11,6 +11,10 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import {
+  normalizeAgentRunTerminalReceipt,
+  type AgentRunTerminalReceipt,
+} from "../../agents/agent-run-terminal-receipt.js";
+import {
   mergeAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
   type AgentRunTerminalReplySnapshot,
@@ -35,6 +39,7 @@ type AgentJobTerminalSnapshot = {
   pendingError?: boolean;
   timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
   providerStarted?: boolean;
+  terminalReceipt?: AgentRunTerminalReceipt;
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
@@ -168,11 +173,13 @@ function mergeSnapshot(
     existing.terminalReply,
     incoming.terminalReply,
   );
+  const terminalReceipt = incoming.terminalReceipt ?? existing.terminalReceipt;
   const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
   // Terminal status precedence and producer reply evidence are independent;
   // a late sticky timeout must not erase the final reply (or vice versa).
   return {
     ...canonical,
+    ...(terminalReceipt ? { terminalReceipt } : {}),
     ...(terminalReply ? { terminalReply } : {}),
     cachedAt: incoming.cachedAt,
     recordedAt: incoming.recordedAt,
@@ -300,6 +307,9 @@ function createSnapshotFromLifecycleEvent(params: {
   const legacyBareAbort =
     terminalOutcome.reason === "aborted" && data?.stopReason == null && data?.status == null;
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(data?.terminalReply);
+  const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(data?.terminalReceipt);
+  const terminalReceipt =
+    normalizedTerminalReceipt?.runId === runId ? normalizedTerminalReceipt : undefined;
   return {
     runId,
     source: "lifecycle",
@@ -316,6 +326,7 @@ function createSnapshotFromLifecycleEvent(params: {
       ? { providerStarted: terminalOutcome.providerStarted }
       : {}),
     ...(terminalReply ? { terminalReply } : {}),
+    ...(terminalReceipt ? { terminalReceipt } : {}),
     version: nextAgentRunVersion(),
   };
 }
@@ -560,6 +571,7 @@ function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot
     pendingError: snapshot.pendingError,
     timeoutPhase: snapshot.timeoutPhase,
     providerStarted: snapshot.providerStarted,
+    terminalReceipt: snapshot.terminalReceipt,
     terminalReply: snapshot.terminalReply,
   };
 }
