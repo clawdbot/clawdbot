@@ -7425,7 +7425,12 @@ describe("handleSendChat", () => {
 
     await retryQueuedChatMessage(host, failedId);
 
-    expect(historyRequests).toBe(2);
+    // Manual retry re-enters the durable drain, which reconciles authoritative history first.
+    expect(historyRequests).toBe(3);
+    expect(host.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:main",
+      limit: 1000,
+    });
     const sends = host.request.mock.calls
       .filter(([method]) => method === "chat.send")
       .map(([, params]) => requireRecord(params, "post-clear send payload"));
