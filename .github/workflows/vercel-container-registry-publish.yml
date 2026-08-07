@@ -102,15 +102,17 @@ jobs:
         run: |
           set -euo pipefail
           repository="${TARGET_IMAGE##*/}"
+          max_attempts=60
           for tag in "${VERSION}" "${VERSION}-slim" "${VERSION}-browser"; do
             ready=0
-            for attempt in $(seq 1 30); do
+            for attempt in $(seq 1 "${max_attempts}"); do
               tag_json="$(npx --yes "vercel@${VERCEL_CLI_VERSION}" vcr tag inspect \
                 "${repository}" "${tag}" \
                 --project "${VERCEL_PROJECT_ID}" \
                 --scope "${VERCEL_SCOPE}" \
                 --format json)"
-              status="$(jq -r '.status // ""' <<< "${tag_json}")"
+              status="$(jq -r '.status // "pending"' <<< "${tag_json}")"
+              echo "Readiness ${repository}:${tag}: attempt ${attempt}/${max_attempts}, status=${status}."
               if [[ "${status}" == "ready" ]]; then
                 ready=1
                 break
@@ -119,13 +121,13 @@ jobs:
                 echo "::error::${repository}:${tag} has no Sandbox-ready linux/amd64 image."
                 exit 1
               fi
-              if [[ "${attempt}" -eq 30 ]]; then
+              if [[ "${attempt}" -eq "${max_attempts}" ]]; then
                 break
               fi
               sleep 20
             done
             if [[ "${ready}" != "1" ]]; then
-              echo "::error::${repository}:${tag} did not become Sandbox-ready within 10 minutes."
+              echo "::error::${repository}:${tag} did not become Sandbox-ready within 20 minutes."
               exit 1
             fi
             echo "Verified ${repository}:${tag} is Sandbox-ready."
