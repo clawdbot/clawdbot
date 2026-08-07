@@ -490,6 +490,32 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         pluginOwnedCleanupOptions,
       );
     },
+    async abortSession(params) {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const pluginId =
+        typeof scope?.pluginId === "string" && scope.pluginId.trim()
+          ? scope.pluginId.trim()
+          : undefined;
+      const pluginOwnedAbortOptions = pluginId
+        ? {
+            pluginRuntimeOwnerId: pluginId,
+            ...(!hasAdminScope(scope?.client)
+              ? {
+                  forceSyntheticClient: true,
+                  syntheticScopes: [ADMIN_SCOPE],
+                }
+              : {}),
+          }
+        : undefined;
+      await dispatchGatewayMethodInProcess(
+        "sessions.abort",
+        {
+          key: params.sessionKey,
+          ...(params.runId ? { runId: params.runId } : {}),
+        },
+        pluginOwnedAbortOptions,
+      );
+    },
   };
 }
 

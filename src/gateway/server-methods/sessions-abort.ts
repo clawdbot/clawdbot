@@ -235,6 +235,20 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
       });
     const sessionEntry = loadedSession?.entry;
+    // A plugin may abort only runs on sessions it owns. `sessions.delete` and the
+    // session mutations already assert this; without the same check here a
+    // plugin-scoped caller could cancel another plugin's in-flight work.
+    if (
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "abort",
+        client,
+        key: canonicalKey,
+        entry: sessionEntry,
+        respond,
+      })
+    ) {
+      return;
+    }
     const requestedKeyAliases =
       requestedKey &&
       requestedKey !== key &&

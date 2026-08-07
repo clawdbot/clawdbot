@@ -874,6 +874,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               assertStoredSessionEntryOwned({ action: "delete", sessionKey: params.sessionKey });
               await subagent.deleteSession(params);
             }),
+          abortSession: async (params) =>
+            await withPluginRuntimePluginIdScope(pluginId, async () => {
+              assertStoredSessionEntryOwned({ action: "abort", sessionKey: params.sessionKey });
+              await subagent.abortSession(params);
+            }),
         } satisfies PluginRuntime["subagent"];
       },
     });

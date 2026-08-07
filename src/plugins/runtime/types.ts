@@ -63,6 +63,17 @@ type SubagentGetSessionMessagesResult = {
   messages: unknown[];
 };
 
+/**
+ * Cancel any in-flight run on a session WITHOUT destroying the session or its
+ * transcript. Use this to STOP work; SubagentDeleteSessionParams discards the
+ * session entirely.
+ */
+type SubagentAbortSessionParams = {
+  sessionKey: string;
+  /** Abort only this run; omit to abort whatever is currently running. */
+  runId?: string;
+};
+
 type SubagentDeleteSessionParams = {
   sessionKey: string;
   deleteTranscript?: boolean;
@@ -125,6 +136,13 @@ export type PluginRuntime = PluginRuntimeCore & {
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
+    /**
+     * Cancel the in-flight run on a session, KEEPING the session and its
+     * transcript. `deleteSession` also stops a run, but it removes the session
+     * entry, so the next message starts a fresh session and prior history
+     * becomes unreachable.
+     */
+    abortSession: (params: SubagentAbortSessionParams) => Promise<void>;
   };
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
