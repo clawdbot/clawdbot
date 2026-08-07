@@ -161,7 +161,6 @@ Do not modify files, source, git state, permissions, configuration, workspace st
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParams,
   options: {
-    agentHarnessCodingToolsFactory?: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarnessSideQuestion"];
     bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
     nativeHookRelay?: {
@@ -414,7 +413,6 @@ export async function runCodexAppServerSideQuestion(
           })
         : "unsupported";
     const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
-      agentHarnessCodingToolsFactory: options.agentHarnessCodingToolsFactory,
       attributionParams: params,
       params: effectiveParams,
       cwd,
@@ -923,7 +921,6 @@ function buildSideRunAttemptParams(
 }
 
 async function createCodexSideToolBridge(input: {
-  agentHarnessCodingToolsFactory?: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarnessSideQuestion"];
   attributionParams: AgentHarnessSideQuestionParams;
   params: AgentHarnessSideQuestionParams;
   cwd: string;
@@ -940,9 +937,8 @@ async function createCodexSideToolBridge(input: {
   const messageToolProvider = resolveCodexMessageToolProvider(input.params);
   let tools: AnyAgentTool[] = [];
   if (supportsModelTools(runtimeModel)) {
-    if (!input.agentHarnessCodingToolsFactory) {
-      throw new Error("[codex] host side-question tool authority is unavailable");
-    }
+    const { createOpenClawCodingToolsForAgentHarnessSideQuestion } =
+      await import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime");
     const sandboxSessionKey =
       input.params.sandboxSessionKey?.trim() ||
       input.params.sessionKey?.trim() ||
@@ -953,7 +949,7 @@ async function createCodexSideToolBridge(input: {
       sessionKey: sandboxSessionKey,
       workspaceDir: input.cwd,
     });
-    const allTools = await input.agentHarnessCodingToolsFactory(input.attributionParams, {
+    const allTools = createOpenClawCodingToolsForAgentHarnessSideQuestion(input.attributionParams, {
       agentId: input.sessionAgentId,
       sessionKey: sandboxSessionKey,
       runSessionKey:

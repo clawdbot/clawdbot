@@ -21,10 +21,7 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
-import {
-  dynamicToolBuildState,
-  type AgentHarnessCodingToolsFactory,
-} from "./dynamic-tool-build-state.js";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
   filterCodexDynamicToolsWithOpenClawShell,
@@ -86,7 +83,6 @@ function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?:
 }
 /** Runtime inputs needed to derive the exact Codex dynamic tool surface for a turn. */
 type DynamicToolBuildParams = {
-  agentHarnessCodingToolsFactory?: AgentHarnessCodingToolsFactory;
   attributionAttempt: EmbeddedRunAttemptParams;
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
@@ -236,11 +232,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   let agentHarnessModule: typeof import("openclaw/plugin-sdk/agent-harness") | undefined;
   const loadAgentHarnessModule = async () =>
     (agentHarnessModule ??= await import("openclaw/plugin-sdk/agent-harness"));
-  const agentHarnessCodingToolsFactory =
-    input.agentHarnessCodingToolsFactory ?? dynamicToolBuildState.agentHarnessCodingToolsFactory;
-  if (!injectedOpenClawCodingToolsFactory && !agentHarnessCodingToolsFactory) {
-    throw new Error("[codex] host tool authority is unavailable");
-  }
+  const agentHarnessCodingToolsFactory = injectedOpenClawCodingToolsFactory
+    ? undefined
+    : (dynamicToolBuildState.agentHarnessCodingToolsFactory ??
+      (await import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))
+        .createOpenClawCodingToolsForAgentHarness);
   const createOpenClawCodingTools =
     injectedOpenClawCodingToolsFactory ??
     ((options: OpenClawCodingToolsOptions) =>
@@ -248,7 +244,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
-  const allTools = await createOpenClawCodingTools({
+  const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {

@@ -1,3 +1,7 @@
+import {
+  createOpenClawCodingToolsForAgentHarness as createCoreOpenClawCodingToolsForAgentHarness,
+  createOpenClawCodingToolsForAgentHarnessSideQuestion as createCoreOpenClawCodingToolsForAgentHarnessSideQuestion,
+} from "../agents/agent-tools-internal.js";
 import type {
   AgentHarnessSideQuestionParams,
   EmbeddedRunAttemptParams,
@@ -11,16 +15,10 @@ type OpenClawCodingToolsOptions = NonNullable<
  * Build tools for the exact host-admitted attempt without exposing its private
  * execution attribution to plugin code.
  */
-export async function createOpenClawCodingToolsForAgentHarness(
+export function createOpenClawCodingToolsForAgentHarness(
   attempt: EmbeddedRunAttemptParams,
   options?: OpenClawCodingToolsOptions,
-): Promise<
-  ReturnType<
-    typeof import("../agents/agent-tools-internal.js").createOpenClawCodingToolsForAgentHarness
-  >
-> {
-  const { createOpenClawCodingToolsForAgentHarness: createCoreOpenClawCodingToolsForAgentHarness } =
-    await import("../agents/agent-tools-internal.js");
+): ReturnType<typeof createCoreOpenClawCodingToolsForAgentHarness> {
   return createCoreOpenClawCodingToolsForAgentHarness(attempt, options);
 }
 
@@ -28,17 +26,9 @@ export async function createOpenClawCodingToolsForAgentHarness(
  * Build tools for the exact host-admitted side-question request without
  * exposing its private execution attribution to plugin code.
  */
-export async function createOpenClawCodingToolsForAgentHarnessSideQuestion(
+export function createOpenClawCodingToolsForAgentHarnessSideQuestion(
   params: AgentHarnessSideQuestionParams,
   options?: OpenClawCodingToolsOptions,
-): Promise<
-  ReturnType<
-    typeof import("../agents/agent-tools-internal.js").createOpenClawCodingToolsForAgentHarnessSideQuestion
-  >
-> {
-  const {
-    createOpenClawCodingToolsForAgentHarnessSideQuestion:
-      createCoreOpenClawCodingToolsForAgentHarnessSideQuestion,
-  } = await import("../agents/agent-tools-internal.js");
+): ReturnType<typeof createCoreOpenClawCodingToolsForAgentHarnessSideQuestion> {
   return createCoreOpenClawCodingToolsForAgentHarnessSideQuestion(params, options);
 }

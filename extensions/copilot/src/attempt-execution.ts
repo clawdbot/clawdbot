@@ -260,7 +260,6 @@ export async function runCopilotExecution(context: {
     if (!settledToolFinalization) {
       try {
         const toolBridge = await createToolBridge({
-          agentHarnessCodingToolsFactory: deps.createOpenClawCodingToolsForAgentHarness,
           allowModelTools: poolAcquire.provider.mode === "byok",
           modelProvider: modelRef.provider,
           modelId: modelRef.id,

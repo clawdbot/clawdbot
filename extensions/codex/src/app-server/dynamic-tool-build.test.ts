@@ -165,7 +165,7 @@ describe("Codex app-server dynamic tool build", () => {
     admittedAttempt.runtimePlan = createCodexRuntimePlanFixture();
     const runtimeParams = { ...admittedAttempt };
     const factory = vi.fn<NonNullable<typeof dynamicToolBuildState.agentHarnessCodingToolsFactory>>(
-      async () => [],
+      () => [],
     );
     dynamicToolBuildState.agentHarnessCodingToolsFactory = factory;
 

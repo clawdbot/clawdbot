@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAgentHarnessRun,
   attachModelProviderRequestTransport,
@@ -554,11 +553,7 @@ describe("runCopilotAttempt", () => {
         disableTools: false,
         config: { tools: { codeMode: true } },
       } as never),
-      {
-        createOpenClawCodingToolsForAgentHarness: async (_attempt, options) =>
-          createOpenClawCodingTools(options),
-        pool: makeFakePool(sdk),
-      },
+      { pool: makeFakePool(sdk) },
     );
 
     expect(result.codeModeEngaged).toBe(true);

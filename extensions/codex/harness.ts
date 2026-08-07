@@ -33,11 +33,6 @@ type CodexAppServerAgentHarness = AgentHarness & {
   ): Promise<AgentHarnessCompactResult | undefined>;
 };
 
-type CodexAgentHarnessToolAuthority = {
-  createForAttempt: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarness"];
-  createForSideQuestion: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarnessSideQuestion"];
-};
-
 async function disposeSharedCodexAppServerClients(): Promise<void> {
   const dispose = (
     globalThis as typeof globalThis & {
@@ -61,7 +56,6 @@ export function createCodexAppServerAgentHarness(options: {
   runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
   sessionCatalogControl?: CodexSessionCatalogControl;
-  toolAuthority?: CodexAgentHarnessToolAuthority;
 }): AgentHarness {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
@@ -186,7 +180,6 @@ export function createCodexAppServerAgentHarness(options: {
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
-        agentHarnessCodingToolsFactory: options.toolAuthority?.createForAttempt,
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
         nativeHookRelay: { enabled: true },
@@ -228,7 +221,6 @@ export function createCodexAppServerAgentHarness(options: {
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {
-        agentHarnessCodingToolsFactory: options.toolAuthority?.createForSideQuestion,
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
         nativeHookRelay: { enabled: true },

@@ -27,8 +27,6 @@ import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 type OpenClawCodingToolsOptions = NonNullable<Parameters<CreateOpenClawCodingTools>[0]>;
-export type AgentHarnessCodingToolsFactory =
-  (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarness"];
 type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSurfaceRuntime>;
 type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
@@ -73,7 +71,6 @@ type CopilotToolCompletion = {
 };
 
 interface CopilotToolBridgeInput {
-  agentHarnessCodingToolsFactory?: AgentHarnessCodingToolsFactory;
   allowModelTools?: boolean;
   /** Invalidates screenshot-bound computer actions after context compaction. */
   computerContextEpoch?: {
@@ -139,9 +136,7 @@ interface CopilotToolBridgeInput {
   onYieldDetected?: (message?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
   observeToolTerminal?: CopilotToolTerminalObserver;
-  createOpenClawCodingTools?: (
-    options: OpenClawCodingToolsOptions,
-  ) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
+  createOpenClawCodingTools?: (opts: unknown) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
   beforeExecute?: (ctx: {
     toolName: string;
     toolCallId: string;
@@ -203,16 +198,15 @@ export async function createCopilotToolBridge(
   }
 
   const admittedAttempt = input.admittedAttempt;
-  let createOpenClawCodingTools = input.createOpenClawCodingTools;
-  if (!createOpenClawCodingTools && admittedAttempt) {
-    if (!input.agentHarnessCodingToolsFactory) {
-      throw new Error("[copilot-tool-bridge] host tool authority is unavailable");
-    }
-    createOpenClawCodingTools = (options: OpenClawCodingToolsOptions) =>
-      input.agentHarnessCodingToolsFactory!(admittedAttempt, options);
-  }
-  createOpenClawCodingTools ??= (await import("openclaw/plugin-sdk/agent-harness"))
-    .createOpenClawCodingTools;
+  const createOpenClawCodingTools =
+    input.createOpenClawCodingTools ??
+    (admittedAttempt
+      ? async (options: OpenClawCodingToolsOptions) => {
+          const { createOpenClawCodingToolsForAgentHarness } =
+            await import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime");
+          return createOpenClawCodingToolsForAgentHarness(admittedAttempt, options);
+        }
+      : (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools);
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: input.abortSignal,
