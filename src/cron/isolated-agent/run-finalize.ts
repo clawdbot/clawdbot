@@ -58,6 +58,19 @@ async function loadUsageFormatRuntime() {
   return await import("../../utils/usage-format.js");
 }
 
+/**
+ * Maps a resolved cron payload outcome to the terminal run status. A fatal
+ * error payload (or run-level error/failure signal) makes the run an error;
+ * otherwise the run is ok. This is the single production mapper from the
+ * payload-outcome owner to the finalization status, so finalization diagnostics
+ * and downstream timer/alert state share one source of truth.
+ */
+export function resolveCronRunFinalStatus(outcome: {
+  hasFatalErrorPayload: boolean;
+}): "error" | "ok" {
+  return outcome.hasFatalErrorPayload ? "error" : "ok";
+}
+
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
   execution: CronExecutionResult;
@@ -298,7 +311,7 @@ export async function finalizeCronRun(params: {
     embeddedRunError,
   } = cronPayloadOutcome;
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
-    finalStatus: hasFatalErrorPayload ? "error" : "ok",
+    finalStatus: resolveCronRunFinalStatus(cronPayloadOutcome),
   });
   const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
   const resolveRunOutcome = (result?: {
@@ -308,7 +321,7 @@ export async function finalizeCronRun(params: {
     delivery?: CronDeliveryTrace;
   }) =>
     prepared.withRunSession({
-      status: hasFatalErrorPayload ? "error" : "ok",
+      status: resolveCronRunFinalStatus(cronPayloadOutcome),
       ...(hasFatalErrorPayload
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
         : {}),
