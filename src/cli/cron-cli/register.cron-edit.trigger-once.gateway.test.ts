@@ -60,10 +60,12 @@ function jobIdFromCronAdd(payload: unknown): string {
 describe("cron edit trigger-once CLI→gateway", () => {
   let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
   let tempRoot = "";
+  let previousCronEnabled: boolean | undefined;
   const token = "proof-trigger-once-token";
 
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trigger-once-proof-"));
+    previousCronEnabled = testState.cronEnabled;
     process.env.OPENCLAW_SKIP_CRON = "0";
     testState.cronEnabled = true;
     const configPath = path.join(testConfigRoot.value, "openclaw.json");
@@ -92,6 +94,7 @@ describe("cron edit trigger-once CLI→gateway", () => {
       await started.server.close().catch(() => undefined);
       started.envSnapshot.restore();
     }
+    testState.cronEnabled = previousCronEnabled;
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
