@@ -1,11 +1,12 @@
 // QA Lab product proof for doctor gateway auth and SecretRef behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { withSecureTestNodeCommand } from "../../../../src/secrets/test-node-command.test-support.js";
-import { forceWindowsAclVerificationUnavailable } from "../../../../src/test-utils/vitest-spies.js";
+import { forceNativeWindowsAclToolsUnavailable } from "../../../../src/test-utils/vitest-spies.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -104,10 +105,11 @@ describe("doctor auth and SecretRef product proof", () => {
       };
       expect(unresolvedConfig.gateway?.auth?.token).toEqual(unresolvedRef);
 
-      const missingSystemRoot = path.join(instance.stateDir, "missing-windows-system-root");
-      await expect(fs.access(missingSystemRoot)).rejects.toThrow();
       if (process.platform === "win32") {
-        forceWindowsAclVerificationUnavailable(instance.env, missingSystemRoot);
+        forceNativeWindowsAclToolsUnavailable(
+          instance.env,
+          pathToFileURL(path.resolve("test/fixtures/windows-acl-tools-unavailable.mjs")).href,
+        );
       }
 
       const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
@@ -141,7 +143,6 @@ describe("doctor auth and SecretRef product proof", () => {
           /Gateway token SecretRef could not be resolved: .*Windows path security could not be verified\. Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify\./,
         );
         expect(fileOutput).not.toContain(filePath);
-        expect(fileOutput).not.toContain(missingSystemRoot);
       } else {
         expect(fileOutput).not.toContain("Gateway token SecretRef could not be resolved");
       }
@@ -194,7 +195,6 @@ describe("doctor auth and SecretRef product proof", () => {
           );
           expect(execAllowedOutput).not.toContain(command);
           expect(execAllowedOutput).not.toContain(execMarker);
-          expect(execAllowedOutput).not.toContain(missingSystemRoot);
           await expect(fs.access(execMarker)).rejects.toThrow();
         } else {
           await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
