@@ -2702,7 +2702,7 @@ describe("QmdMemoryManager", () => {
         startLine: 7,
         endLine: 7,
         score: 0.93,
-        snippet: "@@ -7,1\nrouter glacier backup",
+        snippet: "router glacier backup",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -2837,7 +2837,7 @@ describe("QmdMemoryManager", () => {
         startLine: 1,
         endLine: 1,
         score: 1,
-        snippet: "@@ -1,1\nremember this",
+        snippet: "remember this",
         source: "memory",
         provenance: expectedQmdProvenance("agent"),
       },
@@ -3690,7 +3690,7 @@ describe("QmdMemoryManager", () => {
                 start_line: 8,
                 end_line: 10,
                 snippet:
-                  "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
+                  "3: @@ -20,3\n4: line one\n5: line two\n6: line three <!-- project: github.com/acme/Alpha -->",
               },
             ],
           }),
@@ -3725,7 +3725,7 @@ describe("QmdMemoryManager", () => {
         startLine: 8,
         endLine: 10,
         score: 0.91,
-        snippet: "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
+        snippet: "line one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -3736,7 +3736,7 @@ describe("QmdMemoryManager", () => {
 
   it("keeps per-result and aggregate QMD snippet limits UTF-16 safe", async () => {
     const expectedDocId = "unicode-boundary";
-    const snippet = "@@ -1,1\nabc😀tail";
+    const snippet = "abc😀tail\nsecond line";
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
@@ -3795,11 +3795,11 @@ describe("QmdMemoryManager", () => {
       return results;
     };
 
-    await expect(searchWithLimits({ maxSnippetChars: 12, maxInjectedChars: 100 })).resolves.toEqual(
-      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
-    );
+    await expect(searchWithLimits({ maxSnippetChars: 9, maxInjectedChars: 100 })).resolves.toEqual([
+      expect.objectContaining({ snippet: "abc😀tail", startLine: 1, endLine: 1 }),
+    ]);
     await expect(searchWithLimits({ maxSnippetChars: 100, maxInjectedChars: 12 })).resolves.toEqual(
-      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
+      [expect.objectContaining({ snippet: "abc😀tail\nse", startLine: 1, endLine: 2 })],
     );
   });
 
@@ -3824,7 +3824,7 @@ describe("QmdMemoryManager", () => {
                 score: 0.73,
                 collection: "workspace-main",
                 start_line: 8,
-                snippet: "@@ -20,3\nline one\nline two\nline three",
+                snippet: "3: @@ -20,3\n4: line one\n5: line two\n6: line three",
               },
             ],
           }),
@@ -3859,7 +3859,7 @@ describe("QmdMemoryManager", () => {
         startLine: 8,
         endLine: 10,
         score: 0.73,
-        snippet: "@@ -20,3\nline one\nline two\nline three",
+        snippet: "line one\nline two\nline three",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -5695,7 +5695,7 @@ describe("QmdMemoryManager", () => {
         startLine: 5,
         endLine: 6,
         score: 1,
-        snippet: "@@ -5,2\nremember this\nnext line",
+        snippet: "remember this\nnext line",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -5763,7 +5763,7 @@ describe("QmdMemoryManager", () => {
         startLine: 3,
         endLine: 3,
         score: 0.9,
-        snippet: "@@ -3,1\nworkspace hit",
+        snippet: "workspace hit",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -5804,7 +5804,7 @@ describe("QmdMemoryManager", () => {
         startLine: 4,
         endLine: 4,
         score: 0.71,
-        snippet: "@@ -4,1\ntoken unlock",
+        snippet: "token unlock",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -5860,7 +5860,7 @@ describe("QmdMemoryManager", () => {
         startLine: 2,
         endLine: 2,
         score: 0.84,
-        snippet: "@@ -2,1\nsession canary",
+        snippet: "session canary",
         source: "sessions",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -5952,7 +5952,7 @@ describe("QmdMemoryManager", () => {
         startLine: 2,
         endLine: 2,
         score: 0.8,
-        snippet: "@@ -2,1\nsession hit",
+        snippet: "session hit",
         source: "sessions",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -6021,7 +6021,7 @@ describe("QmdMemoryManager", () => {
         startLine: 2,
         endLine: 2,
         score: 0.8,
-        snippet: "@@ -2,1\nworkspace fact",
+        snippet: "workspace fact",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -6030,7 +6030,7 @@ describe("QmdMemoryManager", () => {
         startLine: 1,
         endLine: 1,
         score: 0.7,
-        snippet: "@@ -1,1\nnotes guide",
+        snippet: "notes guide",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -6123,7 +6123,7 @@ describe("QmdMemoryManager", () => {
         startLine: 3,
         endLine: 3,
         score: 0.91,
-        snippet: "@@ -3,1\nQMD activation",
+        snippet: "QMD activation",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -6176,7 +6176,7 @@ describe("QmdMemoryManager", () => {
         startLine: 3,
         endLine: 3,
         score: 0.91,
-        snippet: "@@ -3,1\nQMD activation",
+        snippet: "QMD activation",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },
@@ -6197,7 +6197,7 @@ describe("QmdMemoryManager", () => {
         startLine: 3,
         endLine: 3,
         score: 0.91,
-        snippet: "@@ -3,1\nQMD activation",
+        snippet: "QMD activation",
         source: "memory",
         provenance: expectedQmdProvenance("untrusted"),
       },

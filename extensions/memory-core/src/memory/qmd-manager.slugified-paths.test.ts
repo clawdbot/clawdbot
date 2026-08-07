@@ -272,7 +272,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         startLine: 2,
         endLine: 2,
         score: 0.73,
-        snippet: "@@ -2,1\nline-2",
+        snippet: "line-2",
         source: "memory",
         provenance: {
           originClass: "untrusted",
@@ -350,7 +350,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         startLine: 1,
         endLine: 1,
         score: 0.81,
-        snippet: "@@ -1,1\nvault memory",
+        snippet: "vault memory",
         source: "memory",
         provenance: {
           originClass: "untrusted",
@@ -415,7 +415,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
         startLine: 1,
         endLine: 1,
         score: 0.79,
-        snippet: "@@ -1,1\nexact slugified path",
+        snippet: "exact slugified path",
         source: "memory",
         provenance: {
           originClass: "untrusted",

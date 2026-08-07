@@ -29,7 +29,8 @@ import {
   writeQmdMultiCollectionProbeCache,
 } from "./qmd-runtime-cache.js";
 
-const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
+const SNIPPET_HEADER_RE =
+  /^\uFEFF?(?:\d+:\s*)?@@\s*-([1-9]\d*),([1-9]\d*)(?:\s*@@(?:\s*\(\d+\s+before,\s*\d+\s+after\))?)?(?:\r?\n|$)/;
 
 export abstract class QmdManagerSearchSupport extends QmdManagerLifecycle {
   protected recordSearchPlanDebug(params: {
@@ -121,6 +122,7 @@ export abstract class QmdManagerSearchSupport extends QmdManagerLifecycle {
   protected resolveSnippetLines(
     entry: QmdQueryResult,
     snippet: string,
+    fallbackSnippet = snippet,
   ): { startLine: number; endLine: number } {
     const explicitStart = this.normalizeSnippetLine(entry.startLine);
     const explicitEnd = this.normalizeSnippetLine(entry.endLine);
@@ -153,7 +155,7 @@ export abstract class QmdManagerSearchSupport extends QmdManagerLifecycle {
     if (headerLines) {
       return headerLines;
     }
-    return { startLine: 1, endLine: snippet.split("\n").length };
+    return { startLine: 1, endLine: fallbackSnippet.split("\n").length };
   }
 
   protected normalizeSnippetLine(value: unknown): number | undefined {
@@ -169,7 +171,7 @@ export abstract class QmdManagerSearchSupport extends QmdManagerLifecycle {
     }
     const start = Number(match[1]);
     const count = Number(match[2]);
-    if (Number.isFinite(start) && Number.isFinite(count)) {
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(start + count - 1)) {
       return { startLine: start, endLine: start + count - 1 };
     }
     return null;

@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { QmdQueryResult } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type {
   MemoryEntryProvenance,
@@ -14,6 +13,7 @@ import {
 import { asQmdAbortError, isMissingCollectionSearchError } from "./qmd-command-errors.js";
 import { qmdManagerLog } from "./qmd-manager-base.js";
 import { QmdManagerSearchSupport } from "./qmd-manager-search-support.js";
+import { parseQmdSnippet } from "./qmd-snippet.js";
 import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineControlOptions,
@@ -237,8 +237,14 @@ export abstract class QmdManagerSearch extends QmdManagerSearchSupport {
       if (!doc) {
         continue;
       }
-      const snippet = truncateUtf16Safe(entry.snippet ?? "", this.qmd.limits.maxSnippetChars);
-      const lines = this.resolveSnippetLines(entry, snippet);
+      const rawSnippet = entry.snippet ?? "";
+      const parsedSnippet = parseQmdSnippet(
+        rawSnippet,
+        mcporterEnabled ? "mcp" : "cli",
+        this.qmd.limits.maxSnippetChars,
+      );
+      const lines = this.resolveSnippetLines(entry, rawSnippet, parsedSnippet.snippet);
+      const snippet = parsedSnippet.snippet;
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
