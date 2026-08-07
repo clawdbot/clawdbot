@@ -746,7 +746,7 @@ export function filterToolResultMediaUrls(
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
-export type ToolResultMediaArtifact = {
+type ToolResultMediaArtifact = {
   mediaUrls: string[];
   attachments?: ReplyMediaAttachment[];
   audioAsVoice?: boolean;

@@ -8,7 +8,7 @@ import { markHostOwnedMcpRelayMedia } from "./mcp-tool-result-media-provenance.j
 
 type McpRelayMediaType = "image" | "audio";
 
-export type McpRelayMediaAttachment = {
+type McpRelayMediaAttachment = {
   type: McpRelayMediaType;
   mediaUrl: string;
   mimeType: string;
@@ -16,7 +16,7 @@ export type McpRelayMediaAttachment = {
   sizeBytes: number;
 };
 
-export type McpRelayMedia = {
+type McpRelayMedia = {
   source: "mcp";
   attachments: readonly McpRelayMediaAttachment[];
 };
