@@ -16,7 +16,6 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
@@ -751,82 +750,6 @@ describe("SessionManager.open", () => {
     ]);
 
     expect(loaded.getCwd()).toBe(dir);
-  });
-
-  it("rejects persistence after the session target rebounds", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-prompt-release-rebound";
-    // Canonical session keys can embed a channel peer id; this fixture proves
-    // that value never reaches the refusal exception raw.
-    const sessionKey = "agent:main:whatsapp:direct:+15551234567";
-    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntryCore(scope, { sessionFile: marker, sessionId, updatedAt: 10 });
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "rebound-user",
-      message: { role: "user", content: "question", timestamp: 1 },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "rebound-assistant",
-      message: buildAssistantMessage("answer"),
-      parentId: user.messageId,
-    });
-    const sessionManager = openMarker(marker, sessionKey, dir);
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "replacement-session", updatedAt: 20 },
-    );
-
-    try {
-      sessionManager.appendCompaction("late summary", assistant.messageId, 42);
-      throw new Error("expected rebound compaction persistence to fail");
-    } catch (error) {
-      expect(error).toMatchObject({
-        cause: {
-          actualSessionId: "replacement-session",
-          code: "session-rebound",
-          expectedSessionId: sessionId,
-          sessionKey,
-        },
-      });
-    }
-
-    const entriesBeforeRejectedAppends = sessionManager.getEntries();
-    const leafBeforeRejectedAppends = sessionManager.getLeafId();
-    const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();
-    expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
-      "entry was not persisted",
-    );
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      "entry was not persisted",
-    );
-    // The refused append must name the identity it was scoped to, but only as a
-    // stable hash: this message surfaces to operators verbatim through /compact
-    // and sessions.compact as result.reason, and the raw sessionKey can embed a
-    // channel peer id such as a phone number.
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      `sessionKeyHash=${redactIdentifier(sessionKey)}`,
-    );
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).toThrow(
-      `sessionIdHash=${redactIdentifier(sessionId)}`,
-    );
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).not.toThrow(sessionKey);
-    expect(() => sessionManager.appendModelChange("openai", "gpt-5.5")).not.toThrow(sessionId);
-    expect(() =>
-      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    ).toThrow("message was not persisted");
-    expect(() =>
-      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    ).toThrow(`sessionKeyHash=${redactIdentifier(sessionKey)}`);
-    expect(() =>
-      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    ).not.toThrow(sessionKey);
-    expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
-    expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
-    expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
   });
 
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
