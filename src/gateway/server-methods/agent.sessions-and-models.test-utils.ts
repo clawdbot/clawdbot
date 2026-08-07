@@ -7,6 +7,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
+  listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.test-helpers.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
@@ -457,6 +458,68 @@ describe("gateway agent handler", () => {
         expectRecordFields(run, {
           runId: "plugin-subagent-own-requester",
           requesterSessionKey: followUpRequester.sessionKey,
+        });
+      },
+    );
+  });
+
+  it("still adopts the paused owner for a default follow-up after a requester-bound sibling", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-plugin-subagent-mixed-delivery-" },
+      async (root) => {
+        useTestStateDir(root);
+        resetSubagentRegistryForTests({ persist: false });
+        const childSessionKey = "agent:work:subagent:plugin-yield-mixed-delivery";
+        const originalRequester = "agent:main:telegram:direct:777";
+        const cfg = {
+          session: { mainKey: "main", scope: "per-sender" as const },
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        };
+        addSubagentRunForTests({
+          runId: "plugin-subagent-paused",
+          childSessionKey,
+          requesterSessionKey: originalRequester,
+          requesterDisplayKey: originalRequester,
+          task: "wait for the remote job",
+          endedAt: 2_000,
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+
+        // A requester-bound follow-up lands at a higher generation than the paused
+        // owner, so it becomes the newest row for this session.
+        await registerPluginSubagentRunFromGateway({
+          cfg,
+          runId: "plugin-subagent-sibling",
+          childSessionKey,
+          task: "deliver to me instead",
+          requester: {
+            sessionKey: "agent:main:telegram:direct:555",
+            origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
+          },
+          pluginId: "memory-core",
+        });
+
+        await registerPluginSubagentRunFromGateway({
+          cfg,
+          runId: "plugin-subagent-default-followup",
+          childSessionKey,
+          task: "the remote job finished",
+          pluginId: "memory-core",
+        });
+
+        // Adoption selects the newest *paused* row, not the newest row overall.
+        // Matching on generation alone would pick the sibling, decline adoption,
+        // and leave the original requester parked behind a row that can never
+        // announce. The sibling's own liveness is irrelevant to that choice.
+        const requesterRuns = listSubagentRunsForRequester(originalRequester);
+        expect(requesterRuns.map((entry) => entry.runId)).toEqual([
+          "plugin-subagent-default-followup",
+        ]);
+        expectRecordFields(requireValue(requesterRuns[0], "expected adopted run"), {
+          childSessionKey,
+          task: "the remote job finished",
+          pauseReason: undefined,
         });
       },
     );

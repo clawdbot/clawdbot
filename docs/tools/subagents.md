@@ -306,6 +306,11 @@ with the same `sessionKey` — it continues that same run rather than starting a
 sibling. The requester is announced once such a follow-up finishes normally;
 a follow-up that yields again leaves the run paused and the requester waiting.
 
+Continuation applies to follow-ups that use default delivery. A follow-up that
+supplies its own requester or completion-delivery context is asking for its own
+audience, so it runs as a separate sibling and delivers there instead. The
+paused run stays resumable, and a later default follow-up still continues it.
+
 When active children exist, OpenClaw injects a compact runtime-generated
 `Active Subagents` prompt block into normal turns so the requester can see
 the current child sessions, run ids, statuses, labels, tasks, and

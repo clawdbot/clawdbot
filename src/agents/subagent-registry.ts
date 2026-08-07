@@ -497,8 +497,15 @@ export function adoptPausedSubagentRunForFollowUp(params: {
   if (!childSessionKey || !runId) {
     return false;
   }
-  const paused = getLatestLiveSubagentRunByChildSessionKey(childSessionKey);
-  if (!paused || paused.pauseReason !== "sessions_yield") {
+  // Select the newest paused row rather than the newest row overall: a
+  // requester-bound follow-up stays a sibling at a higher generation, and
+  // matching on generation alone would let that sibling hide the paused owner
+  // and park its requester for good.
+  const paused = getLatestLiveSubagentRunByChildSessionKey(
+    childSessionKey,
+    (entry) => entry.pauseReason === "sessions_yield",
+  );
+  if (!paused) {
     return false;
   }
   return subagentRunManager.replaceSubagentRunAfterSteer({
