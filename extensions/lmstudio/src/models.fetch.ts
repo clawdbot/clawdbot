@@ -23,6 +23,49 @@ import { buildLmstudioAuthHeaders } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/models");
 const LMSTUDIO_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const REDACTED_SECRET_PLACEHOLDER = "***";
+
+function collectLmstudioRequestSecrets(params: {
+  apiKey?: string;
+  headers?: Record<string, string>;
+}): string[] {
+  const secrets = new Set<string>();
+  const apiKey = params.apiKey?.trim();
+  if (apiKey) {
+    secrets.add(apiKey);
+    secrets.add(`Bearer ${apiKey}`);
+  }
+  for (const [headerName, headerValue] of Object.entries(params.headers ?? {})) {
+    if (!headerValue) {
+      continue;
+    }
+    secrets.add(headerValue);
+    if (headerName.toLowerCase() === "authorization" && headerValue.startsWith("Bearer ")) {
+      secrets.add(headerValue.slice("Bearer ".length));
+    }
+  }
+  return Array.from(secrets);
+}
+
+/**
+ * Redacts the exact credential values sent in the request before applying the
+ * shared pattern-based redactor. This covers short configured API keys (e.g.
+ * `sk-test`) that the generic standalone-Bearer pattern may miss.
+ */
+function redactLmstudioErrorBody(
+  body: string,
+  params: {
+    apiKey?: string;
+    headers?: Record<string, string>;
+  },
+): string {
+  const secrets = collectLmstudioRequestSecrets(params).toSorted((a, b) => b.length - a.length);
+  let redacted = body;
+  for (const secret of secrets) {
+    redacted = redacted.replaceAll(secret, REDACTED_SECRET_PLACEHOLDER);
+  }
+  return redactToolPayloadText(redacted);
+}
 
 type LmstudioLoadResponse = {
   status?: string;
@@ -299,7 +342,7 @@ export async function ensureLmstudioModelLoaded(params: {
       if (!response.ok) {
         const body = await readResponseTextLimited(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES);
         throw new Error(
-          `LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`,
+          `LM Studio model load failed (${response.status})${body ? `: ${redactLmstudioErrorBody(body, { apiKey: params.apiKey, headers: params.headers })}` : ""}`,
         );
       }
       // Read the success body through the shared byte-capped reader so a misbehaving

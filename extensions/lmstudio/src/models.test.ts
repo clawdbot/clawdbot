@@ -955,6 +955,34 @@ describe("lmstudio-models", () => {
     expect((error as Error).message).toContain("upstream proxy error");
   });
 
+  it("redacts short reflected API keys from model load error body text", async () => {
+    // LM Studio accepts short configured API keys that fall below the generic
+    // standalone-Bearer redactor's length threshold; scrub the exact outbound
+    // credential so a reflected `Bearer <key>` value cannot leak.
+    const body = `upstream proxy error: rejected Bearer sk-test`;
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return jsonResponse({
+          models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+        });
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return new Response(body, { status: 502 });
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    const error = await ensureLmstudioModelLoaded({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "sk-test",
+      modelKey: "qwen3-8b-instruct",
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain("sk-test");
+    expect((error as Error).message).toMatch(/LM Studio model load failed \(502\)/);
+  });
+
   it("reloads model to the clamped default target when already loaded below the default window", async () => {
     const fetchMock = createModelLoadFetchMock({
       loadedContextLength: 4096,
