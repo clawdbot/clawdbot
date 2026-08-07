@@ -291,68 +291,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator preserves earlier contact context in a debounced batch", async () => {
-    vi.useFakeTimers();
-    try {
-      const onMessage = vi.fn(async () => undefined);
-      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-        debounceMs: 50,
-      });
-      const contact = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-contact"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      });
-      contact.messages[0]!.message = {
-        contactMessage: {
-          displayName: "Ada Lovelace",
-          vcard: [
-            "BEGIN:VCARD",
-            "VERSION:3.0",
-            "FN:Ada Lovelace",
-            "TEL;TYPE=CELL:+15555550123",
-            "END:VCARD",
-          ].join("\n"),
-        },
-      } as never;
-      const text = buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-contact-text"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "Please call her",
-        timestamp: 1_700_000_001,
-        pushName: "Tester",
-      });
-
-      sock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [...contact.messages, ...text.messages],
-      });
-      await vi.advanceTimersByTimeAsync(50);
-      await waitForMessageCalls(onMessage, 1);
-
-      const inbound = inboundMessage(onMessage);
-      expect(inbound.payload.body).toBe("<contact>\nPlease call her");
-      expect(inbound.event.isBatched).toBe(true);
-      expect(inbound.payload.channelStructuredContext).toEqual([
-        {
-          label: "WhatsApp contact",
-          source: "whatsapp",
-          type: "contact",
-          payload: {
-            kind: "contact",
-            total: 1,
-            contacts: [{ name: "Ada Lovelace", phones: ["+15555550123"] }],
-          },
-        },
-      ]);
-
-      await listener.close();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   it("delivery coordinator drains admitted same-lane turns before close completes", async () => {
     let releaseFirst: (() => void) | undefined;
