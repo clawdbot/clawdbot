@@ -441,8 +441,6 @@ if [ "$update_status" -ne 0 ]; then
   openclaw_e2e_print_log /tmp/openclaw-upgrade-survivor-update.json >&2
   openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG" >&2
   openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2
-  node scripts/e2e/lib/upgrade-survivor/plugin-state-diagnostic.mjs \
-    "$OPENCLAW_STATE_DIR/state/openclaw.sqlite" "$SYSTEMCTL_SHIM_PID_FILE" >&2 || true
   exit "$update_status"
 fi
 

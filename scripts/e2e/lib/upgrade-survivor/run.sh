@@ -1239,8 +1239,6 @@ update_candidate() {
     openclaw_e2e_print_log "$UPDATE_JSON" >&2
     openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG" >&2
     openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG" >&2
-    node scripts/e2e/lib/upgrade-survivor/plugin-state-diagnostic.mjs \
-      "$OPENCLAW_STATE_DIR/state/openclaw.sqlite" "$SYSTEMCTL_SHIM_PID_FILE" >&2 || true
     return 1
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
