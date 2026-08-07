@@ -58,7 +58,7 @@ when personas must not share compiled wiki knowledge.
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
 <Note>
-These paths use `~` for the OS home directory. Tilde expansion works on every
+These paths use `~` for OpenClaw's home directory. Tilde expansion works on every
 platform, including Windows, so the examples are portable as written — see
 [`agents.defaults.workspace`](/gateway/config-agents#agentsdefaultsworkspace)
 for the path conventions.
