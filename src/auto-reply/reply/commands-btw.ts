@@ -11,7 +11,6 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { captureAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
-import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { admitAutoReplyExecutionAttribution } from "./agent-runner-execution-identity.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
@@ -45,7 +44,6 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       );
     }
 
-    let admittedRun: { runId: string; lifecycleGeneration: string } | undefined;
     try {
       await params.typing?.startTypingLoop();
       const messageTo =
@@ -56,10 +54,9 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       const chatType = normalizeChatType(params.ctx.ChatType);
       const groupId = resolveGroupSessionKey(params.ctx)?.id ?? targetSessionEntry.groupId;
       const runId = params.opts?.runId ?? `btw-${randomUUID()}`;
-      const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
       const attribution = admitAutoReplyExecutionAttribution({
         config: params.cfg,
-        lifecycleGeneration,
+        lifecycleGeneration: captureAgentRunLifecycleGeneration(runId),
         runId,
         context: {
           accountId: params.ctx.AccountId,
@@ -77,7 +74,6 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           threadId: params.ctx.MessageThreadId ?? params.ctx.TransportThreadId,
         },
       });
-      admittedRun = { runId, lifecycleGeneration };
       const currentChannelProvider = normalizeAnyChannelId(params.ctx.Provider);
       const capabilitySessionKey = params.ctx.RuntimePolicySessionKey ?? params.sessionKey;
       const messageActionTurnCapability =
@@ -181,12 +177,6 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           isError: true,
         },
       };
-    } finally {
-      if (admittedRun) {
-        // /btw reserves identity before the embedded runner claims the run.
-        // Retire that admission so a reused run id cannot inherit it.
-        clearAgentRunContext(admittedRun.runId, admittedRun.lifecycleGeneration);
-      }
     }
   },
 );
