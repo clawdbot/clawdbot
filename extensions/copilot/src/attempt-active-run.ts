@@ -88,6 +88,7 @@ export function registerCopilotActiveRun(params: {
     // receipt resolves only after that exact SDK event reaches canonical history.
     supportsTranscriptCommitWait: true,
     sourceReplyDeliveryMode: params.input.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.input.taskSuggestionDeliveryMode,
     cancel: () => {
       cancelGatewayQuestionBestEffort("run-cancel");
       params.userInputBridge.cancelPending();

@@ -226,6 +226,7 @@ export async function activateCodexAttemptTurn(
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };

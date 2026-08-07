@@ -55,6 +55,25 @@ describe("normalizeChatSendRequest", () => {
     expect(result).toEqual({ ok: false, error: "message or attachment required" });
   });
 
+  it("rejects an explicit steer without an exact run target", () => {
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ queueMode: "steer" }),
+        client: null,
+      }),
+    ).toEqual({
+      ok: false,
+      error: "explicit steer requires expectedRunId; refresh the active run and retry",
+      reason: "active-run-target-required",
+    });
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ queueMode: "steer", expectedRunId: " run-1 " }),
+        client: null,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
   it("accepts an attachment-only request after attachment normalization", () => {
     const result = normalizeChatSendRequest({
       params: validParams({

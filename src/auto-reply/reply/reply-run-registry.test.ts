@@ -1190,7 +1190,7 @@ describe("reply run registry", () => {
       queueCurrentReplyRunMessage("session-task-suggestions", "legacy client", {
         taskSuggestionDeliveryMode: undefined,
       }),
-    ).resolves.toMatchObject({ status: "rejected" });
+    ).resolves.toEqual({ status: "rejected", reason: "task_suggestion_delivery_mode_mismatch" });
     await expect(
       queueCurrentReplyRunMessage("session-task-suggestions", "capable client", {
         taskSuggestionDeliveryMode: "gateway",

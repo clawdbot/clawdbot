@@ -79,7 +79,9 @@ export type NormalizedChatSendRequest = {
 
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: string };
+
+const ACTIVE_RUN_TARGET_REQUIRED_ERROR_REASON = "active-run-target-required";
 
 /** Validate and normalize the wire request before session or lifecycle work begins. */
 export function normalizeChatSendRequest(params: {
@@ -102,6 +104,13 @@ export function normalizeChatSendRequest(params: {
   }
 
   const p = controlUiReconnectResume.params as ChatSendRequestParams;
+  if (p.queueMode === "steer" && !p.expectedRunId?.trim()) {
+    return {
+      ok: false,
+      error: "explicit steer requires expectedRunId; refresh the active run and retry",
+      reason: ACTIVE_RUN_TARGET_REQUIRED_ERROR_REASON,
+    };
+  }
   const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
   const explicitOriginResult = normalizeExplicitChatSendOrigin({
     originatingChannel: p.originatingChannel,

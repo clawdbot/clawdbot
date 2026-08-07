@@ -1344,7 +1344,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a stale explicit steer without an active owner", async () => {
+  it("rejects an explicit steer without an exact run target before dispatch", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-stale-steer-no-owner-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1357,7 +1357,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await send({
       idempotencyKey: "idem-stale-steer-no-owner",
       requestParams: {
-        expectedLeafEntryId: "leaf-before-finished-run",
         queueMode: "steer",
       },
       waitFor: "none",
@@ -1366,7 +1365,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(lastRespondCall(respond)).toEqual([
       false,
       undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+      expect.objectContaining({ details: { reason: "active-run-target-required" } }),
     ]);
     expect(context.addChatRun).not.toHaveBeenCalled();
   });
@@ -1390,6 +1389,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const queueMessage = vi.fn(async () => {});
     operation.attachBackend({
       kind: "embedded",
+      runId: "active-run",
       runId: "active-run",
       supportsQueueMessageImages: true,
       cancel: () => {},
@@ -1490,12 +1490,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     operation.setPhase("running");
     const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
       await options?.userTurnTranscriptRecorder?.persistApproved();
     });
     operation.attachBackend({
       kind: "embedded",
       runId: "active-run",
       supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
       cancel: () => {},
       messageInjection: { isAvailable: () => true, queueMessage },
     });
@@ -1507,6 +1509,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expectedRunId: "active-run",
           queueMode: "steer",
           attachments: [{ mimeType: "image/png", content: TINY_PNG_BASE64 }],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
         },
       });
     } finally {
@@ -1522,7 +1536,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.objectContaining({
         images: [expect.objectContaining({ mimeType: "image/png" })],
         imageOrder: ["inline"],
-        taskSuggestionDeliveryMode: undefined,
+        taskSuggestionDeliveryMode: "gateway",
         userTurnTranscriptRecorder: expect.any(Object),
       }),
     );
@@ -1739,6 +1753,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
+      runId: "active-run",
       cancel: () => {},
       isStreaming: () => false,
       isStopped: () => false,
@@ -1751,6 +1766,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-steer-stale-owner",
         requestParams: {
           expectedLeafEntryId: "leaf-before-stale-run-output",
+          expectedRunId: "active-run",
           queueMode: "steer",
         },
         waitFor: "none",
@@ -1763,51 +1779,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(lastRespondCall(respond)).toEqual([
       false,
       undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    ]);
-    expect(context.addChatRun).not.toHaveBeenCalled();
-  });
-
-  it("rejects a stale explicit steer when a different leaf owns the active run", async () => {
-    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-different-owner-");
-    await appendTranscriptMessage(transcriptScope(), {
-      eventId: "current-leaf",
-      message: { role: "assistant", content: "working elsewhere" },
-      now: 1,
-      parentId: null,
-    });
-    const { context, respond, send } = createChatRequestFixture();
-    const operation = replyRunRegistry.begin({
-      sessionKey: "main",
-      sessionId: mockState.sessionId,
-      resetTriggered: false,
-      originatingLeafEntryId: "different-branch-leaf",
-    });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: () => {},
-      isStreaming: () => true,
-      queueMessage: async () => {},
-    });
-
-    try {
-      await send({
-        idempotencyKey: "idem-steer-different-owner",
-        requestParams: {
-          expectedLeafEntryId: "stale-pane-leaf",
-          queueMode: "steer",
-        },
-        waitFor: "none",
-      });
-    } finally {
-      operation.complete();
-    }
-
-    expect(lastRespondCall(respond)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+      expect.objectContaining({ details: { reason: "active-run-changed" } }),
     ]);
     expect(context.addChatRun).not.toHaveBeenCalled();
   });

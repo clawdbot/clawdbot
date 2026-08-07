@@ -7731,6 +7731,7 @@ describe("handleSendChat", () => {
       message: "tighten the plan",
       deliver: false,
       queueMode: "steer",
+      expectedRunId: "active-run",
     });
     expect(host.chatRunId).toBeNull();
     expect(host.chatQueue).toEqual([
