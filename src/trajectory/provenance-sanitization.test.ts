@@ -264,6 +264,7 @@ describe("TrajectoryProvenanceSanitizer", () => {
         arguments: {
           oauth: { code: "opaque-oauth-code-1234567890" },
           provider: { code: "opaque-provider-code-1234567890" },
+          providerPattern: { code: "opaque Bearer token-shaped-secret-1234567890" },
           providerNumeric: { code: 123_456 },
           nested: [{ providerAuth: { code: "opaque-array-code-1234567890" } }],
           error: { code: "ERR_TOOL_FAILED" },
@@ -277,6 +278,7 @@ describe("TrajectoryProvenanceSanitizer", () => {
       arguments: {
         oauth: { code: "opaque…7890" },
         provider: { code: "opaque…7890" },
+        providerPattern: { code: "opaque…7890" },
         providerNumeric: { code: "***" },
         nested: [{ providerAuth: { code: "opaque…7890" } }],
         error: { code: "ERR_TOOL_FAILED" },

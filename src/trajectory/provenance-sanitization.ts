@@ -8,7 +8,11 @@ import {
   type DiagnosticPayloadProjectionReason,
 } from "../agents/payload-redaction.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { redactSensitiveFieldValue, redactSensitiveFieldValueAtPath } from "../logging/redact.js";
+import { redactSensitiveFieldValue } from "../logging/redact.js";
+import {
+  maskStructuredFieldValue,
+  shouldRedactStructuredAuthorizationCode,
+} from "../logging/structured-field-redaction.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const ORIGIN_KINDS = new Set(["external_user", "inter_session", "internal_system"]);
@@ -86,6 +90,13 @@ function fieldPath(context: DiagnosticPayloadProjectionContext): string[] {
   return pathParts(context.path).filter((part): part is string => typeof part === "string");
 }
 
+function redactPrimitiveAtPath(value: string, context: DiagnosticPayloadProjectionContext): string {
+  const key = fieldName(context);
+  return shouldRedactStructuredAuthorizationCode(key, fieldPath(context))
+    ? maskStructuredFieldValue(value)
+    : redactSensitiveFieldValue(key, value);
+}
+
 function projectTrajectoryValue(
   value: unknown,
   scope: Scope,
@@ -103,16 +114,15 @@ function projectTrajectoryValue(
     },
     redactPrimitive: (entry, context) => {
       const primitiveText = String(entry);
-      return redactSensitiveFieldValueAtPath(
-        fieldName(context),
-        primitiveText,
-        fieldPath(context),
-      ) === primitiveText
-        ? entry
-        : "***";
+      return redactPrimitiveAtPath(primitiveText, context) === primitiveText ? entry : "***";
     },
-    redactString: (text, context) =>
-      redactSensitiveFieldValueAtPath(fieldName(context), text, fieldPath(context)),
+    redactString: (text, context) => redactSensitiveFieldValue(fieldName(context), text),
+    transformString: (text, context) => {
+      const transformed = options.transformString?.(text, context) ?? text;
+      return shouldRedactStructuredAuthorizationCode(fieldName(context), fieldPath(context))
+        ? maskStructuredFieldValue(transformed)
+        : transformed;
+    },
   });
 }
 
