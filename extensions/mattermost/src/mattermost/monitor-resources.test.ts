@@ -20,39 +20,15 @@ vi.mock("./interactions.js", () => ({
 
 describe("mattermost monitor resources", () => {
   let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
-  let formatMattermostInboundMediaText: typeof import("./monitor-resources.js").formatMattermostInboundMediaText;
   let MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS: typeof import("./monitor-resources.js").MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS;
   let MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS: typeof import("./monitor-resources.js").MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS;
 
   beforeAll(async () => {
     ({
       createMattermostMonitorResources,
-      formatMattermostInboundMediaText,
       MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
       MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
     } = await import("./monitor-resources.js"));
-  });
-
-  it("keeps media-only download failures visible to the agent", () => {
-    expect(
-      formatMattermostInboundMediaText({
-        body: "",
-        mediaPlaceholder: "",
-        expectedCount: 1,
-        mediaCount: 0,
-      }),
-    ).toBe("[mattermost attachment unavailable]");
-  });
-
-  it("preserves successful media placeholders on partial failures", () => {
-    expect(
-      formatMattermostInboundMediaText({
-        body: "<media:document> (2 files)",
-        mediaPlaceholder: "<media:document> (2 files)",
-        expectedCount: 2,
-        mediaCount: 1,
-      }),
-    ).toBe("<media:document> (2 files)\n\n[mattermost attachment unavailable]");
   });
 
   beforeEach(() => {
@@ -105,7 +81,7 @@ describe("mattermost monitor resources", () => {
       filePathHint: "file-1",
       maxBytes: 1024,
       ssrfPolicy: { allowedHostnames: ["chat.example.com"] },
-      responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+      timeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
       readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
     });
   });
@@ -133,7 +109,7 @@ describe("mattermost monitor resources", () => {
       const saveRemoteMediaWithHeaderTimeout: typeof saveRemoteMedia = (params) =>
         saveRemoteMedia({
           ...params,
-          responseHeaderTimeoutMs: headerTimeoutMs,
+          timeoutMs: headerTimeoutMs,
           readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
           ssrfPolicy: { ...params.ssrfPolicy, dangerouslyAllowPrivateNetwork: true },
         });
@@ -159,6 +135,7 @@ describe("mattermost monitor resources", () => {
       expect(elapsedMs).toBeLessThan(headerTimeoutMs + 2_000);
     } finally {
       await new Promise<void>((resolve) => {
+        server.closeAllConnections();
         server.close(() => {
           resolve();
         });

@@ -3380,7 +3380,8 @@ describe("short-term promotion", () => {
           const targetPath =
             typeof target === "string" ? target : target instanceof URL ? target.pathname : "";
           if (targetPath && path.basename(targetPath).startsWith("MEMORY.md")) {
-            const text = typeof data === "string" ? data : Buffer.from(data).toString();
+            const text =
+              typeof data === "string" ? data : Buffer.from(data as Uint8Array).toString();
             await originalWriteFile(target, text.slice(0, 51_200), options);
             throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
           }

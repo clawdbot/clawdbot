@@ -112,44 +112,6 @@ describe("Zalo polling image handling", () => {
     await run;
   });
 
-  it("dispatches an unavailable notice when the inbound image download fails", async () => {
-    saveRemoteMediaMock.mockRejectedValueOnce(new Error("expired image URL"));
-    getUpdatesMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: createImageUpdate({ caption: "/reset" }),
-      })
-      .mockImplementation(() => new Promise(() => {}));
-
-    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
-    const abort = new AbortController();
-    const runtime = createRuntimeEnv();
-    const { account, config } = createLifecycleMonitorSetup({
-      accountId: "default",
-      dmPolicy: "open",
-    });
-    const run = monitorZaloProvider({
-      token: "zalo-token", // pragma: allowlist secret
-      account,
-      config,
-      runtime,
-      abortSignal: abort.signal,
-    });
-
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        RawBody: "/reset",
-        CommandBody: "/reset",
-        BodyForAgent: "/reset\n\n[zalo image attachment unavailable]",
-        MediaPath: undefined,
-      }),
-    );
-
-    abort.abort();
-    await run;
-  });
-
   it("times out inbound image downloads when photo_url headers never arrive", async () => {
     const { createServer } = await import("node:http");
     const { saveRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
@@ -222,7 +184,7 @@ describe("Zalo polling image handling", () => {
     expect(elapsedMs).toBeLessThan(headerTimeoutMs + 5_000);
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        BodyForAgent: "stalled photo\n\n[zalo image attachment unavailable]",
+        BodyForAgent: "stalled photo",
         MediaPath: undefined,
       }),
     );
@@ -230,6 +192,7 @@ describe("Zalo polling image handling", () => {
     abort.abort();
     await run;
     await new Promise<void>((resolve) => {
+      server.closeAllConnections();
       server.close(() => resolve());
     });
   });

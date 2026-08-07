@@ -59,21 +59,6 @@ describe("lmstudio-models", () => {
     }
     return JSON.parse(init.body) as unknown;
   };
-  // The model fetch/load helpers now read bodies through the shared byte-capped
-  // reader, so success-path mocks must be real Response objects with a body
-  // stream rather than bare `{ ok, json }` placeholders.
-  const jsonResponse = (payload: unknown, init?: ResponseInit): Response =>
-    new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-      ...init,
-    });
-  const malformedJsonResponse = (init?: ResponseInit): Response =>
-    new Response("{ this is not valid json", {
-      status: 200,
-      headers: { "content-type": "application/json" },
-      ...init,
-    });
   const cancelTrackedResponse = (
     text: string,
     init: ResponseInit,
@@ -104,7 +89,6 @@ describe("lmstudio-models", () => {
   }) =>
     vi.fn(async (url: string | URL, _init?: RequestInit) => {
       const key = params?.key ?? "qwen3-8b-instruct";
-      void init;
       if (String(url).endsWith("/api/v1/models")) {
         return jsonResponse({
           models: [

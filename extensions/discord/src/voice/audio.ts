@@ -112,6 +112,11 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   const stderr = Buffer.alloc(FFMPEG_ERROR_OUTPUT_BYTES);
   let stderrBytes = 0;
   let ffmpegClosed = false;
+  const killFfmpeg = (signal: NodeJS.Signals = "SIGTERM") => {
+    if (!ffmpegClosed && !ffmpeg.killed) {
+      ffmpeg.kill(signal);
+    }
+  };
 
   ffmpeg.stderr.on("data", (chunk: Buffer) => {
     if (stderrBytes < FFMPEG_ERROR_OUTPUT_BYTES) {
@@ -136,7 +141,15 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
     }
   });
 
-  ffmpeg.stdout.on("error", (err) => opusStream.destroy(err));
+  // Both readable child pipes need listeners; an unhandled stream error terminates Node.
+  for (const readable of [ffmpeg.stdout, ffmpeg.stderr]) {
+    readable.on("error", (err) => {
+      // A broken output pipe cannot drain usefully; force termination so a
+      // blocked ffmpeg process cannot outlive the failed playback stream.
+      killFfmpeg("SIGKILL");
+      opusStream.destroy(err);
+    });
+  }
   ffmpeg.stdin.on("error", (err) => {
     if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
       opusStream.destroy(err);
@@ -144,8 +157,8 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   });
   ffmpeg.stdout.pipe(opusStream);
   opusStream.once("close", () => {
-    if (!ffmpegClosed && !opusStream.readableEnded) {
-      ffmpeg.kill();
+    if (!opusStream.readableEnded) {
+      killFfmpeg();
     }
   });
   if (typeof input !== "string") {

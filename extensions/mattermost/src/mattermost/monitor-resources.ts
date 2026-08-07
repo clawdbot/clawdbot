@@ -35,7 +35,7 @@ type SaveRemoteMedia = (params: {
   filePathHint?: string;
   maxBytes: number;
   ssrfPolicy?: { allowedHostnames?: string[] };
-  responseHeaderTimeoutMs?: number;
+  timeoutMs?: number;
   readIdleTimeoutMs?: number;
 }) => Promise<{ path: string; contentType?: string | null }>;
 
@@ -111,7 +111,7 @@ export function createMattermostMonitorResources(params: {
           ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
           // Without these, a Mattermost host that never returns headers can stall
           // inbound preprocessing indefinitely (idle timeout never starts).
-          responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+          timeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
         });
         const contentType = saved.contentType ?? undefined;

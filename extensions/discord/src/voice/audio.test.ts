@@ -1,11 +1,43 @@
 // Discord tests cover audio plugin behavior.
-import { Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough, Readable } from "node:stream";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  resolveFfmpegBin: () => "ffmpeg",
+}));
+
 import {
   createDiscordOpusEncodeStream,
+  createDiscordOpusPlaybackStream,
   decodeOpusStream,
   decodeOpusStreamChunks,
 } from "./audio.js";
+
+function createFakeFfmpeg() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    stdin: PassThrough;
+    killed: boolean;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  child.killed = false;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    return true;
+  });
+  return child;
+}
 
 async function collectBuffers(stream: Readable): Promise<Buffer[]> {
   const chunks: Buffer[] = [];
