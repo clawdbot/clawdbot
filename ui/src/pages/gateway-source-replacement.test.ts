@@ -205,6 +205,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result,
       costSummary: null,
       providerUsageSummary: null,
+      providerUsageUnavailable: false,
       loadedAtMs: Date.now(),
       error: null,
     } satisfies UsageRouteData;
@@ -249,6 +250,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result: staleResult,
       costSummary: null,
       providerUsageSummary: null,
+      providerUsageUnavailable: false,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -288,6 +290,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result,
       costSummary: null,
       providerUsageSummary: null,
+      providerUsageUnavailable: false,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -338,6 +341,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
       costSummary: null,
       providerUsageSummary: null,
+      providerUsageUnavailable: false,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -395,6 +399,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       result,
       costSummary: null,
       providerUsageSummary: null,
+      providerUsageUnavailable: false,
       loadedAtMs: Date.now(),
       error: null,
     };

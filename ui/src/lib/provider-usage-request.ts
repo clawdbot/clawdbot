@@ -18,6 +18,12 @@ export function requestProviderUsage(
     : client.request<UsageSummary>("usage.status");
   return pending.then(
     (summary) => ({ summary, failed: false }),
-    () => ({ summary: null, failed: true }),
+    // A cancelled request is the caller superseding its own work, not an
+    // outage; reporting it as failed would render the unavailable notice
+    // for every navigation or refresh that aborts an in-flight load. Both
+    // task hosts abort only through supersession, which also discards the
+    // settled result; a caller that aborts and still consumes the result
+    // must classify the failure itself.
+    () => ({ summary: null, failed: !opts?.signal?.aborted }),
   );
 }
