@@ -75,7 +75,6 @@ describe("closeDiscordThreadSessions", () => {
 
     const count = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID,
     });
 
@@ -92,7 +91,6 @@ describe("closeDiscordThreadSessions", () => {
 
     const count = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID,
     });
 
@@ -113,7 +111,6 @@ describe("closeDiscordThreadSessions", () => {
 
     const count = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID,
     });
 
@@ -133,7 +130,6 @@ describe("closeDiscordThreadSessions", () => {
 
     const count = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID,
     });
 
@@ -150,7 +146,6 @@ describe("closeDiscordThreadSessions", () => {
 
     const count = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID.toLowerCase(),
     });
 
@@ -161,7 +156,6 @@ describe("closeDiscordThreadSessions", () => {
   it("returns 0 immediately when threadId is empty without touching the store", async () => {
     const count = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: "   ",
     });
 
@@ -179,12 +173,10 @@ describe("closeDiscordThreadSessions", () => {
 
     const firstCount = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID,
     });
     const secondCount = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID,
     });
 
@@ -214,7 +206,6 @@ describe("closeDiscordThreadSessions", () => {
 
     const count = await closeDiscordThreadSessions({
       cfg: {},
-      accountId: "default",
       threadId: THREAD_ID,
     });
 
@@ -223,18 +214,58 @@ describe("closeDiscordThreadSessions", () => {
     expect(store[MATCHED_KEY].sessionId).toBe("fresh-session");
   });
 
-  it("resolves the store path using cfg.session.store and accountId", async () => {
+  it("resolves the store path per routed agent id, not the channel account id", async () => {
     const store = {};
     setupStore(store);
 
     await closeDiscordThreadSessions({
-      cfg: { session: { store: "/custom/path/sessions.json" } },
-      accountId: "my-bot",
+      cfg: {
+        session: { store: "/custom/path/sessions.json" },
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      },
       threadId: THREAD_ID,
     });
 
     expect(hoisted.resolveStorePath).toHaveBeenCalledWith("/custom/path/sessions.json", {
-      agentId: "my-bot",
+      agentId: "main",
     });
+    expect(hoisted.resolveStorePath).toHaveBeenCalledWith("/custom/path/sessions.json", {
+      agentId: "work",
+    });
+  });
+
+  it("closes sessions across every agent's store", async () => {
+    // Two agents, each with its own store keyed by resolved path.
+    const stores: Record<string, Record<string, { sessionId?: string; updatedAt: number }>> = {
+      "/stores/main.json": { [`agent:main:discord:channel:${THREAD_ID}`]: { updatedAt: 1_000 } },
+      "/stores/work.json": {
+        [`agent:work:discord:channel:${THREAD_ID}:thread:${THREAD_ID}`]: { updatedAt: 2_000 },
+      },
+    };
+    hoisted.resolveStorePath.mockImplementation(
+      (_store: unknown, opts: { agentId: string }) => `/stores/${opts.agentId}.json`,
+    );
+    hoisted.listSessionEntries.mockImplementation(({ storePath }: { storePath: string }) =>
+      Object.entries(stores[storePath] ?? {}).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    );
+    hoisted.deleteSessionEntry.mockImplementation(
+      async (params: { sessionKey: string; storePath: string }) => {
+        const bucket = stores[params.storePath];
+        if (!bucket?.[params.sessionKey]) {
+          return false;
+        }
+        delete bucket[params.sessionKey];
+        return true;
+      },
+    );
+
+    const count = await closeDiscordThreadSessions({
+      cfg: { agents: { list: [{ id: "main", default: true }, { id: "work" }] } },
+      threadId: THREAD_ID,
+    });
+
+    expect(count).toBe(2);
+    expect(Object.keys(stores["/stores/main.json"])).toHaveLength(0);
+    expect(Object.keys(stores["/stores/work.json"])).toHaveLength(0);
   });
 });
