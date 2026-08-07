@@ -1,5 +1,5 @@
 // Msteams tests cover monitor.lifecycle plugin behavior.
-import type { Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
@@ -289,6 +289,42 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const result = await task;
     if (!result.app) {
       throw new Error("expected Teams monitor app after startup abort");
+    }
+  });
+
+  it("rejects startup when the webhook port is already in use", async () => {
+    const blocker = createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(0, resolve);
+    });
+
+    try {
+      const address = blocker.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected occupied TCP port");
+      }
+
+      const stores = createStores();
+      const task = monitorMSTeamsProvider({
+        cfg: createConfig(address.port),
+        runtime: createRuntime(),
+        conversationStore: stores.conversationStore,
+        pollStore: stores.pollStore,
+      });
+
+      await expect(task).rejects.toMatchObject({ code: "EADDRINUSE" });
+      const ingress = getMSTeamsIngressMockState().instances[0];
+      if (!ingress) {
+        throw new Error("expected Teams ingress");
+      }
+      expect(ingress.start).toHaveBeenCalledTimes(1);
+      expect(ingress.stop).toHaveBeenCalledTimes(1);
+      expect(keepHttpServerTaskAliveMock).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        blocker.close((err) => (err ? reject(err) : resolve()));
+      });
     }
   });
 
