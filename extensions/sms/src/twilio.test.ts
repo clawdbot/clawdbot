@@ -467,7 +467,72 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("MessagingServiceSid")).toBeNull();
   });
 
-  it("throws structured Twilio errors from JSON error bodies", async () => {
+  it("redacts reflected Basic auth credentials from non-JSON Twilio error text", async () => {
+    const authToken = Buffer.from("AC123:secret").toString("base64");
+    // Non-JSON error bodies bypass parseTwilioApiError and the raw text
+    // enters Error.message directly — the highest-risk path.
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(`Authorization: Basic ${authToken}\n\nupstream proxy error`, {
+          status: 502,
+          headers: { "content-type": "text/plain" },
+        }),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught?.message).toContain("Twilio SMS send failed (502)");
+    expect(caught?.message).toContain("upstream proxy error");
+    expect(caught?.message).toContain("Authorization: Basic");
+    expect(caught?.message).not.toContain(authToken);
+  });
+
+  it("redacts reflected Basic auth credentials from JSON Twilio error responseText", async () => {
+    const authToken = Buffer.from("AC123:secret").toString("base64");
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: 21610,
+            message: "The message From/To pair violates a blacklist rule.",
+            reflected: `Authorization: Basic ${authToken}`,
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    let caught: any;
+    try {
+      await sendSmsViaTwilio({
+        account: createAccount(),
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    // Error.message gets only the parsed Twilio code/message, but
+    // responseText stores the full (now redacted) body.
+    expect(caught?.message).toContain("violates a blacklist rule");
+    expect(caught?.responseText).not.toContain(authToken);
+    expect(caught?.responseText).toContain("Authorization: Basic");
+    expect(caught?.responseText).toContain("21610");
+  });
+
+  it("preserves structured Twilio error detail when no credential material is reflected", async () => {
     const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(
@@ -491,10 +556,6 @@ describe("Twilio SMS helpers", () => {
       message: "Twilio SMS send failed (400): The message From/To pair violates a blacklist rule.",
       httpStatus: 400,
       twilioCode: 21610,
-      responseText: JSON.stringify({
-        code: 21610,
-        message: "The message From/To pair violates a blacklist rule.",
-      }),
     });
   });
 

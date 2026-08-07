@@ -2,6 +2,7 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
   readResponseWithLimit,
@@ -306,7 +307,10 @@ async function readTwilioApiResponseText(response: Response): Promise<string> {
     : TWILIO_API_ERROR_BODY_LIMIT_BYTES;
   if (!response.ok) {
     const prefix = await readResponseTextPrefix(response, maxBytes);
-    return prefix.truncated ? appendTruncatedResponseSuffix(prefix.text) : prefix.text;
+    const raw = prefix.truncated ? appendTruncatedResponseSuffix(prefix.text) : prefix.text;
+    // Remote API errors can reflect the request's Authorization header.
+    // Force tool-payload redaction before the text enters any surfaced error.
+    return redactToolPayloadText(raw);
   }
 
   const body = await readResponseWithLimit(response, maxBytes, {
