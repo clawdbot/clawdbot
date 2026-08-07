@@ -2231,10 +2231,6 @@ importers:
       typebox:
         specifier: 1.3.6
         version: 1.3.6
-    devDependencies:
-      ajv:
-        specifier: 8.20.0
-        version: 8.20.0
 
   packages/llm-core:
     dependencies:

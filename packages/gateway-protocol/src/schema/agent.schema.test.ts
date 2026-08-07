@@ -1,35 +1,7 @@
-import AjvModule from "ajv";
 import { describe, expect, it } from "vitest";
+import { validateAgentParams as validate } from "../validator-registry.js";
 import { AgentParamsSchema } from "./agent.js";
 import { internalProtocolField, stripInternalProtocolFields } from "./internal-fields.js";
-
-type ValidateFunction = ((value: unknown) => boolean) & { errors?: unknown };
-type AjvConstructor = new (options: { allErrors: boolean }) => {
-  compile: (schema: object) => ValidateFunction;
-};
-
-function isAjvConstructor(value: unknown): value is AjvConstructor {
-  return typeof value === "function";
-}
-
-function resolveAjvConstructor(value: unknown): AjvConstructor {
-  if (isAjvConstructor(value)) {
-    return value;
-  }
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "default" in value &&
-    isAjvConstructor(value.default)
-  ) {
-    return value.default;
-  }
-  throw new TypeError("Ajv module did not expose a constructor");
-}
-
-const Ajv = resolveAjvConstructor(AjvModule);
-const ajv = new Ajv({ allErrors: true });
-const validate = ajv.compile(AgentParamsSchema);
 
 describe("AgentParamsSchema", () => {
   const baseParams = {
