@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
 import { isProcessAlive } from "./process-wait.js";
@@ -63,6 +64,12 @@ if (kind === "resist-after-exit") {
   const resistant = spawn(process.execPath, ["-e", 'const fs = require("node:fs");fs.writeFileSync(process.argv[1], String(process.pid));process.on("SIGTERM", () => fs.appendFileSync(process.argv[2], "SIGTERM"));process.send("ready");setInterval(() => {}, 1_000);', tracePath + ".resistant-pid", tracePath + ".signals"], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
   await new Promise((resolve) => resistant.once("message", resolve));
   process.stderr.write("unrelated startup failure\\n"); process.exit(1);
+}
+if (kind === "terminal-drain") {
+  const draining = spawn(process.execPath, ["-e", 'const fs = require("node:fs");const release = process.argv[1];const deadline = Date.now() + 5_000;const timer = setInterval(() => { if (fs.existsSync(release) || Date.now() >= deadline) clearInterval(timer); }, 10);', tracePath + ".draining-release"], { detached: true, stdio: ["ignore", "ignore", "inherit"] });
+  draining.unref();
+  writeFileSync(tracePath + ".draining-pid", String(draining.pid));
+  process.stderr.write("terminal startup failure\\n"); process.exit(7);
 }
 if (kind === "near") { process.stderr.write(refusal.slice(0, -1) + " fixture\\n"); process.exit(1); }
 if (kind === "stdout") { process.stdout.write(refusal + " fixture\\n"); process.exit(1); }
@@ -196,6 +203,81 @@ describe("openclaw test instance", () => {
       await expectPathMissing(stateRoot);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "reaps terminal children with inherited stdio before starting a new gateway",
+    async () => {
+      const { instance, readAttempts, tracePath } = await createFakeGateway(
+        "terminal-drain,ready",
+        300,
+        100,
+      );
+
+      const startupError = await instance.startGateway().catch((error: unknown) => error);
+      expect(startupError).toBeInstanceOf(Error);
+      expect((startupError as Error).message).toContain(
+        "gateway exited before readiness (code=7 signal=null)",
+      );
+      expect((startupError as Error).message).toContain("terminal startup failure");
+      expect(instance.child?.exitCode).toBe(7);
+      expect(instance.child?.stderr.closed).toBe(false);
+      const firstAttempt = (await readAttempts())[0];
+      const drainingPid = Number(await fs.readFile(`${tracePath}.draining-pid`, "utf8"));
+      expect(isProcessAlive(drainingPid)).toBe(true);
+
+      await fs.writeFile(`${tracePath}.draining-release`, "");
+      await instance.startGateway();
+
+      const attempts = await readAttempts();
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1]?.pid).not.toBe(firstAttempt?.pid);
+      expect(instance.child?.pid).toBe(attempts[1]?.pid);
+      await instance.stopGateway();
+      expect(instance.child).toBeUndefined();
+      expect(isProcessAlive(attempts[1]?.pid as number)).toBe(false);
+      await expect.poll(() => isProcessAlive(drainingPid), { timeout: 500 }).toBe(false);
+    },
+  );
+
+  it("force-kills Windows gateway descendants before retry cleanup settles", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = {
+      exitCode: 1,
+      kill: vi.fn(() => true),
+      pid: 12345,
+      signalCode: null,
+      stderr,
+      stdout,
+    } as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+    const runTaskkill = vi.fn(() => {
+      stdout.destroy();
+      stderr.destroy();
+      return { status: 0 };
+    });
+
+    await expect(
+      testing.stopGatewayProcess(child, Date.now() + 500, 250, {
+        forceWindowsTree: true,
+        platform: "win32",
+        runTaskkill,
+      }),
+    ).resolves.toBe(true);
+
+    expect(runTaskkill).toHaveBeenCalledOnce();
+    expect(runTaskkill).toHaveBeenCalledWith(
+      path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        killSignal: "SIGKILL",
+        stdio: "ignore",
+        timeout: 10_000,
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(stdout.closed).toBe(true);
+    expect(stderr.closed).toBe(true);
+  });
 
   it("keeps only bounded child output tails in helper logs", () => {
     const stdout = testing.createBoundedStringLog();

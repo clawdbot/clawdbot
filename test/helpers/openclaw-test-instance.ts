@@ -9,6 +9,7 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mjs";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -86,6 +87,9 @@ type OpenClawTestChildProcess = Pick<OpenClawTestProcess, "kill" | "pid">;
 type OpenClawTestProcessReadiness = Pick<OpenClawTestProcess, "exitCode" | "signalCode"> & {
   once: (event: "exit", listener: () => void) => unknown;
   off: (event: "exit", listener: () => void) => unknown;
+};
+type GatewayProcessStopOptions = NonNullable<Parameters<typeof terminateManagedChild>[2]> & {
+  forceWindowsTree?: boolean;
 };
 
 function createBoundedStringLog(): string[] {
@@ -335,30 +339,56 @@ async function stopGatewayProcess(
   child: OpenClawTestProcess,
   deadline: number,
   stopTimeoutMs: number,
+  options: GatewayProcessStopOptions = {},
 ): Promise<boolean> {
-  const waitForClose = (deadlineShare: number) =>
+  const platform = options.platform ?? process.platform;
+  const waitForClose = (remainingSteps: number) =>
     waitForGatewayClose(
       child,
-      Math.min(stopTimeoutMs, Math.max(0, Math.floor((deadline - Date.now()) / deadlineShare))),
+      Math.min(
+        stopTimeoutMs,
+        Math.max(0, Math.floor((deadline - Date.now()) / Math.max(1, remainingSteps))),
+      ),
     );
-  // Reserve enough of the shared deadline for TERM and KILL after natural stdio drain.
-  if (hasChildExited(child) && (await waitForClose(3))) {
+  const terminate = (signal: NodeJS.Signals) => {
+    terminateManagedChild(
+      child,
+      signal,
+      options.runTaskkill
+        ? { platform, runTaskkill: options.runTaskkill }
+        : {
+            platform,
+          },
+    );
+  };
+  const forceWindowsTree = options.forceWindowsTree === true && platform === "win32";
+  const signals = forceWindowsTree ? (["SIGKILL"] as const) : (["SIGTERM", "SIGKILL"] as const);
+
+  if (hasGatewayProcessClosed(child)) {
     return true;
   }
-  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+  // An exited leader can leave inherited stdio open in descendants. Let it
+  // settle briefly, then terminate the owned tree before releasing the slot.
+  if (!forceWindowsTree && hasChildExited(child) && (await waitForClose(signals.length + 1))) {
+    return true;
+  }
+  for (const [index, signal] of signals.entries()) {
     if (hasGatewayProcessClosed(child)) {
       return true;
     }
+    if (Date.now() >= deadline) {
+      break;
+    }
     try {
-      signalOpenClawTestProcess(child, signal);
+      terminate(signal);
     } catch {
       // ignore
     }
-    if (await waitForClose(signal === "SIGTERM" ? 2 : 1)) {
+    if (await waitForClose(signals.length - index)) {
       return true;
     }
   }
-  return false;
+  return hasGatewayProcessClosed(child);
 }
 
 function hasChildExited(child: Pick<OpenClawTestProcess, "exitCode" | "signalCode">) {
@@ -471,8 +501,9 @@ export async function createOpenClawTestInstance(
   const releaseGatewayChild = async (
     target: OpenClawTestProcess,
     deadline: number,
+    options: GatewayProcessStopOptions = {},
   ): Promise<boolean> => {
-    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs);
+    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, options);
     if (closed && child === target) {
       child = undefined;
     }
@@ -506,7 +537,7 @@ export async function createOpenClawTestInstance(
       });
     },
     startGateway: async () => {
-      if (child && !hasGatewayProcessClosed(child)) {
+      if (child && !hasChildExited(child)) {
         return;
       }
       const entrypoint = await resolveGatewayEntrypoint(cwd);
@@ -523,6 +554,18 @@ export async function createOpenClawTestInstance(
       const deadline = Date.now() + (options.startTimeoutMs ?? GATEWAY_START_TIMEOUT_MS);
       let restarts = 0;
 
+      if (child) {
+        const staleChild = child;
+        const closed = await releaseGatewayChild(staleChild, deadline, {
+          forceWindowsTree: true,
+        });
+        if (!closed) {
+          throw new Error(
+            `gateway process did not close before restart deadline\n${formatLogs(stdout, stderr)}`,
+          );
+        }
+      }
+
       while (true) {
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) {
@@ -537,19 +580,24 @@ export async function createOpenClawTestInstance(
           await waitForGatewayReady(attempt, stdout, stderr, port, remainingMs);
           return;
         } catch (err) {
-          const closed = await releaseGatewayChild(attempt, deadline);
+          const exitCode = attempt.exitCode;
+          const signalCode = attempt.signalCode;
+          const closed = await releaseGatewayChild(attempt, deadline, {
+            forceWindowsTree: true,
+          });
           const shouldRestart =
-            closed &&
             restarts < GATEWAY_MIGRATION_CONVERGENCE_MAX_RESTARTS &&
             isGatewayMigrationConvergenceRefusal(
-              attempt.exitCode,
-              attempt.signalCode,
+              exitCode,
+              signalCode,
               readLogBuffer(attemptStderr),
             );
           if (shouldRestart && Date.now() < deadline) {
-            restarts += 1;
-            appendLogChunk(stderr, GATEWAY_MIGRATION_CONVERGENCE_RESTART_MARKER);
-            continue;
+            if (closed) {
+              restarts += 1;
+              appendLogChunk(stderr, GATEWAY_MIGRATION_CONVERGENCE_RESTART_MARKER);
+              continue;
+            }
           }
           throw err;
         }
@@ -651,5 +699,6 @@ export const testing = {
   hasChildExited,
   isGatewayMigrationConvergenceRefusal,
   signalOpenClawTestProcess,
+  stopGatewayProcess,
   waitForGatewayReady,
 };
