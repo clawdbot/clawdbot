@@ -341,9 +341,9 @@ describe("ManagedWorktreeService", () => {
       expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
       expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
       expect(await service.list()).toEqual([]);
-      await expect(fs.stat(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expect(fs.readdir(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).resolves.toEqual(
+        [],
+      );
     },
   );
 
@@ -769,6 +769,35 @@ describe("ManagedWorktreeService", () => {
     await git(committed.path, "commit", "-m", "unpushed");
     expect(await service.removeIfLossless(committed.id)).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "canonicalizes managed paths minted below a symlinked state directory",
+    async () => {
+      await addRemote(root, repo);
+      const realStateDir = await fs.mkdtemp(path.join(root, "real-state-"));
+      const linkedStateDir = path.join(root, "linked-state");
+      await fs.symlink(realStateDir, linkedStateDir, "dir");
+      env = { ...process.env, OPENCLAW_STATE_DIR: linkedStateDir };
+      service = new ManagedWorktreeService({ env, now: () => now });
+
+      const created = await service.create({
+        repoRoot: repo,
+        name: "canonical-state",
+        baseRef: "HEAD",
+      });
+      const expectedPath = path.join(
+        await fs.realpath(realStateDir),
+        "worktrees",
+        created.repoFingerprint,
+        "canonical-state",
+      );
+      expect(created.path).toBe(expectedPath);
+
+      await service.acquire(created.id);
+      await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
+      await expect(fs.stat(expectedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("snapshots provisioned ignored file state independently of the source", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\nnode_modules/\n");
