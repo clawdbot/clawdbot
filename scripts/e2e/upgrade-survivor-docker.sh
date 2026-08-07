@@ -268,6 +268,9 @@ cleanup() {
   if [ -n "${plugin_registry_pid:-}" ]; then
     kill "$plugin_registry_pid" >/dev/null 2>&1 || true
   fi
+  if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
+    systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
+  fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     openclaw_e2e_terminate_gateways "$(cat "$SYSTEMCTL_SHIM_PID_FILE" 2>/dev/null || true)"

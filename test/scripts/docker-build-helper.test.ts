@@ -2608,6 +2608,29 @@ fi
     expect(successIndex).toBeGreaterThan(manualSummaryIndex);
   });
 
+  it("models systemd restart supervision in update-restart auth fixtures", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
+
+    for (const script of [publishedRunner, updateRestartAuth]) {
+      expectTextToIncludeAll(script, [
+        'supervisor_script="${pid_file}.supervisor.mjs"',
+        'process_state="$(awk \'{ print $3 }\' "/proc/$pid/stat" 2>/dev/null || true)"',
+        'OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start"',
+        'nohup node "$supervisor_script"',
+        'process.on("SIGTERM", stop);',
+        'setTimeout(() => child?.kill("SIGKILL"), 3_000).unref();',
+        "if (code === 78) return finish();",
+        "setTimeout(start, 100);",
+      ]);
+    }
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG"');
+      expect(script).toContain("systemctl --user stop openclaw-gateway.service");
+    }
+  });
+
   it.each([
     ["start budget", "OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", "90s"],
     ["status budget", "OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS", "30s"],

@@ -230,6 +230,9 @@ cleanup() {
   if [ -n "${plugin_registry_pid:-}" ]; then
     kill "$plugin_registry_pid" >/dev/null 2>&1 || true
   fi
+  if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
+    systemctl --user stop openclaw-gateway.service >/dev/null 2>&1 || true
+  fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     local shim_pid
@@ -784,6 +787,7 @@ set -euo pipefail
 log_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG:-/tmp/openclaw-systemctl-shim.log}"
 pid_file="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-/tmp/openclaw-systemctl-shim.pid}"
 daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw-systemctl-shim-gateway.log}"
+supervisor_script="${pid_file}.supervisor.mjs"
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
@@ -824,18 +828,18 @@ is_running() {
 }
 
 stop_gateway() {
-  [ -s "$pid_file" ] || return 0
-  local pid
+  local pid=""
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" >/dev/null 2>&1; then
     kill "$pid" >/dev/null 2>&1 || true
+    # The supervisor gives its child 3s, so keep this outer deadline comfortably longer.
     for _ in $(seq 1 100); do
-      kill -0 "$pid" >/dev/null 2>&1 || break
+      is_running || break
       sleep 0.1
     done
     kill -9 "$pid" >/dev/null 2>&1 || true
   fi
-  rm -f "$pid_file"
+  rm -f "$pid_file" "$supervisor_script"
 }
 
 unit_path() {
@@ -876,9 +880,66 @@ start_gateway() {
     echo "systemctl shim could not find ExecStart in $unit" >&2
     return 1
   }
+  rm -f "$pid_file" "$supervisor_script"
+  cat >"$supervisor_script" <<'SUPERVISOR'
+import fs from "node:fs";
+import { spawn } from "node:child_process";
+
+const command = process.env.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
+const daemonLog = process.env.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
+if (!command || !daemonLog) {
+  process.exit(2);
+}
+
+const output = fs.openSync(daemonLog, "a");
+const childEnv = { ...process.env };
+delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
+delete childEnv.OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG;
+let child;
+let stopping = false;
+
+const finish = () => {
+  try {
+    fs.closeSync(output);
+  } catch {}
+  process.exit(0);
+};
+
+const stop = () => {
+  if (stopping) return;
+  stopping = true;
+  if (!child) return finish();
+  child.kill("SIGTERM");
+  setTimeout(() => child?.kill("SIGKILL"), 3_000).unref();
+};
+
+const start = () => {
+  if (stopping) return finish();
+  child = spawn("bash", ["-lc", `exec ${command}`], {
+    env: childEnv,
+    stdio: ["ignore", output, output],
+  });
+  child.on("error", (error) => {
+    fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);
+  });
+  child.once("close", (code) => {
+    child = undefined;
+    if (stopping) return finish();
+    // Match the generated systemd unit's RestartPreventExitStatus contract.
+    if (code === 78) return finish();
+    setTimeout(start, 100);
+  });
+};
+
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+start();
+SUPERVISOR
   (
     load_unit_environment "$unit"
-    nohup bash -lc "exec $exec_start" >>"$daemon_log" 2>&1 &
+    OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start" \
+      OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG="$daemon_log" \
+      nohup node "$supervisor_script" </dev/null >/dev/null 2>&1 &
     printf '%s\n' "$!" >"$pid_file"
   )
 }
