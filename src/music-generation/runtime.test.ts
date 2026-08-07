@@ -112,6 +112,45 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it("passes cover-source audio through to the selected provider", async () => {
+    let seenRequest: Record<string, unknown> | undefined;
+    providers = [
+      {
+        id: "music-plugin",
+        capabilities: {},
+        async generateMusic(req: Record<string, unknown>) {
+          seenRequest = req;
+          return {
+            tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+            model: "music-cover",
+          };
+        },
+      },
+    ];
+
+    await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "music-plugin/music-cover" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "cover this song",
+      audioUrl: "https://example.com/source.mp3",
+      audioBase64: "c291cmNlLWJ5dGVz",
+      coverFeatureId: "feature-123",
+      inputAudios: [{ buffer: Buffer.from("cover-source"), mimeType: "audio/mpeg" }],
+    });
+
+    expect(seenRequest).toMatchObject({
+      audioUrl: "https://example.com/source.mp3",
+      audioBase64: "c291cmNlLWJ5dGVz",
+      coverFeatureId: "feature-123",
+      inputAudios: [{ mimeType: "audio/mpeg" }],
+    });
+  });
+
   it("uses configured music-generation timeout when call omits timeoutMs", async () => {
     let seenTimeoutMs: number | undefined;
     providers = [

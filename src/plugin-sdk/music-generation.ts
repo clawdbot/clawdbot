@@ -9,6 +9,7 @@ export type {
   MusicGenerationProviderCapabilities,
   MusicGenerationRequest,
   MusicGenerationResult,
+  MusicGenerationSourceAudio,
   MusicGenerationSourceImage,
   MusicGenerationOutputFormat,
 } from "../music-generation/types.js";

@@ -29,6 +29,15 @@ export type MusicGenerationSourceImage = {
   metadata?: Record<string, unknown>;
 };
 
+/** Optional source audio passed to music-cover models. */
+export type MusicGenerationSourceAudio = {
+  url?: string;
+  buffer?: Buffer;
+  mimeType?: string;
+  fileName?: string;
+  metadata?: Record<string, unknown>;
+};
+
 type MusicGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -48,6 +57,10 @@ export type MusicGenerationRequest = {
   durationSeconds?: number;
   format?: MusicGenerationOutputFormat;
   inputImages?: MusicGenerationSourceImage[];
+  audioUrl?: string;
+  audioBase64?: string;
+  coverFeatureId?: string;
+  inputAudios?: MusicGenerationSourceAudio[];
 };
 
 /** Provider result before runtime fallback metadata is attached. */

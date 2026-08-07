@@ -7,6 +7,7 @@ import type {
   MusicGenerationIgnoredOverride,
   MusicGenerationNormalization,
   MusicGenerationOutputFormat,
+  MusicGenerationSourceAudio,
   MusicGenerationSourceImage,
 } from "./types.js";
 
@@ -28,6 +29,10 @@ export type GenerateMusicParams = {
   durationSeconds?: number;
   format?: MusicGenerationOutputFormat;
   inputImages?: MusicGenerationSourceImage[];
+  audioUrl?: string;
+  audioBase64?: string;
+  coverFeatureId?: string;
+  inputAudios?: MusicGenerationSourceAudio[];
   autoProviderFallback?: boolean;
   /** Optional per-request provider timeout in milliseconds. */
   timeoutMs?: number;

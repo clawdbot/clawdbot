@@ -158,6 +158,79 @@ describe("minimax music generation provider", () => {
     expect(result.metadata).not.toHaveProperty("requestedDurationSeconds");
   });
 
+  it("sends cover_feature_id for music-cover models", async () => {
+    mockMusicGenerationResponse({
+      task_id: "task-cover-feature",
+      audio_url: "https://example.com/cover-feature.mp3",
+      base_resp: { status_code: 0 },
+    });
+
+    await buildMinimaxMusicGenerationProvider().generateMusic({
+      provider: "minimax",
+      model: "music-cover",
+      prompt: "cover this song",
+      cfg: {},
+      lyrics: "singing the same song in a new style",
+      coverFeatureId: "feature-123",
+    });
+
+    const body = mockCallArg(postJsonRequestMock).body as Record<string, unknown>;
+    expect(body.model).toBe("music-cover");
+    expect(body.cover_feature_id).toBe("feature-123");
+    expect(body.lyrics).toBe("singing the same song in a new style");
+    expect(body).not.toHaveProperty("audio_url");
+    expect(body).not.toHaveProperty("audio_base64");
+    expect(body).not.toHaveProperty("is_instrumental");
+    expect(body).not.toHaveProperty("lyrics_optimizer");
+  });
+
+  it("serializes buffered cover audio as base64 for music-cover models", async () => {
+    mockMusicGenerationResponse({
+      task_id: "task-cover-audio",
+      audio_url: "https://example.com/cover-audio.mp3",
+      base_resp: { status_code: 0 },
+    });
+
+    const coverAudio = Buffer.from("cover-source-audio");
+    await buildMinimaxMusicGenerationProvider().generateMusic({
+      provider: "minimax",
+      model: "music-cover-free",
+      prompt: "cover this song",
+      cfg: {},
+      inputAudios: [{ buffer: coverAudio, mimeType: "audio/mpeg" }],
+    });
+
+    const body = mockCallArg(postJsonRequestMock).body as Record<string, unknown>;
+    expect(body.model).toBe("music-cover-free");
+    expect(body.audio_base64).toBe(coverAudio.toString("base64"));
+    expect(body).not.toHaveProperty("audio_url");
+    expect(body).not.toHaveProperty("cover_feature_id");
+    expect(body).not.toHaveProperty("is_instrumental");
+    expect(body).not.toHaveProperty("lyrics_optimizer");
+  });
+
+  it("passes source audio URLs through for music-cover models", async () => {
+    mockMusicGenerationResponse({
+      task_id: "task-cover-url",
+      audio_url: "https://example.com/cover-url.mp3",
+      base_resp: { status_code: 0 },
+    });
+
+    await buildMinimaxMusicGenerationProvider().generateMusic({
+      provider: "minimax",
+      model: "music-cover",
+      prompt: "cover this song",
+      cfg: {},
+      inputAudios: [{ url: "https://example.com/source.mp3", mimeType: "audio/mpeg" }],
+    });
+
+    const body = mockCallArg(postJsonRequestMock).body as Record<string, unknown>;
+    expect(body.model).toBe("music-cover");
+    expect(body.audio_url).toBe("https://example.com/source.mp3");
+    expect(body).not.toHaveProperty("audio_base64");
+    expect(body).not.toHaveProperty("cover_feature_id");
+  });
+
   it.each([
     { provider: "minimax", contentType: "application/json", body: '{"error":"denied"}' },
     {
