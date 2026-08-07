@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -66,6 +67,22 @@ describe("tsdown config", () => {
 
     expect(declarationSources.toSorted()).toEqual(runtimeSources.toSorted());
     expect(new Set(declarationSources).size).toBe(declarationSources.length);
+  });
+
+  it("keeps public SDK declarations together and isolates private runtime declarations", () => {
+    const [publicDeclarationSources = [], privateDeclarationSources = []] =
+      TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.filter((name) =>
+        name.startsWith("openclaw-dts-plugin-sdk-"),
+      ).map((name) => {
+        const dts = configs.find((entry) => entry.name === name)?.dts;
+        return dts && typeof dts === "object" && Array.isArray(dts.entry) ? dts.entry : [];
+      });
+    const publicSources = publicPluginSdkEntrypoints.map((entry) => `src/plugin-sdk/${entry}.ts`);
+    const publicSourceSet = new Set(publicSources);
+
+    expect(publicDeclarationSources.toSorted()).toEqual(publicSources.toSorted());
+    expect(privateDeclarationSources.some((source) => publicSourceSet.has(source))).toBe(false);
+    expect(privateDeclarationSources).toContain("src/plugin-sdk/tts-runtime.ts");
   });
 
   it("keeps node package artifacts on the declared js and dts extensions", () => {

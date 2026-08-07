@@ -524,6 +524,42 @@ describe("xai provider plugin", () => {
     expect(realtimeVoiceProvider.capabilities?.transports).toEqual(["gateway-relay"]);
   });
 
+  it("forwards exact caller cancellation through the registered lazy X search factory", async () => {
+    const factory = registerXaiBilledToolFactories().x_search;
+    const tool = factory({
+      config: createXaiBilledToolConfig("x_search", true),
+      activeModel: { provider: "xai" },
+      hasAuthForProvider: (providerId) => providerId === "xai",
+      resolveApiKeyForProvider: async (providerId) =>
+        providerId === "xai" ? "xai-lazy-cancel-key" : undefined,
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Expected one registered lazy X search tool");
+    }
+    expect(tool.resultContentSource).toBe("network");
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled lazy X search");
+    let transportSignal: AbortSignal | undefined;
+    const mockFetch = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          transportSignal = init?.signal ?? undefined;
+          transportSignal?.addEventListener("abort", () => reject(reason), {
+            once: true,
+          });
+          queueMicrotask(() => controller.abort(reason));
+        }),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    await expect(
+      tool.execute("lazy-xai-cancel", { query: "registered lazy cancellation" }, controller.signal),
+    ).rejects.toBe(reason);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(transportSignal?.reason).toBe(reason);
+  });
+
   describe.each(["code_execution", "x_search"] as const)("%s exposure", (toolName) => {
     it.each([
       {

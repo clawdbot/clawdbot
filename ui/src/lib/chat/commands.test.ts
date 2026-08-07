@@ -1,5 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
-import { expectDefined, isRecord } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFallbackSlashCommands,
@@ -15,12 +16,7 @@ afterEach(() => {
   replaceSlashCommands(buildFallbackSlashCommands());
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {

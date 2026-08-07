@@ -361,17 +361,30 @@ describe("resolvePluginVersionDriftUpdateCommand", () => {
     ).toBe("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
   });
 
-  it("keeps plugin-id updates for floating npm install records", () => {
+  it.each([
+    {
+      pluginId: "codex",
+      source: "npm" as const,
+      packageName: "@openclaw/codex",
+      spec: "@openclaw/codex",
+    },
+    {
+      pluginId: "diagnostics-otel",
+      source: "clawhub" as const,
+      packageName: "@openclaw/diagnostics-otel",
+      spec: "clawhub:@openclaw/diagnostics-otel",
+    },
+  ])("keeps the repairing plugin-id update for a floating $source install", (entry) => {
     expect(
       resolvePluginVersionDriftUpdateCommand({
-        pluginId: "brave",
+        pluginId: entry.pluginId,
         installedVersion: "2026.6.9",
         gatewayVersion: "2026.6.10-beta.1",
-        source: "npm",
-        packageName: "@openclaw/brave-plugin",
-        spec: "@openclaw/brave-plugin",
+        source: entry.source,
+        packageName: entry.packageName,
+        spec: entry.spec,
       }),
-    ).toBe("openclaw plugins update brave");
+    ).toBe(`openclaw plugins update ${entry.pluginId}`);
   });
 
   it("keeps plugin-id updates when the gateway version is not a registry version", () => {

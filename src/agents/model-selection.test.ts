@@ -1859,47 +1859,39 @@ describe("model-selection", () => {
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-5" });
     });
 
-    it("strips trailing profile suffix for provider/model refs", () => {
+    it.each([
+      {
+        title: "strips trailing profile suffix for provider/model refs",
+        input: "google/gemini-flash-latest@google:bevfresh",
+        expectedProvider: "google",
+        expectedModel: "gemini-flash-latest",
+      },
+      {
+        title: "preserves Cloudflare @cf model segments",
+        input: "openai/@cf/openai/gpt-oss-20b",
+        expectedProvider: "openai",
+        expectedModel: "@cf/openai/gpt-oss-20b",
+      },
+      {
+        title: "preserves OpenRouter @preset model segments",
+        input: "openrouter/@preset/kimi-2-5",
+        expectedProvider: "openrouter",
+        expectedModel: "@preset/kimi-2-5",
+      },
+      {
+        title: "splits trailing profile suffix after OpenRouter preset paths",
+        input: "openrouter/@preset/kimi-2-5@work",
+        expectedProvider: "openrouter",
+        expectedModel: "@preset/kimi-2-5",
+      },
+    ])("$title", ({ input, expectedProvider, expectedModel }) => {
       const resolved = resolveModelRefFromString({
-        raw: "google/gemini-flash-latest@google:bevfresh",
+        raw: input,
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({
-        provider: "google",
-        model: "gemini-flash-latest",
-      });
-    });
-
-    it("preserves Cloudflare @cf model segments", () => {
-      const resolved = resolveModelRefFromString({
-        raw: "openai/@cf/openai/gpt-oss-20b",
-        defaultProvider: "anthropic",
-      });
-      expect(resolved?.ref).toEqual({
-        provider: "openai",
-        model: "@cf/openai/gpt-oss-20b",
-      });
-    });
-
-    it("preserves OpenRouter @preset model segments", () => {
-      const resolved = resolveModelRefFromString({
-        raw: "openrouter/@preset/kimi-2-5",
-        defaultProvider: "anthropic",
-      });
-      expect(resolved?.ref).toEqual({
-        provider: "openrouter",
-        model: "@preset/kimi-2-5",
-      });
-    });
-
-    it("splits trailing profile suffix after OpenRouter preset paths", () => {
-      const resolved = resolveModelRefFromString({
-        raw: "openrouter/@preset/kimi-2-5@work",
-        defaultProvider: "anthropic",
-      });
-      expect(resolved?.ref).toEqual({
-        provider: "openrouter",
-        model: "@preset/kimi-2-5",
+        provider: expectedProvider,
+        model: expectedModel,
       });
     });
 
@@ -2178,14 +2170,43 @@ describe("model-selection", () => {
       });
     });
 
-    it("prefers slash-form aliases for configured default models", () => {
+    it.each([
+      {
+        title: "prefers slash-form aliases for configured default models",
+        input: "xiaomi/mimo-v2-pro-mit",
+        aliasRef: "openai/xiaomi/mimo-v2-pro-mit",
+        alias: "xiaomi/mimo-v2-pro-mit",
+        expectedModel: "xiaomi/mimo-v2-pro-mit",
+      },
+      {
+        title: "prefers slash-form aliases before applying auth profile suffixes",
+        input: "xiaomi/mimo-v2-pro-mit@work",
+        aliasRef: "openai/xiaomi/mimo-v2-pro-mit",
+        alias: "xiaomi/mimo-v2-pro-mit",
+        expectedModel: "xiaomi/mimo-v2-pro-mit",
+      },
+      {
+        title: "prefers exact aliases that contain auth-profile-like suffixes",
+        input: "gpt@prod",
+        aliasRef: "openai/gpt-5.5",
+        alias: "gpt@prod",
+        expectedModel: "gpt-5.5",
+      },
+      {
+        title: "prefers exact slash-form aliases before stripping auth-profile suffixes",
+        input: "anthropic/claude-opus-4-6@prod",
+        aliasRef: "openai/gpt-5.5",
+        alias: "anthropic/claude-opus-4-6@prod",
+        expectedModel: "gpt-5.5",
+      },
+    ])("$title", ({ input, aliasRef, alias, expectedModel }) => {
       const cfg = {
         agents: {
           defaults: {
-            model: { primary: "xiaomi/mimo-v2-pro-mit" },
+            model: { primary: input },
             models: {
-              "openai/xiaomi/mimo-v2-pro-mit": {
-                alias: "xiaomi/mimo-v2-pro-mit",
+              [aliasRef]: {
+                alias,
               },
             },
           },
@@ -2198,76 +2219,7 @@ describe("model-selection", () => {
         defaultModel: "claude-sonnet-4-6",
       });
 
-      expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
-    });
-
-    it("prefers slash-form aliases before applying auth profile suffixes", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "xiaomi/mimo-v2-pro-mit@work" },
-            models: {
-              "openai/xiaomi/mimo-v2-pro-mit": {
-                alias: "xiaomi/mimo-v2-pro-mit",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const result = resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-      });
-
-      expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
-    });
-
-    it("prefers exact aliases that contain auth-profile-like suffixes", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "gpt@prod" },
-            models: {
-              "openai/gpt-5.5": {
-                alias: "gpt@prod",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const result = resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-      });
-
-      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
-    });
-
-    it("prefers exact slash-form aliases before stripping auth-profile suffixes", () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6@prod" },
-            models: {
-              "openai/gpt-5.5": {
-                alias: "anthropic/claude-opus-4-6@prod",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const result = resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-      });
-
-      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+      expect(result).toEqual({ provider: "openai", model: expectedModel });
     });
 
     it("prefers exact auth-profile aliases before configured-provider stripping", () => {

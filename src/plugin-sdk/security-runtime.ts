@@ -1,7 +1,4 @@
-/**
- * @deprecated Broad public SDK barrel. Prefer focused security/SSRF/secret
- * subpaths and avoid adding new imports here.
- */
+/** Public security runtime helpers for plugin-side trust boundaries. */
 
 import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
 
@@ -29,7 +26,11 @@ export {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
 } from "./access-groups.js";
-export { wrapExternalContent, wrapWebContent } from "../security/external-content.js";
+export {
+  truncateSanitizedExternalContent,
+  wrapExternalContent,
+  wrapWebContent,
+} from "../security/external-content.js";
 export { compileSafeRegexDetailed } from "../security/safe-regex.js";
 export type { SafeRegexRejectReason } from "../security/safe-regex.js";
 export {

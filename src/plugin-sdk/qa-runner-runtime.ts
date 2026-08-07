@@ -182,6 +182,8 @@ type QaRunnerTransportAdapterDefinition = {
 
 type QaRunnerTransportFactory = {
   id: string;
+  /** Enables module-backed scenarios; every created adapter must implement `prepareFlow`. */
+  supportsModuleFlows?: true;
   /** Each create() call owns isolated runtime state and may run concurrently. */
   isolatesInstances?: boolean;
   matches: (context: { channelId: string; driver: string }) => boolean;
@@ -593,9 +595,13 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
         );
       }
       const adapterFactory = registration.adapterFactory;
+      const supportsModuleFlows: unknown = adapterFactory
+        ? Reflect.get(adapterFactory, "supportsModuleFlows")
+        : undefined;
       if (
         adapterFactory &&
         (adapterFactory.id !== runner.commandName ||
+          (supportsModuleFlows !== undefined && supportsModuleFlows !== true) ||
           (adapterFactory.isolatesInstances !== undefined &&
             typeof adapterFactory.isolatesInstances !== "boolean") ||
           typeof adapterFactory.matches !== "function" ||

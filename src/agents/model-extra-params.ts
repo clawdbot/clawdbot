@@ -19,7 +19,7 @@ const FAST_MODE_CUTOFF_MODEL_PARAM_KEYS = new Set([
 
 // Native harnesses receive recognized values as typed run controls. Other value
 // shapes with the same keys remain authored provider request parameters.
-function isAgentRuntimeModelParam(key: string, value: unknown): boolean {
+export function isAgentRuntimeModelParam(key: string, value: unknown): boolean {
   if (key === "thinking") {
     return (
       value === false ||

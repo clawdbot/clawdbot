@@ -38,6 +38,7 @@ function createFakeSession(): FakeSession {
     on: vi.fn((eventType: string, handler: (event: SessionEvent) => void) => {
       listeners.set(eventType, [...(listeners.get(eventType) ?? []), handler]);
     }) as FakeSession["on"],
+    send: vi.fn(async () => "sdk-user"),
     sendAndWait: vi.fn(async () => undefined),
     sessionId: "sdk-session",
   };

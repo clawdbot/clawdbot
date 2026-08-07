@@ -306,6 +306,81 @@ describe("SessionManager.open", () => {
     expect(() => SessionManager.open(scope, dir)).not.toThrow();
   });
 
+  it("persists a fresh SQLite session header and first message", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-fresh-session",
+      sessionKey: "agent:main:sqlite-fresh-session",
+      storePath: path.join(dir, "sessions.json"),
+    };
+
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    const manager = SessionManager.open(scope, dir);
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    const messageId = manager.appendMessage({
+      role: "user",
+      content: "first message",
+      timestamp: 1,
+    });
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({
+        id: scope.sessionId,
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+      }),
+      expect.objectContaining({
+        id: messageId,
+        message: expect.objectContaining({ content: "first message", role: "user" }),
+        type: "message",
+      }),
+    ]);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+  });
+
+  it("does not rewrite an existing session row when opening an empty transcript", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-empty-existing-row-target",
+      sessionKey: "agent:main:sqlite-empty-existing-row",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "sqlite-existing-row",
+      updatedAt: 123,
+      label: "preserved",
+    });
+    const before = loadSessionEntry(scope);
+
+    SessionManager.open(scope, dir);
+
+    expect(loadSessionEntry(scope)).toEqual(before);
+  });
+
+  it("does not overwrite a rebound session row when the first append seeds its header", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-stale-appender",
+      sessionKey: "agent:main:sqlite-rebound-before-header",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "sqlite-current-owner",
+      updatedAt: 456,
+      label: "preserved",
+    });
+    const before = loadSessionEntry(scope);
+    const manager = SessionManager.open(scope, dir);
+
+    expect(() =>
+      manager.appendMessage({ role: "user", content: "stale message", timestamp: 1 }),
+    ).toThrow("Session transcript header was not persisted");
+    expect(loadSessionEntry(scope)).toEqual(before);
+  });
+
   it("rejects invalid entries before mutating in-memory state", () => {
     const manager = SessionManager.inMemory("/tmp");
     const entriesBefore = manager.getEntries();
@@ -793,6 +868,20 @@ describe("SessionManager.open", () => {
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
     );
+
+    try {
+      sessionManager.appendCompaction("late summary", assistant.messageId, 42);
+      throw new Error("expected rebound compaction persistence to fail");
+    } catch (error) {
+      expect(error).toMatchObject({
+        cause: {
+          actualSessionId: "replacement-session",
+          code: "session-rebound",
+          expectedSessionId: sessionId,
+          sessionKey,
+        },
+      });
+    }
 
     expect(() =>
       sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),

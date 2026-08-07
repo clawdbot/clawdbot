@@ -8,7 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { isLocalOllamaBaseUrl } from "./src/discovery-shared.js";
 import { createOllamaEmbeddingProvider } from "./src/embedding-provider.js";
-import { createOllamaStreamFn } from "./src/stream.js";
+import { createOllamaStreamFn } from "./src/stream.runtime.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_OLLAMA === "1";
@@ -177,7 +177,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
         buildCliEnv(root),
       );
 
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr || result.stdout).toBe(0);
       expect(result.stderr).not.toContain("[agents/auth-profiles]");
       expect(result.stdout.trim(), result.stderr).not.toHaveLength(0);
       const payload = parseJsonEnvelope(result.stdout) as {

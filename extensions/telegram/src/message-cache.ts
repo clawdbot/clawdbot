@@ -260,6 +260,13 @@ export function hasProviderObservedTelegramThreadBinding(
   return normalizeTelegramMessageThreadBinding(node?.threadBinding, threadId) !== undefined;
 }
 
+export function resolveProviderObservedTelegramThreadId(
+  node: TelegramCachedMessageNode | null | undefined,
+): number | undefined {
+  const threadId = parseTelegramMessageThreadId(node?.threadId);
+  return hasProviderObservedTelegramThreadBinding(node, threadId) ? threadId : undefined;
+}
+
 function normalizeMessageNodes(
   msg: Message,
   params: {

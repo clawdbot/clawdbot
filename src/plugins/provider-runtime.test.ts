@@ -1,5 +1,6 @@
-/** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+/** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -164,12 +165,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }): unknown {
   return mock.mock.calls[0]?.[0];
@@ -279,8 +275,9 @@ describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./provider-public-artifacts.js", () => ({
-      resolveBundledProviderPolicySurface: (provider: string) =>
-        resolveBundledProviderPolicySurfaceMock(provider),
+      resolveBundledProviderPolicySurface: (
+        ...args: Parameters<ResolveBundledProviderPolicySurface>
+      ) => resolveBundledProviderPolicySurfaceMock(...args),
     }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
@@ -1611,6 +1608,50 @@ describe("provider-runtime", () => {
 
     expect(normalizeConfig).toHaveBeenCalledTimes(1);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards prepared manifest metadata to bundled config policy resolution", () => {
+    const manifestRegistry = { plugins: [] };
+    const providerConfig: ModelProviderConfig = {
+      baseUrl: "https://api.example.com/v1",
+      api: "openai-completions",
+      models: [],
+    };
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      normalizeConfig: ({ providerConfig: candidateConfig }) => ({
+        ...candidateConfig,
+        baseUrl: "https://normalized.example.com/v1",
+      }),
+      resolveConfigApiKey: () => "EXAMPLE_API_KEY",
+    });
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "example-alias",
+        manifestRegistry,
+        context: {
+          provider: "example-alias",
+          providerConfig,
+        },
+      })?.baseUrl,
+    ).toBe("https://normalized.example.com/v1");
+    expect(
+      resolveProviderConfigApiKeyWithPlugin({
+        provider: "example-alias",
+        manifestRegistry,
+        context: {
+          provider: "example-alias",
+          env: {},
+        },
+      }),
+    ).toBe("EXAMPLE_API_KEY");
+
+    expect(resolveBundledProviderPolicySurfaceMock).toHaveBeenNthCalledWith(1, "example-alias", {
+      manifestRegistry,
+    });
+    expect(resolveBundledProviderPolicySurfaceMock).toHaveBeenNthCalledWith(2, "example-alias", {
+      manifestRegistry,
+    });
   });
 
   it("resolves thinking profiles from bundled policy surface before runtime plugins", () => {

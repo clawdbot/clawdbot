@@ -445,6 +445,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
               migrationBaseConfig: baseConfig,
             });
+            if (applied.agentModelOverride) {
+              session.setPreparedModelRef(applied.agentModelOverride);
+            }
           }),
         );
       },
@@ -546,6 +549,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         }
         if (params.reset) {
           const existing = sessions.get(sessionId);
+          // Persist the reset first; a failed write must leave the live session intact.
+          appendTranscriptReset();
           sessions.delete(sessionId);
           if (existing?.pendingApproval) {
             context.systemAgentApprovalManager?.expire(
@@ -647,9 +652,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             }
             respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
             return;
-          }
-          if (params.reset) {
-            appendTranscriptReset();
           }
           persistEngineHistory(engine, welcomeHistoryStart);
           await evictOldestSession(sessions, context);

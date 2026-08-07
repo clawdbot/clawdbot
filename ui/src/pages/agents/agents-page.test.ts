@@ -27,6 +27,7 @@ type TestAgentsPage = HTMLElement & {
   agentFileActive: string | null;
   agentFileContents: Record<string, string>;
   agentIdentityLoading: boolean;
+  agentSkillsError: string | null;
   readonly agentsPanel: AgentsPanel;
   toolsEffectiveLoading: boolean;
   toolsEffectiveResult: ToolsEffectiveResult | null;
@@ -56,7 +57,9 @@ type TestAgentsPage = HTMLElement & {
   runCronTask: <T>(task: (cronState: CronState) => Promise<T>) => Promise<T>;
   loadEffectiveToolsForAgent: (agentId: string) => void;
   loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
+  clearAgentSkills: (agentId: string) => void;
   saveAgentConfig: () => void;
+  setDefaultAgent: (agentId: string) => void;
 };
 
 function setPageGateway(
@@ -176,6 +179,93 @@ function pageContext(
 }
 
 describe("AgentsPage gateway lifecycle", () => {
+  it("does not stage a default-agent change after a same-client reconnect", async () => {
+    const loading = deferred<void>();
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    const stageDefaultAgent = vi.fn(() => true);
+    const save = vi.fn(async () => true);
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    const context = pageContext(currentGateway, agents);
+    page.context = {
+      ...context,
+      runtimeConfig: {
+        state: { configFormDirty: false },
+        ensureLoaded: vi.fn(() => loading.promise),
+        stageDefaultAgent,
+        save,
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    setPageGateway(page, client);
+
+    page.setDefaultAgent("research");
+    setPageGateway(page, client, false);
+    setPageGateway(page, client);
+    loading.resolve();
+    await loading.promise;
+    await Promise.resolve();
+
+    expect(stageDefaultAgent).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a queued agent skills clear across a same-client reconnect", async () => {
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    const patch = vi.fn(
+      async (_options: Parameters<ApplicationContext["runtimeConfig"]["patch"]>[0]) => false,
+    );
+    const runtimeConfig = {
+      state: {},
+      agentEntry: vi.fn(() => ({
+        path: ["agents", "entries", "main"],
+        entry: { skills: ["coding-agent"] },
+      })),
+      patch,
+      subscribe: vi.fn(() => () => undefined),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = { ...pageContext(currentGateway, agents), runtimeConfig };
+    setPageGateway(page, client);
+    page.agentsSelectedId = "main";
+
+    page.clearAgentSkills("main");
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    const canDispatch = vi.mocked(patch).mock.calls[0]?.[0]?.canDispatch;
+    expect(canDispatch?.()).toBe(true);
+
+    setPageGateway(page, client, false);
+    setPageGateway(page, client);
+
+    expect(canDispatch?.()).toBe(false);
+  });
+
+  it("surfaces a rejected agent skills clear in the panel", async () => {
+    const client = {} as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    const runtimeConfig = {
+      state: { lastError: "Gateway rejected the patch." },
+      agentEntry: vi.fn(() => ({
+        path: ["agents", "entries", "main"],
+        entry: { skills: ["coding-agent"] },
+      })),
+      patch: vi.fn(async () => false),
+      subscribe: vi.fn(() => () => undefined),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = { ...pageContext(currentGateway, agents), runtimeConfig };
+    setPageGateway(page, client);
+    page.agentsSelectedId = "main";
+
+    page.clearAgentSkills("main");
+
+    await vi.waitFor(() => expect(page.agentSkillsError).toBe("Gateway rejected the patch."));
+  });
+
   it("does not refresh the agent roster after a rejected config save", async () => {
     const client = {} as GatewayBrowserClient;
     const refreshList = vi.fn(async () => agentsList);
@@ -184,6 +274,7 @@ describe("AgentsPage gateway lifecycle", () => {
     setPageGateway(page, client, false);
     page.agentsSelectedId = "main";
     page.context = {
+      gateway: gateway(snapshot(client)),
       agents: {
         state: { agentsLoading: false, agentsError: null, agentsList },
         refreshList,

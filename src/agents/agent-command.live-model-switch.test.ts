@@ -1,6 +1,7 @@
 /** Tests live model switching behavior in active agent command sessions. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -116,10 +117,16 @@ const state = vi.hoisted(() => ({
   storePathMock: undefined as string | undefined,
   resolvedSessionKeyMock: undefined as string | undefined,
   trajectoryRecorderParamsMock: vi.fn(),
+  enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
 
 vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+}));
+
+vi.mock("../audit/execution-identity-admission.js", () => ({
+  enqueueExecutionIdentityContextAtAdmission: (...args: unknown[]) =>
+    state.enqueueExecutionIdentityContextAtAdmissionMock(...args),
 }));
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
@@ -241,6 +248,10 @@ vi.mock("./main-session-recovery-store.js", () => ({
 
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+}));
+
+vi.mock("./runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
 }));
 
 // Harness selection has dedicated coverage; this command suite registers no auto harnesses.
@@ -652,11 +663,13 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 }));
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
+let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
 let agentCommandTesting: typeof import("./agent-command.js").testing;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
+  agentCommandFromSystem ??= mod.agentCommandFromSystem;
   agentCommandTesting ??= mod.testing;
 });
 
@@ -745,12 +758,7 @@ function setupAcpSession(): void {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -779,6 +787,17 @@ async function runBasicAgentCommand() {
     message: "hello",
     to: "+1234567890",
   });
+}
+
+async function runSystemAgentCommand() {
+  await agentCommandFromSystem(
+    {
+      message: "boot",
+      sessionKey: "agent:main:boot",
+      deliver: false,
+    },
+    { boundary: "gateway.boot" },
+  );
 }
 
 function runDiscordDelivery(overrides: Partial<Parameters<typeof agentCommand>[0]> = {}) {
@@ -1060,6 +1079,62 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
     );
+  });
+
+  it("keeps collection off by default without blocking local execution", async () => {
+    setupSuccessfulAttempt();
+
+    await runBasicAgentCommand();
+
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+      }),
+      { enabled: false },
+    );
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records authoritative local and system ingress only after explicit opt-in", async () => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      logging: { audit: { executionIdentity: true } },
+    };
+    setupSuccessfulAttempt();
+
+    await runBasicAgentCommand();
+    await runSystemAgentCommand();
+
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+      }),
+      { enabled: true },
+    );
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+      }),
+      { enabled: true },
+    );
+  });
+
+  it.each([
+    ["local CLI", runBasicAgentCommand],
+    ["system", runSystemAgentCommand],
+  ])("keeps %s runs nonblocking when evidence cannot be queued", async (_name, run) => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      logging: { audit: { executionIdentity: true } },
+    };
+    state.enqueueExecutionIdentityContextAtAdmissionMock.mockReturnValue(undefined);
+    setupSuccessfulAttempt();
+
+    await run();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
   });
 
   it("forwards the auth profile bound to the configured default model", async () => {

@@ -197,6 +197,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
+      preferencesBrowserOnly: gatewayConnected && context.runtimeConfig.canPatch === false,
       sidebarEntries: navigationSnapshot.sidebarEntries,
       workboardBoards: host.sidebarWorkboardSnapshot.boards,
       workboardBoardsReady: host.sidebarWorkboardSnapshot.ready,
@@ -256,6 +257,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           needsApply: runtimeConfig.configNeedsApply,
           applying: runtimeConfig.configApplying,
           applyDisabled:
+            context.runtimeConfig.canApply === false ||
             runtimeConfig.configLoading ||
             runtimeConfig.configSaving ||
             (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||

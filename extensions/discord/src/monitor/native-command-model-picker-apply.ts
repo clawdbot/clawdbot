@@ -1,9 +1,10 @@
 // Discord plugin module implements native command model picker apply behavior.
 import { randomUUID } from "node:crypto";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  applyModelOverrideToSessionEntry,
+  applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -39,6 +40,7 @@ async function persistDiscordModelPickerOverride(params: {
   provider: string;
   model: string;
   isDefault: boolean;
+  defaultProvider: string;
   runtime?: string;
 }): Promise<boolean> {
   const storePath = resolveStorePath(params.cfg.session?.store, {
@@ -54,9 +56,14 @@ async function persistDiscordModelPickerOverride(params: {
     },
     replaceEntry: true,
     update: (entry) => {
+      const currentProvider =
+        entry.providerOverride?.trim() || entry.modelProvider?.trim() || params.defaultProvider;
       persisted =
-        applyModelOverrideToSessionEntry({
+        applyModelOverrideWithAuthProfileCompatibility({
+          cfg: params.cfg,
+          agentDir: resolveAgentDir(params.cfg, params.route.agentId),
           entry,
+          currentProvider,
           selection: {
             provider: params.provider,
             model: params.model,
@@ -141,6 +148,7 @@ export async function applyDiscordModelPickerSelection(params: {
         route: fallbackRoute,
         provider: params.selectedProvider,
         model: params.selectedModel,
+        defaultProvider: params.defaultProvider,
         isDefault:
           params.selectedProvider === params.defaultProvider &&
           params.selectedModel === params.defaultModel,
@@ -163,6 +171,7 @@ export async function applyDiscordModelPickerSelection(params: {
           route: fallbackRoute,
           provider: params.selectedProvider,
           model: params.selectedModel,
+          defaultProvider: params.defaultProvider,
           isDefault:
             params.selectedProvider === params.defaultProvider &&
             params.selectedModel === params.defaultModel,

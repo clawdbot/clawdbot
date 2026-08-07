@@ -18,6 +18,7 @@ import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
+  resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
@@ -29,6 +30,7 @@ import {
   resolveSessionWriteLockTargetKey,
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
+import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { resolveCompactionFailureReason } from "./compact-reasons.js";
@@ -111,6 +113,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const sessionTarget = await resolveAgentRunSessionTarget({
       agentId: sessionAgentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionFile: params.sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -367,7 +370,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
             hookRunner,
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: sessionTarget.sessionKey,
             sessionAgentId,
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
@@ -424,7 +427,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              return activeSession.compact(params.customInstructions);
+              return resolveEffectiveCompactionMode(params.config) === "default" &&
+                trigger !== "manual"
+                ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
+                : activeSession.compact(params.customInstructions);
             },
             compactionTimeoutMs,
             {

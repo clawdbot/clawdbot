@@ -365,9 +365,25 @@ private func wizardProgressResponse(id: String, sessionID: String, message: Stri
         """.utf8)
 }
 
-private func wizardDoneResponse(id: String, sessionID: String) -> Data {
-    Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":{"sessionId":"\#(sessionID)","done":true,"status":"done"}}"#
-        .utf8)
+private func wizardDoneResponse(
+    id: String,
+    sessionID: String,
+    preparedModelRef: String? = nil) -> Data
+{
+    var payload: [String: Any] = [
+        "sessionId": sessionID,
+        "done": true,
+        "status": "done",
+    ]
+    if let preparedModelRef {
+        payload["preparedModelRef"] = preparedModelRef
+    }
+    return try! JSONSerialization.data(withJSONObject: [
+        "type": "res",
+        "id": id,
+        "ok": true,
+        "payload": payload,
+    ])
 }
 
 private func settleQueuedAISetupTasks() async {
@@ -802,6 +818,12 @@ struct OnboardingAISetupTests {
                 modelRef: "lmstudio/qwen3-8b-instruct",
                 credentials: true),
             OnboardingAISetupModel.Candidate(
+                kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
+                label: "Vendor Local",
+                detail: "available locally",
+                modelRef: "vendor/model",
+                credentials: true),
+            OnboardingAISetupModel.Candidate(
                 kind: "provider-auto:llama-cpp",
                 label: "Local model (llama.cpp)",
                 detail: "credentials required",
@@ -833,6 +855,14 @@ struct OnboardingAISetupTests {
                 brandId: "lmstudio",
                 icon: "https://cdn.simpleicons.org/lmstudio",
                 website: "https://lmstudio.ai/download"),
+            OnboardingAISetupModel.PrepareOption(
+                id: "vendor/local:v1%beta?x#y",
+                label: "Vendor Local",
+                hint: nil,
+                actionLabel: nil,
+                brandId: "different-namespace",
+                icon: nil,
+                website: nil),
         ]
 
         let options = OnboardingAISetupModel.prepareOptions(
@@ -849,7 +879,6 @@ struct OnboardingAISetupTests {
     @Test func `prepare starts the shared wizard and polls gateway progress`() async throws {
         let recorder = AISetupRequestRecorder()
         let frames = AISetupSocketGeneration()
-        let detections = AISetupSocketGeneration()
         let completion = AISetupRequestGate()
         let preparedModelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m"
         let session = makeAISetupRequestSession(
@@ -857,19 +886,10 @@ struct OnboardingAISetupTests {
             handler: { task, request in
                 switch request.method {
                 case "openclaw.setup.detect":
-                    if detections.claim() == 0 {
-                        task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
-                    } else {
-                        let response = String(decoding: detectedSetupResponse(
-                            id: request.id,
-                            kind: "provider-auto:llama-cpp",
-                            modelRef: preparedModelRef), as: UTF8.self)
-                            .replacingOccurrences(
-                                of: #""credentials":false"#,
-                                with: #""credentials":true"#)
-                        task.emitReceiveSuccess(.data(Data(response.utf8)))
-                    }
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
                 case "openclaw.setup.activate":
+                    #expect(request.params["kind"] as? String == "provider-auto:llama-cpp")
+                    #expect(request.params["modelRef"] as? String == preparedModelRef)
                     task.emitReceiveSuccess(.data(successfulActivationResponse(
                         id: request.id,
                         modelRef: preparedModelRef,
@@ -899,7 +919,8 @@ struct OnboardingAISetupTests {
                         await completion.wait()
                         task.emitReceiveSuccess(.data(wizardDoneResponse(
                             id: request.id,
-                            sessionID: sessionID)))
+                            sessionID: sessionID,
+                            preparedModelRef: preparedModelRef)))
                     }
                 default:
                     break
@@ -952,9 +973,84 @@ struct OnboardingAISetupTests {
         #expect(model.connectedModelRef == preparedModelRef)
         let completedRequests = await recorder.snapshot()
         #expect(completedRequests.methods.suffix(2) == [
+            "wizard.next",
+            "openclaw.setup.activate",
+        ])
+        #expect(completedRequests.methods.filter { $0 == "openclaw.setup.detect" }.count == 1)
+    }
+
+    @Test func `prepare without a model handoff falls back to detection`() async throws {
+        let recorder = AISetupRequestRecorder()
+        let detections = AISetupSocketGeneration()
+        let preparedModelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m"
+        let session = makeAISetupRequestSession(
+            recorder: recorder,
+            handler: { task, request in
+                switch request.method {
+                case "openclaw.setup.detect":
+                    if detections.claim() == 0 {
+                        task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                    } else {
+                        let response = String(decoding: detectedSetupResponse(
+                            id: request.id,
+                            kind: "provider-auto:llama-cpp",
+                            modelRef: preparedModelRef), as: UTF8.self)
+                            .replacingOccurrences(
+                                of: #""credentials":false"#,
+                                with: #""credentials":true"#)
+                        task.emitReceiveSuccess(.data(Data(response.utf8)))
+                    }
+                case "openclaw.setup.prepare.start":
+                    let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
+                    task.emitReceiveSuccess(.data(wizardDoneResponse(
+                        id: request.id,
+                        sessionID: sessionID)))
+                case "openclaw.setup.activate":
+                    task.emitReceiveSuccess(.data(successfulActivationResponse(
+                        id: request.id,
+                        modelRef: preparedModelRef,
+                        latencyMs: 731)))
+                default:
+                    break
+                }
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                let id = task.snapshotConnectRequestID() ?? "connect"
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: id,
+                    methods: [
+                        "openclaw.setup.prepare.start",
+                        "openclaw.setup.activate",
+                    ],
+                    capabilities: ["openclaw-setup-model-ref"]))
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = makeAISetupGateway(url: url, session: session)
+        let model = makeAISetupModel(gateway: gateway)
+
+        await model.detectAndAutoConnect()
+        let option = try #require(model.prepareOptions.first { $0.id == "llama-cpp" })
+        model.startProviderPrepare(option)
+        for _ in 0..<400 where !model.connected {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(model.connectedModelRef == preparedModelRef)
+        #expect(await (recorder.snapshot()).methods == [
+            "openclaw.setup.detect",
+            "openclaw.setup.prepare.start",
             "openclaw.setup.detect",
             "openclaw.setup.activate",
         ])
+    }
+
+    @Test func `provider setup kinds encode reserved choice id characters`() {
+        #expect(OnboardingAISetupModel.providerAutoSetupKind(
+            choiceID: "vendor/local:v1%beta?x#y") ==
+            "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y")
     }
 
     @Test func `provider auth opens only safe external links`() {

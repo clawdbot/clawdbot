@@ -23,6 +23,7 @@ scenario:
     kind: flow
     summary: Verify reasoning-only OpenAI turns recover after a replay-safe read.
     config:
+      requiredProviderMode: mock-openai
       requiredProvider: mock-openai
       promptSnippet: Reasoning-only continuation QA check
       prompt: "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK."

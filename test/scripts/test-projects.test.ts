@@ -44,6 +44,7 @@ import {
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
 const normalizeRepoPath = toRepoPath;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 
 type VitestTestConfig = {
   dir?: string;
@@ -72,6 +73,11 @@ function findVitestConfigFactory(mod: Record<string, unknown>): VitestConfigFact
     }
   }
   return null;
+}
+
+function expectedMatrixTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots(["extensions/matrix"]).length;
+  return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
 }
 
 async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
@@ -481,6 +487,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/release-scenarios-assertions.test.ts",
         "test/scripts/release-user-journey-assertions.test.ts",
       ],
+      "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs": [
+        "test/scripts/release-plugin-marketplace-lifecycle.test.ts",
+      ],
       "scripts/e2e/lib/openai-chat-tools/write-config.mjs": [
         "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
       ],
@@ -714,7 +723,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       "scripts/e2e/lib/onboard/assert-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
       "scripts/e2e/lib/onboard/write-config.mjs": ["test/scripts/onboard-config-fixtures.test.ts"],
-      "scripts/e2e/lib/package-compat.mjs": ["test/scripts/docker-build-helper.test.ts"],
+      "scripts/e2e/lib/package-compat.mjs": [
+        "test/scripts/direct-run-entrypoints.test.ts",
+        "test/scripts/docker-build-helper.test.ts",
+      ],
       "scripts/e2e/agents-delete-shared-workspace-docker.sh": [
         "test/scripts/docker-e2e-plan.test.ts",
         "src/scripts/ci-changed-scope.test.ts",
@@ -756,6 +768,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
+      ],
+      "scripts/e2e/cli-installer-distribution-docker.sh": [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
       ],
       "scripts/e2e/update-channel-switch-docker.sh": [
         "test/scripts/docker-build-helper.test.ts",
@@ -1687,7 +1703,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugins/recommended-tool-installs.test.ts",
         "test/release-check.test.ts",
       ],
-      "scripts/lib/direct-run.mjs": ["test/scripts/changed-lanes.test.ts"],
+      "scripts/lib/direct-run.mjs": [
+        "test/scripts/changed-lanes.test.ts",
+        "test/scripts/direct-run-entrypoints.test.ts",
+      ],
       "scripts/lib/npm-verify-exec.ts": ["test/scripts/npm-verify-exec.test.ts"],
       "scripts/lib/plugin-npm-runtime-build.mjs": [
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
@@ -1898,13 +1917,17 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       "scripts/plugin-clawhub-release-check.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/plugin-clawhub-release-plan.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
-      "scripts/plugin-npm-release-check.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
+      "scripts/plugin-npm-release-check.ts": [
+        "test/e2e/qa-lab/plugins/clawhub-release-policy-contracts.e2e.test.ts",
+        "test/scripts/release-wrapper-scripts.test.ts",
+      ],
       "scripts/plugin-npm-release-plan.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/plugin-release-pretag-pack-check.ts": [
         "test/scripts/plugin-release-pretag-pack-check.test.ts",
       ],
       "scripts/plan-release-workflow-matrix.mjs": [
         "test/scripts/release-workflow-matrix-plan.test.ts",
+        "test/scripts/direct-run-entrypoints.test.ts",
       ],
       "scripts/release-verify-beta.ts": ["test/scripts/release-wrapper-scripts.test.ts"],
       "scripts/validate-release-publish-approval.mjs": [
@@ -2594,6 +2617,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
+          "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -2779,6 +2803,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
+          "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -2938,29 +2963,97 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes misc extensions to the misc extension shard", () => {
-    const plans = buildVitestRunPlans(["extensions/thread-ownership"], process.cwd());
+  it.each([
+    {
+      title: "routes misc extensions to the misc extension shard",
+      target: "extensions/thread-ownership",
+      config: "test/vitest/vitest.extension-misc.config.ts",
+      includePattern: "extensions/thread-ownership/**/*.test.ts",
+    },
+    {
+      title: "routes explicit plugin-sdk light tests to the lighter plugin-sdk lane",
+      target: "src/plugin-sdk/temp-path.test.ts",
+      config: "test/vitest/vitest.plugin-sdk-light.config.ts",
+      includePattern: "src/plugin-sdk/temp-path.test.ts",
+    },
+    {
+      title: "routes explicit commands light tests to the lighter commands lane",
+      target: "src/commands/status-json-runtime.test.ts",
+      config: "test/vitest/vitest.commands-light.config.ts",
+      includePattern: "src/commands/status-json-runtime.test.ts",
+    },
+    {
+      title: "routes fake-timer unit-fast tests to the serial fake-timer lane",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+      includePattern: "src/acp/control-plane/manager.test.ts",
+    },
+  ])("$title", ({ target, config, includePattern }) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.extension-misc.config.ts",
+        config,
         forwardedArgs: [],
-        includePatterns: ["extensions/thread-ownership/**/*.test.ts"],
+        includePatterns: [includePattern],
         watchMode: false,
       },
     ]);
   });
 
-  it("routes browser extension changes to the browser extension lane", () => {
+  it.each([
+    {
+      title: "routes browser extension changes to the browser extension lane",
+      changedPath: "extensions/browser/src/browser/cdp.helpers.ts",
+      config: "test/vitest/vitest.extension-browser.config.ts",
+      testPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
+    },
+    {
+      title: "keeps public plugin SDK changes focused by default",
+      changedPath: "src/plugin-sdk/provider-entry.ts",
+      config: "test/vitest/vitest.unit-fast.config.ts",
+      testPath: "src/plugin-sdk/provider-entry.test.ts",
+    },
+    {
+      title: "routes LM Studio changes to the provider extension lane",
+      changedPath: "extensions/lmstudio/src/runtime.ts",
+      config: "test/vitest/vitest.extension-providers.config.ts",
+      testPath: "extensions/lmstudio/src/runtime.test.ts",
+    },
+    {
+      title: "routes QA extension changes to the QA extension lane",
+      changedPath: "extensions/qa-lab/src/scenario-catalog.test.ts",
+      config: "test/vitest/vitest.extension-qa.config.ts",
+      testPath: "extensions/qa-lab/src/scenario-catalog.test.ts",
+    },
+    {
+      title: "routes changed source files to sibling tests when present",
+      changedPath: "src/agents/live-model-turn-probes.ts",
+      config: "test/vitest/vitest.unit-fast.config.ts",
+      testPath: "src/agents/live-model-turn-probes.test.ts",
+    },
+    {
+      title: "routes plugin-sdk source files with sibling tests narrowly by default",
+      changedPath: "src/plugin-sdk/facade-runtime.ts",
+      config: "test/vitest/vitest.bundled.config.ts",
+      testPath: "src/plugin-sdk/facade-runtime.test.ts",
+    },
+    {
+      title: "routes command source files with sibling tests narrowly on the command lane",
+      changedPath: "src/commands/channels.add.ts",
+      config: "test/vitest/vitest.commands.config.ts",
+      testPath: "src/commands/channels.add.test.ts",
+    },
+  ])("$title", ({ changedPath, config, testPath }) => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "extensions/browser/src/browser/cdp.helpers.ts",
+      changedPath,
     ]);
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.extension-browser.config.ts",
+        config,
         forwardedArgs: [],
-        includePatterns: ["extensions/browser/src/browser/cdp.helpers.test.ts"],
+        includePatterns: [testPath],
         watchMode: false,
       },
     ]);
@@ -3134,21 +3227,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps public plugin SDK changes focused by default", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/plugin-sdk/provider-entry.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("adds extension tests for public plugin SDK changes in broad changed mode", () => {
     const plans = buildVitestRunPlans(
       ["--changed", "origin/main"],
@@ -3165,36 +3243,6 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
       ...listExpectedFullExtensionRunPlans(),
-    ]);
-  });
-
-  it("routes LM Studio changes to the provider extension lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "extensions/lmstudio/src/runtime.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.extension-providers.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/lmstudio/src/runtime.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes QA extension changes to the QA extension lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "extensions/qa-lab/src/scenario-catalog.test.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.extension-qa.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/qa-lab/src/scenario-catalog.test.ts"],
-        watchMode: false,
-      },
     ]);
   });
 
@@ -3235,8 +3283,12 @@ describe("scripts/test-projects changed-target routing", () => {
           watchMode: false,
         })),
     );
-    expect(matrixPlans).toHaveLength(3);
-    expect(matrixPlans.every((plan) => (plan.includePatterns?.length ?? 0) <= 40)).toBe(true);
+    expect(matrixPlans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      matrixPlans.every(
+        (plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT,
+      ),
+    ).toBe(true);
     expect(matrixPlans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -3246,11 +3298,13 @@ describe("scripts/test-projects changed-target routing", () => {
   it("bounds an explicit Matrix directory target across process lifetimes", () => {
     const plans = buildVitestRunPlans(["extensions/matrix"], process.cwd());
 
-    expect(plans).toHaveLength(3);
+    expect(plans).toHaveLength(expectedMatrixTestProcessCount());
     expect(
       plans.every((plan) => plan.config === "test/vitest/vitest.extension-matrix.config.ts"),
     ).toBe(true);
-    expect(plans.every((plan) => (plan.includePatterns?.length ?? 0) <= 40)).toBe(true);
+    expect(
+      plans.every((plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -3264,7 +3318,10 @@ describe("scripts/test-projects changed-target routing", () => {
 
     const plans = buildVitestRunPlans(["extensions/matrix", testFile], process.cwd());
 
-    expect(plans).toHaveLength(3);
+    expect(plans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      plans.every((plan) => (plan.includePatterns?.length ?? 0) <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(plans.flatMap((plan) => plan.includePatterns ?? [])).toEqual(
       listExtensionTestFilesForRoots(["extensions/matrix"]),
     );
@@ -3305,21 +3362,6 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["packages/sdk/src/index.test.ts"],
         includePatterns: null,
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes changed source files to sibling tests when present", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/agents/live-model-turn-probes.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/agents/live-model-turn-probes.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3567,19 +3609,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes explicit plugin-sdk light tests to the lighter plugin-sdk lane", () => {
-    const plans = buildVitestRunPlans(["src/plugin-sdk/temp-path.test.ts"], process.cwd());
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.plugin-sdk-light.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/temp-path.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("uses collision-resistant include-file names for scoped Vitest specs", () => {
     const tempDir = path.join("tmp", "openclaw-vitest-specs");
     const [spec] = createVitestRunSpecs(["src/plugin-sdk/temp-path.test.ts"], {
@@ -3651,19 +3680,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes explicit commands light tests to the lighter commands lane", () => {
-    const plans = buildVitestRunPlans(["src/commands/status-json-runtime.test.ts"], process.cwd());
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.commands-light.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/commands/status-json-runtime.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes the full commands test root to both command shards", () => {
     expect(findUnmatchedExplicitTestTargets(["src/commands"])).toEqual([]);
     expect(buildVitestRunPlans(["src/commands"], process.cwd())).toEqual([
@@ -3714,19 +3730,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes fake-timer unit-fast tests to the serial fake-timer lane", () => {
-    const plans = buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"], process.cwd());
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/acp/control-plane/manager.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes changed commands source allowlist files to sibling light tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/commands/status-overview-values.ts",
@@ -3741,21 +3744,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "src/commands/status-overview-values.test.ts",
           "src/commands/gateway-status/helpers.test.ts",
         ],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes plugin-sdk source files with sibling tests narrowly by default", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/plugin-sdk/facade-runtime.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.bundled.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/facade-runtime.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3777,21 +3765,6 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
       ...listExpectedFullExtensionRunPlans(),
-    ]);
-  });
-
-  it("routes command source files with sibling tests narrowly on the command lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/commands/channels.add.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.commands.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/commands/channels.add.test.ts"],
-        watchMode: false,
-      },
     ]);
   });
 
@@ -4620,7 +4593,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(gatewayPlans).toHaveLength(4);
     expect(gatewayTargets.length).toBeGreaterThan(90);
     expect(new Set(gatewayTargets).size).toBe(gatewayTargets.length);
-    expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
+    expect(gatewayTargets).not.toContain("src/gateway/server-network-runtime.e2e.test.ts");
     expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
     expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
     const agentsCoreTargets = agentsCorePlans.flatMap((plan) => plan.forwardedArgs);
@@ -4652,8 +4625,10 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     const matrixTargets = matrixPlans.flatMap((plan) => plan.forwardedArgs);
-    expect(matrixPlans).toHaveLength(3);
-    expect(matrixPlans.every((plan) => plan.forwardedArgs.length <= 40)).toBe(true);
+    expect(matrixPlans).toHaveLength(expectedMatrixTestProcessCount());
+    expect(
+      matrixPlans.every((plan) => plan.forwardedArgs.length <= MATRIX_TEST_PROCESS_FILE_LIMIT),
+    ).toBe(true);
     expect(matrixTargets).toEqual(listExtensionTestFilesForRoots(["extensions/matrix"]));
     expect(
       plans.filter(

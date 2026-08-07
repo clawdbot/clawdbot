@@ -200,6 +200,75 @@ describe("streaming config resolution", () => {
     expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({ idleMs: 5 });
     expect(resolveChannelStreamingNativeTransport(entry)).toBe(false);
   });
+
+  it.each(["partial", "block", "progress"] as const)(
+    "lets an available explicit %s preview override the inherited block default",
+    (mode) => {
+      expect(
+        resolveChannelStreamingBlockEnabled(
+          { streaming: { mode } },
+          {
+            previewAvailable: true,
+            blockStreamingDefault: "on",
+          },
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("keeps the inherited block default for off or invalid preview modes", () => {
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "off" } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "invalid" } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves block precedence when preview delivery is unavailable", () => {
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "partial" } },
+        {
+          previewAvailable: false,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps explicit block configuration authoritative", () => {
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "partial", block: { enabled: true } } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "off",
+        },
+      ),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        { streaming: { mode: "partial", block: { enabled: false } } },
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+        },
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("progress narration", () => {

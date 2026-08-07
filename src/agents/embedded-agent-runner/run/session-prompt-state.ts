@@ -61,6 +61,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     const resolvedTarget = await resolveAgentRunSessionTarget({
       agentId: nextSessionTarget.agentId ?? sessionAgentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionId: nextSessionTarget.sessionId ?? activeSessionId,
       sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
       sessionTarget: nextSessionTarget,

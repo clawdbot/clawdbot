@@ -12,7 +12,7 @@ function steerWithDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   deliveryTimeoutMs = 10_000,
-): Promise<void> {
+): ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait> {
   return steerActiveSessionWithOptionalDeliveryWait(activeSession, text, {
     deliveryTimeoutMs,
     waitForTranscriptCommit: true,
@@ -214,6 +214,28 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       expect(queueMessages).toEqual([keepMessage]);
       expect(steeringUiMessages).toEqual(["keep unrelated queue entry"]);
       expect(unsubscribed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks a missing queued message as accepted without transcript confirmation", async () => {
+    vi.useFakeTimers();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      agent: { steeringQueue: { messages: [] } },
+      getSteeringMessages: () => [],
+      steer: async () => {},
+      subscribe: () => () => {},
+    };
+
+    try {
+      const wait = steerWithDeliveryWait(activeSession, "possibly consumed", 1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(wait).resolves.toEqual({
+        transcriptCommit: "unconfirmed",
+        errorMessage: "queued steering message was not committed to the transcript before timeout",
+      });
     } finally {
       vi.useRealTimers();
     }

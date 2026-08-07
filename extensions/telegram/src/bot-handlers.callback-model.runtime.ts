@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  applyModelOverrideToSessionEntry,
+  applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
@@ -277,13 +277,21 @@ export async function handleTelegramModelCallback(params: {
         fallbackEntry: { sessionId: randomUUID(), updatedAt: Date.now() },
         replaceEntry: true,
         update: (entry) => {
-          applyModelOverrideToSessionEntry({
+          const currentProvider =
+            entry.providerOverride?.trim() ||
+            entry.modelProvider?.trim() ||
+            resolvedDefault.provider;
+          applyModelOverrideWithAuthProfileCompatibility({
+            cfg: runtimeCfg,
+            agentDir: resolveAgentDir(runtimeCfg, sessionState.agentId),
             entry,
+            currentProvider,
             selection: {
               provider: selection.provider,
               model: selection.model,
               isDefault: isDefaultSelection,
             },
+            markLiveSwitchPending: true,
           });
           return entry;
         },

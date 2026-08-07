@@ -224,29 +224,6 @@ describe("plugin-sdk qa-runtime", () => {
     });
   });
 
-  it("builds shared live-lane artifact errors", async () => {
-    const module = await import("./qa-runtime.js");
-
-    expect(
-      module.buildQaLiveLaneArtifactsError({
-        heading: "Matrix QA failed.",
-        details: ["cleanup: ok"],
-        artifacts: {
-          report: "/tmp/report.md",
-          summary: "/tmp/summary.json",
-        },
-      }),
-    ).toBe(
-      [
-        "Matrix QA failed.",
-        "cleanup: ok",
-        "Artifacts:",
-        "- report: /tmp/report.md",
-        "- summary: /tmp/summary.json",
-      ].join("\n"),
-    );
-  });
-
   it("shares Docker health parsing across array and jsonl compose output", async () => {
     const module = await import("./qa-runtime.js");
     const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });

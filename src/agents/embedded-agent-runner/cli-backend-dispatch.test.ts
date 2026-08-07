@@ -362,6 +362,23 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(cliParams).not.toHaveProperty("toolsAllow");
   });
 
+  it.each(["group", "channel"] as const)(
+    "forwards authoritative %s type through embedded-to-CLI dispatch for opaque keys",
+    async (chatType) => {
+      await runEmbeddedAgentViaCliBackendIfEligible(
+        baseRunParams({
+          sessionKey: "agent:main:opaque:binding",
+          chatType,
+        }),
+      );
+
+      expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+      });
+    },
+  );
+
   // Fail-closed tool policy: only a non-empty named allowlist is expressible
   // on the CLI surface. Every other embedded tool state keeps the passthrough
   // so no closed state silently widens.

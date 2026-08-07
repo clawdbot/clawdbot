@@ -1,6 +1,7 @@
 import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
+  ensureSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import {
@@ -18,6 +19,17 @@ import type {
 } from "./session-manager-types.js";
 
 type PersistRecordResult = string | null | undefined | { adoptedMessageId: string };
+
+function requireTranscriptEventAppend(
+  result: ReturnType<typeof appendTranscriptEventSync>,
+  message: string,
+): void {
+  if (result.ok && result.value) {
+    return;
+  }
+  const cause = result.ok ? { code: "transcript-event-not-appended" as const } : result.error;
+  throw new Error(`${message}: ${cause.code}`, { cause });
+}
 
 export class SessionManagerPersistence extends SessionManagerCore {
   removeTrailingEntries(
@@ -150,34 +162,46 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     const scope = this.persistenceTarget;
     if (this.persistenceHeaderPending) {
-      const header = this.fileEntries[0];
-      if (!header || header.type !== "session" || !appendTranscriptEventSync(scope, header)) {
+      if (
+        !ensureSessionEntrySync(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: Date.now(),
+        })
+      ) {
         throw new Error("Session transcript header was not persisted");
       }
+      const header = this.fileEntries[0];
+      if (!header || header.type !== "session") {
+        throw new Error("Session transcript header was not persisted");
+      }
+      requireTranscriptEventAppend(
+        appendTranscriptEventSync(scope, header),
+        "Session transcript header was not persisted",
+      );
       this.persistenceHeaderPending = false;
     }
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
-      if (!appendTranscriptEventSync(scope, entry)) {
-        throw new Error(`Session transcript leaf control was not persisted: ${leafEntry.id}`);
-      }
+      requireTranscriptEventAppend(
+        appendTranscriptEventSync(scope, entry),
+        `Session transcript leaf control was not persisted: ${leafEntry.id}`,
+      );
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
       return undefined;
     }
     if (entry.type !== "message") {
-      if (
-        !appendTranscriptEventSync(
+      requireTranscriptEventAppend(
+        appendTranscriptEventSync(
           scope,
           entry,
           options?.appendIntent === "active-branch"
             ? { appendIntent: options.appendIntent }
             : undefined,
-        )
-      ) {
-        throw new Error(`Session transcript entry was not persisted: ${entry.id}`);
-      }
+        ),
+        `Session transcript entry was not persisted: ${entry.id}`,
+      );
       return undefined;
     }
     const appendOptions = {
