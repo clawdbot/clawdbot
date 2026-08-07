@@ -25,8 +25,9 @@ const qaFlowModuleSchema = z.object({
   call: z.string().trim().min(1),
   args: z.array(qaFlowModuleArgSchema).optional(),
 });
+const qaFlowProviderModeSchema = z.enum(["aimock", "live-frontier", "mock-openai"]);
 const qaFlowExecutionShape = {
-  providerMode: z.enum(["aimock", "live-frontier", "mock-openai"]).optional(),
+  providerMode: qaFlowProviderModeSchema.optional(),
   retryCount: z.number().int().min(0).max(1).optional(),
   runtime: z.enum(["openclaw", "codex"]).optional(),
   timeoutMs: z.number().int().positive().optional(),
@@ -106,6 +107,7 @@ export const qaScenarioModuleFlow = {
   moduleSchema: qaFlowModuleSchema,
   executionShape: qaFlowExecutionShape,
   normalizeMetadata: normalizeQaScenarioFileMetadata,
+  providerModeSchema: qaFlowProviderModeSchema,
   resolveKind: resolveQaScenarioFlowKind,
   resolveFlow: resolveQaScenarioFileFlow,
 };

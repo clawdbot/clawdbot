@@ -15,6 +15,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
+  adoptsEquivalentLegacyAuditEvent,
+  ensureAuditEventSourceAdoptionSchema,
+  pruneAuditEventSourceAdoptions,
+} from "./audit-event-source-adoption.js";
+import {
   AUDIT_EVENT_SCHEMA_VERSION,
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
   AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
@@ -551,6 +556,9 @@ function pruneAuditEventsAfterInsert(
       : Math.max(0, cachedCount + 1 - Number(expired.numAffectedRows ?? 0n));
   if (rowCount <= limits.maxRows) {
     auditEventRowCounts.set(db, rowCount);
+    if (expired.numAffectedRows) {
+      pruneAuditEventSourceAdoptions(db);
+    }
     return;
   }
   const retainedRows = Math.max(0, limits.maxRows - limits.pruneBatchRows);
@@ -572,6 +580,7 @@ function pruneAuditEventsAfterInsert(
     rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
   }
   auditEventRowCounts.set(db, rowCount);
+  pruneAuditEventSourceAdoptions(db);
 }
 
 /** Persist one projected event idempotently and prune fixed retention bounds. */
@@ -581,8 +590,17 @@ export function recordAuditEvent(
 ): AuditEventRecord | undefined {
   let countCacheDatabase: DatabaseSync | undefined;
   try {
+    if (input.kind !== "message" && input.legacySourceId) {
+      ensureAuditEventSourceAdoptionSchema(options);
+    }
     return runOpenClawStateWriteTransaction(({ db }) => {
       countCacheDatabase = db;
+      // The shipped row remains immutable. The first versioned claimant reserves
+      // its legacy key; equivalent input adopts the old row, while non-equivalent
+      // input persists normally without letting a later generation claim it.
+      if (adoptsEquivalentLegacyAuditEvent(db, input)) {
+        return undefined;
+      }
       const insert = executeSqliteQuerySync(
         db,
         getAuditKysely(db)
@@ -690,6 +708,7 @@ export function pruneExpiredAuditEvents(
         .deleteFrom("audit_events")
         .where("occurred_at", "<", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS),
     );
+    pruneAuditEventSourceAdoptions(db);
     auditEventRowCounts.delete(db);
   }, params.database);
 }

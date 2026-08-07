@@ -91,6 +91,9 @@ const resolveGatewayInstallToken = vi.hoisted(() =>
   })),
 );
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
+const resolveSystemdUserServiceAccount = vi.hoisted(() =>
+  vi.fn(() => "test-user" as string | null),
+);
 const readSystemdUserLingerStatus = vi.hoisted(() =>
   vi.fn(async () => ({ user: "test-user", linger: "yes" as const })),
 );
@@ -237,6 +240,7 @@ vi.mock("../daemon/service.js", () => ({
 
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUserServiceAvailable,
+  resolveSystemdUserServiceAccount,
   readSystemdUserLingerStatus,
 }));
 
@@ -489,6 +493,8 @@ describe("finalizeSetupWizard", () => {
     resolveGatewayInstallToken.mockClear();
     isSystemdUserServiceAvailable.mockReset();
     isSystemdUserServiceAvailable.mockResolvedValue(true);
+    resolveSystemdUserServiceAccount.mockReset();
+    resolveSystemdUserServiceAccount.mockReturnValue("test-user");
     readSystemdUserLingerStatus.mockReset();
     readSystemdUserLingerStatus.mockResolvedValue({ user: "test-user", linger: "yes" });
     resolveSetupSecretInputString.mockReset();

@@ -9,6 +9,8 @@ import { setAgentEffectiveModelPrimary, type AgentModelPrimaryWriteTarget } from
 const log = createSubsystemLogger("agents/sticky-model-selection");
 let warnedImmutableConfig = false;
 
+export type StickyModelSelectionDispatchOutcome = "requested" | "skipped-immutable";
+
 /** Persists a validated session model selection at the agent's effective config layer. */
 async function persistStickyModelSelection(params: {
   agentId: string;
@@ -36,7 +38,7 @@ async function persistStickyModelSelection(params: {
 export function persistStickyModelSelectionBestEffort(params: {
   agentId: string;
   model: string;
-}): void {
+}): StickyModelSelectionDispatchOutcome {
   if (resolveIsNixMode()) {
     // A Nix-managed gateway can switch models but can never persist this preference.
     // Warn once per process so repeated switches do not flood the operator log.
@@ -46,11 +48,12 @@ export function persistStickyModelSelectionBestEffort(params: {
         `skipped sticky model persistence agentId=${params.agentId} model=${params.model} reason=config is immutable in OPENCLAW_NIX_MODE`,
       );
     }
-    return;
+    return "skipped-immutable";
   }
   void persistStickyModelSelection(params).catch((error: unknown) => {
     log.warn(
       `failed sticky model persistence agentId=${params.agentId} model=${params.model} reason=${formatErrorMessage(error)}`,
     );
   });
+  return "requested";
 }

@@ -6,8 +6,8 @@
 // a parent lookup keyed by one id space and queried with the other.
 //
 // Trace cases use the OPENCLAW_OTEL_PRELOADED seam to retain this file's tracer provider.
-// Collector-boundary cases start the real NodeSDK, so teardown restores every global SDK
-// registration; otherwise a shutdown provider would poison later real-SDK cases.
+// Collector-boundary cases run owned mode, which now composes private providers and never
+// registers global SDK state; teardown still restores the preloaded globals for trace cases.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -40,6 +40,7 @@ import {
 import { createDiagnosticsOtelService } from "./service.js";
 import {
   createOtelContext,
+  emitRealSdkSignals,
   startOtelService,
   stopStartedOtelServices,
 } from "./service.test-helpers.js";
@@ -241,17 +242,6 @@ function releasePreloadedOtelGlobals() {
   propagation.disable();
   trace.disable();
   process.env[PRELOAD_ENV] = "0";
-}
-
-async function emitRealSdkSignals() {
-  trace.getTracer("openclaw-otel-routing-test").startSpan("routing-test").end();
-  metrics.getMeter("openclaw-otel-routing-test").createCounter("openclaw.routing.test").add(1);
-  emit({
-    type: "log.record",
-    level: "INFO",
-    message: "OTLP routing test",
-  });
-  await waitForDiagnosticEventsDrained();
 }
 
 const SHARED_ENDPOINT_ROUTING_CASES = [

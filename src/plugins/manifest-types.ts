@@ -20,7 +20,7 @@ export type PluginConfigUiHint = {
 export type PluginFormat = "openclaw" | "bundle";
 
 /** Supported external bundle manifest formats. */
-export type PluginBundleFormat = "codex" | "claude" | "cursor";
+export type PluginBundleFormat = "agent" | "codex" | "claude" | "cursor";
 
 /**
  * Closed classification codes for plugin diagnostics. Health surfaces branch

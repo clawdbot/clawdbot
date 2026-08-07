@@ -136,7 +136,6 @@ describe("gateway agent handler", () => {
       payloads: [{ text: "ok" }],
       meta: { durationMs: 100 },
     });
-
     await invokeAgent(
       {
         message: "forged exec followup",
@@ -413,6 +412,7 @@ describe("gateway agent handler", () => {
         const context = makeContext();
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
         const commandCallCount = mocks.agentCommand.mock.calls.length;
+        mocks.registerAgentRunContext.mockClear();
         const respond = vi.fn();
 
         await invokeAgent(
@@ -438,6 +438,7 @@ describe("gateway agent handler", () => {
 
         expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
         expect(findTaskByRunId(runId)).toBeUndefined();
         const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
         expectStringFieldContains(error, "message", "run was not started");
@@ -445,16 +446,15 @@ describe("gateway agent handler", () => {
           expect.stringContaining("rejecting untracked dispatch"),
         );
 
-        const retryRunId = "plugin-subagent-registry-retry";
         await invokeAgent(
           {
             message: "retry background plugin subagent task",
             sessionKey: childSessionKey,
-            idempotencyKey: retryRunId,
+            idempotencyKey: runId,
           },
           {
             context,
-            reqId: retryRunId,
+            reqId: `${runId}-retry`,
             client: {
               connect: baseClient.connect,
               internal: {
@@ -469,11 +469,13 @@ describe("gateway agent handler", () => {
         expect(persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThan(1);
         await waitForAssertion(() => {
           expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
+          expect(mocks.registerAgentRunContext).toHaveBeenCalledTimes(1);
+          expect(mockCallArg(mocks.registerAgentRunContext, 0, 0)).toBe(runId);
           const retryRun = requireValue(
             getSubagentRunByChildSessionKey(childSessionKey),
             "expected retry plugin subagent run",
           );
-          expect(retryRun.runId).toBe(retryRunId);
+          expect(retryRun.runId).toBe(runId);
         });
       },
     );
@@ -1266,7 +1268,6 @@ describe("gateway agent handler", () => {
       payloads: [{ text: "ok" }],
       meta: { durationMs: 100 },
     });
-
     await invokeAgent(
       {
         message: "resume channel session",
@@ -2071,6 +2072,7 @@ describe("gateway agent handler", () => {
   });
 
   it("infers selected-global agent id from agent-prefixed session aliases", async () => {
+    mocks.registerAgentRunContext.mockClear();
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
       agents: { list: [{ id: "main", default: true }, { id: "work" }] },
@@ -2115,6 +2117,24 @@ describe("gateway agent handler", () => {
       agentId: "work",
       clone: false,
     });
+    expect(mockCallArg(mocks.registerAgentRunContext, 0, 1)).toEqual(
+      expect.objectContaining({
+        attribution: expect.objectContaining({
+          runId: "alias-global-session-agent-id",
+          contextId: expect.any(String),
+          executionId: expect.any(String),
+          createdAt: expect.any(Number),
+          lifecycleGeneration: "test-generation",
+          sessionKey: "global",
+          sessionId: "global-work-session-id",
+          agentId: "work",
+        }),
+        sessionKey: "global",
+        sessionId: "global-work-session-id",
+        agentId: "work",
+        lifecycleGeneration: "test-generation",
+      }),
+    );
   });
 
   it("registers tool event recipients for active selected-global alias runs", async () => {

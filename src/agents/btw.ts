@@ -9,6 +9,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
@@ -20,6 +21,7 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import type { AgentExecutionAttribution } from "./agent-execution-attribution.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -43,6 +45,7 @@ import {
   selectAgentHarnessForPreparedModelProviders,
   type AgentHarnessPreparedModelProvider,
 } from "./harness/selection.js";
+import { bindAgentHarnessSideQuestionExecutionAttribution } from "./harness/side-question-execution-attribution.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
@@ -129,10 +132,7 @@ function resolveReturnedAuthProfileSource(
   if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
     return "auto";
   }
-  return (
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number" ? "auto" : "user")
-  );
+  return resolveSessionAuthProfileOverrideSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider
@@ -582,6 +582,8 @@ async function resolveRuntimeModel(params: {
 }
 
 type RunBtwSideQuestionParams = {
+  /** Host-owned execution identity; never projected onto the public harness params object. */
+  attribution?: AgentExecutionAttribution;
   cfg: OpenClawConfig;
   agentDir: string;
   provider: string;
@@ -626,6 +628,7 @@ type RunBtwSideQuestionParams = {
 };
 
 async function runCliBtwSideQuestion(params: {
+  attribution?: AgentExecutionAttribution;
   cfg: OpenClawConfig;
   model: string;
   question: string;
@@ -650,6 +653,7 @@ async function runCliBtwSideQuestion(params: {
     overrideSeconds: params.opts?.timeoutOverrideSeconds,
   });
   const prepared = await prepareCliRunContext({
+    ...(params.attribution ? { attribution: params.attribution } : {}),
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
@@ -966,42 +970,47 @@ export async function runBtwSideQuestion(
       runtimeAuthPlan.modelRoute?.authRequirement === "api-key" && "auth" in resolvedAttempt
         ? resolvedAttempt.auth.apiKey?.trim()
         : undefined;
-    const result = await selectedHarness.runSideQuestion({
-      ...params,
-      provider: runtimeModel.provider,
-      model: runtimeModel.id,
-      runtimeModel,
-      preparedRuntimeAuth: {
-        plan: runtimeAuthPlan,
-        authProfileStore: scopeAuthProfileStoreToPreparedPlan(
-          selectedAuthProfileStore,
-          runtimeAuthPlan,
-        ),
-        authStorage: runtime.authStorage,
-        modelRegistry: runtime.modelRegistry,
-        ...(resolvedApiKey
-          ? {
-              resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
-                resolvedApiKey,
-                "BTW harness handoff",
-              ),
-            }
-          : {}),
+    const { attribution: _attribution, ...publicParams } = params;
+    const sideQuestionParams = bindAgentHarnessSideQuestionExecutionAttribution(
+      {
+        ...publicParams,
+        provider: runtimeModel.provider,
+        model: runtimeModel.id,
+        runtimeModel,
+        preparedRuntimeAuth: {
+          plan: runtimeAuthPlan,
+          authProfileStore: scopeAuthProfileStoreToPreparedPlan(
+            selectedAuthProfileStore,
+            runtimeAuthPlan,
+          ),
+          authStorage: runtime.authStorage,
+          modelRegistry: runtime.modelRegistry,
+          ...(resolvedApiKey
+            ? {
+                resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
+                  resolvedApiKey,
+                  "BTW harness handoff",
+                ),
+              }
+            : {}),
+        },
+        sessionId,
+        sessionFile,
+        agentId: sessionAgentId,
+        workspaceDir,
+        ...(toolsAllow ? { toolsAllow } : {}),
+        authProfileId:
+          runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
+            ? undefined
+            : runtimeAuthPlan.forwardedAuthProfileId,
+        authProfileIdSource:
+          runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
+            ? undefined
+            : runtimeAuthPlan.forwardedAuthProfileSource,
       },
-      sessionId,
-      sessionFile,
-      agentId: sessionAgentId,
-      workspaceDir,
-      ...(toolsAllow ? { toolsAllow } : {}),
-      authProfileId:
-        runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
-          ? undefined
-          : runtimeAuthPlan.forwardedAuthProfileId,
-      authProfileIdSource:
-        runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
-          ? undefined
-          : runtimeAuthPlan.forwardedAuthProfileSource,
-    });
+      params.attribution,
+    );
+    const result = await selectedHarness.runSideQuestion(sideQuestionParams);
     return { kind: "handled", payload: { text: result.text } };
   };
   if (harness.runSideQuestion) {
@@ -1088,6 +1097,7 @@ export async function runBtwSideQuestion(
       : undefined);
   if (cliProvider) {
     return runCliBtwSideQuestion({
+      ...(params.attribution ? { attribution: params.attribution } : {}),
       cfg: params.cfg,
       model: params.model,
       question: params.question,

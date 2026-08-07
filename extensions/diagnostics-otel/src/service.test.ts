@@ -56,9 +56,22 @@ const telemetryState = vi.hoisted(() => {
   return { counters, histograms, spans, tracer, meter };
 });
 
-const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const sdkCtor = vi.hoisted(() => vi.fn());
+const traceProviderCtor = vi.hoisted(() => vi.fn());
+const traceProviderShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const meterProviderCtor = vi.hoisted(() => vi.fn());
+const meterProviderShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const diagWarn = vi.hoisted(() => vi.fn());
+const detectResourcesMock = vi.hoisted(() =>
+  vi.fn((_options: { detectors?: unknown[] }) => ({
+    attributes: { "openclaw.test.detected": "1" },
+    merge: vi.fn((configured: { attributes?: Record<string, unknown> }) => ({
+      attributes: {
+        "openclaw.test.detected": "1",
+        ...configured.attributes,
+      },
+    })),
+  })),
+);
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
@@ -73,6 +86,9 @@ const logExporterShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined
 const exporterForceFlush = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const logProcessorCtor = vi.hoisted(() => vi.fn());
 const spanProcessorCtor = vi.hoisted(() => vi.fn());
+const metricReaderCtor = vi.hoisted(() => vi.fn());
+const ownedSdkRuntimeCleanup = vi.hoisted(() => vi.fn());
+const registerOwnedSdkRuntimeMock = vi.hoisted(() => vi.fn(() => ownedSdkRuntimeCleanup));
 const nodeProxyAgent = vi.hoisted(() => ({ kind: "node-proxy-agent" }));
 const createNodeProxyAgentMock = vi.hoisted(() => vi.fn());
 const unhandledRejectionHandlerState = vi.hoisted(() => {
@@ -95,6 +111,9 @@ vi.mock("@opentelemetry/api", () => ({
   context: {
     active: () => ({}),
   },
+  diag: {
+    warn: diagWarn,
+  },
   metrics: {
     getMeter: () => telemetryState.meter,
   },
@@ -115,15 +134,8 @@ vi.mock("@opentelemetry/api", () => ({
   },
 }));
 
-vi.mock("@opentelemetry/sdk-node", () => ({
-  NodeSDK: class {
-    constructor(options?: unknown) {
-      sdkCtor(options);
-    }
-
-    start = sdkStart;
-    shutdown = sdkShutdown;
-  },
+vi.mock("./service-propagation.js", () => ({
+  registerOwnedSdkRuntime: registerOwnedSdkRuntimeMock,
 }));
 
 vi.mock("@opentelemetry/exporter-metrics-otlp-proto", () => ({
@@ -180,10 +192,28 @@ vi.mock("@opentelemetry/sdk-logs", () => ({
 }));
 
 vi.mock("@opentelemetry/sdk-metrics", () => ({
-  PeriodicExportingMetricReader: function PeriodicExportingMetricReader() {},
+  MeterProvider: class {
+    constructor(options?: unknown) {
+      meterProviderCtor(options);
+    }
+
+    getMeter = () => telemetryState.meter;
+    shutdown = meterProviderShutdown;
+  },
+  PeriodicExportingMetricReader: function PeriodicExportingMetricReader(options?: unknown) {
+    metricReaderCtor(options);
+  },
 }));
 
 vi.mock("@opentelemetry/sdk-trace-base", () => ({
+  BasicTracerProvider: class {
+    constructor(options?: unknown) {
+      traceProviderCtor(options);
+    }
+
+    getTracer = () => telemetryState.tracer;
+    shutdown = traceProviderShutdown;
+  },
   BatchSpanProcessor: function BatchSpanProcessor(exporter?: unknown, options?: unknown) {
     spanProcessorCtor(exporter, options);
   },
@@ -192,7 +222,16 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 }));
 
 vi.mock("@opentelemetry/resources", () => ({
-  resourceFromAttributes: vi.fn((attrs: Record<string, unknown>) => attrs),
+  detectResources: detectResourcesMock,
+  envDetector: { detector: "env" },
+  hostDetector: { detector: "host" },
+  osDetector: { detector: "os" },
+  processDetector: { detector: "process" },
+  serviceInstanceIdDetector: { detector: "serviceinstance" },
+  resourceFromAttributes: vi.fn((attrs: Record<string, unknown>) => ({
+    attributes: attrs,
+    merge: vi.fn((other: unknown) => other ?? {}),
+  })),
   Resource: function Resource(_value?: unknown) {
     // Constructor shape required by the mocked OpenTelemetry API.
   },
@@ -266,15 +305,38 @@ const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
 const ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
 const ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
 const ORIGINAL_OTEL_SDK_DISABLED = process.env.OTEL_SDK_DISABLED;
+const ORIGINAL_OTEL_PROPAGATORS = process.env.OTEL_PROPAGATORS;
 const OTEL_PROTOCOL_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_PROTOCOL",
   "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
   "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
   "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
 ] as const;
+const OTEL_PROVIDER_ENV_KEYS = [
+  "OTEL_BSP_EXPORT_TIMEOUT",
+  "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+  "OTEL_BSP_MAX_QUEUE_SIZE",
+  "OTEL_BSP_SCHEDULE_DELAY",
+  "OTEL_METRIC_EXPORT_INTERVAL",
+  "OTEL_METRIC_EXPORT_TIMEOUT",
+  "OTEL_NODE_EXPERIMENTAL_SDK_METRICS",
+  "OTEL_NODE_RESOURCE_DETECTORS",
+  "OTEL_SERVICE_NAME",
+  "OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT",
+  "OTEL_SPAN_ATTRIBUTE_PER_EVENT_COUNT_LIMIT",
+  "OTEL_SPAN_ATTRIBUTE_PER_LINK_COUNT_LIMIT",
+  "OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT",
+  "OTEL_SPAN_EVENT_COUNT_LIMIT",
+  "OTEL_SPAN_LINK_COUNT_LIMIT",
+  "OTEL_TRACES_SAMPLER",
+  "OTEL_TRACES_SAMPLER_ARG",
+] as const;
 const ORIGINAL_OTEL_PROTOCOL_ENV = Object.fromEntries(
   OTEL_PROTOCOL_ENV_KEYS.map((key) => [key, process.env[key]]),
 ) as Record<(typeof OTEL_PROTOCOL_ENV_KEYS)[number], string | undefined>;
+const ORIGINAL_OTEL_PROVIDER_ENV = Object.fromEntries(
+  OTEL_PROVIDER_ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof OTEL_PROVIDER_ENV_KEYS)[number], string | undefined>;
 const OTEL_CERT_ENV_KEYS = [
   "OTEL_EXPORTER_OTLP_CERTIFICATE",
   "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
@@ -383,8 +445,26 @@ function findCreateNodeProxyAgentCall(targetUrl: string) {
   return call;
 }
 
-function firstSpanProcessorOptions(): { scheduledDelayMillis?: number } {
-  return mockCallArg(spanProcessorCtor, 1) as { scheduledDelayMillis?: number };
+type TestSpanProcessorOptions = {
+  exportTimeoutMillis?: number;
+  maxExportBatchSize?: number;
+  maxQueueSize?: number;
+  scheduledDelayMillis?: number;
+  selfObsMeterProvider?: unknown;
+};
+
+function firstSpanProcessorOptions(): TestSpanProcessorOptions {
+  return mockCallArg(spanProcessorCtor, 1) as TestSpanProcessorOptions;
+}
+
+function firstMetricReaderOptions(): {
+  exportIntervalMillis?: number;
+  exportTimeoutMillis?: number;
+} {
+  return mockCallArg(metricReaderCtor, 0) as {
+    exportIntervalMillis?: number;
+    exportTimeoutMillis?: number;
+  };
 }
 
 function firstLogProcessorOptions(): { exporter?: unknown; scheduledDelayMillis?: number } {
@@ -606,7 +686,6 @@ function emitTrustedToolExecutionCompletedWithContent(
 
 afterAll(() => {
   vi.doUnmock("@opentelemetry/api");
-  vi.doUnmock("@opentelemetry/sdk-node");
   vi.doUnmock("@opentelemetry/exporter-metrics-otlp-proto");
   vi.doUnmock("@opentelemetry/exporter-trace-otlp-proto");
   vi.doUnmock("@opentelemetry/exporter-logs-otlp-proto");
@@ -626,8 +705,12 @@ describe("diagnostics-otel service", () => {
     for (const key of OTEL_PROTOCOL_ENV_KEYS) {
       delete process.env[key];
     }
+    for (const key of OTEL_PROVIDER_ENV_KEYS) {
+      delete process.env[key];
+    }
     delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
     delete process.env.OTEL_SDK_DISABLED;
+    delete process.env.OTEL_PROPAGATORS;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
     telemetryState.spans.length = 0;
@@ -635,9 +718,11 @@ describe("diagnostics-otel service", () => {
     telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
-    sdkCtor.mockClear();
-    sdkStart.mockClear();
-    sdkShutdown.mockClear();
+    traceProviderCtor.mockClear();
+    traceProviderShutdown.mockClear();
+    meterProviderCtor.mockClear();
+    meterProviderShutdown.mockClear();
+    diagWarn.mockClear();
     logEmit.mockReset();
     logShutdown.mockClear();
     traceExporterCtor.mockClear();
@@ -656,6 +741,10 @@ describe("diagnostics-otel service", () => {
     exporterForceFlush.mockResolvedValue(undefined);
     logProcessorCtor.mockClear();
     spanProcessorCtor.mockClear();
+    metricReaderCtor.mockClear();
+    ownedSdkRuntimeCleanup.mockClear();
+    registerOwnedSdkRuntimeMock.mockClear();
+    registerOwnedSdkRuntimeMock.mockReturnValue(ownedSdkRuntimeCleanup);
     createNodeProxyAgentMock.mockReset();
     createNodeProxyAgentMock.mockReturnValue(undefined);
     unhandledRejectionHandlerState.reset();
@@ -690,6 +779,14 @@ describe("diagnostics-otel service", () => {
         process.env[key] = value;
       }
     }
+    for (const key of OTEL_PROVIDER_ENV_KEYS) {
+      const value = ORIGINAL_OTEL_PROVIDER_ENV[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     if (ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN === undefined) {
       delete process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
     } else {
@@ -699,6 +796,11 @@ describe("diagnostics-otel service", () => {
       delete process.env.OTEL_SDK_DISABLED;
     } else {
       process.env.OTEL_SDK_DISABLED = ORIGINAL_OTEL_SDK_DISABLED;
+    }
+    if (ORIGINAL_OTEL_PROPAGATORS === undefined) {
+      delete process.env.OTEL_PROPAGATORS;
+    } else {
+      process.env.OTEL_PROPAGATORS = ORIGINAL_OTEL_PROPAGATORS;
     }
     if (ORIGINAL_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT === undefined) {
       delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -1082,7 +1184,8 @@ describe("diagnostics-otel service", () => {
     await service.start(ctx);
 
     expect(logShutdown).toHaveBeenCalledTimes(1);
-    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+    expect(traceProviderShutdown).toHaveBeenCalledTimes(1);
+    expect(meterProviderShutdown).toHaveBeenCalledTimes(1);
     expect(unregisterBridge).toHaveBeenCalledTimes(1);
 
     telemetryState.tracer.startSpan.mockClear();
@@ -1096,7 +1199,8 @@ describe("diagnostics-otel service", () => {
 
     await service.stop?.(ctx);
     expect(logShutdown).toHaveBeenCalledTimes(2);
-    expect(sdkShutdown).toHaveBeenCalledTimes(2);
+    expect(traceProviderShutdown).toHaveBeenCalledTimes(2);
+    expect(meterProviderShutdown).toHaveBeenCalledTimes(2);
     expect(unregisterBridge).toHaveBeenCalledTimes(2);
 
     telemetryState.tracer.startSpan.mockClear();
@@ -1118,8 +1222,11 @@ describe("diagnostics-otel service", () => {
     logShutdown.mockImplementationOnce(async () => {
       cleanupOrder.push("log-provider");
     });
-    sdkShutdown.mockImplementationOnce(async () => {
-      cleanupOrder.push("sdk-provider");
+    traceProviderShutdown.mockImplementationOnce(async () => {
+      cleanupOrder.push("trace-provider");
+    });
+    meterProviderShutdown.mockImplementationOnce(async () => {
+      cleanupOrder.push("meter-provider");
     });
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
@@ -1152,30 +1259,37 @@ describe("diagnostics-otel service", () => {
     expect(unregisterBridge).toHaveBeenCalledOnce();
     expect(runSpan.end).toHaveBeenCalledOnce();
     expect(logShutdown).toHaveBeenCalledOnce();
-    expect(sdkShutdown).toHaveBeenCalledOnce();
+    expect(traceProviderShutdown).toHaveBeenCalledOnce();
+    expect(meterProviderShutdown).toHaveBeenCalledOnce();
     expect(unhandledRejectionHandlerState.getHandlers()).toEqual([]);
     expect(cleanupOrder.indexOf("bridge")).toBeLessThan(cleanupOrder.indexOf("log-provider"));
-    expect(cleanupOrder.indexOf("listener")).toBeLessThan(cleanupOrder.indexOf("sdk-provider"));
+    expect(cleanupOrder.indexOf("listener")).toBeLessThan(cleanupOrder.indexOf("trace-provider"));
   });
 
   test("attempts every provider shutdown and reports every failure", async () => {
     const logError = new Error("log provider failed");
-    const sdkError = new Error("SDK providers failed");
+    const traceError = new Error("trace provider failed");
+    const meterError = new Error("meter provider failed");
     logShutdown.mockRejectedValueOnce(logError);
-    sdkShutdown.mockRejectedValueOnce(sdkError);
+    traceProviderShutdown.mockRejectedValueOnce(traceError);
+    meterProviderShutdown.mockRejectedValueOnce(meterError);
     const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
 
     const stopError = await Promise.resolve(service.stop?.(ctx)).catch((error: unknown) => error);
 
     expect(logShutdown).toHaveBeenCalledTimes(1);
-    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+    expect(traceProviderShutdown).toHaveBeenCalledTimes(1);
+    expect(meterProviderShutdown).toHaveBeenCalledTimes(1);
     expect(stopError).toBeInstanceOf(AggregateError);
     expect(stopError).toMatchObject({
-      errors: [logError, sdkError],
+      errors: [logError, traceError, meterError],
       message: expect.stringContaining("log provider failed"),
     });
     expect(stopError).toMatchObject({
-      message: expect.stringContaining("SDK providers failed"),
+      message: expect.stringContaining("trace provider failed"),
+    });
+    expect(stopError).toMatchObject({
+      message: expect.stringContaining("meter provider failed"),
     });
   });
 
@@ -1191,14 +1305,19 @@ describe("diagnostics-otel service", () => {
       metrics: false,
       logs: false,
     });
-    const options = sdkCtor.mock.calls.at(-1)?.[0] as
-      | { traceExporter?: { shutdown(): Promise<void> } }
-      | undefined;
-    if (!options?.traceExporter) {
-      throw new Error("expected trace exporter");
-    }
     traceExporterShutdown.mockRejectedValueOnce(new TypeError("private shutdown details"));
-    sdkShutdown.mockImplementationOnce(() => options.traceExporter!.shutdown());
+    traceProviderShutdown.mockImplementationOnce(async () => {
+      // Emulate the real provider shutdown chain: the exporter health wrapper
+      // observes the failing exporter shutdown before the provider failure is
+      // reported, so the shutdown_failed route is retained, not dropped.
+      const exporter = spanProcessorCtor.mock.calls.at(-1)?.[0] as
+        | { shutdown(): Promise<void> }
+        | undefined;
+      if (!exporter) {
+        throw new Error("expected trace exporter");
+      }
+      await exporter.shutdown();
+    });
 
     await expect(service.stop?.(ctx)).rejects.toThrow("private shutdown details");
     await waitForDiagnosticEventsDrained();
@@ -1247,12 +1366,12 @@ describe("diagnostics-otel service", () => {
     });
     const startupError = new Error("SDK startup failed");
     const rollbackError = new Error("SDK rollback failed");
-    sdkStart.mockImplementationOnce(() => {
+    traceProviderCtor.mockImplementationOnce(() => {
       throw startupError;
     });
-    sdkShutdown.mockRejectedValueOnce(rollbackError);
+    meterProviderShutdown.mockRejectedValueOnce(rollbackError);
     const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
 
     const startError = await Promise.resolve(service.start(ctx)).catch((error: unknown) => error);
 
@@ -1272,16 +1391,15 @@ describe("diagnostics-otel service", () => {
         "diagnostics-otel: SDK startup rollback cleanup failed: Error: SDK rollback failed",
       ),
     );
-    expect(sdkShutdown).toHaveBeenCalledOnce();
+    expect(meterProviderShutdown).toHaveBeenCalledOnce();
     await waitForDiagnosticEventsDrained();
     expect(events.map(({ status, reason }) => ({ status, reason }))).toEqual([
-      {
-        status: "failure",
-        reason: "start_failed",
-      },
+      { status: "failure", reason: "start_failed" },
+      { status: "failure", reason: "start_failed" },
     ]);
     expect(
-      getReportedExporterHealth(ctx).map(({ transport, endpointMode, status, reason }) => ({
+      getReportedExporterHealth(ctx).map(({ signal, transport, endpointMode, status, reason }) => ({
+        signal,
         transport,
         endpointMode,
         status,
@@ -1289,6 +1407,14 @@ describe("diagnostics-otel service", () => {
       })),
     ).toEqual([
       {
+        signal: "traces",
+        transport: "otlp-http-protobuf",
+        endpointMode: "configured",
+        status: "failure",
+        reason: "start_failed",
+      },
+      {
+        signal: "metrics",
         transport: "otlp-http-protobuf",
         endpointMode: "configured",
         status: "failure",
@@ -1298,10 +1424,8 @@ describe("diagnostics-otel service", () => {
     await expect(service.stop?.(ctx)).resolves.toBeUndefined();
     await waitForDiagnosticEventsDrained();
     expect(events.map(({ status, reason }) => ({ status, reason }))).toEqual([
-      {
-        status: "failure",
-        reason: "start_failed",
-      },
+      { status: "failure", reason: "start_failed" },
+      { status: "failure", reason: "start_failed" },
     ]);
     expect(getReportedExporterHealth(ctx).at(-1)).toMatchObject({
       transport: "otlp-http-protobuf",
@@ -1339,7 +1463,7 @@ describe("diagnostics-otel service", () => {
           events.push(event);
         }
       });
-      sdkStart.mockImplementationOnce(() => {
+      traceProviderCtor.mockImplementationOnce(() => {
         throw new TypeError("private startup details");
       });
       const service = createDiagnosticsOtelService();
@@ -1434,8 +1558,8 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(enabledCtx);
 
-    sdkCtor.mockClear();
-    sdkStart.mockClear();
+    traceProviderCtor.mockClear();
+    meterProviderCtor.mockClear();
     logExporterCtor.mockClear();
     const deniedCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
       traces: true,
@@ -1450,10 +1574,11 @@ describe("diagnostics-otel service", () => {
     expect(deniedCtx.logger.error).toHaveBeenCalledWith(
       "diagnostics-otel: internal diagnostics capability unavailable",
     );
-    expect(sdkCtor).not.toHaveBeenCalled();
-    expect(sdkStart).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
     expect(logExporterCtor).not.toHaveBeenCalled();
-    expect(sdkShutdown).toHaveBeenCalledOnce();
+    expect(traceProviderShutdown).toHaveBeenCalledOnce();
+    expect(meterProviderShutdown).toHaveBeenCalledOnce();
     expect(logShutdown).toHaveBeenCalledOnce();
   });
 
@@ -1475,7 +1600,8 @@ describe("diagnostics-otel service", () => {
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
     const { service, ctx } = await startOtelService({ traces: true, metrics: true, logs: true });
 
-    expect(sdkStart).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(ctx.logger.info).toHaveBeenCalledWith(
       "diagnostics-otel: using preloaded OpenTelemetry SDK",
@@ -1503,7 +1629,8 @@ describe("diagnostics-otel service", () => {
     expect(logEmit).toHaveBeenCalled();
 
     await service.stop?.(ctx);
-    expect(sdkShutdown).not.toHaveBeenCalled();
+    expect(traceProviderShutdown).not.toHaveBeenCalled();
+    expect(meterProviderShutdown).not.toHaveBeenCalled();
     expect(logShutdown).toHaveBeenCalledTimes(1);
   });
 
@@ -1580,119 +1707,92 @@ describe("diagnostics-otel service", () => {
     unsubscribe();
   });
 
-  test("keeps disabled owned SDK signals out of the operator health projection", async () => {
-    const events: TelemetryExporterEvent[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "telemetry.exporter") {
-        events.push(event);
-      }
-    });
-    process.env.OTEL_SDK_DISABLED = " TRUE ";
+  test.each([" TRUE ", "TrUe"])(
+    "disables every OpenClaw-owned telemetry route for OTEL_SDK_DISABLED=%j",
+    async (value) => {
+      const events: TelemetryExporterEvent[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => {
+        if (event.type === "telemetry.exporter") {
+          events.push(event);
+        }
+      });
+      const onEvent = vi.fn();
+      process.env.OTEL_SDK_DISABLED = value;
 
-    const { ctx } = await startOtelService({
+      const { service, ctx } = await startOtelService({
+        traces: true,
+        metrics: true,
+        logs: true,
+        logsExporter: "both",
+        configure: (context) => {
+          context.internalDiagnostics = {
+            ...context.internalDiagnostics!,
+            onEvent,
+          };
+        },
+      });
+      await waitForDiagnosticEventsDrained();
+
+      expect(events).toEqual([]);
+      expect(getReportedExporterHealth(ctx)).toEqual([]);
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(traceExporterCtor).not.toHaveBeenCalled();
+      expect(metricExporterCtor).not.toHaveBeenCalled();
+      expect(logExporterCtor).not.toHaveBeenCalled();
+      expect(traceProviderCtor).not.toHaveBeenCalled();
+      expect(meterProviderCtor).not.toHaveBeenCalled();
+      expect(logEmit).not.toHaveBeenCalled();
+      expect(unhandledRejectionHandlerState.register).not.toHaveBeenCalled();
+      expect(registerOwnedSdkRuntimeMock).toHaveBeenCalledOnce();
+
+      await service.stop?.(ctx);
+      expect(ownedSdkRuntimeCleanup).toHaveBeenCalledOnce();
+      unsubscribe();
+    },
+  );
+
+  test.each([" FaLsE "])("keeps the SDK enabled for OTEL_SDK_DISABLED=%j", async (value) => {
+    process.env.OTEL_SDK_DISABLED = value;
+
+    const { service, ctx } = await startOtelService({
       traces: true,
       metrics: true,
       logs: true,
-      logsExporter: "stdout",
     });
-    await waitForDiagnosticEventsDrained();
 
-    expect(events.map(({ signal, status, reason }) => ({ signal, status, reason }))).toEqual([
-      { signal: "logs", status: "started", reason: "configured" },
-    ]);
-    expect(
-      getReportedExporterHealth(ctx).map(({ signal, transport, status, reason }) => ({
-        signal,
-        transport,
-        status,
-        reason,
-      })),
-    ).toEqual([
-      {
-        signal: "logs",
-        transport: "stdout",
-        status: "started",
-        reason: "configured",
-      },
-    ]);
-    expect(sdkStart).toHaveBeenCalledOnce();
+    expect(traceProviderCtor).toHaveBeenCalledOnce();
+    expect(meterProviderCtor).toHaveBeenCalledOnce();
+    expect(traceExporterCtor).toHaveBeenCalledOnce();
+    expect(metricExporterCtor).toHaveBeenCalledOnce();
+    expect(logExporterCtor).toHaveBeenCalledOnce();
+    expect(registerOwnedSdkRuntimeMock).toHaveBeenCalledOnce();
 
-    unsubscribe();
+    await service.stop?.(ctx);
   });
 
-  test("keeps disabled owned SDK protocol failures out of operator health", async () => {
-    const events: TelemetryExporterEvent[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "telemetry.exporter") {
-        events.push(event);
-      }
-    });
-    process.env.OTEL_SDK_DISABLED = "true";
-    process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
-    process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/json";
+  test("warns through the plugin logger and keeps the SDK enabled for an invalid value", async () => {
+    process.env.OTEL_SDK_DISABLED = "invalid";
 
-    const { ctx } = await startOtelService({
+    const { service, ctx } = await startOtelService({
       traces: true,
       metrics: true,
       logs: true,
-      logsExporter: "stdout",
-      configure: (context) => {
-        delete context.config.diagnostics?.otel?.protocol;
-      },
     });
-    await waitForDiagnosticEventsDrained();
 
-    expect(events.map(({ signal, status, reason }) => ({ signal, status, reason }))).toEqual([
-      { signal: "logs", status: "started", reason: "configured" },
-    ]);
-    expect(
-      getReportedExporterHealth(ctx).map(({ signal, transport, status, reason }) => ({
-        signal,
-        transport,
-        status,
-        reason,
-      })),
-    ).toEqual([
-      {
-        signal: "logs",
-        transport: "stdout",
-        status: "started",
-        reason: "configured",
-      },
-    ]);
-    expect(sdkStart).not.toHaveBeenCalled();
-
-    unsubscribe();
-  });
-
-  test("keeps disabled malformed owned SDK routes out of operator health", async () => {
-    const events: TelemetryExporterEvent[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "telemetry.exporter") {
-        events.push(event);
-      }
-    });
-    process.env.OTEL_SDK_DISABLED = "true";
-    const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
-      traces: true,
-      metrics: false,
-      logs: false,
-    });
-    ctx.config.diagnostics!.otel!.tracesEndpoint = "not a collector URL";
-
-    await expect(service.start(ctx)).rejects.toThrow(
-      "Configured OpenTelemetry collector endpoint is invalid",
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: invalid OTEL_SDK_DISABLED value; expected true or false, using false",
     );
-    await waitForDiagnosticEventsDrained();
+    expect(traceProviderCtor).toHaveBeenCalledOnce();
+    expect(meterProviderCtor).toHaveBeenCalledOnce();
+    expect(traceExporterCtor).toHaveBeenCalledOnce();
+    expect(metricExporterCtor).toHaveBeenCalledOnce();
+    expect(logExporterCtor).toHaveBeenCalledOnce();
+    expect(registerOwnedSdkRuntimeMock).toHaveBeenCalledOnce();
 
-    expect(events).toEqual([]);
-    expect(getReportedExporterHealth(ctx)).toEqual([]);
     await service.stop?.(ctx);
-    unsubscribe();
   });
 
-  test("keeps disabled owned SDK start failures out of operator health", async () => {
+  test("skips malformed endpoint, protocol, and TLS settings while disabled", async () => {
     const events: TelemetryExporterEvent[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {
       if (event.type === "telemetry.exporter") {
@@ -1700,24 +1800,108 @@ describe("diagnostics-otel service", () => {
       }
     });
     process.env.OTEL_SDK_DISABLED = "true";
-    sdkStart.mockImplementationOnce(() => {
-      throw new TypeError("mocked disabled SDK start failure");
-    });
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
+    process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = "/definitely-missing/otel-root.pem";
     const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+    const ctx = createOtelContext("not a collector URL", {
       traces: true,
       metrics: true,
-      logs: false,
+      logs: true,
+      logsExporter: "both",
     });
 
-    await expect(service.start(ctx)).rejects.toThrow("mocked disabled SDK start failure");
+    await expect(service.start(ctx)).resolves.toBeUndefined();
     await waitForDiagnosticEventsDrained();
 
     expect(events).toEqual([]);
     expect(getReportedExporterHealth(ctx)).toEqual([]);
-    await service.stop?.(ctx);
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(createNodeProxyAgentMock).not.toHaveBeenCalled();
+    expect(ctx.logger.warn).not.toHaveBeenCalled();
     await service.stop?.(ctx);
     unsubscribe();
+  });
+
+  test("preserves preloaded trace and metric ownership while disabling plugin logs", async () => {
+    const events: TelemetryExporterEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OPENCLAW_OTEL_PRELOADED = "1";
+    process.env.OTEL_SDK_DISABLED = "true";
+
+    const { service, ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      logsExporter: "both",
+    });
+    emitDiagnosticEvent({
+      type: "run.completed",
+      ...RUN_FIXTURE,
+      outcome: "completed",
+      durationMs: 100,
+    });
+    await emitAndFlush({
+      type: "log.record",
+      level: "INFO",
+      message: "disabled preloaded log",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(events.map(({ signal, status }) => ({ signal, status }))).toEqual([
+      { signal: "traces", status: "started" },
+      { signal: "metrics", status: "started" },
+    ]);
+    expect(
+      getReportedExporterHealth(ctx).map(({ signal, transport, status }) => ({
+        signal,
+        transport,
+        status,
+      })),
+    ).toEqual([
+      {
+        signal: "traces",
+        transport: "external-sdk",
+        status: "started",
+      },
+      {
+        signal: "metrics",
+        transport: "external-sdk",
+        status: "started",
+      },
+    ]);
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
+    expect(unhandledRejectionHandlerState.register).not.toHaveBeenCalled();
+    expect(lastHistogramRecord("openclaw.run.duration_ms")?.[0]).toBe(100);
+    expect(startedSpanOptions("openclaw.run")?.attributes?.["openclaw.outcome"]).toBe("completed");
+    expect(logEmit).not.toHaveBeenCalled();
+    expect(registerOwnedSdkRuntimeMock).not.toHaveBeenCalled();
+    await service.stop?.(ctx);
+    unsubscribe();
+  });
+
+  test("releases each owned context and propagation generation across restart and stop", async () => {
+    process.env.OTEL_SDK_DISABLED = "true";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+
+    await service.start(ctx);
+    await service.start(ctx);
+    await service.stop?.(ctx);
+
+    expect(registerOwnedSdkRuntimeMock).toHaveBeenCalledTimes(2);
+    expect(ownedSdkRuntimeCleanup).toHaveBeenCalledTimes(2);
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
   });
 
   test("records dependency-default, stdout, and external SDK ownership facts", async () => {
@@ -2081,8 +2265,14 @@ describe("diagnostics-otel service", () => {
       logs: true,
     });
 
-    expect(sdkCtor).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(sdkCtor, 0)).toMatchObject({ logRecordProcessors: [] });
+    expect(traceProviderCtor).toHaveBeenCalledTimes(1);
+    expect(meterProviderCtor).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(traceProviderCtor, 0)).toMatchObject({
+      spanProcessors: expect.any(Array),
+    });
+    expect(mockCallArg(meterProviderCtor, 0)).toMatchObject({
+      readers: expect.any(Array),
+    });
     expect(traceExporterCtor).toHaveBeenCalledTimes(1);
     expect(metricExporterCtor).toHaveBeenCalledTimes(1);
     expect(logExporterCtor).toHaveBeenCalledTimes(1);
@@ -2093,7 +2283,7 @@ describe("diagnostics-otel service", () => {
       "http://otel-collector:4318/v1/metrics",
     );
     expect(firstExporterOptions(logExporterCtor).url).toBe("http://otel-collector:4318/v1/logs");
-    expect(sdkStart).toHaveBeenCalledTimes(1);
+    expect(spanProcessorCtor).toHaveBeenCalledTimes(1);
     expect(ctx.logger.warn).not.toHaveBeenCalledWith("diagnostics-otel: unsupported protocol grpc");
 
     emitDiagnosticEvent({
@@ -2169,7 +2359,8 @@ describe("diagnostics-otel service", () => {
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(metricExporterCtor).not.toHaveBeenCalled();
     expect(logExporterCtor).not.toHaveBeenCalled();
-    expect(sdkStart).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
 
     unsubscribe();
   });
@@ -2198,7 +2389,8 @@ describe("diagnostics-otel service", () => {
     expect(traceExporterCtor).toHaveBeenCalledTimes(1);
     expect(metricExporterCtor).not.toHaveBeenCalled();
     expect(logExporterCtor).toHaveBeenCalledTimes(1);
-    expect(sdkStart).toHaveBeenCalledTimes(1);
+    expect(traceProviderCtor).toHaveBeenCalledTimes(1);
+    expect(meterProviderCtor).not.toHaveBeenCalled();
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       "diagnostics-otel: unsupported metrics protocol http/json; OTLP export disabled",
     );
@@ -2217,7 +2409,7 @@ describe("diagnostics-otel service", () => {
     unsubscribe();
   });
 
-  test("keeps rejected traces disabled when metrics still start NodeSDK", async () => {
+  test("keeps rejected traces disabled when metrics still start owned SDK", async () => {
     process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
     process.env.OTEL_EXPORTER_OTLP_TRACES_PROTOCOL = "grpc";
     process.env.OTEL_EXPORTER_OTLP_METRICS_PROTOCOL = "http/protobuf";
@@ -2236,14 +2428,10 @@ describe("diagnostics-otel service", () => {
       },
     });
 
-    const options = mockCallArg(sdkCtor, 0) as {
-      metricReaders?: unknown[];
-      spanProcessors?: unknown[];
-    };
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(metricExporterCtor).toHaveBeenCalledTimes(1);
-    expect(options.spanProcessors).toEqual([]);
-    expect(options.metricReaders).toHaveLength(1);
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect((mockCallArg(meterProviderCtor, 0) as { readers?: unknown[] }).readers).toHaveLength(1);
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       "diagnostics-otel: unsupported traces protocol grpc; OTLP export disabled",
     );
@@ -2323,7 +2511,8 @@ describe("diagnostics-otel service", () => {
       },
     });
 
-    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(metricExporterCtor).not.toHaveBeenCalled();
     expect(ctx.logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("unsupported"));
@@ -2962,14 +3151,16 @@ describe("diagnostics-otel service", () => {
       durationMs: 100,
     });
 
-    expect(sdkStart).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
     const runDurationRecordCall = lastHistogramRecord("openclaw.run.duration_ms");
     expect(runDurationRecordCall?.[0]).toBe(100);
     expect(runDurationRecordCall?.[1]?.["openclaw.provider"]).toBe("openai");
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
 
     await service.stop?.(ctx);
-    expect(sdkShutdown).not.toHaveBeenCalled();
+    expect(traceProviderShutdown).not.toHaveBeenCalled();
+    expect(meterProviderShutdown).not.toHaveBeenCalled();
   });
 
   test("treats omitted diagnostics enabled flag as enabled", async () => {
@@ -3009,7 +3200,8 @@ describe("diagnostics-otel service", () => {
     });
 
     expect(logShutdown).toHaveBeenCalledTimes(1);
-    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+    expect(traceProviderShutdown).toHaveBeenCalledTimes(1);
+    expect(meterProviderShutdown).toHaveBeenCalledTimes(1);
 
     telemetryState.tracer.startSpan.mockClear();
     emitDiagnosticEvent({
@@ -3097,6 +3289,144 @@ describe("diagnostics-otel service", () => {
 
     expect(spanProcessorCtor).toHaveBeenCalledTimes(1);
     expect(firstSpanProcessorOptions().scheduledDelayMillis).toBe(1000);
+  });
+
+  test("passes explicit NodeSDK batch and metric defaults to private providers", async () => {
+    await startOtelService({ traces: true, metrics: true });
+
+    expect(firstSpanProcessorOptions()).toMatchObject({
+      exportTimeoutMillis: 30_000,
+      maxExportBatchSize: 512,
+      maxQueueSize: 2048,
+      scheduledDelayMillis: 5000,
+    });
+    expect(firstMetricReaderOptions()).toMatchObject({
+      exportIntervalMillis: 60_000,
+      exportTimeoutMillis: 30_000,
+    });
+    expect((mockCallArg(meterProviderCtor, 0) as Record<string, unknown>).sdkMetricsEnabled).toBe(
+      false,
+    );
+    const traceOptions = mockCallArg(traceProviderCtor, 0) as Record<string, unknown>;
+    expect(traceOptions.meterProvider).toBeUndefined();
+    expect(traceOptions).not.toHaveProperty("sampler");
+    expect(traceOptions).not.toHaveProperty("spanLimits");
+    expect(firstSpanProcessorOptions().selfObsMeterProvider).toBeUndefined();
+  });
+
+  test("lets explicit OpenClaw sampling override the inherited sampler environment", async () => {
+    process.env.OTEL_TRACES_SAMPLER = "always_off";
+    await startOtelService({
+      traces: true,
+      configure: (ctx) => {
+        ctx.config.diagnostics!.otel!.sampleRate = 1;
+      },
+    });
+
+    const traceOptions = mockCallArg(traceProviderCtor, 0) as Record<string, unknown>;
+    expect(traceOptions.sampler).toBeDefined();
+    expect(traceOptions).not.toHaveProperty("spanLimits");
+  });
+
+  test("honors positive BSP and metric environment values", async () => {
+    process.env.OTEL_BSP_MAX_QUEUE_SIZE = "32";
+    process.env.OTEL_BSP_MAX_EXPORT_BATCH_SIZE = "16";
+    process.env.OTEL_BSP_SCHEDULE_DELAY = "1250";
+    process.env.OTEL_BSP_EXPORT_TIMEOUT = "2500";
+    process.env.OTEL_METRIC_EXPORT_INTERVAL = "4000";
+    process.env.OTEL_METRIC_EXPORT_TIMEOUT = "3000";
+
+    await startOtelService({ traces: true, metrics: true });
+
+    expect(firstSpanProcessorOptions()).toMatchObject({
+      exportTimeoutMillis: 2500,
+      maxExportBatchSize: 16,
+      maxQueueSize: 32,
+      scheduledDelayMillis: 1250,
+    });
+    expect(firstMetricReaderOptions()).toMatchObject({
+      exportIntervalMillis: 4000,
+      exportTimeoutMillis: 3000,
+    });
+  });
+
+  test.each(["0", "-1", "invalid"])(
+    "falls back from invalid positive-only OTel interval values: %s",
+    async (value) => {
+      process.env.OTEL_BSP_MAX_QUEUE_SIZE = value;
+      process.env.OTEL_BSP_MAX_EXPORT_BATCH_SIZE = value;
+      process.env.OTEL_BSP_SCHEDULE_DELAY = value;
+      process.env.OTEL_BSP_EXPORT_TIMEOUT = value;
+      process.env.OTEL_METRIC_EXPORT_INTERVAL = value;
+      process.env.OTEL_METRIC_EXPORT_TIMEOUT = value;
+
+      await startOtelService({ traces: true, metrics: true });
+
+      expect(firstSpanProcessorOptions()).toMatchObject({
+        exportTimeoutMillis: 30_000,
+        maxExportBatchSize: 512,
+        maxQueueSize: 2048,
+        scheduledDelayMillis: 5000,
+      });
+      expect(firstMetricReaderOptions()).toMatchObject({
+        exportIntervalMillis: 60_000,
+        exportTimeoutMillis: 30_000,
+      });
+    },
+  );
+
+  test("clamps metric timeout to interval and wires experimental SDK metrics", async () => {
+    process.env.OTEL_METRIC_EXPORT_INTERVAL = "2000";
+    process.env.OTEL_METRIC_EXPORT_TIMEOUT = "3000";
+    process.env.OTEL_NODE_EXPERIMENTAL_SDK_METRICS = "true";
+
+    await startOtelService({ traces: true, metrics: true });
+
+    expect(firstMetricReaderOptions()).toMatchObject({
+      exportIntervalMillis: 2000,
+      exportTimeoutMillis: 2000,
+    });
+    const meterOptions = mockCallArg(meterProviderCtor, 0) as Record<string, unknown>;
+    expect(meterOptions.sdkMetricsEnabled).toBe(true);
+    expect(
+      (mockCallArg(traceProviderCtor, 0) as Record<string, unknown>).meterProvider,
+    ).toBeDefined();
+    expect(firstSpanProcessorOptions().selfObsMeterProvider).toBeDefined();
+    expect(diagWarn).toHaveBeenCalledWith(
+      "OTEL_METRIC_EXPORT_TIMEOUT (3000) is greater than the active metric export interval (2000). Clamping timeout to interval value.",
+    );
+  });
+
+  test("clamps BSP export batches to the configured queue size", async () => {
+    process.env.OTEL_BSP_MAX_QUEUE_SIZE = "16";
+    process.env.OTEL_BSP_MAX_EXPORT_BATCH_SIZE = "32";
+
+    await startOtelService({ traces: true });
+
+    expect(firstSpanProcessorOptions()).toMatchObject({
+      maxExportBatchSize: 16,
+      maxQueueSize: 16,
+    });
+  });
+
+  test("merges configured service resource after detected environment attributes", async () => {
+    process.env.OTEL_SERVICE_NAME = "environment-service";
+    const { ctx } = await startOtelService({
+      traces: true,
+      configure: (serviceContext) => {
+        serviceContext.config.diagnostics!.otel!.serviceName = "configured-service";
+      },
+    });
+
+    expect(
+      (mockCallArg(traceProviderCtor, 0) as { resource?: { attributes?: unknown } }).resource,
+    ).toMatchObject({
+      attributes: {
+        "openclaw.test.detected": "1",
+        "service.name": "configured-service",
+      },
+    });
+    expect(ctx.logger.error).not.toHaveBeenCalled();
   });
 
   test("applies flush interval to log batching", async () => {
@@ -3204,21 +3534,57 @@ describe("diagnostics-otel service", () => {
       tracesDisabled: false,
     },
   ] as const)(
-    "keeps NodeSDK exporter ownership explicit for $enabledSignal",
+    "keeps owned SDK exporter ownership explicit for $enabledSignal",
     async ({ flags, metricReaderCount, tracesDisabled }) => {
       process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
       await startOtelService(flags);
 
-      const options = mockCallArg(sdkCtor, 0) as {
-        logRecordProcessors?: unknown[];
-        metricReaders?: unknown[];
-        spanProcessors?: unknown[];
-      };
-      expect(options.logRecordProcessors).toEqual([]);
-      expect(options.metricReaders).toHaveLength(metricReaderCount);
-      expect(options).not.toHaveProperty("metricReader");
+      if (metricReaderCount > 0) {
+        expect((mockCallArg(meterProviderCtor, 0) as { readers?: unknown[] }).readers).toHaveLength(
+          metricReaderCount,
+        );
+      } else {
+        expect(meterProviderCtor).not.toHaveBeenCalled();
+      }
       if (tracesDisabled) {
-        expect(options.spanProcessors).toEqual([]);
+        expect(traceProviderCtor).not.toHaveBeenCalled();
+      } else {
+        expect(traceProviderCtor).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  test.each([
+    { label: "unset", env: undefined, expected: ["env", "process", "host"] },
+    { label: "none", env: "none", expected: [] },
+    { label: "subset", env: "process", expected: ["process"] },
+    {
+      label: "all",
+      env: "all",
+      expected: ["host", "os", "serviceinstance", "process", "env"],
+    },
+    {
+      label: "subset with invalid name",
+      env: "process,invalid-name",
+      expected: ["process"],
+    },
+  ] as const)(
+    "passes the $label resource detectors to detectResources",
+    async ({ env, expected }) => {
+      if (env === undefined) {
+        delete process.env.OTEL_NODE_RESOURCE_DETECTORS;
+      } else {
+        process.env.OTEL_NODE_RESOURCE_DETECTORS = env;
+      }
+      await startOtelService({ traces: true });
+      const call = detectResourcesMock.mock.calls.at(-1)?.[0] as
+        | { detectors?: Array<{ detector: string }> }
+        | undefined;
+      expect(call?.detectors?.map((detector) => detector.detector)).toEqual(expected);
+      if (env?.includes("invalid-name")) {
+        expect(diagWarn).toHaveBeenCalledWith(
+          'Invalid resource detector "invalid-name" specified in the environment variable OTEL_NODE_RESOURCE_DETECTORS',
+        );
       }
     },
   );
@@ -3233,7 +3599,8 @@ describe("diagnostics-otel service", () => {
 
     await startOtelService({ traces: true, metrics: true, logs: false });
 
-    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(metricExporterCtor).not.toHaveBeenCalled();
   });
@@ -3250,7 +3617,8 @@ describe("diagnostics-otel service", () => {
       logsExporter: "stdout",
     });
 
-    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
     expect(logExporterCtor).not.toHaveBeenCalled();
   });
 
@@ -3403,8 +3771,8 @@ describe("diagnostics-otel service", () => {
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(metricExporterCtor).not.toHaveBeenCalled();
     expect(logExporterCtor).not.toHaveBeenCalled();
-    expect(sdkCtor).not.toHaveBeenCalled();
-    expect(sdkStart).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
   });
 
   test("never falls back from an unreadable signal TLS file to readable shared trust", async () => {
@@ -3446,7 +3814,8 @@ describe("diagnostics-otel service", () => {
 
     await startOtelService({ traces: true, metrics: true, logs: false });
 
-    expect(sdkCtor).not.toHaveBeenCalled();
+    expect(traceProviderCtor).not.toHaveBeenCalled();
+    expect(meterProviderCtor).not.toHaveBeenCalled();
   });
 
   test("still validates plugin-owned OTLP logs when a trace SDK is preloaded", async () => {
@@ -3486,7 +3855,7 @@ describe("diagnostics-otel service", () => {
 
     await startOtelService(flags);
 
-    expect(sdkCtor).toHaveBeenCalledTimes(1);
+    expect(traceProviderCtor.mock.calls.length + meterProviderCtor.mock.calls.length).toBe(1);
   });
 
   test.each([
