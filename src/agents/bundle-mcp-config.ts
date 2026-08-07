@@ -16,6 +16,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
+  prepareDataDirsByServer: Record<string, string>;
 };
 
 type BundleMcpServerMapper = (server: BundleMcpServerConfig, name: string) => BundleMcpServerConfig;
@@ -84,6 +85,12 @@ export function loadMergedBundleMcpConfig(params: {
     ),
   );
   const mapConfiguredServer = params.mapConfiguredServer ?? ((server) => server);
+  const prepareDataDirsByServer = Object.fromEntries(
+    Object.entries(bundleMcp.prepareDataDirsByServer ?? {}).filter(
+      ([name]) =>
+        Object.hasOwn(enabledBundleMcp, name) && !Object.hasOwn(enabledConfiguredMcp, name),
+    ),
+  );
 
   return {
     config: {
@@ -99,5 +106,6 @@ export function loadMergedBundleMcpConfig(params: {
       } satisfies BundleMcpConfig["mcpServers"],
     },
     diagnostics: bundleMcp.diagnostics,
+    prepareDataDirsByServer,
   };
 }

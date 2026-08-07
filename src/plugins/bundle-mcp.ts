@@ -30,6 +30,10 @@ export type BundleMcpConfig = {
   mcpServers: Record<string, BundleMcpServerConfig>;
 };
 
+type BundleMcpRuntimeConfig = BundleMcpConfig & {
+  prepareDataDirsByServer: Record<string, string | null>;
+};
+
 export type BundleMcpDiagnostic = {
   pluginId: string;
   message: string;
@@ -38,6 +42,7 @@ export type BundleMcpDiagnostic = {
 type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
+  prepareDataDirsByServer: Record<string, string>;
 };
 type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
@@ -388,7 +393,7 @@ function loadBundleFileBackedMcpConfig(params: {
   relativePath: string;
   bundleFormat: PluginBundleFormat;
 }): {
-  config: BundleMcpConfig;
+  config: BundleMcpRuntimeConfig;
   diagnostics: string[];
 } {
   const rootDir =
@@ -405,7 +410,7 @@ function loadBundleFileBackedMcpConfig(params: {
   if (!result.ok) {
     if (result.reason === "open") {
       return {
-        config: { mcpServers: {} },
+        config: { mcpServers: {}, prepareDataDirsByServer: {} },
         diagnostics:
           result.failure.reason === "path"
             ? params.bundleFormat === "agent"
@@ -415,7 +420,7 @@ function loadBundleFileBackedMcpConfig(params: {
       };
     }
     return {
-      config: { mcpServers: {} },
+      config: { mcpServers: {}, prepareDataDirsByServer: {} },
       diagnostics: [`unable to read ${params.relativePath}: ${result.error}`],
     };
   }
@@ -443,6 +448,14 @@ function loadBundleFileBackedMcpConfig(params: {
           }),
         ]),
       ),
+      prepareDataDirsByServer: Object.fromEntries(
+        Object.entries(servers).map(([serverName, server]) => [
+          serverName,
+          agentLoaded?.pluginDataDir && server.transport === "stdio"
+            ? agentLoaded.pluginDataDir
+            : null,
+        ]),
+      ),
     },
     diagnostics: agentLoaded?.diagnostics ?? [],
   };
@@ -451,9 +464,9 @@ function loadBundleFileBackedMcpConfig(params: {
 function loadBundleInlineMcpConfig(params: {
   raw: Record<string, unknown>;
   baseDir: string;
-}): BundleMcpConfig {
+}): BundleMcpRuntimeConfig {
   if (!isRecord(params.raw.mcpServers)) {
-    return { mcpServers: {} };
+    return { mcpServers: {}, prepareDataDirsByServer: {} };
   }
   const baseDir = normalizeBundlePath(params.baseDir);
   const servers = extractMcpServerMap(params.raw.mcpServers);
@@ -464,13 +477,16 @@ function loadBundleInlineMcpConfig(params: {
         absolutizeBundleMcpServer({ rootDir: baseDir, baseDir, server }),
       ]),
     ),
+    prepareDataDirsByServer: Object.fromEntries(
+      Object.keys(servers).map((serverName) => [serverName, null]),
+    ),
   };
 }
 
 function loadNativePluginMcpConfig(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
-}): { config: BundleMcpConfig; diagnostics: string[] } {
+}): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
   const rootDir = normalizeBundlePath(params.rootDir);
   return {
     config: {
@@ -479,6 +495,9 @@ function loadNativePluginMcpConfig(params: {
           serverName,
           absolutizeBundleMcpServer({ rootDir, baseDir: rootDir, server }),
         ]),
+      ),
+      prepareDataDirsByServer: Object.fromEntries(
+        Object.keys(params.mcpServers).map((serverName) => [serverName, null]),
       ),
     },
     diagnostics: [],
@@ -489,7 +508,7 @@ function loadBundleMcpConfig(params: {
   pluginId: string;
   rootDir: string;
   bundleFormat: PluginBundleFormat;
-}): { config: BundleMcpConfig; diagnostics: string[] } {
+}): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
   const manifestRelativePath = MANIFEST_PATH_BY_FORMAT[params.bundleFormat];
   const manifestLoaded = readBundleJsonObject({
     rootDir: params.rootDir,
@@ -502,10 +521,13 @@ function loadBundleMcpConfig(params: {
       }),
   });
   if (!manifestLoaded.ok) {
-    return { config: { mcpServers: {} }, diagnostics: [manifestLoaded.error] };
+    return {
+      config: { mcpServers: {}, prepareDataDirsByServer: {} },
+      diagnostics: [manifestLoaded.error],
+    };
   }
 
-  let merged: BundleMcpConfig = { mcpServers: {} };
+  let merged: BundleMcpRuntimeConfig = { mcpServers: {}, prepareDataDirsByServer: {} };
   const filePaths = resolveBundleMcpConfigPaths({
     raw: manifestLoaded.raw,
     rootDir: params.rootDir,
@@ -520,7 +542,7 @@ function loadBundleMcpConfig(params: {
       bundleFormat: params.bundleFormat,
     });
     diagnostics.push(...loaded.diagnostics);
-    merged = applyMergePatch(merged, loaded.config) as BundleMcpConfig;
+    merged = applyMergePatch(merged, loaded.config) as BundleMcpRuntimeConfig;
   }
 
   if (params.bundleFormat !== "agent") {
@@ -530,7 +552,7 @@ function loadBundleMcpConfig(params: {
         raw: manifestLoaded.raw,
         baseDir: params.rootDir,
       }),
-    ) as BundleMcpConfig;
+    ) as BundleMcpRuntimeConfig;
   }
 
   return { config: merged, diagnostics };
@@ -585,11 +607,14 @@ export function loadEnabledBundleMcpConfig(params: {
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): EnabledBundleMcpConfigResult {
-  return loadEnabledBundleConfig({
+  const loaded = loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
-    createEmptyConfig: () => ({ mcpServers: {} }),
+    createEmptyConfig: (): BundleMcpRuntimeConfig => ({
+      mcpServers: {},
+      prepareDataDirsByServer: {},
+    }),
     loadBundleConfig: loadBundleMcpConfig,
     loadNativePluginConfig: ({ record }) =>
       record.mcpServers
@@ -600,4 +625,13 @@ export function loadEnabledBundleMcpConfig(params: {
         : undefined,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
+  return {
+    config: { mcpServers: loaded.config.mcpServers },
+    diagnostics: loaded.diagnostics,
+    prepareDataDirsByServer: Object.fromEntries(
+      Object.entries(loaded.config.prepareDataDirsByServer).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+  };
 }

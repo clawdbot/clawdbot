@@ -18,6 +18,7 @@ type OpenClawStdioServerParameters = {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  prepareDataDir?: string;
   stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
@@ -53,14 +54,13 @@ export class OpenClawStdioClientTransport implements Transport {
       );
     }
 
-    const pluginRoot = this.serverParams.env?.PLUGIN_ROOT?.trim();
-    const pluginDataDir = this.serverParams.env?.PLUGIN_DATA?.trim();
-    if (pluginRoot && pluginDataDir) {
+    const prepareDataDir = this.serverParams.prepareDataDir?.trim();
+    if (prepareDataDir) {
       try {
-        await fs.mkdir(pluginDataDir, { recursive: true });
+        await fs.mkdir(prepareDataDir, { recursive: true });
       } catch (error) {
         throw new Error(
-          `unable to prepare PLUGIN_DATA directory "${pluginDataDir}": ${formatErrorMessage(error)}`,
+          `unable to prepare PLUGIN_DATA directory "${prepareDataDir}": ${formatErrorMessage(error)}`,
           { cause: error },
         );
       }

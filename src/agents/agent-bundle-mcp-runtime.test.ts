@@ -38,6 +38,7 @@ vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
       }
       return {
         diagnostics: [],
+        prepareDataDirsByServer: {},
         mcpServers: Object.fromEntries(
           Object.entries(params.cfg?.mcp?.servers ?? {}).filter(([name]) => {
             const overrides = params.toolOverrides?.mcpServers;
@@ -1049,51 +1050,6 @@ describe("session MCP runtime", () => {
         "timed out waiting for bundle MCP catalog cleanup",
       );
       await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("isolates PLUGIN_DATA preparation failures to the affected stdio server", async () => {
-    const tempDir = tempDirTracker.make("bundle-mcp-plugin-data-collision-");
-    const serverPath = path.join(tempDir, "server.mjs");
-    const logPath = path.join(tempDir, "server.log");
-    const pluginDataPath = path.join(tempDir, "plugin-data");
-    await writeListToolsMcpServer({ filePath: serverPath, logPath });
-    await fs.writeFile(pluginDataPath, "directory collision", "utf8");
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-plugin-data-collision",
-      sessionKey: "agent:test:session-plugin-data-collision",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            broken: {
-              command: process.execPath,
-              args: [serverPath],
-              env: { PLUGIN_ROOT: tempDir, PLUGIN_DATA: pluginDataPath },
-            },
-            healthy: { command: process.execPath, args: [serverPath] },
-          },
-        },
-      },
-    });
-
-    try {
-      const catalog = await runtime.getCatalog();
-
-      expect(Object.keys(catalog.servers)).toEqual(["healthy"]);
-      expect(catalog.tools.map((tool) => `${tool.serverName}:${tool.toolName}`)).toEqual([
-        "healthy:slow_tool",
-      ]);
-      expect(catalog.diagnostics).toEqual([
-        expect.objectContaining({
-          serverName: "broken",
-          message: expect.stringMatching(/unable to prepare PLUGIN_DATA.*EEXIST/iu),
-        }),
-      ]);
-      expect((await fs.stat(pluginDataPath)).isFile()).toBe(true);
-    } finally {
-      await runtime.dispose();
     }
   });
 

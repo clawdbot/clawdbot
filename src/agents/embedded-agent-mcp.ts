@@ -13,6 +13,7 @@ import { loadMergedBundleMcpConfig } from "./bundle-mcp-config.js";
 type EmbeddedAgentMcpConfig = {
   mcpServers: Record<string, BundleMcpServerConfig>;
   diagnostics: BundleMcpDiagnostic[];
+  prepareDataDirsByServer: Record<string, string>;
 };
 
 /** Loads merged MCP server config for an embedded agent workspace. */
@@ -32,5 +33,6 @@ export function loadEmbeddedAgentMcpConfig(params: {
   return {
     mcpServers: bundleMcp.config.mcpServers,
     diagnostics: bundleMcp.diagnostics,
+    prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer,
   };
 }

@@ -209,6 +209,47 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
         await materialized.dispose();
         await disposeAllSessionMcpRuntimes();
       }
+
+      await fs.rm(expectedPluginData, { recursive: true });
+      await fs.writeFile(expectedPluginData, "Agent data-dir collision", "utf8");
+      const userDataPath = path.join(stateDir, "user-configured-data-file");
+      await fs.writeFile(userDataPath, "user-owned path", "utf8");
+      clearPluginMetadataLifecycleCaches();
+      const collisionRuntime = await getOrCreateSessionMcpRuntime({
+        sessionId: "agent-bundle-boundary-collision",
+        sessionKey: "agent:test:agent-bundle-boundary-collision",
+        workspaceDir,
+        cfg: {
+          ...cfg,
+          mcp: {
+            servers: {
+              userProbe: {
+                command: "node",
+                args: [serverPath, expandedMarkerPath],
+                env: { PLUGIN_ROOT: pluginRoot, PLUGIN_DATA: userDataPath },
+              },
+            },
+          },
+        },
+      });
+      try {
+        const catalog = await collisionRuntime.getCatalog();
+
+        expect(Object.keys(catalog.servers)).toEqual(["userProbe"]);
+        expect(catalog.tools.map((tool) => `${tool.serverName}:${tool.toolName}`)).toEqual([
+          "userProbe:weather_probe",
+        ]);
+        expect(catalog.diagnostics).toEqual([
+          expect.objectContaining({
+            serverName: "weatherProbe",
+            message: expect.stringMatching(/unable to prepare PLUGIN_DATA.*EEXIST/iu),
+          }),
+        ]);
+        expect((await fs.stat(expectedPluginData)).isFile()).toBe(true);
+        expect((await fs.stat(userDataPath)).isFile()).toBe(true);
+      } finally {
+        await disposeAllSessionMcpRuntimes();
+      }
     },
   );
 });
