@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
+import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 
 type EmbeddedAgentActiveSessionSteerTarget = Parameters<
@@ -61,11 +62,58 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       subscribe: () => () => {},
     };
 
-    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "runtime prompt", {
-      userTurnTranscriptRecorder: recorder,
+    await expect(
+      steerActiveSessionWithOptionalDeliveryWait(activeSession, "runtime prompt", {
+        userTurnTranscriptRecorder: recorder,
+      }),
+    ).resolves.toEqual({
+      kind: "steered",
+      transcriptCommit: "not-requested",
     });
 
     expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
+  });
+
+  it("reports a claimed pending-input answer without steering", async () => {
+    const sessionKey = "agent:main:queue-outcome";
+    const answers = { answers: { answer: ["Continue"] } };
+    const pending = registerPendingAgentQuestion({
+      questionId: "ask_queue_outcome",
+      sessionKey,
+      questions: [
+        {
+          id: "answer",
+          header: "Answer",
+          question: "What should happen?",
+          isOther: true,
+          options: [],
+        },
+      ],
+      gatewayCall: vi.fn(async () => ({ status: "answered", answers })),
+      answer: Promise.resolve({ status: "answered", answers }),
+    });
+    const steer = vi.fn(async () => undefined);
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    try {
+      await expect(
+        steerActiveSessionWithOptionalDeliveryWait(
+          activeSession,
+          "Continue",
+          {
+            isInboundUserMessage: true,
+            waitForTranscriptCommit: true,
+          },
+          sessionKey,
+        ),
+      ).resolves.toEqual({ kind: "answered-pending-input" });
+      expect(steer).not.toHaveBeenCalled();
+    } finally {
+      pending.dispose();
+    }
   });
 
   it("forwards ordered images with a queued steering message", async () => {
@@ -121,7 +169,10 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(settled).toBe(false);
 
     deferred.resolve();
-    await expect(wait).resolves.toBeUndefined();
+    await expect(wait).resolves.toEqual({
+      kind: "steered",
+      transcriptCommit: "confirmed",
+    });
     expect(settled).toBe(true);
   });
 
@@ -157,11 +208,17 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     await Promise.resolve();
 
     first.resolve();
-    await expect(firstWait).resolves.toBeUndefined();
+    await expect(firstWait).resolves.toEqual({
+      kind: "steered",
+      transcriptCommit: "confirmed",
+    });
     expect(secondSettled).toBe(false);
 
     second.resolve();
-    await expect(secondWait).resolves.toBeUndefined();
+    await expect(secondWait).resolves.toEqual({
+      kind: "steered",
+      transcriptCommit: "confirmed",
+    });
   });
 
   it("cancels only its exact receipt when identical text is queued twice", async () => {
@@ -202,7 +259,10 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
       expect(queued).toEqual(["first"]);
       first.resolve();
-      await expect(firstWait).resolves.toBeUndefined();
+      await expect(firstWait).resolves.toEqual({
+        kind: "steered",
+        transcriptCommit: "confirmed",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -327,7 +387,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       await expect(wait).resolves.toEqual({
-        transcriptCommit: "unconfirmed",
+        kind: "accepted-unconfirmed",
         errorMessage: "queued steering message was not committed to the transcript before timeout",
       });
     } finally {
@@ -351,7 +411,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(1);
 
-      await expect(wait).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+      await expect(wait).resolves.toMatchObject({ kind: "accepted-unconfirmed" });
       expect(queued).toEqual([sibling]);
     } finally {
       vi.useRealTimers();
@@ -381,7 +441,10 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       deferred.resolve();
-      await expect(wait).resolves.toBeUndefined();
+      await expect(wait).resolves.toEqual({
+        kind: "steered",
+        transcriptCommit: "confirmed",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -408,7 +471,10 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       deferred.resolve();
-      await expect(wait).resolves.toBeUndefined();
+      await expect(wait).resolves.toEqual({
+        kind: "steered",
+        transcriptCommit: "confirmed",
+      });
     } finally {
       vi.useRealTimers();
     }

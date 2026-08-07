@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
@@ -69,6 +70,8 @@ function prepareCatalogExecutor(
     runAbortController?: AbortController;
     sandboxSessionKey?: string;
     sessionKey?: string;
+    activeSession?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"];
+    trajectoryRecorder?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["trajectoryRecorder"];
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -78,7 +81,7 @@ function prepareCatalogExecutor(
       sessionId: "session-output-schema",
       sessionKey: options?.sessionKey ?? "agent:main:main",
     } as never,
-    activeSession: { agent: {}, isStreaming: false } as never,
+    activeSession: options?.activeSession ?? ({ agent: {}, isStreaming: false } as never),
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
@@ -103,6 +106,7 @@ function prepareCatalogExecutor(
     sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
+    trajectoryRecorder: options?.trajectoryRecorder,
   });
 }
 
@@ -347,6 +351,86 @@ describe("prepareEmbeddedAttemptStream", () => {
       imagesCount: 0,
       origin,
     });
+  });
+
+  it("does not record a pending-input answer as a queued prompt", async () => {
+    const sessionKey = "agent:receiver:pending-answer";
+    const origin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      sourceTool: "sessions_send",
+    };
+    const answers = { answers: { answer: ["Continue"] } };
+    const pending = registerPendingAgentQuestion({
+      questionId: "ask_pending_answer",
+      sessionKey,
+      questions: [
+        {
+          id: "answer",
+          header: "Answer",
+          question: "What should happen?",
+          isOther: true,
+          options: [],
+        },
+      ],
+      gatewayCall: vi.fn(async () => ({ status: "answered", answers })),
+      answer: Promise.resolve({ status: "answered", answers }),
+    });
+    const steer = vi.fn(async () => undefined);
+    const recordEvent = vi.fn();
+    const prepared = prepareCatalogExecutor([], {
+      sessionKey,
+      activeSession: {
+        agent: {},
+        isStreaming: true,
+        messages: [],
+        steer,
+        subscribe: vi.fn(() => () => undefined),
+      } as never,
+      trajectoryRecorder: { recordEvent } as never,
+    });
+
+    try {
+      await expect(
+        prepared.queueHandle.queueMessage("Continue", {
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: true,
+          inputProvenance: origin,
+        }),
+      ).resolves.toBeUndefined();
+      expect(steer).not.toHaveBeenCalled();
+      expect(recordEvent).not.toHaveBeenCalled();
+    } finally {
+      pending.dispose();
+    }
+  });
+
+  it("does not record steering when transcript confirmation was not requested", async () => {
+    const origin = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:sender:main",
+      sourceTool: "sessions_send",
+    };
+    const steer = vi.fn(async () => undefined);
+    const recordEvent = vi.fn();
+    const prepared = prepareCatalogExecutor([], {
+      activeSession: {
+        agent: {},
+        isStreaming: true,
+        messages: [],
+        steer,
+        subscribe: vi.fn(() => () => undefined),
+      } as never,
+      trajectoryRecorder: { recordEvent } as never,
+    });
+
+    await expect(
+      prepared.queueHandle.queueMessage("fire and continue", {
+        inputProvenance: origin,
+      }),
+    ).resolves.toBeUndefined();
+    expect(steer).toHaveBeenCalledOnce();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it("records each identical queued prompt from only its exact committed receipt", async () => {

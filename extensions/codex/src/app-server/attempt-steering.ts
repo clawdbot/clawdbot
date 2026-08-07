@@ -30,7 +30,7 @@ export type CodexSteeringQueueOptions = {
   isInboundUserMessage?: boolean;
 };
 
-export type CodexSteeringQueueOutcome = { kind: "answered-pending-input" } | { kind: "steered" };
+type CodexSteeringQueueOutcome = { kind: "answered-pending-input" } | { kind: "steered" };
 
 const ANSWERED_PENDING_INPUT_OUTCOME: CodexSteeringQueueOutcome = {
   kind: "answered-pending-input",
@@ -167,7 +167,7 @@ export function createCodexSteeringQueue(params: {
       const acceptedUnconfirmed =
         isCodexAppServerIndeterminateRequestCancellationError(error) ||
         isCodexAppServerIndeterminateTransportError(error);
-      for (const item of liveItems) {
+      for (const item of liveItems.filter((candidate) => !candidate.settled)) {
         rejectItem(
           item,
           acceptedUnconfirmed
@@ -184,13 +184,10 @@ export function createCodexSteeringQueue(params: {
 
   const enqueueSend = (items: PendingSteerMessage[]) => {
     const send = sendChain.then(() => sendBatch(items));
-    // Preserve submission order after rejection: later messages must fall back
-    // instead of overtaking the failed message with another turn/steer request.
-    sendChain = send;
+    // Preserve serialization without allowing one failed request to poison
+    // later steering. Callers still receive the original batch failure.
+    sendChain = send.catch(() => undefined);
     void send.catch((error: unknown) => {
-      for (const item of items) {
-        rejectItem(item, error);
-      }
       embeddedAgentLog.debug("codex app-server queued steer failed", { error });
     });
     return send;
@@ -254,11 +251,10 @@ export function createCodexSteeringQueue(params: {
           // before releasing the prompt so no partial text answer can win the race.
           void flushBatch().catch(() => undefined);
           const { item, delivery } = createPendingMessage(text, options.images);
-          const [, outcome] = await Promise.all([
-            enqueueSend([item]).finally(() => pendingUserInput.cancel()),
-            delivery,
-          ]);
-          return outcome;
+          void enqueueSend([item])
+            .finally(() => pendingUserInput.cancel())
+            .catch(() => undefined);
+          return await delivery;
         }
       }
       const { item, delivery } = createPendingMessage(text, options?.images);

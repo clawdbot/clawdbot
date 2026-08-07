@@ -12,10 +12,7 @@ import {
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
 import { log } from "../logger.js";
-import type {
-  EmbeddedAgentQueueMessageOptions,
-  EmbeddedAgentQueueMessageResult,
-} from "../run-state.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
 type AgentSessionSteerReceipt = {
   committed: Promise<void>;
@@ -32,6 +29,11 @@ type ReceiptAwareSteerTarget = {
     inputProvenance?: InputProvenance,
   ): Promise<AgentSessionSteerReceipt>;
 };
+
+type EmbeddedSteeringQueueOutcome =
+  | { kind: "answered-pending-input" }
+  | { kind: "steered"; transcriptCommit: "confirmed" | "not-requested" }
+  | { kind: "accepted-unconfirmed"; errorMessage: string };
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
@@ -253,7 +255,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   text: string,
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
-): Promise<void | EmbeddedAgentQueueMessageResult> {
+): Promise<EmbeddedSteeringQueueOutcome> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !options?.images?.length;
   if (isInboundUserMessage && !isPlainTextAnswer) {
@@ -276,7 +278,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         : undefined,
     }))
   ) {
-    return;
+    return { kind: "answered-pending-input" };
   }
   if (options?.waitForTranscriptCommit !== true) {
     await steerActiveSession(
@@ -288,7 +290,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options?.imageOrder,
       options?.inputProvenance,
     );
-    return;
+    return { kind: "steered", transcriptCommit: "not-requested" };
   }
   try {
     await steerAndWaitForTranscriptCommit(
@@ -301,9 +303,10 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       options.imageOrder,
       options.inputProvenance,
     );
+    return { kind: "steered", transcriptCommit: "confirmed" };
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {
-      return { transcriptCommit: "unconfirmed", errorMessage: error.message };
+      return { kind: "accepted-unconfirmed", errorMessage: error.message };
     }
     throw error;
   }

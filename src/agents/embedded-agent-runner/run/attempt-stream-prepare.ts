@@ -403,16 +403,16 @@ export function prepareEmbeddedAttemptStream(input: {
         if (options?.steeringMode) {
           input.activeSession.agent.steeringMode = options.steeringMode;
         }
-        const result = await steerActiveSessionWithOptionalDeliveryWait(
+        const outcome = await steerActiveSessionWithOptionalDeliveryWait(
           input.activeSession,
           text,
           options,
           attempt.sessionKey,
         );
         if (
-          result?.transcriptCommit !== "unconfirmed" &&
-          options?.waitForTranscriptCommit &&
-          options.inputProvenance
+          outcome.kind === "steered" &&
+          outcome.transcriptCommit === "confirmed" &&
+          options?.inputProvenance
         ) {
           try {
             input.trajectoryRecorder?.recordEvent("prompt.submitted", {
@@ -425,7 +425,9 @@ export function prepareEmbeddedAttemptStream(input: {
             log.warn(`failed to record queued prompt trajectory: ${formatErrorMessage(error)}`);
           }
         }
-        return result;
+        return outcome.kind === "accepted-unconfirmed"
+          ? { transcriptCommit: "unconfirmed", errorMessage: outcome.errorMessage }
+          : undefined;
       } finally {
         activeQueueAdmissions--;
       }
