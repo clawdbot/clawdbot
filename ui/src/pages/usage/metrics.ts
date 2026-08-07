@@ -13,6 +13,12 @@ import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
+// Activity timestamps arrive verbatim from the gateway; a corrupt or
+// clock-skewed entry can claim a span of centuries. The mosaic and the hour
+// filter only bucket by hour-of-day, so cap the per-hour span walk at the
+// longest span worth slicing and attribute longer sessions to their boundary
+// hours only.
+const MAX_SESSION_SPAN_MS = 366 * DAY_MS;
 
 type UsageCostWindowSummary = {
   days: number;
@@ -77,6 +83,21 @@ function forEachSessionHourSlice(
   }
 
   const totalMinutes = (endMs - startMs) / 60000;
+  if (endMs - startMs > MAX_SESSION_SPAN_MS) {
+    // Extreme spans would iterate once per hour for centuries; attribute the
+    // session to its start and end hours only (split evenly, approximate).
+    for (const boundaryMs of [startMs, endMs]) {
+      const date = new Date(boundaryMs);
+      visitor({
+        usage,
+        hour: getZonedHour(date, timeZone),
+        weekday: getZonedWeekday(date, timeZone),
+        share: 0.5,
+      });
+    }
+    return true;
+  }
+
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
@@ -252,6 +273,14 @@ function sessionSpanTouchesSelectedHours(
   }
   const startMs = Math.min(start, end);
   const endMs = Math.max(start, end);
+  if (endMs - startMs > MAX_SESSION_SPAN_MS) {
+    // Same bound as forEachSessionHourSlice: extreme spans are attributed to
+    // their boundary hours only, so only those can match the selection.
+    return (
+      hours.includes(getZonedHour(new Date(startMs), timeZone)) ||
+      hours.includes(getZonedHour(new Date(endMs), timeZone))
+    );
+  }
   let cursor = startMs;
   while (cursor <= endMs) {
     const date = new Date(cursor);

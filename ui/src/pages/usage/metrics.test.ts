@@ -521,6 +521,101 @@ describe("usage mosaic token buckets", () => {
   });
 });
 
+describe("extreme session activity spans", () => {
+  // Corrupt/clock-skewed timestamps: a ~506-year span. Boundaries fall in
+  // UTC hours 0 and 12; hour 6 is inside the span but not a boundary.
+  const SPAN_START = Date.parse("2020-01-01T00:00:00.000Z");
+  const SPAN_END = Date.parse("2026-08-01T12:00:00.000Z") + 500 * 365 * 86_400_000;
+
+  const makeExtremeSpanSession = (usage: Partial<UsageSessionEntry["usage"]>): UsageSessionEntry =>
+    ({
+      key: "extreme-span-session",
+      updatedAt: SPAN_END,
+      usage: {
+        totalTokens: 24_000,
+        totalCost: 0,
+        input: 0,
+        output: 24_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: SPAN_START,
+        lastActivity: SPAN_END,
+        ...usage,
+      },
+    }) as unknown as UsageSessionEntry;
+
+  const nonEmptyMosaicHours = (container: HTMLElement): number[] => {
+    const cells = [...container.querySelectorAll<HTMLElement>(".usage-hour-cell")];
+    return cells
+      .map((cell, hour) => ({ cell, hour }))
+      .filter(({ cell }) => !cell.title.includes("0 tokens"))
+      .map(({ hour }) => hour);
+  };
+
+  it("attributes extreme spans to their boundary hours only in the mosaic", () => {
+    const session = makeExtremeSpanSession({});
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+
+    expect(nonEmptyMosaicHours(container)).toStrictEqual([0, 12]);
+    const cells = container.querySelectorAll<HTMLElement>(".usage-hour-cell");
+    expect(cells[0]?.title).toContain("12.0K");
+    expect(cells[12]?.title).toContain("12.0K");
+    expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("24.0K");
+  });
+
+  it("bounds peak-error fallback allocation for extreme spans", () => {
+    const session = makeExtremeSpanSession({
+      messageCounts: { total: 10, user: 5, assistant: 5, toolCalls: 0, toolResults: 0, errors: 5 },
+    });
+
+    const result = buildPeakErrorHours([session], "utc");
+    expect(result.map(({ value }) => value)).toStrictEqual(["50.00%", "50.00%"]);
+  });
+
+  it("bounds hour-filter matching for extreme spans to boundary hours", () => {
+    const session = makeExtremeSpanSession({});
+
+    expect(sessionTouchesSelectedHours(session, [0], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [12], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [6], "utc")).toBe(false);
+  });
+
+  it("still walks normal spans hour by hour", () => {
+    const start = Date.parse("2026-03-15T10:00:00.000Z");
+    const session = {
+      key: "normal-span-session",
+      updatedAt: start + 2 * 3_600_000,
+      usage: {
+        totalTokens: 4_000,
+        totalCost: 0,
+        input: 0,
+        output: 4_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+        firstActivity: start,
+        lastActivity: start + 2 * 3_600_000,
+      },
+    } as unknown as UsageSessionEntry;
+    const container = document.createElement("div");
+    render(renderUsageMosaic([session], "utc", [], vi.fn()), container);
+
+    expect(nonEmptyMosaicHours(container)).toStrictEqual([10, 11]);
+    expect(sessionTouchesSelectedHours(session, [11], "utc")).toBe(true);
+    expect(sessionTouchesSelectedHours(session, [13], "utc")).toBe(false);
+  });
+});
+
 describe("formatUsageTokens", () => {
   it("formats values below 1,000 verbatim", () => {
     expect(formatUsageTokens(0)).toBe("0");
