@@ -22,6 +22,7 @@ let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; las
 
 const { registryRuntimeMock } = vi.hoisted(() => ({
   registryRuntimeMock: {
+    countActiveDescendantRuns: vi.fn(() => 0),
     hasDescendantRunAwaitingSettle: vi.fn(
       (_rootSessionKey: string, _excludeRunId?: string) => false,
     ),
