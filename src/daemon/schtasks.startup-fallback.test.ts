@@ -132,7 +132,7 @@ async function writeNodeScript(env: Record<string, string>, port = "18789") {
 }
 
 const NODE_PROCESS_QUERY =
-  "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
+  "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress";
 
 function makeNodeServiceEnv(env: Record<string, string>): Record<string, string> {
   return {
@@ -912,7 +912,12 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
-      expect(processQueries).toBe(5);
+      // One extra snapshot query vs. the pre-#120134 flow: the Windows
+      // termination guard reads the process tree once to avoid `taskkill /T`
+      // killing a caller inside the gateway's tree. The mock answers that
+      // query with a failure (status 1), which also proves the guard keeps the
+      // previous tree-kill behavior when the snapshot is unavailable.
+      expect(processQueries).toBe(6);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
@@ -1518,7 +1523,7 @@ describe("Windows startup fallback", () => {
           command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
           )
         ) {
           return {
@@ -1588,7 +1593,7 @@ describe("Windows startup fallback", () => {
           command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
           )
         ) {
           return {
@@ -1741,7 +1746,7 @@ describe("Windows startup fallback", () => {
           command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
           )
         ) {
           return {

@@ -18,6 +18,7 @@ import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-t
 
 type WindowsProcessSnapshotEntry = {
   ProcessId?: number;
+  ParentProcessId?: number;
   CommandLine?: string | null;
 };
 
@@ -299,6 +300,38 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
   return probeProcessState(pid) === "missing";
 }
 
+/**
+ * True when `currentPid` is `targetPid` itself or a descendant of it.
+ * Mirrors the POSIX "leader verification avoids signaling our group" guard:
+ * the Windows restart path must not `taskkill /T` a tree that contains the
+ * calling process (agent exec commands are direct children of the gateway),
+ * or the restart CLI would terminate itself before `schtasks /Run` executes.
+ */
+export function isProcessDescendantOf(
+  targetPid: number,
+  currentPid: number,
+  snapshot: WindowsProcessSnapshotEntry[],
+): boolean {
+  const parentByPid = new Map<number, number>();
+  for (const entry of snapshot) {
+    const pid = getSnapshotProcessId(entry);
+    const parentPid = entry.ParentProcessId;
+    if (pid && typeof parentPid === "number" && Number.isFinite(parentPid) && parentPid > 0) {
+      parentByPid.set(pid, parentPid);
+    }
+  }
+  let cursor = currentPid;
+  const visited = new Set<number>();
+  while (cursor > 0 && !visited.has(cursor)) {
+    if (cursor === targetPid) {
+      return true;
+    }
+    visited.add(cursor);
+    cursor = parentByPid.get(cursor) ?? 0;
+  }
+  return false;
+}
+
 export async function terminateGatewayProcessTree(pid: number, graceMs: number): Promise<void> {
   if (process.platform !== "win32") {
     // These PIDs come from argv/port ownership; leader verification avoids signaling our group.
@@ -306,20 +339,37 @@ export async function terminateGatewayProcessTree(pid: number, graceMs: number):
     return;
   }
   const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
-  const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  // When this process is inside the target's tree (agent exec commands are
+  // direct children of the gateway), taskkill /T terminates the caller too:
+  // `openclaw gateway restart` via exec would kill itself before the restart
+  // completes, leaving the gateway stopped with no auto-recovery. Drop the
+  // tree flag in that case so only the gateway is terminated; the caller is
+  // orphaned and survives to finish the restart. Without a readable process
+  // snapshot the tree kill is kept as the previous behavior.
+  const snapshot = readWindowsProcessSnapshot();
+  const treeKill = !(snapshot && isProcessDescendantOf(pid, process.pid, snapshot));
+  const graceful = spawnSync(
+    taskkillPath,
+    treeKill ? ["/T", "/PID", String(pid)] : ["/PID", String(pid)],
+    {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    },
+  );
   // taskkill can race with exit; only a missing PID avoids forcing the verified owner.
   if (await waitForProcessExit(pid, graceful.status === 0 && !graceful.error ? graceMs : 0)) {
     return;
   }
-  const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
-    stdio: "ignore",
-    timeout: 5_000,
-    windowsHide: true,
-  });
+  const forced = spawnSync(
+    taskkillPath,
+    treeKill ? ["/F", "/T", "/PID", String(pid)] : ["/F", "/PID", String(pid)],
+    {
+      stdio: "ignore",
+      timeout: 5_000,
+      windowsHide: true,
+    },
+  );
   if (forced.error || forced.status !== 0) {
     if (probeProcessState(pid) === "missing") {
       return;
@@ -359,7 +409,7 @@ export function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | nu
     [
       "-NoProfile",
       "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
     ],
     { encoding: "utf8", timeout: 5_000, windowsHide: true },
   );
