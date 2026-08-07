@@ -585,12 +585,19 @@ function capWithMarker(text: string, maxChars: number, marker: string): string {
 }
 
 /**
- * Tail slice that starts on a message boundary. Rendered turns are one per line,
- * so a raw character cut can restart mid-message and leave a fragment that reads
- * as a complete turn. A cut already landing on a boundary keeps its first line;
- * otherwise the partial line goes. No boundary at all means the whole slice is
- * one fragment, so nothing survives. Slicing and aligning live together because
+ * Tail slice that starts on a line boundary, so no line is delivered
+ * half-formed. A cut already landing on a boundary keeps its first line;
+ * otherwise the partial line goes, and a slice with no boundary at all is one
+ * fragment, so nothing survives. Slicing and aligning live together because
  * only here are both the source and the cut position known.
+ *
+ * A line boundary is NOT a message boundary — a rendered message may span lines
+ * (see formatContextMessages). This is the last-resort trim over an already
+ * assembled suffix, where the section structure is no longer available, so it
+ * guarantees only that the result is line-aligned and UTF-16 safe. Its output
+ * is always preceded by SUFFIX_TRUNCATED_MARKER, so a surviving continuation
+ * reads as truncated content rather than as a whole turn. A caller that still
+ * holds the messages MUST drop whole messages instead; boundRawSplitTurn does.
  */
 function sliceTailAtLineBoundary(text: string, budget: number): string {
   if (budget <= 0) {
@@ -804,18 +811,16 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
       } else {
         return null;
       }
-      // One rendered message is exactly one line. Message text can contain
-      // newlines, and the tail trims treat every newline as a message
-      // boundary, so an embedded one would let a continuation survive without
-      // its role prefix and be persisted as if it were a whole turn.
+      // A rendered message may span lines: extractMessageText joins content
+      // blocks with a newline and returns block text verbatim. Callers that
+      // trim MUST work on this array, where one element is one message —
+      // never on the joined string, where a newline is not a message boundary.
       const rendered = [
         extractMessageText(message),
         formatNonTextPlaceholder((message as { content?: unknown }).content),
       ]
         .filter(Boolean)
-        .join(" ")
-        .replace(/\s*\n\s*/gu, " ")
-        .trim();
+        .join("\n");
       if (!rendered) {
         return null;
       }
@@ -850,14 +855,36 @@ function boundSummarizedSplitTurn(section: string): string {
  * they carry the latest tool results and execution state, and nothing else in
  * the artifact reproduces them, whereas earlier history is already in the
  * summary body.
+ *
+ * Takes the rendered messages rather than the joined string. A rendered message
+ * may span lines, so the boundaries cannot be recovered from the join — dropping
+ * whole elements is exact where searching for a newline is a guess.
  */
-function boundRawSplitTurn(lines: string): string {
-  if (lines.length <= MAX_CONTEXT_SECTION_CHARS) {
-    return lines;
+function boundRawSplitTurn(renderedMessages: string[]): string {
+  const joined = renderedMessages.join("\n");
+  if (joined.length <= MAX_CONTEXT_SECTION_CHARS) {
+    return joined;
   }
   const budget = MAX_CONTEXT_SECTION_CHARS - SUFFIX_TRUNCATED_MARKER.length;
-  const kept = sliceTailAtLineBoundary(lines, budget);
-  return `${SUFFIX_TRUNCATED_MARKER}${kept}`;
+  // Drop whole messages from the oldest end until the rest fits.
+  let firstKept = renderedMessages.length;
+  let kept = 0;
+  for (let i = renderedMessages.length - 1; i >= 0; i--) {
+    // Every message after the first costs its joining newline.
+    const cost = (renderedMessages[i] ?? "").length + (firstKept < renderedMessages.length ? 1 : 0);
+    if (kept + cost > budget) {
+      break;
+    }
+    kept += cost;
+    firstKept = i;
+  }
+  if (firstKept === renderedMessages.length) {
+    // Even the newest message alone overruns the budget. It is the one thing
+    // here nothing else reproduces, so keep its tail and mark the cut; a raw
+    // slice is safe because a single message has no boundary left to respect.
+    return `${SUFFIX_TRUNCATED_MARKER}${sliceUtf16Safe(renderedMessages.at(-1) ?? "", -budget)}`;
+  }
+  return `${SUFFIX_TRUNCATED_MARKER}${renderedMessages.slice(firstKept).join("\n")}`;
 }
 
 function formatPreservedTurnsSection(messages: AgentMessage[]): string {
@@ -875,7 +902,7 @@ function formatSplitTurnContextSection(messages: AgentMessage[]): string {
   }
   // Bound the rendered lines, not the heading, so the heading survives a cut
   // that keeps the tail.
-  return `**Turn Context (split turn):**\n\n${boundRawSplitTurn(lines.join("\n"))}`;
+  return `**Turn Context (split turn):**\n\n${boundRawSplitTurn(lines)}`;
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {

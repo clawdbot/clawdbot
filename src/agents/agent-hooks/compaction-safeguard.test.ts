@@ -710,39 +710,92 @@ describe("compaction-safeguard summary budgets", () => {
     expect(sliceTailAtLineBoundary(text, 0)).toBe("");
   });
 
-  it("renders a multiline message as a single line", () => {
+  it("preserves multiline turns verbatim, below the cap", () => {
+    // Two content blocks is the shape that actually reaches the formatter:
+    // extractMessageText joins blocks with a newline, so a rendered message
+    // spans lines without anyone typing one.
     const messages = [
       {
         role: "assistant" as const,
-        content: [{ type: "text" as const, text: "first line\nsecond line\r\nthird line" }],
+        content: [
+          { type: "text" as const, text: "block one" },
+          { type: "text" as const, text: "block two" },
+        ],
+        timestamp: 0,
+      },
+      {
+        role: "toolResult" as const,
+        toolName: "bash",
+        content: [{ type: "text" as const, text: "stdout line 1\nstdout line 2" }],
+        timestamp: 0,
+      },
+    ];
+
+    const section: string = formatPreservedTurnsSection(messages);
+
+    // recentTurnsPreserve promises the configured turns verbatim. Collapsing
+    // internal newlines to satisfy a trim elsewhere breaks that contract for
+    // every session with multiline tool output, below the cap, for nothing.
+    expect(section).toContain("- Assistant: block one\nblock two");
+    expect(section).toContain("- Tool result (bash): stdout line 1\nstdout line 2");
+  });
+
+  it("never orphans a continuation when trimming multiline split turns", () => {
+    // Each message renders as two lines via the block join, so a trim that
+    // treats a newline as a message boundary would keep "part2-N" without its
+    // "- Assistant: turn-N" head, which the next run reads as a whole turn.
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: `turn-${i}` },
+        { type: "text" as const, text: `part2-${i} ${"y".repeat(200)}` },
+      ],
+      timestamp: 0,
+    }));
+
+    const section: string = formatSplitTurnContextSection(messages);
+    const after = section.slice(
+      section.indexOf(SUFFIX_TRUNCATED_MARKER.trim()) + SUFFIX_TRUNCATED_MARKER.trim().length,
+    );
+
+    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // Every surviving continuation still has its own head.
+    const orphans = Array.from(after.matchAll(/part2-(\d+)/gu), (m) => Number(m[1])).filter(
+      (n) => !after.includes(`- Assistant: turn-${n}\n`),
+    );
+    expect(orphans, `continuations kept without their head: ${orphans.join(", ")}`).toEqual([]);
+    // The newest message is the one nothing else reproduces, so it is kept.
+    expect(after).toContain("- Assistant: turn-199\n");
+  });
+
+  it("keeps the newest message's tail when that message alone overruns the budget", () => {
+    // Message text is capped at MAX_RECENT_TURN_TEXT_CHARS, so text alone can
+    // never fill the section. The role prefix is not capped: toolName is used
+    // as given, which is the one way a single rendered message exceeds the cap.
+    const messages = [
+      {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "older" }],
+        timestamp: 0,
+      },
+      {
+        role: "toolResult" as const,
+        toolName: `${"t".repeat(MAX_CONTEXT_SECTION_CHARS)}-endmark`,
+        content: [{ type: "text" as const, text: "newest tool output" }],
         timestamp: 0,
       },
     ];
 
     const section: string = formatSplitTurnContextSection(messages);
-    const rendered = section.split("\n").filter(Boolean);
 
-    // The trims treat every newline as a message boundary, so an embedded one
-    // would let "second line" survive with no role prefix and read as a turn.
-    expect(rendered.filter((line) => line.startsWith("- Assistant:"))).toHaveLength(1);
-    expect(section).toContain("first line second line third line");
-  });
-
-  it("keeps only whole prefixed messages when trimming multiline turns", () => {
-    const messages = Array.from({ length: 200 }, (_, i) => ({
-      role: "assistant" as const,
-      content: [{ type: "text" as const, text: `turn-${i}\nembedded\n${"y".repeat(200)}` }],
-      timestamp: 0,
-    }));
-
-    const section: string = formatSplitTurnContextSection(messages);
-    const after = section.slice(section.indexOf(SUFFIX_TRUNCATED_MARKER.trim()));
-
-    for (const line of after.split("\n").slice(1).filter(Boolean)) {
-      expect(line.startsWith("- Assistant:"), `orphan continuation: ${line.slice(0, 40)}`).toBe(
-        true,
-      );
-    }
+    expect(section.length).toBeLessThanOrEqual(
+      MAX_CONTEXT_SECTION_CHARS + "**Turn Context (split turn):**\n\n".length,
+    );
+    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // The newest content survives even though its message cannot be kept whole;
+    // returning nothing here would lose the latest execution state entirely.
+    expect(section).toContain("newest tool output");
+    expect(section).not.toContain("- Assistant: older");
   });
 
   it("never exceeds the cap, down to a one-character budget", () => {
