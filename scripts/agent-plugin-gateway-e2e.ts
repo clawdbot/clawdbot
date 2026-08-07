@@ -140,12 +140,42 @@ async function waitForHttp(url: string, child: CapturedChild, timeoutMs = 60_000
   throw new Error(`${child.label} did not become ready at ${url}\n${child.stderr}`);
 }
 
+async function waitForOutputLine(
+  child: CapturedChild,
+  predicate: (line: string) => boolean,
+  timeoutMs = 30_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.child.exitCode !== null) {
+      throw childFailure(child);
+    }
+    const line = `${child.stdout}\n${child.stderr}`.split(/\r?\n/u).find(predicate);
+    if (line) {
+      return line;
+    }
+    await delay(50);
+  }
+  throw new Error(`${child.label} did not emit the expected output\n${child.stderr}`);
+}
+
 async function writeFixture(pluginRoot: string): Promise<void> {
   const skillDir = path.join(pluginRoot, "skills", "forecast-brief");
   await fs.mkdir(skillDir, { recursive: true });
   await fs.writeFile(
     path.join(pluginRoot, "plugin.json"),
-    `${JSON.stringify({ $schema: PLUGIN_SCHEMA, name: "weather-helper" }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        $schema: PLUGIN_SCHEMA,
+        name: "weather-helper",
+        extensions: {
+          "ai.openclaw": { activation: { onStartup: true } },
+          "com.example.other": { ignored: true },
+        },
+      },
+      null,
+      2,
+    )}\n`,
   );
   await fs.writeFile(
     path.join(skillDir, "SKILL.md"),
@@ -352,6 +382,10 @@ async function main(): Promise<void> {
       { cwd: repoRoot, env: childEnv, label: "gateway" },
     );
     await waitForHttp(`http://127.0.0.1:${gatewayPort}/health`, gateway, 120_000);
+    const startupLog = await waitForOutputLine(
+      gateway,
+      (line) => line.includes("http server listening (") && line.includes("weather-helper"),
+    );
 
     const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/responses`, {
       method: "POST",
@@ -377,6 +411,14 @@ async function main(): Promise<void> {
     const finalText = responseText(JSON.parse(responseBody) as unknown);
     if (!finalText.includes("AGENT_BUNDLE_MCP_OK")) {
       throw new Error(`unexpected final response: ${finalText || responseBody}`);
+    }
+
+    const pluginOutput = `${install.stdout}\n${install.stderr}\n${gateway.stdout}\n${gateway.stderr}`;
+    if (
+      pluginOutput.includes("com.example.other") ||
+      pluginOutput.includes("ignoring Agent Plugins")
+    ) {
+      throw new Error(`foreign extension namespace produced plugin diagnostics:\n${pluginOutput}`);
     }
 
     const installedPlugin = await fs.realpath(path.join(stateDir, "extensions", "weather-helper"));
@@ -406,6 +448,7 @@ async function main(): Promise<void> {
           finalText,
           installedPlugin,
           launchMarker,
+          startupLog,
         },
         null,
         2,
