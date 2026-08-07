@@ -1778,30 +1778,25 @@ describe("subagent registry seam flow", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const },
     });
-    const makeQueuedRun = (runId: string, createdAt: number) => ({
-      runId,
-      childSessionKey: `agent:main:subagent:${runId}`,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: runId,
-      cleanup: "keep" as const,
-      collect: true,
-      groupId: "restore-unconfirmed",
-      createdAt,
-      execution: { status: "queued" as const },
-      completion: { required: false },
-      queuedLaunch: {
-        request: { sessionKey: `agent:main:subagent:${runId}`, idempotencyKey: runId },
-        timeoutMs: 1_000,
-        schedulerGroupKey: '["agent:main:main","restore-unconfirmed"]',
-        maxConcurrent: 1,
-      },
-    });
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
     }) => {
-      params.runs.set("run-unconfirmed-one", makeQueuedRun("run-unconfirmed-one", now));
-      params.runs.set("run-unconfirmed-two", makeQueuedRun("run-unconfirmed-two", now + 1));
+      params.runs.set(
+        "run-unconfirmed-one",
+        makeQueuedRun({
+          runId: "run-unconfirmed-one",
+          groupId: "restore-unconfirmed",
+          createdAt: now,
+        }),
+      );
+      params.runs.set(
+        "run-unconfirmed-two",
+        makeQueuedRun({
+          runId: "run-unconfirmed-two",
+          groupId: "restore-unconfirmed",
+          createdAt: now + 1,
+        }),
+      );
       return 2;
     }) as never);
     const sessionStore: Record<string, SessionEntry> = {
@@ -1862,30 +1857,25 @@ describe("subagent registry seam flow", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const },
     });
-    const makeQueuedRun = (runId: string, createdAt: number) => ({
-      runId,
-      childSessionKey: `agent:main:subagent:${runId}`,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: runId,
-      cleanup: "keep" as const,
-      collect: true,
-      groupId: "restore-attempt-local",
-      createdAt,
-      execution: { status: "queued" as const },
-      completion: { required: false },
-      queuedLaunch: {
-        request: { sessionKey: `agent:main:subagent:${runId}`, idempotencyKey: runId },
-        timeoutMs: 1_000,
-        schedulerGroupKey: '["agent:main:main","restore-attempt-local"]',
-        maxConcurrent: 1,
-      },
-    });
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
     }) => {
-      params.runs.set("run-attempt-first", makeQueuedRun("run-attempt-first", now));
-      params.runs.set("run-attempt-next", makeQueuedRun("run-attempt-next", now + 1));
+      params.runs.set(
+        "run-attempt-first",
+        makeQueuedRun({
+          runId: "run-attempt-first",
+          groupId: "restore-attempt-local",
+          createdAt: now,
+        }),
+      );
+      params.runs.set(
+        "run-attempt-next",
+        makeQueuedRun({
+          runId: "run-attempt-next",
+          groupId: "restore-attempt-local",
+          createdAt: now + 1,
+        }),
+      );
       return 2;
     }) as never);
     mocks.loadSessionStore.mockReturnValue({
@@ -1941,30 +1931,25 @@ describe("subagent registry seam flow", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const },
     });
-    const makeQueuedRun = (runId: string, createdAt: number) => ({
-      runId,
-      childSessionKey: `agent:main:subagent:${runId}`,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: runId,
-      cleanup: "keep" as const,
-      collect: true,
-      groupId: "restore-durable",
-      createdAt,
-      execution: { status: "queued" as const },
-      completion: { required: false },
-      queuedLaunch: {
-        request: { sessionKey: `agent:main:subagent:${runId}`, idempotencyKey: runId },
-        timeoutMs: 1_000,
-        schedulerGroupKey: '["agent:main:main","restore-durable"]',
-        maxConcurrent: 1,
-      },
-    });
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
     }) => {
-      params.runs.set("run-durable-one", makeQueuedRun("run-durable-one", now));
-      params.runs.set("run-durable-two", makeQueuedRun("run-durable-two", now + 1));
+      params.runs.set(
+        "run-durable-one",
+        makeQueuedRun({
+          runId: "run-durable-one",
+          groupId: "restore-durable",
+          createdAt: now,
+        }),
+      );
+      params.runs.set(
+        "run-durable-two",
+        makeQueuedRun({
+          runId: "run-durable-two",
+          groupId: "restore-durable",
+          createdAt: now + 1,
+        }),
+      );
       return 2;
     }) as never);
     mocks.loadSessionStore.mockReturnValue({
