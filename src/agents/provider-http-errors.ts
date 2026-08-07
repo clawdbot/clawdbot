@@ -24,6 +24,7 @@ const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 /** Shared timeout and byte-limit options for provider response consumption. */
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
+  onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
 };
 
 /** Options for bounded provider error-body normalization. */
@@ -439,8 +440,10 @@ export async function readProviderBinaryResponse(
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
     ...opts,
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`),
+    onOverflow:
+      opts?.onOverflow ??
+      (({ maxBytes: maxBytesLocal }) =>
+        new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`)),
   });
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
