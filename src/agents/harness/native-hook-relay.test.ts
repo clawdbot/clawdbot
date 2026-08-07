@@ -15,6 +15,7 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { invokeNativeHookRelayBridge as invokeNativeHookRelayClient } from "./native-hook-relay-client.js";
 import {
   testing,
   buildNativeHookRelayCommand,
@@ -747,6 +748,31 @@ describe("native hook relay registry", () => {
       event: "pre_tool_use",
       runId: "run-1",
     });
+  });
+
+  it("invokes the file-backed direct bridge through the cold client", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-cold-client-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    await expect(
+      invokeNativeHookRelayClient({
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "pre_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
   });
 
   it("rejects stale direct bridge requests after stable relay id replacement", async () => {

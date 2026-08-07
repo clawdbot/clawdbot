@@ -62,6 +62,12 @@ describe("runCommandWithRuntime", () => {
 });
 
 describe("shouldSkipRespawnForArgv", () => {
+  it("keeps a native hook relay in its Codex-owned process on non-Windows hosts", () => {
+    const argv = ["node", "openclaw", "hooks", "relay", "--provider", "codex"];
+    expect(shouldSkipRespawnForArgv(argv, "linux")).toBe(true);
+    expect(shouldSkipRespawnForArgv(argv, "win32")).toBe(false);
+  });
+
   it.each([
     { argv: ["node", "openclaw", "--help"] },
     { argv: ["node", "openclaw", "-V"] },
@@ -88,6 +94,12 @@ describe("shouldSkipRespawnForArgv", () => {
 });
 
 describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
+  it("keeps a native hook relay in its Codex-owned process on non-Windows hosts", () => {
+    const argv = ["node", "openclaw", "hooks", "relay", "--provider", "codex"];
+    expect(shouldSkipStartupEnvironmentRespawnForArgv(argv, "linux")).toBe(true);
+    expect(shouldSkipStartupEnvironmentRespawnForArgv(argv, "win32")).toBe(false);
+  });
+
   it.each([
     { argv: ["node", "openclaw", "--help"] },
     { argv: ["node", "openclaw", "gateway"] },

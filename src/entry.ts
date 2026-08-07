@@ -11,6 +11,7 @@ import {
 } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
+import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
 import { createGatewayStartupTrace } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
@@ -276,6 +277,11 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     return;
   }
   try {
+    if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
+      const { runNativeHookRelayCliFromArgv } = await import("./cli/native-hook-relay-cli.js");
+      process.exitCode = await runNativeHookRelayCliFromArgv(argv);
+      return;
+    }
     const { runCli } = await gatewayEntryStartupTrace.measure(
       "run-main-import",
       () => import("./cli/run-main.js"),

@@ -29,6 +29,15 @@ const GATEWAY_RUN_VALUE_FLAGS = [
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
 
+export function isNativeHookRelayArgv(argv: string[]): boolean {
+  const { commandPath } = resolveCliArgvInvocation(argv);
+  return commandPath[0] === "hooks" && commandPath[1] === "relay";
+}
+
+function shouldKeepNativeHookRelayInProcess(argv: string[], platform: NodeJS.Platform): boolean {
+  return platform !== "win32" && isNativeHookRelayArgv(argv);
+}
+
 export function isInteractiveTtyCommandArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
@@ -57,20 +66,28 @@ function isForegroundGatewayRunArgv(argv: string[]): boolean {
 }
 
 /** Returns whether CLI startup should avoid the general respawn wrapper for this argv. */
-export function shouldSkipRespawnForArgv(argv: string[]): boolean {
+export function shouldSkipRespawnForArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return (
     invocation.hasHelpOrVersion ||
     isInteractiveTtyCommandArgv(argv) ||
+    shouldKeepNativeHookRelayInProcess(argv, platform) ||
     (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
   );
 }
 
 /** Returns whether startup-environment respawn should be skipped without suppressing TUI respawn policy. */
-export function shouldSkipStartupEnvironmentRespawnForArgv(argv: string[]): boolean {
+export function shouldSkipStartupEnvironmentRespawnForArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return (
     invocation.hasHelpOrVersion ||
+    shouldKeepNativeHookRelayInProcess(argv, platform) ||
     (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
   );
 }
