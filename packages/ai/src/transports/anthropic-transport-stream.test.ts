@@ -1663,6 +1663,43 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
   });
 
+  it("accepts proxy provider streams that end without message_stop", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_proxy", usage: { input_tokens: 3, output_tokens: 0 } },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "proxy answer" },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 3, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    // Proxy identity: non-anthropic provider through a custom endpoint is not
+    // held to the first-party message_stop framing contract.
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "openrouter",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-proxy" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
   it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
