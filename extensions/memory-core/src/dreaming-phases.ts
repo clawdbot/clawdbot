@@ -54,6 +54,7 @@ import {
   type SessionIngestionSource,
   type SessionIngestionState,
 } from "./session-ingestion.js";
+import { compareStoreTimestampDesc } from "./short-term-promotion-utils.js";
 import {
   filterLiveShortTermRecallEntries,
   filterFreshLightDreamingEntries,
@@ -64,7 +65,6 @@ import {
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
-import { compareStoreTimestampDesc } from "./short-term-promotion-utils.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type DreamingHostConfig = unknown;
