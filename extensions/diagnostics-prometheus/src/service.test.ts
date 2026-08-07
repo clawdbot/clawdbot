@@ -56,10 +56,12 @@ function createMetricsHarness() {
     } as TrustedExporterInternalDiagnostics,
   });
   return {
+    handler: exporter.handler,
     record(event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) {
       expectDefined(listener, "Prometheus diagnostics listener")(event, metadata, {});
     },
     render: exporter.render,
+    stop: () => exporter.service.stop?.(),
   };
 }
 
@@ -899,10 +901,25 @@ describe("diagnostics-prometheus service", () => {
 });
 
 describe("metrics HTTP handler", () => {
-  it("sends Content-Length on HEAD responses matching the GET body", async () => {
-    const exporter = createDiagnosticsPrometheusExporter();
+  it("sends byte-accurate representation metadata on HEAD", async () => {
+    const metrics = createMetricsHarness();
+    metrics.record(
+      {
+        ...baseEvent(),
+        type: "run.completed",
+        runId: "run-1",
+        sessionKey: "session-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        channel: "discord",
+        trigger: "message",
+        durationMs: 1500,
+        outcome: "completed",
+      },
+      trusted,
+    );
     const server = createServer((req, res) => {
-      void exporter.handler(req, res);
+      void metrics.handler(req, res);
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -916,12 +933,19 @@ describe("metrics HTTP handler", () => {
       const get = await fetch(base);
       const getBody = await get.text();
       const head = await fetch(base, { method: "HEAD" });
-      await head.arrayBuffer();
+      const headBody = await head.arrayBuffer();
+      const getBodyBytes = Buffer.byteLength(getBody);
       expect(get.status).toBe(200);
+      expect(getBodyBytes).toBeGreaterThan(0);
+      expect(get.headers.get("content-length")).toBe(String(getBodyBytes));
       expect(head.status).toBe(200);
-      expect(head.headers.get("content-length")).toBe(String(Buffer.byteLength(getBody)));
+      expect(head.headers.get("content-length")).toBe(String(getBodyBytes));
+      expect(headBody.byteLength).toBe(0);
     } finally {
-      server.close();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      metrics.stop();
     }
   });
 });
