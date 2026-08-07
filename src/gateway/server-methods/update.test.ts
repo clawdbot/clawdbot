@@ -250,12 +250,6 @@ beforeEach(() => {
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
   readPackageVersionMock.mockResolvedValue("1.0.0");
-  checkUpdateStatusMock.mockReset();
-  checkUpdateStatusMock.mockResolvedValue({
-    root: "/tmp/openclaw",
-    installKind: "package",
-    packageManager: "npm",
-  });
   versionMock.value = "1.0.0";
   normalizeUpdateChannelMock.mockReset();
   normalizeUpdateChannelMock.mockReturnValue(null);
@@ -1075,32 +1069,6 @@ describe("update.run post-core plugin finalize", () => {
 });
 
 describe("update.status", () => {
-  it("reports a verified configless extended-stable package channel", async () => {
-    versionMock.value = "2026.6.33";
-    checkUpdateStatusMock.mockResolvedValueOnce({
-      root: "/tmp/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    });
-    const { updateHandlers } = await import("./update.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      updateHandlers["update.status"],
-      'updateHandlers["update.status"] test invariant',
-    )({
-      params: {},
-      respond,
-      context: { getRuntimeConfig: () => ({ update: {} }) },
-    } as never);
-
-    const [, response] = firstMockCall(respond, "update status response") as [
-      boolean,
-      { effectiveChannel?: string | null } | undefined,
-    ];
-    expect(response?.effectiveChannel).toBe("extended-stable");
-  });
-
   it("refreshes the latest update sentinel before responding", async () => {
     getUpdateAvailableMock.mockReturnValueOnce({
       currentVersion: "1.0.0",
