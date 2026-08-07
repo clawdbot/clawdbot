@@ -1,11 +1,11 @@
-// Safe loader for package-local OpenClaw profiles referenced by Claw metadata.
+// Safe loader for the conventional package-local OpenClaw profile.
 import { isScalar, parseDocument, visit } from "yaml";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
-import type { ClawDiagnostic, ClawManifest, ClawOpenClawProfile } from "./types.js";
+import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
+const CLAW_PROFILE_PATH = "profiles/openclaw.yml";
 
 function diagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
@@ -84,30 +84,27 @@ async function readProfileFile(packageRoot: string, path: string): Promise<Buffe
 
 export async function readClawOpenClawProfile(params: {
   packageRoot: string;
-  manifest: ClawManifest;
+  metadata?: Record<string, string>;
 }): Promise<
   | { ok: true; profile?: ClawOpenClawProfile; raw?: Buffer; path?: string }
   | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
-  const declaredPath = params.manifest.metadata?.["openclaw.config"];
-  if (declaredPath === undefined) {
-    return { ok: true };
-  }
-  if (
-    declaredPath.includes("\\") ||
-    !isSafeClawRelativePath(declaredPath) ||
-    !/\.ya?ml$/i.test(declaredPath)
-  ) {
+  if (Object.hasOwn(params.metadata ?? {}, "openclaw.config")) {
     return {
       ok: false,
       diagnostics: [
         diagnostic(
-          "invalid_openclaw_profile_path",
-          "metadata.openclaw.config must reference a forward-slash package-relative .yml or .yaml file.",
+          "legacy_openclaw_profile_pointer",
+          "metadata.openclaw.config is no longer supported; move the profile to profiles/openclaw.yml and remove the metadata entry.",
           "$.metadata.openclaw.config",
         ),
       ],
     };
+  }
+  const declaredPath = CLAW_PROFILE_PATH;
+  const packageFiles = await fsSafeRoot(params.packageRoot);
+  if (!(await packageFiles.exists(declaredPath))) {
+    return { ok: true };
   }
 
   let raw: Buffer;
@@ -132,7 +129,7 @@ export async function readClawOpenClawProfile(params: {
             : tooLarge
               ? `The OpenClaw profile exceeds ${MAX_PROFILE_BYTES} bytes.`
               : `Could not read ${declaredPath}: ${(error as Error).message}`,
-          "$.metadata.openclaw.config",
+          "$.profiles.openclaw",
         ),
       ],
     };
@@ -148,7 +145,7 @@ export async function readClawOpenClawProfile(params: {
       ok: false,
       diagnostics: parsed.diagnostics.map((entry) => ({
         ...entry,
-        path: `$.metadata.openclaw.config${entry.path.slice(1)}`,
+        path: `$.profiles.openclaw${entry.path.slice(1)}`,
       })),
     };
   }

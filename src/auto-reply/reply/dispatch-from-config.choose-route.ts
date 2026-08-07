@@ -238,16 +238,17 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const sendTrackedBlockReply = (payload: ReplyPayload): boolean => {
     const contentKey = createBlockReplyContentKey(payload);
     const delivery = turnLedger.sendQueued("block", payload);
-    if (!delivery.queued || !delivery.outcome) {
-      return delivery.queued;
+    if (!delivery.queued) {
+      return false;
     }
+    const outcome = delivery.outcome ?? Promise.resolve("delivered" as const);
     const outcomes = blockDeliveryOutcomes.get(contentKey);
     if (outcomes) {
-      outcomes.push(delivery.outcome);
+      outcomes.push(outcome);
     } else {
-      blockDeliveryOutcomes.set(contentKey, [delivery.outcome]);
+      blockDeliveryOutcomes.set(contentKey, [outcome]);
     }
-    return delivery.queued;
+    return true;
   };
   const recordRoutedBlockReplyDelivery = (
     payload: ReplyPayload,

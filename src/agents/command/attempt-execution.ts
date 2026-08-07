@@ -20,6 +20,7 @@ import {
 } from "../../auto-reply/reply/source-turn-id.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { acquireOwnedSessionTranscriptWriteLock } from "../../config/sessions/transcript-write-context.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
@@ -80,6 +81,8 @@ import type {
   RunEmbeddedAgentInternalParams,
 } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
+import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
+import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
@@ -573,14 +576,16 @@ export function runAgentAttempt(params: {
   fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (
     lifecycleGeneration: string,
     attribution?: AgentExecutionAttribution,
   ) => void;
 }) {
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
-  const sessionAuthProfileSource = params.sessionEntry?.authProfileOverrideSource;
+  const sessionAuthProfileSource = resolveSessionAuthProfileOverrideSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
   // bound to the configured model replaces a stale automatic session choice.
   const selectedAuthProfile =
@@ -951,6 +956,8 @@ export function runAgentAttempt(params: {
             trigger: "user",
             sessionFile: params.sessionFile,
             storePath: params.storePath,
+            persistAssistantTranscript:
+              params.storePath !== undefined && params.sessionStore !== undefined,
             workspaceDir: params.workspaceDir,
             cwd: params.cwd,
             config: params.cfg,
@@ -1051,6 +1058,8 @@ export function runAgentAttempt(params: {
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
             oneShotCliRun: params.opts.oneShotCliRun,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+            contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+            onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
             allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
@@ -1244,6 +1253,8 @@ export function runAgentAttempt(params: {
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: () => {
       params.opts.onExecutionStarted?.();

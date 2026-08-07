@@ -417,7 +417,6 @@ describe("resolveCronSession", () => {
             lastActivityAt: NOW_MS - 1_000,
           },
           authProfileOverride: "auto-auth",
-          authProfileOverrideSource: "auto",
           authProfileOverrideCompactionCount: 2,
           modelOverride: "auto-model",
           providerOverride: "anthropic",
@@ -511,6 +510,22 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
       expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
+    });
+
+    it("stamps a legacy source-less user auth override on fresh sessions", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-legacy-auth",
+          updatedAt: NOW_MS - 1_000,
+          authProfileOverride: "work-profile",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
     });
 
     it("preserves non-delivery ambient session context for non-isolated expiration rollovers", () => {

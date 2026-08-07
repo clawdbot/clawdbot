@@ -105,36 +105,6 @@ describe("executeAgentTurn: runtime selection", () => {
     });
   });
 
-  it("preserves one admission attribution across model fallback candidates", async () => {
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("openai", "gpt-5.4");
-      const result = await params.run("anthropic", "claude-opus-4-7");
-      return {
-        result,
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        attempts: [],
-      };
-    });
-    state.runEmbeddedAgentMock
-      .mockResolvedValueOnce({ payloads: [{ text: "retry" }], meta: {} })
-      .mockResolvedValueOnce({ payloads: [{ text: "final" }], meta: {} });
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(
-      createMinimalRunAgentTurnParams({ opts: { runId: "fallback-attribution" } }),
-    );
-
-    const firstAttribution = state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.attribution;
-    expect(firstAttribution).toMatchObject({
-      runId: "fallback-attribution",
-      sessionKey: "main",
-      sessionId: "session",
-    });
-    expect(Object.isFrozen(firstAttribution)).toBe(true);
-    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.attribution).toBe(firstAttribution);
-  });
-
   it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -415,6 +385,36 @@ describe("executeAgentTurn: runtime selection", () => {
     } finally {
       uninstallPlacement();
     }
+  });
+
+  it("preserves one admission attribution across model fallback candidates", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("openai", "gpt-5.4");
+      const result = await params.run("anthropic", "claude-opus-4-7");
+      return {
+        result,
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        attempts: [],
+      };
+    });
+    state.runEmbeddedAgentMock
+      .mockResolvedValueOnce({ payloads: [{ text: "retry" }], meta: {} })
+      .mockResolvedValueOnce({ payloads: [{ text: "final" }], meta: {} });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ opts: { runId: "fallback-attribution" } }),
+    );
+
+    const firstAttribution = state.runEmbeddedAgentMock.mock.calls[0]?.[0]?.attribution;
+    expect(firstAttribution).toMatchObject({
+      runId: "fallback-attribution",
+      sessionKey: "main",
+      sessionId: "session",
+    });
+    expect(Object.isFrozen(firstAttribution)).toBe(true);
+    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]?.attribution).toBe(firstAttribution);
   });
 
   it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {

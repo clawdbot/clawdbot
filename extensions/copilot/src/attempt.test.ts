@@ -402,6 +402,7 @@ function makeUserTurnRecorder(
     hasPersisted: () => persisted,
     isBlocked: () => blocked,
     hasRuntimePersistencePending: () => false,
+    getAdmissionReceipt: () => undefined,
     waitForRuntimePersistence: vi.fn(async () => undefined),
     persistApproved: vi.fn(async () => undefined),
     persistBlocked: vi.fn(async () => undefined),

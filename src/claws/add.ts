@@ -13,6 +13,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
   installClawCronJobs,
@@ -54,6 +55,7 @@ type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   installPackages?: typeof installClawPackages;
   installMcpServers?: typeof installClawMcpServers;
   installCronJobs?: typeof installClawCronJobs;
+  seedPackageBootstrap?: typeof seedClawPackageBootstrap;
   cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
   nowMs?: number;
 };
@@ -93,9 +95,15 @@ type ClawAddResult = {
 function hasUnsupportedMutationActions(plan: ClawAddPlan): boolean {
   return plan.actions.some(
     (action) =>
-      !["agent", "workspace", "workspaceFile", "package", "mcpServer", "cronJob"].includes(
-        action.kind,
-      ),
+      ![
+        "agent",
+        "workspace",
+        "bootstrap",
+        "workspaceFile",
+        "package",
+        "mcpServer",
+        "cronJob",
+      ].includes(action.kind),
   );
 }
 
@@ -300,6 +308,27 @@ export async function applyClawAddPlan(
       }
       throw new ClawAddMutationError("provenance_failed", (error as Error).message);
     }
+  }
+
+  try {
+    await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
+      ...options,
+      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+    });
+  } catch (error) {
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted,
+      packages,
+      installStatus: "workspace_ready",
+      error: {
+        code: error instanceof ClawBootstrapWriteError ? error.code : "bootstrap_write_failed",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      nowMs: options.nowMs,
+    });
   }
 
   try {

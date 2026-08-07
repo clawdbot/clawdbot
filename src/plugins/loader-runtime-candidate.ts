@@ -632,7 +632,7 @@ function recordBundleDiagnostics(params: {
         source: params.record.source,
         message:
           "bundle MCP servers use unsupported transports or incomplete configs " +
-          `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
       });
     }
   }

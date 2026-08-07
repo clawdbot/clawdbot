@@ -84,6 +84,10 @@ export {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 };
+export const STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS = [
+  "claw_installs.bootstrap_source_path",
+  "claw_installs.bootstrap_content_digest",
+] as const;
 export type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -419,6 +423,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
           repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             verifyPhysicalIntegrity: false,
           });
+          ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
         } else if (previousVersion === 5) {
           assertOpenClawStateDatabaseV5ForMigration(db, { pathname });
@@ -505,7 +510,10 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     assertSupportedSchemaVersion(db, pathname);
     assertSqliteIntegrity(db, pathname);
     if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
-      assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+      assertOpenClawStateDatabaseForMaintenance(db, {
+        pathname,
+        allowedMissingColumns: STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
+      });
     }
   } catch (error) {
     try {
@@ -544,9 +552,18 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   };
 }
 
-function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: string): void {
+function assertCurrentStateRuntimeSchema(
+  database: DatabaseSync,
+  pathname: string,
+  options: { allowedMissingColumns?: readonly string[] } = {},
+): void {
   assertCanonicalStateSchemaShape(database, pathname);
-  assertOpenClawStateDatabaseForMaintenance(database, { pathname });
+  assertOpenClawStateDatabaseForMaintenance(database, {
+    pathname,
+    ...(options.allowedMissingColumns
+      ? { allowedMissingColumns: options.allowedMissingColumns }
+      : {}),
+  });
 }
 
 function assertStateDatabaseIntegrityBeforeMutation(
@@ -571,8 +588,12 @@ function assertStateDatabaseIntegrityBeforeMutation(
   if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
       allowMissingColumns: true,
-      validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
+      validateAfterRepair: () =>
+        assertCurrentStateRuntimeSchema(database, pathname, {
+          allowedMissingColumns: STATE_READ_ONLY_COMPATIBLE_MISSING_COLUMNS,
+        }),
     });
+    ensureAdditiveStateColumns(database);
   } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);

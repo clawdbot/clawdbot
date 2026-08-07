@@ -238,4 +238,17 @@ describe("resolveMcpTransportConfig", () => {
       supportsParallelToolCalls: false,
     });
   });
+
+  it.each([
+    {
+      name: "rejects non-HTTP URL schemes",
+      server: { url: "ftp://mcp.example.com/tools", transport: "streamable-http" },
+    },
+    {
+      name: "rejects http as a canonical transport",
+      server: { url: "https://mcp.example.com/http", transport: "http" },
+    },
+  ])("$name", ({ server }) => {
+    expect(resolveMcpTransportConfig("probe", server)).toBeNull();
+  });
 });

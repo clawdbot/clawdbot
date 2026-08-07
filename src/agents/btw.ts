@@ -9,6 +9,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
@@ -131,10 +132,7 @@ function resolveReturnedAuthProfileSource(
   if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
     return "auto";
   }
-  return (
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number" ? "auto" : "user")
-  );
+  return resolveSessionAuthProfileOverrideSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider

@@ -1,15 +1,16 @@
 ---
-summary: "Install and use Codex, Claude, and Cursor bundles as OpenClaw plugins"
+summary: "Install and use Agent Plugins, Codex, Claude, and Cursor bundles as OpenClaw plugins"
 read_when:
-  - You want to install a Codex, Claude, or Cursor-compatible bundle
+  - You want to install an Agent Plugins, Codex, Claude, or Cursor-compatible bundle
   - You need to understand how OpenClaw maps bundle content into native features
   - You are debugging bundle detection or missing capabilities
 title: "Plugin bundles"
 ---
 
-OpenClaw can install plugins from three external ecosystems: **Codex**, **Claude**,
-and **Cursor**. These are called **bundles** - content and metadata packs that
-OpenClaw maps into native features like skills, hooks, and MCP tools.
+OpenClaw can install plugins from four external ecosystems: the vendor-neutral
+[**Agent Plugins**](https://agent-plugins.org) standard, plus **Codex**,
+**Claude**, and **Cursor**. These are called **bundles** - content and metadata
+packs that OpenClaw maps into native features like skills, hooks, and MCP tools.
 
 <Info>
   Bundles are **not** the same as native OpenClaw plugins. Native plugins run
@@ -19,11 +20,11 @@ OpenClaw maps into native features like skills, hooks, and MCP tools.
 
 ## Why bundles exist
 
-Many useful plugins are published in Codex, Claude, or Cursor format. Instead
-of requiring authors to rewrite them as native OpenClaw plugins, OpenClaw
-detects these formats and maps their supported content into the native feature
-set. You can install a Claude command pack or a Codex skill bundle and use it
-immediately.
+Many useful plugins are published in the Agent Plugins, Codex, Claude, or
+Cursor format. Instead of requiring authors to rewrite them as native OpenClaw
+plugins, OpenClaw detects these formats and maps their supported content into
+the native feature set. You can install an Agent Plugins package, a Claude
+command pack, or a Codex skill bundle and use it immediately.
 
 ## Install a bundle
 
@@ -51,8 +52,8 @@ immediately.
     openclaw plugins inspect <id>
     ```
 
-    Bundles show `Format: bundle` plus a `Bundle format:` value of `codex`,
-    `claude`, or `cursor`.
+    Bundles show `Format: bundle` plus a `Bundle format:` value of
+    `agent (Agent Plugins)`, `codex`, `claude`, or `cursor`.
 
   </Step>
 
@@ -79,6 +80,7 @@ is detected but not yet wired.
 | Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                        | Claude, Cursor |
 | Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                   | Codex          |
 | MCP tools     | Bundle MCP config merged into embedded OpenClaw settings; supported stdio and HTTP servers loaded | All formats    |
+| Env contract  | `PLUGIN_ROOT` and `PLUGIN_DATA` env vars plus placeholder expansion for stdio MCP servers         | Agent Plugins  |
 | LSP servers   | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded OpenClaw LSP defaults  | Claude         |
 | Settings      | Claude `settings.json` imported as embedded OpenClaw defaults                                     | Claude         |
 
@@ -210,6 +212,41 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 ## Bundle formats
 
 <AccordionGroup>
+  <Accordion title="Agent Plugins bundles">
+    Marker: `plugin.json` at the package root, per the open
+    [Agent Plugins 1.0.0 standard](https://agent-plugins.org)
+
+    Optional content: `skills/`, `mcp.json`
+
+    Format behavior:
+
+    - The manifest is strict JSON (not JSON5). OpenClaw requires a non-empty
+      `name`; other manifest fields are optional and unknown fields are ignored
+    - Immediate child directories of `skills/` that contain a `SKILL.md` load as
+      skills; children without one are skipped with a warning, and deeper
+      directories are not scanned
+    - `mcp.json` must declare the 1.0.0 `$schema` and an `mcpServers` object
+      only; `stdio`, `streamable-http`, and legacy `sse` transports are
+      supported
+    - stdio servers launch with `PLUGIN_ROOT` (the plugin root) and
+      `PLUGIN_DATA` (a persistent per-plugin data directory OpenClaw creates
+      under its state dir) in their environment; `${PLUGIN_ROOT}` and
+      `${PLUGIN_DATA}` placeholders expand in `args`, `env` values, and `cwd`
+      in a single pass
+    - A stdio `command` must be a bare executable name or a `./`-relative path
+      inside the plugin; `cwd` must stay inside `PLUGIN_ROOT` or `PLUGIN_DATA`
+    - Invalid `mcp.json` disables MCP for the plugin with a diagnostic while
+      skills keep loading; invalid individual server entries are skipped
+    - `.mcp.json` (dot-prefixed) and inline manifest `mcpServers` are **not**
+      read for this format; the standard's closed schema wins
+    - OpenClaw reads `extensions["ai.openclaw"]`; it currently supports
+      `activation` with the same semantics as other bundle manifests
+    - Other manifest extension namespaces are ignored and reserved for their
+      clients
+    - Reverse-domain client directories are ignored and reserved
+
+  </Accordion>
+
   <Accordion title="Codex bundles">
     Markers: `.codex-plugin/plugin.json`
 
@@ -253,10 +290,15 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 OpenClaw checks for native plugin format first:
 
 1. `openclaw.plugin.json` or a valid `package.json` with `openclaw.extensions` - treated as a **native plugin**
-2. Bundle markers (`.codex-plugin/`, `.claude-plugin/`, or default Claude/Cursor layout) - treated as a **bundle**
+2. Client-specific bundle markers (`.codex-plugin/`, `.cursor-plugin/`, `.claude-plugin/`) - treated as a **bundle** in that format
+3. A root `plugin.json` - treated as an **Agent Plugins bundle**
+4. Default manifestless Claude layout (`skills/`, `commands/`, `.mcp.json`, ...) - treated as a **Claude bundle**
 
-If a directory contains both, OpenClaw uses the native path. This prevents
-dual-format packages from being partially installed as bundles.
+If a package carries both a client-specific marker and a root `plugin.json`,
+the client-specific format wins so its richer mappings (commands, hooks,
+settings) are preserved. If a directory contains both a native manifest and
+bundle markers, OpenClaw uses the native path. This prevents dual-format
+packages from being partially installed as bundles.
 
 ## Runtime dependencies and cleanup
 
