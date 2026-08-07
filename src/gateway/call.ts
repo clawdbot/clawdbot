@@ -2,6 +2,7 @@
 // Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
@@ -253,9 +254,11 @@ export function formatGatewayTransportErrorJson(value: unknown): GatewayTranspor
     error: {
       type: "gateway_transport_error",
       kind: value.kind,
-      message: firstGatewayErrorLine(value.message),
+      // The message embeds the remote-controlled close reason, which can echo a
+      // credential-bearing URL; redact both before they reach CLI JSON output.
+      message: redactSensitiveUrlLikeString(firstGatewayErrorLine(value.message)),
       ...(value.code !== undefined ? { code: value.code } : {}),
-      ...(value.reason !== undefined ? { reason: value.reason } : {}),
+      ...(value.reason !== undefined ? { reason: redactSensitiveUrlLikeString(value.reason) } : {}),
       ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
     },
     gateway: {
