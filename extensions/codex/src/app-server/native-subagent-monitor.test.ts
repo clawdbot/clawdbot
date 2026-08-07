@@ -5,6 +5,7 @@ import type {
   AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerRequestResult,
@@ -21,9 +22,6 @@ type CodexNativeSubagentMonitorInstance = InstanceType<typeof CodexNativeSubagen
 function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
   type ThreadTurnsParams = { threadId?: string };
-  type NotificationHandler = (notification: CodexServerNotification) => Promise<void> | void;
-  const notificationHandlers = new Set<NotificationHandler>();
-  const closeHandlers = new Set<() => void>();
   const threadReads = new Map<
     string,
     | CodexThreadReadResponse
@@ -31,7 +29,7 @@ function createClient() {
     | ((params: ThreadReadParams) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>)
   >();
   const threadTurns = new Map<string, JsonValue | Error>();
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
     if (method === "thread/turns/list") {
       const childThreadId = ((params as ThreadTurnsParams | undefined) ?? {}).threadId ?? "";
       const response = threadTurns.get(childThreadId);
@@ -58,7 +56,7 @@ function createClient() {
     return typeof response === "function" ? await response(readParams) : response;
   });
   return {
-    request,
+    request: fixture.request,
     setThreadRead(childThreadId: string, response: CodexThreadReadResponse | Error) {
       threadReads.set(childThreadId, response);
     },
@@ -73,25 +71,10 @@ function createClient() {
     setThreadTurns(childThreadId: string, response: JsonValue | Error) {
       threadTurns.set(childThreadId, response);
     },
-    addNotificationHandler(handler: NotificationHandler) {
-      notificationHandlers.add(handler);
-      return () => notificationHandlers.delete(handler);
-    },
-    addCloseHandler(handler: (client: never) => void) {
-      const closeHandler = () => handler(undefined as never);
-      closeHandlers.add(closeHandler);
-      return () => closeHandlers.delete(closeHandler);
-    },
-    async notify(notification: CodexServerNotification) {
-      await Promise.all(
-        [...notificationHandlers].map(async (handler) => await handler(notification)),
-      );
-    },
-    close() {
-      for (const handler of closeHandlers) {
-        handler();
-      }
-    },
+    addNotificationHandler: fixture.client.addNotificationHandler.bind(fixture.client),
+    addCloseHandler: fixture.client.addCloseHandler.bind(fixture.client),
+    notify: (notification: CodexServerNotification) => fixture.notify(notification),
+    close: () => fixture.close(),
   };
 }
 

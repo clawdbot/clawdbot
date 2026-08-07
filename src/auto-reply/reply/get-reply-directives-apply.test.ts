@@ -152,7 +152,7 @@ describe("applyInlineDirectiveOverrides", () => {
 
       expect(result).toEqual({
         kind: "reply",
-        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE },
+        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
       });
       expect(typing.cleanup).toHaveBeenCalledOnce();
       expect(mocks.handleDirective).not.toHaveBeenCalled();
@@ -239,7 +239,7 @@ describe("applyInlineDirectiveOverrides", () => {
 
     expect(result).toEqual({
       kind: "reply",
-      reply: { text: errorText },
+      reply: { text: errorText, isError: true },
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.handleDirective).toHaveBeenCalledOnce();
@@ -310,7 +310,7 @@ describe("applyInlineDirectiveOverrides", () => {
       typing,
     });
 
-    expect(result).toEqual({ kind: "reply", reply: { text: errorText } });
+    expect(result).toEqual({ kind: "reply", reply: { text: errorText, isError: true } });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.handleDirective).toHaveBeenCalledOnce();
   });

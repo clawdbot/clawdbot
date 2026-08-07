@@ -837,6 +837,38 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(refExists(repoDir)).toBe(false);
   });
+  it("releases a validation-phase lock when temporary storage is unavailable", () => {
+    const repoDir = createRepo();
+    const { binDir, cli } = installPrCliFixture(repoDir);
+    const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
+    writeFileSync(
+      reviewScript,
+      `${readFileSync(reviewScript, "utf8")}\nreview_init() { printf 'review ran\\n'; }\n`,
+    );
+    for (const command of ["gh", "jq", "pnpm", "rg"]) {
+      const stub = join(binDir, command);
+      writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+      chmodSync(stub, 0o755);
+    }
+    const mktempStub = join(binDir, "mktemp");
+    writeFileSync(mktempStub, "#!/bin/sh\necho 'mktemp: No space left on device' >&2\nexit 1\n");
+    chmodSync(mktempStub, 0o755);
+
+    const result = spawnSync(cli, ["review-init", "42"], {
+      cwd: repoDir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(result.stderr).toContain("mktemp: No space left on device");
+    expect(result.stderr).toContain("temporary-storage preflight failed");
+    expect(result.stderr).toContain("Free disk space or set TMPDIR");
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+    expect(result.stderr).not.toContain("scripts/pr lock-recover");
+    expect(result.stdout).not.toContain("review ran");
+    expect(refExists(repoDir)).toBe(false);
+  });
   it.each([["--dryrun"], ["--dry-run", "extra"]])(
     "rejects invalid gc arguments before cleanup: %s",
     (...args: string[]) => {
@@ -1919,9 +1951,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("23 23");
   });
-  it("accepts only nonempty docs-only file lists", () => {
+  it("parses docs and mixed file lists without temp files or producer processes", () => {
     const repoDir = createRepo();
+    const unusableTmpDir = join(repoDir, "missing-tmp");
     const result = runLockShell(repoDir, [
+      `TMPDIR='${unusableTmpDir}'`,
+      "printf() { echo 'unexpected producer' >&2; return 99; }",
       "set +e",
       "file_list_is_docsish_only ''",
       'empty_status="$?"',
@@ -1929,10 +1964,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
       'docs_status="$?"',
       "file_list_is_docsish_only $'docs/guide.md\\nsrc/index.ts'",
       'mixed_status="$?"',
-      'printf "%s %s %s\\n" "$empty_status" "$docs_status" "$mixed_status"',
+      'command printf "%s %s %s\\n" "$empty_status" "$docs_status" "$mixed_status"',
     ]);
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("1 0 1");
+    expect(result.stderr).not.toContain("unexpected producer");
+    expect(readFileSync(commonScript, "utf8")).not.toMatch(/done\s+(?:<<<|<\s*<\()/u);
   });
   it("prunes a registered worktree whose directory is already gone", () => {
     const repoDir = createRepo();

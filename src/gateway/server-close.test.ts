@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
   clearSessionSuspensionTimers: vi.fn(() => 0),
+  closePluginStateDatabase: vi.fn(async () => undefined),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -86,6 +87,13 @@ vi.mock("../agents/session-suspension.js", () => ({
   clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
 }));
 
+vi.mock("../plugin-state/plugin-state-store.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugin-state/plugin-state-store.js")>(
+    "../plugin-state/plugin-state-store.js",
+  )),
+  closePluginStateDatabase: mocks.closePluginStateDatabase,
+}));
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
     debug: vi.fn(),
@@ -136,7 +144,7 @@ function createGatewayCloseTestDeps(
     tickInterval: setInterval(() => undefined, 60_000),
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
-    mediaCleanup: null,
+    stopMediaCleanup: vi.fn(async () => "drained" as const),
     worktreeCleanup: null,
     skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
@@ -187,6 +195,8 @@ describe("createGatewayCloseHandler", () => {
     mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
     mocks.clearSessionSuspensionTimers.mockReset();
     mocks.clearSessionSuspensionTimers.mockReturnValue(0);
+    mocks.closePluginStateDatabase.mockReset();
+    mocks.closePluginStateDatabase.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -231,7 +241,43 @@ describe("createGatewayCloseHandler", () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+    expect(deps.stopMediaCleanup).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for in-flight media cleanup before shutdown completes", async () => {
+    let releaseMediaCleanup = () => {};
+    const stopMediaCleanup = vi.fn(
+      () =>
+        new Promise<"drained">((resolve) => {
+          releaseMediaCleanup = () => resolve("drained");
+        }),
+    );
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));
+
+    let closed = false;
+    const closing = close({ reason: "test" }).then(() => {
+      closed = true;
+    });
+    await vi.waitFor(() => expect(stopMediaCleanup).toHaveBeenCalledTimes(1));
+    expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    expect(closed).toBe(false);
+
+    releaseMediaCleanup();
+    await closing;
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledTimes(1);
+    expect(closed).toBe(true);
+  });
+
+  it("retains shared state when media cleanup times out", async () => {
+    const stopMediaCleanup = vi.fn(async () => "timed-out" as const);
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));
+
+    const result = await close({ reason: "test" });
+
+    expect(stopMediaCleanup).toHaveBeenCalledTimes(1);
+    expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    expect(result.warnings).toContain("media-cleanup");
   });
 
   it("clears the process-root plugin registry after teardown", async () => {

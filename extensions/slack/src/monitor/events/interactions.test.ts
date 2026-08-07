@@ -1,5 +1,6 @@
-// Slack tests cover interactions plugin behavior.
 import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
+// Slack tests cover interactions plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -97,13 +98,75 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
-  dispatchPluginInteractiveHandler: (arg: unknown) => dispatchPluginInteractiveHandlerMock(arg),
-  createInteractiveConversationBindingHelpers: (params: {
-    registration: { pluginRoot?: string };
-    conversation: Record<string, unknown>;
-  }) => createInteractiveConversationBindingHelpersMock(params),
-}));
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    createChannelInteractiveDispatcher: (config: {
+      channel: string;
+      interactiveKey: PropertyKey;
+      dispatchInteractiveKey?: PropertyKey;
+    }) => {
+      return (params: {
+        data: string;
+        dedupeId: string;
+        ctx: Record<PropertyKey, unknown> & {
+          accountId: string;
+          conversationId: string;
+          senderId?: string;
+          auth: { isAuthorizedSender: boolean };
+        };
+        respond: unknown;
+        conversation?: Record<string, unknown>;
+        onMatched?: () => Promise<void> | void;
+        afterInvoke?: (result: unknown) => Promise<void> | void;
+      }) =>
+        dispatchPluginInteractiveHandlerMock({
+          channel: config.channel,
+          data: params.data,
+          dedupeId: params.dedupeId,
+          onMatched: params.onMatched,
+          afterInvoke: params.afterInvoke,
+          invoke: ({
+            registration,
+            namespace,
+            payload,
+          }: {
+            registration: { pluginRoot?: string; handler: (ctx: unknown) => unknown };
+            namespace: string;
+            payload: string;
+          }) => {
+            const dispatchKey = config.dispatchInteractiveKey ?? config.interactiveKey;
+            const handlerContext = { ...params.ctx };
+            const interactiveContext = handlerContext[dispatchKey];
+            delete handlerContext[dispatchKey];
+            const hasBindingAuthority =
+              params.ctx.auth.isAuthorizedSender &&
+              params.ctx.senderId?.trim() &&
+              params.ctx.accountId.trim() &&
+              params.ctx.conversationId.trim();
+            return registration.handler({
+              ...handlerContext,
+              channel: config.channel,
+              [config.interactiveKey]: {
+                ...(interactiveContext as object),
+                data: params.data,
+                namespace,
+                payload,
+              },
+              respond: params.respond,
+              ...createInteractiveConversationBindingHelpersMock({
+                registration: hasBindingAuthority
+                  ? registration
+                  : { ...registration, pluginRoot: undefined },
+                conversation: params.conversation ?? {},
+              }),
+            });
+          },
+        });
+    },
+  };
+});
 
 vi.mock("../conversation.runtime.js", () => {
   const parsePluginBindingApprovalCustomId = (value: string) => {
@@ -347,12 +410,7 @@ function mockCallArg(mock: unknown, index: number, label: string, argIndex = 0):
   return call[argIndex];
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-capitalized");
 
 function hasLoneSurrogate(value: string): boolean {
   return Array.from(value).some((char) => {

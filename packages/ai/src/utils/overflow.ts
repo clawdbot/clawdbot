@@ -31,7 +31,7 @@ export function isConfiguredContextSizeOverflowError(errorMessage: string): bool
  * - GitHub Copilot: "prompt token count of X exceeds the limit of Y"
  * - MiniMax: "invalid params, context window exceeds limit"
  * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
- * - Cerebras: "400/413 status code (no body)"
+ * - Cerebras: "413 status code (no body)"
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
  * - z.ai: May return "tokens in request more than max tokens allowed" (code 1210),
  *   "Prompt exceeds max length" (code 1261), or accept overflow silently; handled via the
@@ -67,7 +67,7 @@ const OVERFLOW_PATTERNS = [
   /context[_ ]length[_ ]exceeded/i, // Generic fallback
   /too many tokens/i, // Generic fallback
   /token limit exceeded/i, // Generic fallback
-  /^4(?:00|13)\s*(?:status code)?\s*\(no body\)/i, // Cerebras: 400/413 with no body
+  /^413\s*(?:status code)?\s*\(no body\)/i, // Cerebras: 413 with no body
 ];
 
 /**
@@ -115,7 +115,7 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
  * - Google Gemini: "input token count exceeds the maximum"
  * - xAI (Grok): "maximum prompt length is X but request contains Y"
  * - Groq: "reduce the length of the messages"
- * - Cerebras: 400/413 status code (no body)
+ * - Cerebras: 413 status code (no body)
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
  * - OpenRouter (all backends): "maximum context length is X tokens"
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."

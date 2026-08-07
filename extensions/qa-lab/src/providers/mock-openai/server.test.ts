@@ -1,5 +1,6 @@
-// Qa Lab tests cover server plugin behavior.
 import { once } from "node:events";
+// Qa Lab tests cover server plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
@@ -216,12 +217,7 @@ function expectOpenAiStreamingResponsesText(server: MockServer, body: Record<str
   return expectStreamingResponsesText(server, { model: "gpt-5.6-luna", ...body });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {

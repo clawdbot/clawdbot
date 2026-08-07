@@ -266,6 +266,7 @@ export function transitionMainSessionRecovery(
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
       entry.status = "running";
+      entry.lifecycleRunId = undefined;
       entry.abortedLastRun = true;
       if (command.resetRuntime) {
         entry.startedAt = undefined;
@@ -419,6 +420,7 @@ export function transitionMainSessionRecovery(
         foregroundClaims: undefined,
       });
       entry.abortedLastRun = false;
+      entry.lifecycleRunId = command.runId;
       recordLifecycleFence(entry, {
         runId: command.runId,
         lifecycleGeneration: command.lifecycleGeneration,
@@ -449,6 +451,7 @@ export function transitionMainSessionRecovery(
         return { kind: "rejected", reason: "stale_reservation" };
       }
       entry.status = "running";
+      entry.lifecycleRunId = undefined;
       entry.abortedLastRun = true;
       entry.startedAt = undefined;
       entry.endedAt = undefined;
@@ -599,6 +602,7 @@ export function transitionMainSessionRecovery(
       });
       entry.abortedLastRun = false;
       entry.status = "failed";
+      entry.lifecycleRunId = undefined;
       entry.endedAt = command.now;
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
       entry.updatedAt = command.now;
@@ -611,6 +615,7 @@ export function transitionMainSessionRecovery(
       }
       const noticeEntry = structuredClone(entry);
       entry.status = "failed";
+      entry.lifecycleRunId = undefined;
       entry.abortedLastRun = true;
       entry.endedAt = command.now;
       entry.updatedAt = command.now;

@@ -775,7 +775,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <wa-dropdown class="chat-pane__gateway-menu">
-            <template shadowrootmode="open"><div part="menu">Gateways</div></template>
+            <template shadowrootmode="open"><div part="menu">Gateways<slot></slot></div></template>
             <wa-dropdown-item class="chat-pane__gateway-menu-item">Local Gateway</wa-dropdown-item>
           </wa-dropdown>
         </body></html>`,
@@ -839,6 +839,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const observer = await getBoundingBox(page, ".chat-session-rail");
 
       expect(observer.y).toBeCloseTo(header.y + header.height, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps a Done status disjoint from a long compact session headline", async () => {
+    const page = await openBrowserPage(320, 240);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-session-rail chat-session-rail--pill" style="width: 190px">
+            <span class="chat-session-rail__status" data-health="done">Done</span>
+            <button class="chat-session-rail__expand" type="button">
+              <span class="chat-session-rail__headline">A deliberately long completed-session headline</span>
+            </button>
+            <button class="chat-session-rail__hide" type="button">Hide</button>
+          </div>
+        </body></html>`,
+      );
+
+      const status = await getBoundingBox(page, ".chat-session-rail__status");
+      const headline = await getBoundingBox(page, ".chat-session-rail__headline");
+      const expand = await getBoundingBox(page, ".chat-session-rail__expand");
+
+      expect(status.x + status.width).toBeLessThanOrEqual(headline.x);
+      expect(headline.x + headline.width).toBeLessThanOrEqual(expand.x + expand.width);
     } finally {
       await closeBrowserPage(page);
     }

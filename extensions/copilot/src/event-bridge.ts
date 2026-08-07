@@ -45,6 +45,7 @@ export interface SessionLike {
       cancelBackgroundCompaction?: () => Promise<unknown>;
     };
   };
+  send(options: MessageOptions): Promise<string>;
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
   sessionId?: string;
 }

@@ -931,13 +931,48 @@ describe("discoverOpenClawPlugins", () => {
       packageName: "pack",
       extensions: ["./src/one.ts", "./src/two.ts"],
     });
+    writePluginManifest({ pluginDir: globalExt, id: "pack" });
     writePluginEntry(path.join(globalExt, "src", "one.ts"));
     writePluginEntry(path.join(globalExt, "src", "two.ts"));
     writePluginEntry(path.join(globalExt, "dist", "one.js"));
     writePluginEntry(path.join(globalExt, "dist", "two.js"));
 
-    const { candidates } = await discoverWithStateDir(stateDir, {});
-    expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
+    const discovery = await discoverWithStateDir(stateDir, {});
+    expectCandidateIds(discovery.candidates, { includes: ["pack/one", "pack/two"] });
+
+    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    expect(registry.plugins.map((plugin) => plugin.id).toSorted()).toEqual([
+      "pack/one",
+      "pack/two",
+    ]);
+  });
+
+  it("rejects pack entries whose basenames collide on the same derived id", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "pack");
+    mkdirSafe(path.join(globalExt, "src", "a"));
+    mkdirSafe(path.join(globalExt, "src", "b"));
+    mkdirSafe(path.join(globalExt, "dist", "a"));
+    mkdirSafe(path.join(globalExt, "dist", "b"));
+
+    writePluginPackageManifest({
+      packageDir: globalExt,
+      packageName: "pack",
+      extensions: ["./src/a/index.ts", "./src/b/index.ts"],
+    });
+    writePluginManifest({ pluginDir: globalExt, id: "pack" });
+    writePluginEntry(path.join(globalExt, "src", "a", "index.ts"));
+    writePluginEntry(path.join(globalExt, "src", "b", "index.ts"));
+    writePluginEntry(path.join(globalExt, "dist", "a", "index.js"));
+    writePluginEntry(path.join(globalExt, "dist", "b", "index.js"));
+
+    const discovery = await discoverWithStateDir(stateDir, {});
+    // Neither colliding entry may silently win the shared id.
+    expect(discovery.candidates.filter((c) => c.idHint === "pack/index")).toHaveLength(0);
+    const collision = discovery.diagnostics.find((diag) =>
+      diag.message.includes('collide on derived id "pack/index"'),
+    );
+    expect(collision?.level).toBe("error");
   });
 
   it("discovers untracked global package plugins that point at TypeScript source", async () => {
@@ -2302,6 +2337,21 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it.each([
+    {
+      name: "auto-detects Agent Plugins bundles as bundle candidates",
+      idHint: "portable-bundle",
+      bundleFormat: "agent",
+      setup: (stateDir: string) => {
+        const bundleDir = path.join(stateDir, "extensions", "portable-bundle");
+        createBundleRoot(bundleDir, "plugin.json", {
+          $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+          name: "portable-bundle",
+        });
+        mkdirSafe(path.join(bundleDir, "skills", "sample"));
+        return bundleDir;
+      },
+      expectRootDir: true,
+    },
     {
       name: "auto-detects Codex bundles as bundle candidates",
       idHint: "sample-bundle",

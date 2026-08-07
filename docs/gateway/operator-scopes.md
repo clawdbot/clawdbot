@@ -92,6 +92,14 @@ An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
 
+The explicit exception is the administrator-capable Control UI owner profile
+issued directly on the Gateway host by `openclaw dashboard` or graphical
+onboarding. Its short-lived, single-use bootstrap can approve the exact closed
+scope set for a fresh browser or upgrade an existing limited credential only
+when it binds to that same signed browser keypair. Generic Control UI and
+Telegram handoffs, mobile setup profiles, shared credentials, locality, and
+caller-selected scopes do not receive this exception.
+
 Approving a device request:
 
 - A request with no operator role does not need operator scope approval.

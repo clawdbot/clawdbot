@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import {
   capturePendingFinalDeliveryIdentity,
@@ -29,10 +29,11 @@ describe("pending final delivery restart proof", () => {
   async function writePendingFinal(
     beforeAgentReplyState: "continue" | "handled-reply",
   ): Promise<void> {
-    await replaceSessionEntry({ storePath, sessionKey }, {
+    const entry: SessionEntry = {
       sessionId: "session",
       status: "running",
       startedAt: 10,
+      lifecycleRunId: "active-run",
       updatedAt: Date.now(),
       pendingFinalDelivery: {
         kind: "replayable",
@@ -43,7 +44,8 @@ describe("pending final delivery restart proof", () => {
       restartRecoveryBeforeAgentReplyState: beforeAgentReplyState,
       restartRecoveryForceSafeTools: beforeAgentReplyState === "handled-reply" ? true : undefined,
       restartRecoverySourceIngress: "channel",
-    } satisfies SessionEntry);
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
   }
 
   it.each(["continue", "handled-reply"] as const)(
@@ -58,12 +60,15 @@ describe("pending final delivery restart proof", () => {
 
       await clearPendingFinalDeliveryAfterSuccess({ identity, sessionKey, storePath });
 
-      const entry = loadSessionEntry({ sessionKey, storePath });
+      const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
       expect(entry?.pendingFinalDelivery).toBeUndefined();
       expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
       expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
       expect(entry?.restartRecoverySourceIngress).toBeUndefined();
       expect(entry?.status).toBe(beforeAgentReplyState === "handled-reply" ? "done" : "running");
+      expect(entry?.lifecycleRunId).toBe(
+        beforeAgentReplyState === "handled-reply" ? undefined : "active-run",
+      );
       if (beforeAgentReplyState === "handled-reply") {
         expect(entry?.endedAt).toBeTypeOf("number");
         expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
@@ -72,22 +77,21 @@ describe("pending final delivery restart proof", () => {
   );
 
   it("finalizes a media-only hook turn after its exact transport intent succeeds", async () => {
-    await replaceSessionEntry(
-      { storePath, sessionKey },
-      {
-        sessionId: "session",
-        status: "running",
-        startedAt: 10,
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "transport-only",
-          createdAt: Date.now(),
-          intentId: "intent-media",
-        },
-        restartRecoveryBeforeAgentReplyState: "handled-unrecoverable",
-        restartRecoverySourceIngress: "channel",
+    const entry: SessionEntry = {
+      sessionId: "session",
+      status: "running",
+      startedAt: 10,
+      lifecycleRunId: "media-run",
+      updatedAt: Date.now(),
+      pendingFinalDelivery: {
+        kind: "transport-only",
+        createdAt: Date.now(),
+        intentId: "intent-media",
       },
-    );
+      restartRecoveryBeforeAgentReplyState: "handled-unrecoverable",
+      restartRecoverySourceIngress: "channel",
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
     const identity = capturePendingFinalDeliveryIdentity({
       intentId: "intent-media",
       sessionKey,
@@ -100,6 +104,9 @@ describe("pending final delivery restart proof", () => {
       status: "done",
       abortedLastRun: false,
     });
+    expect(
+      (loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined)?.lifecycleRunId,
+    ).toBeUndefined();
   });
 
   it("keeps normal-turn provenance when transport fails before delivery", async () => {

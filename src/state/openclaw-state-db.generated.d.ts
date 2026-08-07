@@ -110,6 +110,11 @@ export interface ApnsRegistrations {
   updated_at_ms: number;
 }
 
+export interface AuditEventSourceAdoptions {
+  adopted_source_id: string;
+  legacy_source_id: string;
+}
+
 export interface AuditEvents {
   account_ref: string | null;
   action: string;
@@ -1564,6 +1569,7 @@ export interface DB {
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
+  audit_event_source_adoptions: AuditEventSourceAdoptions;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;

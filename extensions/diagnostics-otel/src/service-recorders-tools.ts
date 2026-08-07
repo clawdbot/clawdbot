@@ -30,6 +30,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     activeTrustedParentContext,
     exportedInternalOrTrustedContext,
     trackTrustedSpan,
+    getTrackedInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
     addRunAttrs,
@@ -56,6 +57,8 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     ...(evt.toolOwner ? { "openclaw.tool.owner": normalizeDiagnosticValue(evt.toolOwner) } : {}),
     ...paramsSummaryAttrs(evt.paramsSummary),
   });
+  const toolTimestampMs = (evt: { sourceTimestampMs?: number; ts: number }) =>
+    evt.sourceTimestampMs ?? evt.ts;
 
   const skillUsedAttrs = (
     evt: Extract<DiagnosticEventPayload, { type: "skill.used" }>,
@@ -96,18 +99,22 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     metadata: DiagnosticEventMetadata,
   ) => {
     if (!tracesEnabled || !metadata.trusted) {
-      return;
+      return undefined;
+    }
+    const trackedSpan = getTrackedInternalOrTrustedSpan(evt, metadata);
+    if (trackedSpan) {
+      return trackedSpan.spanContext();
     }
     const spanAttrs = toolExecutionBaseAttrs(evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
-    trackTrustedSpan(
+    return trackTrustedSpan(
       evt,
       metadata,
       spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {
         parentContext: activeTrustedParentContext(evt, metadata),
-        startTimeMs: evt.ts,
+        startTimeMs: toolTimestampMs(evt),
       }),
-    );
+    ).spanContext();
   };
 
   const recordToolExecutionCompleted = (
@@ -128,10 +135,10 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
         parentContext: activeTrustedParentContext(evt, metadata),
-        endTimeMs: evt.ts,
+        endTimeMs: toolTimestampMs(evt),
       });
     setSpanAttrs(span, spanAttrs);
-    span.end(evt.ts);
+    span.end(toolTimestampMs(evt));
   };
 
   const recordToolExecutionError = (
@@ -158,14 +165,14 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration("openclaw.tool.execution", spanAttrs, evt.durationMs, {
         parentContext: activeTrustedParentContext(evt, metadata),
-        endTimeMs: evt.ts,
+        endTimeMs: toolTimestampMs(evt),
       });
     setSpanAttrs(span, spanAttrs);
     span.setStatus({
       code: SpanStatusCode.ERROR,
       message: redactSensitiveText(evt.errorCategory),
     });
-    span.end(evt.ts);
+    span.end(toolTimestampMs(evt));
   };
 
   const recordToolExecutionBlocked = (
@@ -186,12 +193,14 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     };
     addRunAttrs(spanAttrs, evt);
     assignOtelToolIdentityAttributes(spanAttrs, evt);
-    const span = spanWithDuration("openclaw.tool.execution", spanAttrs, 0, {
-      parentContext: activeTrustedParentContext(evt, metadata),
-      endTimeMs: evt.ts,
-    });
+    const span =
+      takeTrackedTrustedSpan(evt, metadata) ??
+      spanWithDuration("openclaw.tool.execution", spanAttrs, 0, {
+        parentContext: activeTrustedParentContext(evt, metadata),
+        endTimeMs: toolTimestampMs(evt),
+      });
     setSpanAttrs(span, spanAttrs);
-    span.end(evt.ts);
+    span.end(toolTimestampMs(evt));
   };
 
   const recordPayloadLarge = (evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>) => {

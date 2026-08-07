@@ -400,7 +400,7 @@ export function prepareEmbeddedAttemptStream(input: {
         if (options?.steeringMode) {
           input.activeSession.agent.steeringMode = options.steeringMode;
         }
-        await steerActiveSessionWithOptionalDeliveryWait(
+        return await steerActiveSessionWithOptionalDeliveryWait(
           input.activeSession,
           text,
           options,

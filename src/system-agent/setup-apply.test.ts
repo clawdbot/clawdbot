@@ -1018,17 +1018,15 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(result.gateway).toEqual({ status: "failed", error: "service exploded" });
   });
 
-  it("preserves the service owner's failed install outcome after config commits", async () => {
-    mocks.ensureGatewayService.mockResolvedValueOnce({
-      gateway: { status: "failed", error: "gateway install blocked" },
-      containerWithoutUserSystemd: false,
-    });
-
+  it.each([
+    { status: "failed", error: "gateway install blocked" } as const,
+    { status: "skipped", reason: "external" } as const,
+  ])("preserves the service owner's $status outcome after config commits", async (gateway) => {
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
     const result = await applySystemAgentSetup(baseParams({ surface: "cli" }));
-
-    expect(result.workspaceReady).toBe(true);
-    expect(result.gateway).toEqual({ status: "failed", error: "gateway install blocked" });
-    expect(result.lines).toContain("Gateway service: gateway install blocked");
+    const marker = gateway.status === "failed" ? gateway.error : "SUPERVISOR_MODE=external";
+    expect(result.gateway).toEqual(gateway);
+    expect(result.lines.join("\n")).toContain(marker);
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 

@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
   inspectPortUsage: vi.fn(async () => null),
   resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
+  resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => null),
+  resolveStatusGatewayHealthSafe: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../agents/exec-defaults.js", () => ({
@@ -32,8 +34,8 @@ vi.mock("../status-overview-surface.ts", () => ({
   buildStatusOverviewSurfaceFromOverview: () => ({}),
 }));
 vi.mock("../status-runtime-shared.ts", () => ({
-  resolveStatusGatewayDiagnosticsSafe: async () => null,
-  resolveStatusGatewayHealthSafe: async () => undefined,
+  resolveStatusGatewayDiagnosticsSafe: mocks.resolveStatusGatewayDiagnosticsSafe,
+  resolveStatusGatewayHealthSafe: mocks.resolveStatusGatewayHealthSafe,
 }));
 vi.mock("../status-update-restart.ts", () => ({
   formatUpdateRestartStatusValue: () => null,
@@ -47,6 +49,8 @@ import { buildStatusAllReportData } from "./report-data.js";
 describe("buildStatusAllReportData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue(null);
+    mocks.resolveStatusGatewayHealthSafe.mockResolvedValue(undefined);
   });
 
   it("keeps local config diagnosis non-observing", async () => {
@@ -80,5 +84,45 @@ describe("buildStatusAllReportData", () => {
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789, {
       probeHosts: ["127.0.0.1"],
     });
+  });
+
+  it("collects delivery and exporter stability projections in parallel", async () => {
+    await buildStatusAllReportData({
+      overview: {
+        cfg: {},
+        gatewaySnapshot: {
+          gatewayReachable: true,
+          gatewayProbe: { error: null },
+          gatewayCallOverrides: undefined,
+          gatewayConnection: {},
+          remoteUrlMissing: false,
+        },
+        secretDiagnostics: [],
+        tailscaleMode: "off",
+        tailscaleDns: null,
+        agentStatus: { agents: [], defaultId: null },
+        channels: { rows: [], details: [] },
+        channelIssues: [],
+        osSummary: { label: "test" },
+      } as never,
+      daemon: {} as never,
+      nodeService: {} as never,
+      nodeOnlyGateway: null,
+      progress: { setLabel: vi.fn(), tick: vi.fn() },
+    });
+
+    expect(mocks.resolveStatusGatewayDiagnosticsSafe.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          gatewayReachable: true,
+        }),
+      ],
+      [
+        expect.objectContaining({
+          gatewayReachable: true,
+          type: "telemetry.exporter",
+        }),
+      ],
+    ]);
   });
 });

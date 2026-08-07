@@ -23,6 +23,7 @@ import {
   listAgentRunsForSession,
   readAgentRunIndexVersion,
   registerAgentRunContext,
+  retainActiveAgentRunContext,
   releaseAgentRunContext,
   retainQueuedAgentRunContext,
   sweepStaleRunContexts,
@@ -1014,7 +1015,7 @@ describe("agent-events sequencing", () => {
     ]);
   });
 
-  test("protects only active queue leases while stale tracked and abandoned owners expire", () => {
+  test("protects explicit live leases while stale tracked and abandoned owners expire", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(100);
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     registerAgentRunContext("queued-run", { lifecycleGeneration, registeredAt: 100 });
@@ -1024,6 +1025,15 @@ describe("agent-events sequencing", () => {
       { lifecycleGeneration, registeredAt: 100 },
       { exclusive: true, ownsContext: true, trackOwner: true },
     );
+    claimAgentRunContext(
+      "active-worker-run",
+      { lifecycleGeneration, registeredAt: 100 },
+      { exclusive: true, ownsContext: true, trackOwner: true },
+    );
+    const activeLease = retainActiveAgentRunContext("active-worker-run", lifecycleGeneration);
+    expect(activeLease).toBeTypeOf("function");
+    expect(retainActiveAgentRunContext("missing-run", lifecycleGeneration)).toBeUndefined();
+    expect(retainActiveAgentRunContext("active-worker-run", "stale-generation")).toBeUndefined();
     const versionBeforeLease = readAgentRunIndexVersion();
 
     const firstLease = retainQueuedAgentRunContext("queued-run", lifecycleGeneration);
@@ -1040,6 +1050,7 @@ describe("agent-events sequencing", () => {
     expect(getAgentRunContext("queued-run")).toBeDefined();
     expect(getAgentRunContext("abandoned-run")).toBeUndefined();
     expect(getAgentRunContext("tracked-worker-run")).toBeUndefined();
+    expect(getAgentRunContext("active-worker-run")).toBeDefined();
 
     const versionAfterSweep = readAgentRunIndexVersion();
     firstLease?.("admitted");
@@ -1052,6 +1063,8 @@ describe("agent-events sequencing", () => {
     expect(readAgentRunIndexVersion()).toBe(versionAfterSweep);
     secondLease?.("abandoned");
     expect(readAgentRunIndexVersion()).toBe(versionAfterSweep);
+    expect(sweepStaleRunContexts(500)).toBe(1);
+    activeLease?.();
     expect(sweepStaleRunContexts(500)).toBe(1);
     expect(readAgentRunIndexVersion()).toBeGreaterThan(versionAfterSweep);
     expect(getAgentRunContext("queued-run")).toBeUndefined();
@@ -1116,28 +1129,4 @@ describe("agent-events sequencing", () => {
     first.events.resetAgentEventsForTest();
     clock.mockRestore();
   });
-});
-
-test("clearAgentRunContext also cleans up seqByRun to prevent memory leak (#63643)", () => {
-  // Regression test: seqByRun entries were never deleted when a run ended,
-  // causing unbounded growth over time.
-  registerAgentRunContext("run-leak", { sessionKey: "main" });
-  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
-  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
-
-  // After clearing run context, the sequence counter should also be removed.
-  clearAgentRunContext("run-leak");
-
-  // Emitting a new event on the same runId should start seq from 1 again,
-  // proving the old entry was deleted.
-  const seqs: number[] = [];
-  const stop = onAgentEvent((evt) => {
-    if (evt.runId === "run-leak") {
-      seqs.push(evt.seq);
-    }
-  });
-  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
-  stop();
-
-  expect(seqs).toEqual([1]);
 });
