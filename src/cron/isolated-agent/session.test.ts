@@ -186,6 +186,25 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
   });
 
+  it("keeps an initializing isolated heartbeat blocked during forced rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "initializing-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          initializationPending: true,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+        forceNew: true,
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
+    );
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
   it("keeps an archived isolated heartbeat read-only without forceNew", () => {
     expect(() =>
       resolveWithStoredEntry({
