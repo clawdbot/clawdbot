@@ -3,6 +3,7 @@ import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/sess
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withAgentSessionModelPatchOrigin } from "../session-model-patch-origin.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const effects = vi.hoisted(() => ({
@@ -151,6 +152,38 @@ describe("sessions.patch sticky model persistence", () => {
         modelOverride: "gpt-5.6-sol",
       });
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    });
+  });
+
+  it("persists model and profile provenance from the Gateway caller boundary", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const userSessionKey = "agent:main:dm:user-model-patch";
+      const agentSessionKey = "agent:main:dm:agent-model-patch";
+      for (const sessionKey of [userSessionKey, agentSessionKey]) {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey },
+          { sessionId: `session-${sessionKey}`, updatedAt: 1 },
+        );
+      }
+
+      const model = "anthropic/claude-sonnet-4-6@work";
+      const userResponse = await patchSession({ key: userSessionKey, model }, ["operator.write"]);
+      const agentResponse = await withAgentSessionModelPatchOrigin(
+        async () => await patchSession({ key: agentSessionKey, model }, ["operator.write"]),
+      );
+
+      expect(userResponse[0]).toBe(true);
+      expect(agentResponse[0]).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", sessionKey: userSessionKey })).toMatchObject({
+        modelOverrideSource: "user",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: agentSessionKey })).toMatchObject({
+        modelOverrideSource: "auto",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "auto",
+      });
     });
   });
 
