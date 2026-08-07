@@ -2442,6 +2442,9 @@ describe("package artifact reuse", () => {
     expect(prepare.with?.published_upgrade_survivor_scenarios).toBe(
       "${{ (inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full') && 'reported-issues' || '' }}",
     );
+    expect(prepare.with?.allow_frozen_target_scenario_omissions).toBe(
+      "${{ inputs.target_context_ref != '' }}",
+    );
     expect(pluginDispatch.run).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
