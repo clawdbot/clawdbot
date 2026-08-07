@@ -1,9 +1,9 @@
 // Shared helpers for config-trusted skill symlink targets.
 import path from "node:path";
-import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { safeRealpathSync } from "../../infra/boundary-path.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveUserPath } from "../../utils.js";
 

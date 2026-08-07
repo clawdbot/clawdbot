@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -39,6 +38,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadLegacySessionStore,

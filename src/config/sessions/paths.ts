@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { safeRealpathSync } from "../../infra/boundary-path.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";

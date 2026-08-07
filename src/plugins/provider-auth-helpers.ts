@@ -1,7 +1,6 @@
 // Builds provider auth credentials from config and plugin metadata.
 import fs from "node:fs";
 import path from "node:path";
-import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
@@ -16,6 +15,7 @@ import {
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
