@@ -6,6 +6,7 @@ import {
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -164,6 +165,7 @@ export function buildSessionHistorySnapshot(params: {
 }): SessionHistorySnapshot {
   const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
     maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    resolveCurrentUserProfileDisplay,
   });
   const visibleMessages = toSessionHistoryMessages(projected.messages);
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
@@ -317,6 +319,7 @@ export class SessionHistorySseState {
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
         maxChars: this.maxChars,
+        resolveCurrentUserProfileDisplay,
       }),
     );
     if (projectedMessages.length > this.sentHistory.messages.length) {

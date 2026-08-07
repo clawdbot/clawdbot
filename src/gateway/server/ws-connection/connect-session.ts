@@ -474,7 +474,10 @@ export async function attachAuthenticatedGatewayConnect(
       // gateway-side Gravatar proxy, so clients never need an email-hash URL.
       // The revision changes when the profile avatar changes, so reconnecting
       // viewers refetch instead of reusing a stale route response.
-      avatarUrl: `${formatUserProfileAvatarPath(authenticatedUserProfile.profileId)}?v=${authenticatedUserProfile.updatedAt}`,
+      avatarUrl: formatUserProfileAvatarPath(
+        authenticatedUserProfile.profileId,
+        authenticatedUserProfile.updatedAt,
+      ),
     };
   };
 

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -13,9 +14,11 @@ import {
 } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
 import { SSE_CONTENT_TYPE } from "./http-common.js";
 import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import { SessionHistorySseState } from "./session-history-state.js";
@@ -34,6 +37,7 @@ installGatewayTestHooks();
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
+const requireRecord = createRequireRecord("object", "expected-label");
 
 afterEach(async () => {
   testState.sessionConfig = undefined;
@@ -300,6 +304,32 @@ async function readSessionHistoryBody(
   const res = await fetchSessionHistory(port, sessionKey, params);
   expect(res.status).toBe(200);
   return (await res.json()) as SessionHistoryBody;
+}
+
+function attributedHistoryMessageProjection(value: unknown) {
+  const message = requireRecord(value, "attributed history message");
+  const metadata = requireRecord(message["__openclaw"], "attributed history metadata");
+  return {
+    role: message.role,
+    content: message.content,
+    __openclaw: {
+      id: metadata.id,
+      seq: metadata.seq,
+      senderId: metadata.senderId,
+      senderName: metadata.senderName,
+      senderUsername: metadata.senderUsername,
+      senderProfileAvatarUrl: metadata.senderProfileAvatarUrl,
+    },
+  };
+}
+
+function withMockedDateNow<T>(now: number, run: () => T): T {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    return run();
+  } finally {
+    clock.mockRestore();
+  }
 }
 
 async function readSseEvent(
@@ -651,6 +681,111 @@ describe("session history HTTP endpoints", () => {
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         seq: 1,
       });
+    });
+  });
+
+  test("shares revisioned current-profile projection across REST and initial and inline SSE", async () => {
+    const OLD_REV = 1_800_000_000_000;
+    const NEW_REV = 1_900_000_000_000;
+    const { storePath } = await seedSession();
+    const sessionId = "sess-main";
+    const sessionKey = "agent:main:main";
+    const sessionEntry = { sessionId, updatedAt: 1 };
+
+    const profile = withMockedDateNow(OLD_REV, () => {
+      const created = ensureProfileForEmail("session-history-profile@example.com");
+      setDisplayName(created.id, "Old Display Name");
+      expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
+      return created;
+    });
+    const persistAttributedTurn = async (id: string, senderName: string, text: string) => {
+      const turn = await persistUserTurnTranscript({
+        agentId: AGENT_ID,
+        sessionEntry,
+        sessionId,
+        sessionKey,
+        storePath,
+        input: {
+          idempotencyKey: `session-history-profile:${id}`,
+          sender: { id: profile.id, name: senderName, username: "ada" },
+          text,
+        },
+      });
+      expect(turn).toBeDefined();
+      return turn!;
+    };
+    const first = await persistAttributedTurn(
+      "first",
+      "Historical Ada",
+      "first attributed history turn",
+    );
+
+    await withGatewayHarness(async (harness) => {
+      const initialRest = await readSessionHistoryBody(harness.port, sessionKey);
+      const stream = await openSessionHistorySse(harness.port, sessionKey);
+      try {
+        const initialSse = await readSseEvent(stream.reader, stream.streamState);
+        expect(initialSse.event).toBe("history");
+        const oldExpected = {
+          role: "user",
+          content: "first attributed history turn",
+          __openclaw: {
+            id: first.messageId,
+            seq: 1,
+            senderId: profile.id,
+            senderName: "Historical Ada",
+            senderUsername: "ada",
+            senderProfileAvatarUrl: `/api/users/${profile.id}/avatar?v=${OLD_REV}`,
+          },
+        };
+        expect(attributedHistoryMessageProjection(initialRest.messages?.[0])).toEqual(oldExpected);
+        expect(
+          attributedHistoryMessageProjection((initialSse.data as SessionHistoryBody).messages?.[0]),
+        ).toEqual(oldExpected);
+
+        withMockedDateNow(NEW_REV, () => {
+          setDisplayName(profile.id, "Current Ada");
+          expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
+        });
+
+        const inlineEventPromise = readSseEvent(stream.reader, stream.streamState);
+        const second = await persistAttributedTurn(
+          "second",
+          "Current Ada",
+          "second attributed history turn",
+        );
+        const inlineEvent = await inlineEventPromise;
+        expect(inlineEvent.event).toBe("message");
+        const inlineMessage = requireRecord(inlineEvent.data, "inline history SSE payload").message;
+        const newSecondExpected = {
+          role: "user",
+          content: "second attributed history turn",
+          __openclaw: {
+            id: second.messageId,
+            seq: 2,
+            senderId: profile.id,
+            senderName: "Current Ada",
+            senderUsername: "ada",
+            senderProfileAvatarUrl: `/api/users/${profile.id}/avatar?v=${NEW_REV}`,
+          },
+        };
+        expect(attributedHistoryMessageProjection(inlineMessage)).toEqual(newSecondExpected);
+
+        const refreshedRest = await readSessionHistoryBody(harness.port, sessionKey);
+        expect(refreshedRest.messages).toHaveLength(2);
+        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[0])).toEqual({
+          ...oldExpected,
+          __openclaw: {
+            ...oldExpected["__openclaw"],
+            senderProfileAvatarUrl: `/api/users/${profile.id}/avatar?v=${NEW_REV}`,
+          },
+        });
+        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[1])).toEqual(
+          newSecondExpected,
+        );
+      } finally {
+        await stream.reader.cancel();
+      }
     });
   });
 
