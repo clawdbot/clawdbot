@@ -135,7 +135,10 @@ function resolveSlackCommandMenuModelContext(params: {
         sessionEntry: entry,
       }),
     };
-  } catch {
+  } catch (err) {
+    logVerbose(
+      `slack: failed to resolve slash command menu model context for agent=${params.agentId}: ${formatErrorMessage(err)}`,
+    );
     return {};
   }
 }

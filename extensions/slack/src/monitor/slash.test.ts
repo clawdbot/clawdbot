@@ -8,6 +8,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
@@ -18,6 +20,28 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   return {
     ...actual,
     loadPreparedModelCatalog: vi.fn(async () => []),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: vi.fn(),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
+  return {
+    ...actual,
+    getSessionEntry: vi.fn((params: Parameters<typeof actual.getSessionEntry>[0]) =>
+      actual.getSessionEntry(params),
+    ),
   };
 });
 
@@ -528,6 +552,8 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
+    vi.mocked(getSessionEntry).mockReset();
+    vi.mocked(logVerbose).mockClear();
   });
 
   it("delivers native /login block replies before the command finishes", async () => {
@@ -762,6 +788,41 @@ describe("Slack native command argument menus", () => {
       expect(values.includes("ultra")).toBe(includesUltra);
     },
   );
+
+  it("gracefully degrades the slash command menu when the session store throws", async () => {
+    const testHarness = createArgMenusHarness({
+      commands: { native: true, nativeSkills: false },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    });
+    await registerCommands(testHarness.ctx, testHarness.account);
+    const handler = requireHandler(testHarness.commands, "/think", "/think");
+
+    vi.mocked(getSessionEntry).mockImplementationOnce(() => {
+      throw new Error("session store corrupt");
+    });
+
+    const { respond } = await runCommandHandler(handler);
+
+    // Must not crash: the slash command should still dispatch normally
+    // even when model context resolution fails.
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = firstCallPayload(respond, "response") as { blocks?: Array<{ type: string }> };
+    expect(payload.blocks?.some((block) => block.type === "actions")).toBe(true);
+    expect(logVerbose).toHaveBeenCalledTimes(1);
+    expect(logVerbose).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "slack: failed to resolve slash command menu model context for agent=main",
+      ),
+    );
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("session store corrupt"));
+  });
 
   it("falls back to static menus when app.options() throws during registration", async () => {
     const testHarness = createArgMenusHarness();
