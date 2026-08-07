@@ -138,30 +138,25 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("resolves acpx onto the acpx vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "acpx", cwd: process.cwd() });
+  it.each([
+    { extensionId: "acpx" },
+    { extensionId: "diffs" },
+    { extensionId: "feishu" },
+    { extensionId: "matrix" },
+    { extensionId: "telegram" },
+    { extensionId: "whatsapp" },
+    { extensionId: "voice-call" },
+    { extensionId: "mattermost" },
+    { extensionId: "irc" },
+    { extensionId: "zalo" },
+    { extensionId: "msteams" },
+    { extensionId: "codex" },
+  ])("resolves $extensionId onto the $extensionId vitest config", ({ extensionId }) => {
+    const plan = resolveExtensionTestPlan({ targetArg: extensionId, cwd: process.cwd() });
 
-    expect(plan.extensionId).toBe("acpx");
-    expect(plan.config).toBe("test/vitest/vitest.extension-acpx.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("acpx"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves diffs onto the diffs vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "diffs", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("diffs");
-    expect(plan.config).toBe("test/vitest/vitest.extension-diffs.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("diffs"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves feishu onto the feishu vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "feishu", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("feishu");
-    expect(plan.config).toBe("test/vitest/vitest.extension-feishu.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("feishu"));
+    expect(plan.extensionId).toBe(extensionId);
+    expect(plan.config).toBe(`test/vitest/vitest.extension-${extensionId}.config.ts`);
+    expect(plan.roots).toContain(bundledPluginRoot(extensionId));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -171,15 +166,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.extensionId).toBe("openai");
     expect(plan.config).toBe("test/vitest/vitest.extension-provider-openai.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("openai"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves matrix onto the matrix vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "matrix", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("matrix");
-    expect(plan.config).toBe("test/vitest/vitest.extension-matrix.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("matrix"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -240,75 +226,12 @@ describe("scripts/test-extension.mjs", () => {
     ).toEqual([[root]]);
   });
 
-  it("resolves telegram onto the telegram vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "telegram", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("telegram");
-    expect(plan.config).toBe("test/vitest/vitest.extension-telegram.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("telegram"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves whatsapp onto the whatsapp vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "whatsapp", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("whatsapp");
-    expect(plan.config).toBe("test/vitest/vitest.extension-whatsapp.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("whatsapp"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves voice-call onto the voice-call vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "voice-call", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("voice-call");
-    expect(plan.config).toBe("test/vitest/vitest.extension-voice-call.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("voice-call"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves mattermost onto the mattermost vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "mattermost", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("mattermost");
-    expect(plan.config).toBe("test/vitest/vitest.extension-mattermost.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("mattermost"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves irc onto the irc vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "irc", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("irc");
-    expect(plan.config).toBe("test/vitest/vitest.extension-irc.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("irc"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves zalo onto the zalo vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "zalo", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("zalo");
-    expect(plan.config).toBe("test/vitest/vitest.extension-zalo.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("zalo"));
-    expect(plan.hasTests).toBe(true);
-  });
-
   it("resolves memory extensions onto the memory vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "memory-core", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("memory-core");
     expect(plan.config).toBe("test/vitest/vitest.extension-memory.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("memory-core"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves msteams onto the msteams vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "msteams", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("msteams");
-    expect(plan.config).toBe("test/vitest/vitest.extension-msteams.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("msteams"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -325,15 +248,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() }).config).toBe(
       "test/vitest/vitest.extension-misc.config.ts",
     );
-  });
-
-  it("resolves codex onto the codex vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "codex", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("codex");
-    expect(plan.config).toBe("test/vitest/vitest.extension-codex.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("codex"));
-    expect(plan.hasTests).toBe(true);
   });
 
   it("omits src/<extension> when no paired core root exists", () => {

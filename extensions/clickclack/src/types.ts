@@ -37,6 +37,8 @@ export type ClickClackAccountConfig = {
   reconnectMs?: number;
   /** Opt-in: publish durable agent activity (commentary + tool) rows. */
   agentActivity?: boolean;
+  /** Opt-in: publish ephemeral native progress while an agent turn runs. */
+  nativeProgress?: boolean;
   /** Publish the native command catalog to ClickClack composer autocomplete. */
   commandMenu?: boolean;
   /** Create and synchronize one managed ClickClack channel per OpenClaw session. */
@@ -83,6 +85,7 @@ export type ResolvedClickClackAccount = {
   allowFrom: string[];
   reconnectMs: number;
   agentActivity: boolean;
+  nativeProgress?: boolean;
   commandMenu: boolean;
   discussions: {
     enabled: boolean;

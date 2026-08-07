@@ -65,6 +65,11 @@ describe("QA scenario lane matching", () => {
       rejectedProviderMode: "live-frontier" as const,
     },
     {
+      id: "subagent-completion-direct-fallback",
+      allowedProviderMode: "mock-openai" as const,
+      rejectedProviderMode: "live-frontier" as const,
+    },
+    {
       id: "cron-explicit-authority-execution",
       allowedProviderMode: "live-frontier" as const,
       rejectedProviderMode: "mock-openai" as const,

@@ -1,20 +1,22 @@
 // Codex tests cover run attempt thread cleanup plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import {
-  resetAgentEventsForTest,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { runCodexAppServerAttempt } from "./run-attempt.js";
+import {
+  createParams as createSharedParams,
+  mockClientRuntimeMethods,
+  multiplexCodexTestClientHandlers,
+  runCodexAppServerAttempt,
+  setupRunAttemptTestHooks,
+  tempDir,
+  threadStartResult,
+  turnStartResult,
+} from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
-  resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import {
@@ -25,7 +27,6 @@ import {
 import {
   adaptCodexTestClientFactory,
   createClientHarness,
-  createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -37,108 +38,23 @@ function multiplexedClientFactory(
 ): CodexAppServerClientFactory {
   return adaptCodexTestClientFactory(async (...args) => {
     const client = await factory(...args);
-    const notificationHandlers = new Set<Parameters<typeof client.addNotificationHandler>[0]>();
-    const requestHandlers = new Set<Parameters<typeof client.addRequestHandler>[0]>();
-    client.addNotificationHandler((notification) =>
-      Promise.all(
-        [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
-      ).then(() => undefined),
-    );
-    client.addRequestHandler(async (request) => {
-      for (const handler of requestHandlers) {
-        const result = await handler(request);
-        if (result !== undefined) {
-          return result;
-        }
-      }
-      return undefined;
-    });
-    client.addNotificationHandler = (handler) => {
-      notificationHandlers.add(handler);
-      return () => notificationHandlers.delete(handler);
-    };
-    client.addRequestHandler = (handler) => {
-      requestHandlers.add(handler);
-      return () => requestHandlers.delete(handler);
-    };
+    multiplexCodexTestClientHandlers(client);
     return client;
   });
 }
-
-let tempDir: string;
 
 function createParams(
   sessionFile: string,
   workspaceDir: string,
   sessionKey = "agent:main:session-1",
 ): EmbeddedRunAttemptParams {
-  registerCodexTestSessionIdentity(sessionFile, "session-1", sessionKey);
-  return {
-    prompt: "hello",
-    sessionId: "session-1",
-    sessionKey,
-    sessionFile,
-    workspaceDir,
-    runId: "run-1",
-    provider: "codex",
-    modelId: "gpt-5.4-codex",
-    model: createCodexTestModel("codex"),
-    thinkLevel: "medium",
-    disableTools: true,
-    timeoutMs: 5_000,
-    authStorage: {} as never,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {} as never,
-  } as EmbeddedRunAttemptParams;
-}
-
-function threadStartResult(threadId = "thread-1") {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.146.1",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: tempDir || "/tmp/openclaw-codex-test",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
-}
-
-function turnStartResult(turnId = "turn-1") {
-  return {
-    turn: {
-      id: turnId,
-      status: "inProgress",
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  const params = createSharedParams(sessionFile, workspaceDir, { sessionKey });
+  params.disableTools = true;
+  params.config = undefined;
+  delete params.contextTokenBudget;
+  delete params.contextWindowInfo;
+  delete params.observeToolTerminal;
+  return params;
 }
 
 async function waitForHarnessRequest(
@@ -161,41 +77,15 @@ async function waitForHarnessRequest(
   return { id: request.id };
 }
 
-function getMockServerVersion() {
-  return CODEX_APP_SERVER_VERSION;
-}
-
-function getMockRuntimeIdentity() {
-  return { serverVersion: getMockServerVersion() };
-}
-
-function mockClientRuntimeMethods() {
-  return {
-    getInstanceId: () => "test-client-1",
-    getRuntimeIdentity: getMockRuntimeIdentity,
-    getServerVersion: getMockServerVersion,
-  };
-}
+setupRunAttemptTestHooks();
 
 describe("Codex app-server main thread cleanup", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     resetSharedCodexAppServerClientForTests();
-    resetCodexTestBindingStore();
-    vi.useRealTimers();
-    resetAgentEventsForTest();
-    vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
-    vi.stubEnv("CODEX_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEY", "");
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-cleanup-"));
   });
 
-  afterEach(async () => {
-    vi.useRealTimers();
+  afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    resetAgentEventsForTest();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it.each([

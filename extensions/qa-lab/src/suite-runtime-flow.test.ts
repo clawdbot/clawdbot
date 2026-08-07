@@ -4,61 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
 const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
-const waitForNoOutbound = vi.hoisted(() => vi.fn());
-const waitForNoTransportOutbound = vi.hoisted(() => vi.fn());
-const recentOutboundSummary = vi.hoisted(() => vi.fn());
-const formatConversationTranscript = vi.hoisted(() => vi.fn());
-const readTransportTranscript = vi.hoisted(() => vi.fn());
-const formatTransportTranscript = vi.hoisted(() => vi.fn());
-const fetchJson = vi.hoisted(() => vi.fn());
-const waitForGatewayHealthy = vi.hoisted(() => vi.fn());
-const waitForTransportReady = vi.hoisted(() => vi.fn());
-const patchConfig = vi.hoisted(() => vi.fn());
-const applyConfig = vi.hoisted(() => vi.fn());
-const readConfigSnapshot = vi.hoisted(() => vi.fn());
-const restartGatewayWithConfigPatch = vi.hoisted(() => vi.fn());
-const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
-const createSession = vi.hoisted(() => vi.fn());
-const readEffectiveTools = vi.hoisted(() => vi.fn());
-const readSkillStatus = vi.hoisted(() => vi.fn());
-const readRawQaSessionStore = vi.hoisted(() => vi.fn());
-const seedQaSessionTranscript = vi.hoisted(() => vi.fn());
-const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
-const runQaCli = vi.hoisted(() => vi.fn());
-const extractMediaPathFromText = vi.hoisted(() => vi.fn());
-const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
-const startAgentRun = vi.hoisted(() => vi.fn());
-const waitForAgentRun = vi.hoisted(() => vi.fn());
-const waitForAgentHistoryReply = vi.hoisted(() => vi.fn());
-const listCronJobs = vi.hoisted(() => vi.fn());
-const findManagedDreamingCronJob = vi.hoisted(() => vi.fn());
-const waitForCronRunCompletion = vi.hoisted(() => vi.fn());
-const readDoctorMemoryStatus = vi.hoisted(() => vi.fn());
-const forceMemoryIndex = vi.hoisted(() => vi.fn());
-const findSkill = vi.hoisted(() => vi.fn());
-const writeWorkspaceSkill = vi.hoisted(() => vi.fn());
-const callPluginToolsMcp = vi.hoisted(() => vi.fn());
-const runAgentPrompt = vi.hoisted(() => vi.fn());
-const ensureImageGenerationConfigured = vi.hoisted(() => vi.fn());
-const handleQaAction = vi.hoisted(() => vi.fn());
 const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
-const extractQaToolPayload = vi.hoisted(() => vi.fn());
-const browserRequest = vi.hoisted(() => vi.fn());
-const waitForBrowserReady = vi.hoisted(() => vi.fn());
-const browserOpenTab = vi.hoisted(() => vi.fn());
-const browserSnapshot = vi.hoisted(() => vi.fn());
-const browserAct = vi.hoisted(() => vi.fn());
 const webOpenPage = vi.hoisted(() => vi.fn(async () => ({ pageId: "page-1" })));
-const webWait = vi.hoisted(() => vi.fn());
-const webType = vi.hoisted(() => vi.fn());
-const webSnapshot = vi.hoisted(() => vi.fn());
-const webEvaluate = vi.hoisted(() => vi.fn());
-const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
-const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
-const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
-const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
-const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
-const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
@@ -68,98 +15,34 @@ vi.mock("./scenario-flow-runner.js", () => ({
   runScenarioFlow,
 }));
 
-vi.mock("./suite-runtime-transport.js", () => ({
+vi.mock("./suite-runtime-transport.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite-runtime-transport.js")>()),
   waitForOutboundMessage,
-  waitForNoOutbound,
-  waitForNoTransportOutbound,
-  recentOutboundSummary,
-  formatConversationTranscript,
-  readTransportTranscript,
-  formatTransportTranscript,
 }));
 
-vi.mock("./suite-runtime-gateway.js", () => ({
-  fetchJson,
-  waitForGatewayHealthy,
-  waitForTransportReady,
-  waitForConfigRestartSettle,
-  patchConfig,
-  applyConfig,
-  readConfigSnapshot,
-  restartGatewayWithConfigPatch,
-}));
-
-vi.mock("./suite-runtime-agent.js", () => ({
-  createSession,
-  readEffectiveTools,
-  readSkillStatus,
-  readRawQaSessionStore,
-  seedQaSessionTranscript,
-  readSessionTranscriptSummary,
-  runQaCli,
-  extractMediaPathFromText,
-  resolveGeneratedImagePath,
-  startAgentRun,
-  waitForAgentRun,
-  waitForAgentHistoryReply,
-  listCronJobs,
-  findManagedDreamingCronJob,
-  readDoctorMemoryStatus,
-  forceMemoryIndex,
-  findSkill,
-  writeWorkspaceSkill,
-  callPluginToolsMcp,
-  runAgentPrompt,
-  ensureImageGenerationConfigured,
-  handleQaAction,
-}));
-
-vi.mock("./browser-runtime.js", () => ({
-  callQaBrowserRequest: browserRequest,
-  waitForQaBrowserReady: waitForBrowserReady,
-  qaBrowserOpenTab: browserOpenTab,
-  qaBrowserSnapshot: browserSnapshot,
-  qaBrowserAct: browserAct,
-}));
-
-vi.mock("./web-runtime.js", () => ({
+vi.mock("./web-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./web-runtime.js")>()),
   qaWebOpenPage: webOpenPage,
-  qaWebWait: webWait,
-  qaWebType: webType,
-  qaWebSnapshot: webSnapshot,
-  qaWebEvaluate: webEvaluate,
 }));
 
-vi.mock("./cron-run-wait.js", () => ({
-  waitForCronRunCompletion,
-}));
-
-vi.mock("./discovery-eval.js", () => ({
-  hasDiscoveryLabels,
-  reportsDiscoveryScopeLeak,
-  reportsMissingDiscoveryFiles,
-}));
-
-vi.mock("./extract-tool-payload.js", () => ({
-  extractQaToolPayload,
-}));
-
-vi.mock("./runtime-tool-fixture.js", () => ({
+vi.mock("./runtime-tool-fixture.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-tool-fixture.js")>()),
   runRuntimeToolFixture,
 }));
 
-vi.mock("./model-switch-eval.js", () => ({
-  hasModelSwitchContinuitySignal,
-}));
-
-vi.mock("./gateway-log-sentinel.js", () => ({
-  scanGatewayLogSentinels,
-  assertNoGatewayLogSentinels,
-}));
-
+import * as browserRuntime from "./browser-runtime.js";
+import * as cronRunWait from "./cron-run-wait.js";
+import * as discoveryEval from "./discovery-eval.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
+import * as extractToolPayload from "./extract-tool-payload.js";
+import * as modelSwitchEval from "./model-switch-eval.js";
+import type { QaScenarioRuntimeDeps } from "./scenario-runtime-api.js";
+import * as suiteRuntimeAgent from "./suite-runtime-agent.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
+import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import * as webRuntime from "./web-runtime.js";
 
 describe("qa suite runtime flow", () => {
   it("records intentional scenario skips without running later steps", async () => {
@@ -269,18 +152,10 @@ describe("qa suite runtime flow", () => {
     const call = createQaScenarioRuntimeApi.mock.calls[0]?.[0] as {
       env: typeof env;
       scenario: typeof scenario;
-      deps: {
-        runScenario: typeof runScenario;
-        waitForTransportReady: typeof waitForTransportReady;
+      deps: QaScenarioRuntimeDeps & {
         waitForOutboundMessage: typeof waitForOutboundMessage;
         markGatewayLogCursor: () => number;
-        assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
-        readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
-        seedQaSessionTranscript: typeof seedQaSessionTranscript;
-        findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
-        forceMemoryIndex: typeof forceMemoryIndex;
-        runAgentPrompt: typeof runAgentPrompt;
-        waitForAgentHistoryReply: typeof waitForAgentHistoryReply;
+        assertNoGatewayLogSentinels: () => void;
         runRuntimeToolFixture: (
           envArg: typeof env,
           configArg: Record<string, unknown>,
@@ -296,7 +171,37 @@ describe("qa suite runtime flow", () => {
     expect(call.env).toBe(env);
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBe(runScenario);
-    expect(call.deps.waitForTransportReady).toBe(waitForTransportReady);
+    for (const dependencyModule of [
+      suiteRuntimeAgent,
+      suiteRuntimeGateway,
+      cronRunWait,
+      discoveryEval,
+      extractToolPayload,
+      modelSwitchEval,
+    ]) {
+      for (const [name, helper] of Object.entries(dependencyModule)) {
+        expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
+      }
+    }
+    for (const [name, helper] of Object.entries(suiteRuntimeTransport)) {
+      if (name !== "waitForOutboundMessage") {
+        expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
+      }
+    }
+    const aliasedDependencies = {
+      browserRequest: browserRuntime.callQaBrowserRequest,
+      waitForBrowserReady: browserRuntime.waitForQaBrowserReady,
+      browserOpenTab: browserRuntime.qaBrowserOpenTab,
+      browserSnapshot: browserRuntime.qaBrowserSnapshot,
+      browserAct: browserRuntime.qaBrowserAct,
+      webWait: webRuntime.qaWebWait,
+      webType: webRuntime.qaWebType,
+      webSnapshot: webRuntime.qaWebSnapshot,
+      webEvaluate: webRuntime.qaWebEvaluate,
+    };
+    for (const [name, helper] of Object.entries(aliasedDependencies)) {
+      expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
+    }
     expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
     const outboundPredicate = vi.fn();
     call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
@@ -308,22 +213,16 @@ describe("qa suite runtime flow", () => {
     );
     expect(call.deps.markGatewayLogCursor()).toBe(0);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
-    expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
-    expect(call.deps.seedQaSessionTranscript).toBe(seedQaSessionTranscript);
-    expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
-    expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
-    expect(call.deps.waitForAgentHistoryReply).toBe(waitForAgentHistoryReply);
-    expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
     await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
     expect(runRuntimeToolFixture).toHaveBeenCalledWith(
       env,
       { toolName: "read" },
       {
-        createSession,
-        readEffectiveTools,
-        runAgentPrompt,
-        fetchJson,
-        ensureImageGenerationConfigured,
+        createSession: suiteRuntimeAgent.createSession,
+        readEffectiveTools: suiteRuntimeAgent.readEffectiveTools,
+        runAgentPrompt: suiteRuntimeAgent.runAgentPrompt,
+        fetchJson: suiteRuntimeGateway.fetchJson,
+        ensureImageGenerationConfigured: suiteRuntimeAgent.ensureImageGenerationConfigured,
       },
     );
     expect(call.constants).toEqual({
