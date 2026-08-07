@@ -68,6 +68,12 @@ type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+type SubagentAbortSessionParams = {
+  sessionKey: string;
+  /** Abort only this run; omit to abort whatever is currently running. */
+  runId?: string;
+};
+
 type RuntimeNodeListParams = {
   connected?: boolean;
 };
@@ -125,6 +131,8 @@ export type PluginRuntime = PluginRuntimeCore & {
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
+    /** Stop an in-flight run without destroying the session entry or transcript. */
+    abortSession: (params: SubagentAbortSessionParams) => Promise<void>;
   };
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;

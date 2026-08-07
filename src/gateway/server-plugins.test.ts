@@ -254,6 +254,13 @@ function getLastDispatchedParams(): Record<string, unknown> | undefined {
   return call?.req?.params as Record<string, unknown> | undefined;
 }
 
+function getLastDispatchedMethod(): string | undefined {
+  const call = getLastMockFirstArg(handleGatewayRequest, "gateway request") as
+    | HandleGatewayRequestOptions
+    | undefined;
+  return call?.req?.method;
+}
+
 function getRequiredLastDispatchedParams(): Record<string, unknown> {
   return requireRecord(getLastDispatchedParams(), "dispatched params");
 }
@@ -1882,6 +1889,62 @@ describe("loadGatewayPlugins", () => {
             deleteTranscript: true,
           }),
         ),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
+  });
+
+  test("abortSession dispatches sessions.abort with key and runId under the plugin identity", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("plugin-abort-session"));
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+        runtime.abortSession({
+          sessionKey: "agent:main:subagent:abort-me",
+          runId: "run-abort-1",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(getLastDispatchedMethod()).toBe("sessions.abort");
+    const params = getRequiredLastDispatchedParams();
+    expect(params.key).toBe("agent:main:subagent:abort-me");
+    expect(params.runId).toBe("run-abort-1");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
+  });
+
+  test("abortSession omits runId when not provided", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("plugin-abort-session-no-run"));
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+        runtime.abortSession({
+          sessionKey: "agent:main:subagent:abort-all",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(getLastDispatchedMethod()).toBe("sessions.abort");
+    expect(getLastDispatchedParams()).not.toHaveProperty("runId");
+    expect(getRequiredLastDispatchedParams().key).toBe("agent:main:subagent:abort-all");
+  });
+
+  test("abortSession uses owner-scoped synthetic admin for plugin-owned stops", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("plugin-abort-synthetic-admin"));
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+        runtime.abortSession({
+          sessionKey: "dreaming-narrative-light-workspace-1",
+        }),
       ),
     ).resolves.toBeUndefined();
 

@@ -48,6 +48,7 @@ function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRun
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
     deleteSession: (...args) => runtime.subagent.deleteSession(...args),
+    abortSession: (...args) => runtime.subagent.abortSession(...args),
   };
 }
 

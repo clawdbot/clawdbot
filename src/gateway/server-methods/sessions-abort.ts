@@ -31,7 +31,10 @@ import { resolveWorkerSessionTarget } from "../worker-environments/session-targe
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { requireSessionKey } from "./sessions-shared.js";
+import {
+  rejectPluginRuntimeSessionOwnershipMismatch,
+  requireSessionKey,
+} from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -235,6 +238,21 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
       });
     const sessionEntry = loadedSession?.entry;
+    // Aborting another plugin's run is the same class of violation as deleting
+    // its session: the abort path must not become an unscoped, instance-wide
+    // cancel for plugin callers. Non-plugin clients and owner-matching plugins
+    // pass through unchanged.
+    if (
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "abort",
+        client,
+        key: canonicalKey,
+        entry: sessionEntry,
+        respond,
+      })
+    ) {
+      return;
+    }
     const requestedKeyAliases =
       requestedKey &&
       requestedKey !== key &&

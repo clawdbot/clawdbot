@@ -999,6 +999,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
       deleteSession: vi.fn(),
+      abortSession: vi.fn(),
     },
     sandbox: {
       resolveWorkspaceAuthority: vi.fn(),

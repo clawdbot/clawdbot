@@ -45,6 +45,7 @@ function createGatewaySubagentRuntime() {
     waitForRun: vi.fn(),
     getSessionMessages: vi.fn(),
     deleteSession: vi.fn(),
+    abortSession: vi.fn(),
   };
 }
 

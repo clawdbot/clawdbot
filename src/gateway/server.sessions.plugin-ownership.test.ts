@@ -284,3 +284,57 @@ test("sessions.delete protects the archived session generation from a replacemen
     sessionId: "replacement-plugin-session",
   });
 });
+
+test.each([
+  {
+    name: "another plugin's session",
+    key: "agent:main:dreaming-narrative-foreign",
+    entry: sessionStoreEntry("foreign-plugin-session", { pluginOwnerId: "other-plugin" }),
+  },
+  {
+    name: "an operator-owned session",
+    key: "agent:main:dashboard:operator-owned",
+    entry: sessionStoreEntry("operator-owned-session"),
+  },
+])("sessions.abort prevents a plugin from aborting $name", async ({ key, entry }) => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: { [key]: entry } });
+  const pluginClient = {
+    connect: { scopes: ["operator.write"] },
+    internal: { pluginRuntimeOwnerId: "memory-core" },
+  } as never;
+
+  const abort = await directSessionReq("sessions.abort", { key }, { client: pluginClient });
+
+  expect(abort.ok).toBe(false);
+  expect(abort.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: `Plugin "memory-core" cannot abort session "${key}" because it did not create it.`,
+  });
+});
+
+test("sessions.abort allows a plugin to abort its own session", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dreaming-narrative-owned";
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("owned-plugin-session", { pluginOwnerId: "memory-core" }),
+    },
+  });
+  const pluginClient = {
+    connect: { scopes: ["operator.write"] },
+    internal: { pluginRuntimeOwnerId: "memory-core" },
+  } as never;
+
+  const abort = await directSessionReq(
+    "sessions.abort",
+    { key: sessionKey },
+    { client: pluginClient },
+  );
+
+  expect(abort.ok, JSON.stringify(abort.error)).toBe(true);
+  expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+    pluginOwnerId: "memory-core",
+    sessionId: "owned-plugin-session",
+  });
+});
