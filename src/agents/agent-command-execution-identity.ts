@@ -5,7 +5,7 @@ import {
 } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureAgentRunLifecycleGeneration } from "../infra/agent-events.js";
-import { assertAgentRunAttributionAdmissionCompatible } from "../infra/agent-run-registry.js";
+import { reserveAgentRunAttribution } from "../infra/agent-run-registry.js";
 import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
 import type { AgentCommandGatewayIngressOpts, AgentCommandOpts } from "./command/types.js";
 
@@ -75,21 +75,17 @@ function resolveAgentCommandExecutionAttribution(
     opts.executionAttribution?.lifecycleGeneration ??
     opts.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(params.runId);
-  assertAgentRunAttributionAdmissionCompatible(
-    params.runId,
-    lifecycleGeneration,
-    opts.executionAttribution,
-  );
+  const attribution =
+    opts.executionAttribution ??
+    createAgentExecutionAttribution({
+      runId: params.runId,
+      lifecycleGeneration,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.sessionAgentId,
+    });
   return {
-    attribution:
-      opts.executionAttribution ??
-      createAgentExecutionAttribution({
-        runId: params.runId,
-        lifecycleGeneration,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.sessionAgentId,
-      }),
+    attribution: reserveAgentRunAttribution(params.runId, lifecycleGeneration, attribution),
     lifecycleGeneration,
   };
 }

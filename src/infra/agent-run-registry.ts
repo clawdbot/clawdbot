@@ -106,17 +106,51 @@ export function assertAgentRunAttributionCompatible(
   }
 }
 
-/** Rejects attribution collisions before admission-owned audit capture can observe them. */
-export function assertAgentRunAttributionAdmissionCompatible(
+/**
+ * Atomically reserves current-generation attribution before admission audit capture.
+ * The first admission owns the immutable value; later conflicting callers fail closed.
+ */
+export function reserveAgentRunAttribution(
   runId: string,
   lifecycleGeneration: string,
-  attribution: AgentExecutionAttribution | undefined,
-): void {
-  const existing = getAgentRunRegistryState().contexts.get(runId);
-  if (existing?.lifecycleGeneration !== lifecycleGeneration) {
-    return;
+  attribution: AgentExecutionAttribution,
+): AgentExecutionAttribution {
+  if (attribution.runId !== runId) {
+    throw new TypeError("Agent run attribution runId does not match the reserved runId.");
   }
-  assertAgentRunAttributionCompatible(existing.attribution, attribution);
+  if (attribution.lifecycleGeneration !== lifecycleGeneration) {
+    throw new TypeError(
+      "Agent run attribution lifecycleGeneration does not match the reserved generation.",
+    );
+  }
+  const state = getAgentRunRegistryState();
+  const existing = state.contexts.get(runId);
+  if (existing?.lifecycleGeneration === lifecycleGeneration) {
+    assertAgentRunAttributionCompatible(existing.attribution, attribution);
+    attachAgentExecutionAttribution(existing, attribution);
+    return existing.attribution ?? attribution;
+  }
+  // Stale callers fail the normal lifecycle guard without replacing a current run.
+  if (lifecycleGeneration !== state.lifecycleGeneration) {
+    return attribution;
+  }
+  state.owners.delete(runId);
+  state.contexts.set(
+    runId,
+    createAgentRunContext(
+      {
+        attribution,
+        sessionKey: attribution.sessionKey,
+        sessionId: attribution.sessionId,
+        agentId: attribution.agentId,
+      },
+      lifecycleGeneration,
+    ),
+  );
+  state.sequenceResetHandler?.(runId);
+  clearAgentRunUsage(runId);
+  bumpAgentRunIndexVersion();
+  return attribution;
 }
 
 function createAgentRunContext(

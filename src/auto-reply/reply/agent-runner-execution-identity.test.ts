@@ -3,6 +3,10 @@ import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
+import {
+  getAgentRunLifecycleGeneration,
+  resetAgentRunRegistryForTest,
+} from "../../infra/agent-run-registry.js";
 import { admitAutoReplyExecutionAttribution } from "./agent-runner-execution-identity.js";
 
 describe("admitAutoReplyExecutionAttribution", () => {
@@ -11,6 +15,7 @@ describe("admitAutoReplyExecutionAttribution", () => {
   afterEach(() => {
     restoreSink?.();
     restoreSink = undefined;
+    resetAgentRunRegistryForTest();
   });
 
   it("records exact channel and requester evidence with the runtime correlation", () => {
@@ -119,6 +124,41 @@ describe("admitAutoReplyExecutionAttribution", () => {
     expect(attribution.runId).toBe(runId);
     expect(attribution).not.toHaveProperty("executionIdentityAdmission");
     expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("captures only the winning cross-session attribution for a shared run id", () => {
+    const work: ExecutionIdentityAdmissionWork[] = [];
+    restoreSink = configureExecutionIdentityAdmissionSink((item) => {
+      work.push(item);
+      return true;
+    });
+    const lifecycleGeneration = getAgentRunLifecycleGeneration();
+    const runId = "run-shared";
+
+    admitAutoReplyExecutionAttribution({
+      config: { logging: { audit: { enabled: true, executionIdentity: true } } },
+      lifecycleGeneration,
+      runId,
+      context: {
+        isHeartbeat: false,
+        sessionId: "first-session",
+        sessionKey: "agent:main:first-session",
+      },
+    });
+
+    expect(() =>
+      admitAutoReplyExecutionAttribution({
+        config: { logging: { audit: { enabled: true, executionIdentity: true } } },
+        lifecycleGeneration,
+        runId,
+        context: {
+          isHeartbeat: false,
+          sessionId: "second-session",
+          sessionKey: "agent:main:second-session",
+        },
+      }),
+    ).toThrow("Agent run ID is already bound to different execution attribution.");
+    expect(work).toHaveLength(1);
   });
 
   it("does not persist or replace an already admitted attribution", () => {
