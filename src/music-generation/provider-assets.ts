@@ -11,7 +11,6 @@ import {
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
   type ProviderOperationDeadline,
-  type ProviderOperationTimeoutMs,
 } from "../media-understanding/shared.js";
 import type { GeneratedMusicAsset } from "./types.js";
 
@@ -23,7 +22,7 @@ type GeneratedMusicResponseHandle = {
 
 type GeneratedMusicResponseFactory = (params: {
   deadline: ProviderOperationDeadline;
-  timeoutMs: ProviderOperationTimeoutMs;
+  timeoutMs: () => number;
 }) => Promise<GeneratedMusicResponseHandle>;
 
 /**

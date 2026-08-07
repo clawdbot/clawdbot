@@ -4,6 +4,7 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {

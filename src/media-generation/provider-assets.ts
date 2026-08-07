@@ -20,7 +20,7 @@ type GeneratedVideoResponseHandle = {
 
 type GeneratedVideoResponseFactory = (params: {
   deadline: ProviderOperationDeadline;
-  timeoutMs: ProviderOperationTimeoutMs;
+  timeoutMs: () => number;
 }) => Promise<GeneratedVideoResponseHandle>;
 
 /** Download a generated video URL with size limits and inferred video metadata. */
