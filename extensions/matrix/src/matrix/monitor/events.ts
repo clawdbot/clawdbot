@@ -272,7 +272,10 @@ export function registerMatrixMonitorEvents(params: {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
-    if (eventType !== EventType.RoomMessage) {
+    // Same canonical admission gate as the generic listener: redacted or
+    // sender-less decrypted events would occupy the journal until replay
+    // drops them, and a failed append would stick the sync-cursor gate.
+    if (!isMatrixDispatchableRoomEvent(event)) {
       return;
     }
     void ingress.accept(roomId, event);

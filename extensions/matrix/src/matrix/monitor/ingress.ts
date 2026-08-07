@@ -44,6 +44,14 @@ export type MatrixIngressLifecycle = {
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
   onAbandoned: () => void | Promise<void>;
+  /**
+   * Persisted admission timestamp from the journal payload. Only rows
+   * journaled before this monitor started are crash-recovered replays; fresh
+   * initial-sync admissions share the same lifecycle shape but must still
+   * face the cold-start history filter, so presence of the lifecycle alone
+   * cannot mark a replay.
+   */
+  receivedAt: number;
 };
 
 type MatrixIngressPayload = {
@@ -104,7 +112,7 @@ function inspectMatrixIngressEvent(
 function parseClaimedEvent(
   payload: unknown,
   claimedId: string,
-): { roomId: string; rawEvent: MatrixRawEvent } {
+): { roomId: string; rawEvent: MatrixRawEvent; receivedAt: number } {
   if (!isRecord(payload)) {
     throw new MatrixIngressPermanentError(
       "invalid-event",
@@ -131,7 +139,13 @@ function parseClaimedEvent(
       "Matrix event identity changed after durable admission.",
     );
   }
-  return { roomId, rawEvent: payload.rawEvent as MatrixRawEvent };
+  if (typeof payload.receivedAt !== "number" || !Number.isFinite(payload.receivedAt)) {
+    throw new MatrixIngressPermanentError(
+      "invalid-event",
+      "Matrix ingress payload is missing its admission timestamp.",
+    );
+  }
+  return { roomId, rawEvent: payload.rawEvent as MatrixRawEvent, receivedAt: payload.receivedAt };
 }
 
 function resolveMatrixIngressNonRetryableFailure(error: unknown) {
@@ -198,8 +212,8 @@ export function createMatrixIngressMonitor(options: {
       ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
       onLog: (message) => options.runtime.log?.(`matrix ${message}`),
       dispatchClaimedEvent: async (record, lifecycle) => {
-        const { roomId, rawEvent } = parseClaimedEvent(record.payload, record.id);
-        await options.dispatch(roomId, rawEvent, lifecycle);
+        const { roomId, rawEvent, receivedAt } = parseClaimedEvent(record.payload, record.id);
+        await options.dispatch(roomId, rawEvent, { ...lifecycle, receivedAt });
       },
     });
     return drain;

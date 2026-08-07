@@ -430,6 +430,9 @@ vi.mock("./ingress.js", () => ({
         onDeferred: vi.fn(),
         onAdoptionFinalizing: vi.fn(),
         onAbandoned: vi.fn(async () => {}),
+        // Matches a fresh accept through the real monitor: the drain stamps
+        // the persisted admission time onto the lifecycle it hands out.
+        receivedAt: Date.now(),
       };
       return {
         // Faithful stand-in: accept dispatches through the same dispatch

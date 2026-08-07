@@ -1977,4 +1977,57 @@ describe("registerMatrixMonitorEvents ingress dispatchability filter", () => {
     await flushTasks();
     expect(onRoomMessage).not.toHaveBeenCalled();
   });
+
+  it("journals a plain decrypted room message", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+
+    roomDecryptedEventListener("!room:example.org", buildMessageEvent({ event_id: "$dec-ok" }));
+
+    await flushTasks();
+    expect(onRoomMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not journal redacted or sender-less decrypted room messages", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+
+    roomDecryptedEventListener(
+      "!room:example.org",
+      buildMessageEvent({
+        event_id: "$dec-redacted",
+        unsigned: { redacted_because: { reason: "spam" } },
+      } as Partial<MatrixRawEvent>),
+    );
+    roomDecryptedEventListener(
+      "!room:example.org",
+      buildMessageEvent({ event_id: "$dec-no-sender", sender: undefined }),
+    );
+
+    await flushTasks();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not journal non-dispatchable decrypted events", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+
+    roomDecryptedEventListener("!room:example.org", {
+      event_id: "$dec-member",
+      sender: "@alice:example.org",
+      state_key: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: { membership: "join", displayname: "Alice" },
+    } as MatrixRawEvent);
+
+    await flushTasks();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
 });

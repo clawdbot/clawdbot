@@ -154,7 +154,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           client,
           senderId,
           dropPreStartupMessages,
-          isJournaledReplay: ingressLifecycle !== undefined,
+          // Only rows journaled before this monitor started are crash-recovered
+          // replays that may bypass the pre-startup drop. Fresh admissions from
+          // the initial sync carry a lifecycle too; treating them as replays
+          // would process historical room history on a no-cursor cold start.
+          isJournaledReplay:
+            ingressLifecycle !== undefined && ingressLifecycle.receivedAt < startupMs,
           eventTs: eventTs ?? undefined,
           eventAge: eventAge ?? undefined,
           startupMs,

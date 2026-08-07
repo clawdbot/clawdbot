@@ -2199,7 +2199,7 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("processes journaled pre-startup replays that carry an ingress lifecycle", async () => {
+  it("processes journaled pre-startup replays admitted before monitor startup", async () => {
     const resolveAgentRoute = vi.fn(() => ({
       agentId: "ops",
       channel: "matrix",
@@ -2229,10 +2229,53 @@ describe("matrix monitor handler pairing account scope", () => {
         onDeferred: vi.fn(),
         onAdoptionFinalizing: vi.fn(),
         onAbandoned: vi.fn(async () => {}),
+        // Journaled at 500, before this monitor's startupMs of 1000: a
+        // crash-recovered replay that must bypass the pre-startup drop.
+        receivedAt: 500,
       },
     );
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops fresh initial-sync admissions with pre-startup event timestamps", async () => {
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "ops",
+      channel: "matrix",
+      accountId: "ops",
+      sessionKey: "agent:ops:main",
+      mainSessionKey: "agent:ops:main",
+      matchedBy: "binding.account" as const,
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      resolveAgentRoute,
+      isDirectMessage: true,
+      startupMs: 1_000,
+      startupGraceMs: 0,
+      dropPreStartupMessages: true,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$cold-start-history",
+        body: "hello",
+        originServerTs: 999,
+      }),
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+        // Journaled at 2000, after this monitor's startupMs of 1000: a fresh
+        // no-cursor initial-sync admission, not a crash replay, so the
+        // cold-start history filter still applies.
+        receivedAt: 2_000,
+      },
+    );
+
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 });
 
