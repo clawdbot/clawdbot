@@ -305,6 +305,46 @@ describe("decodeWhatsAppPollVote", () => {
     expect(decoded?.chatJid).toBe(DM_LID_JID);
   });
 
+  it("decodes a self-authored vote in a DM (fromMe vote, no participant, remoteJid is the peer)", () => {
+    // Regression: a self-authored DM vote key has fromMe: true, no
+    // participant, and the DM peer's jid in remoteJid (not ours). Using
+    // remoteJid as the voter identity for the crypto call — instead of our
+    // own identity — fails GCM authentication and the vote is silently
+    // dropped (decrypt throws, caught, returns undefined).
+    const DM_PEER_JID = "15550003333@s.whatsapp.net";
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Yes", "No"],
+    });
+    const creationKey: WAMessageKey = {
+      remoteJid: DM_PEER_JID,
+      id: POLL_MSG_ID,
+      fromMe: true,
+    };
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Yes"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: POLL_MSG_ID,
+      voterJid: POLL_CREATOR_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+
+    const decoded = decodeWhatsAppPollVote({
+      message: voteMessage,
+      key: {
+        remoteJid: DM_PEER_JID,
+        id: "VOTE-SELF-DM",
+        fromMe: true,
+      } as proto.IMessageKey,
+      getCachedMessage: (remoteJid, messageId) =>
+        remoteJid === DM_PEER_JID && messageId === POLL_MSG_ID ? pollCreationMessage : undefined,
+      selfJid: POLL_CREATOR_JID,
+    });
+
+    expect(decoded?.selectedOptions).toEqual(["Yes"]);
+  });
+
   it("returns undefined when decryption fails (wrong key / tampered payload)", () => {
     const { message: pollCreationMessage } = buildPollCreationMessageForTests({
       section: "pollCreationMessage",

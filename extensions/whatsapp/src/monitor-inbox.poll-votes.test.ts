@@ -89,7 +89,7 @@ describe("web monitor inbox poll vote hook", () => {
       // echo alone must NOT be sufficient to establish ownership (a fromMe
       // poll-creation message can also come from another linked device).
       // Simulate what sendPollWhatsApp would have done at accepted-send time.
-      const cfg = mockLoadConfig();
+      const cfg = mockLoadConfig() as never;
       rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId, cfg);
       rememberWhatsAppPollCreationMessage(
         DEFAULT_ACCOUNT_ID,

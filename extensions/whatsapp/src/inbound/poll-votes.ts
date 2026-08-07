@@ -109,8 +109,26 @@ function toTimestampMs(value: number | LongLike | null | undefined): number | un
  * decrypt — the primary `participant`/`remoteJid` field (whichever space
  * the conversation is natively in) is what the encryptor actually signed.
  */
-function resolvePollVoterJidForDecrypt(key: proto.IMessageKey): string | undefined {
-  return key.participant || key.remoteJid || undefined;
+function resolvePollVoterJidForDecrypt(
+  key: proto.IMessageKey,
+  selfJid: string | null | undefined,
+  selfLid: string | null | undefined,
+): string | undefined {
+  if (key.participant) {
+    return key.participant;
+  }
+  if (key.fromMe) {
+    // A self-authored vote (e.g. voting on your own poll in a self-chat DM)
+    // has no `participant` — `remoteJid` holds the DM peer's jid, not ours.
+    // Resolve to our own identity instead, matching whichever address space
+    // (LID or PN) the conversation is natively in, mirroring
+    // resolvePollCreatorJidForDecrypt below.
+    const referenceJid = key.remoteJid || "";
+    return referenceJid.endsWith("@lid")
+      ? (selfLid ?? selfJid ?? undefined)
+      : (selfJid ?? selfLid ?? undefined);
+  }
+  return key.remoteJid || undefined;
 }
 
 /**
@@ -202,7 +220,7 @@ export function decodeWhatsAppPollVote(params: {
     params.selfJid,
     params.selfLid,
   );
-  const decryptVoterJid = resolvePollVoterJidForDecrypt(params.key);
+  const decryptVoterJid = resolvePollVoterJidForDecrypt(params.key, params.selfJid, params.selfLid);
   let decodedVote: proto.Message.PollVoteMessage;
   try {
     if (!decryptCreatorJid || !decryptVoterJid) {
