@@ -90,7 +90,8 @@ jobs:
           fi
           node scripts/docker-channel-promote.mjs \
             --version "${VERSION}" \
-            --image "${TARGET_IMAGE}"
+            --image "${TARGET_IMAGE}" \
+            --attestation-policy omitted
 
       # VCR tag status can remain null after an image is usable, so Sandbox
       # creation is the authoritative readiness check for this publication.

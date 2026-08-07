@@ -269,7 +269,7 @@ describe("Vercel Container Registry publishing", () => {
       reusablePublish.steps?.find(
         (step) => step.name === "Promote and verify Vercel channel aliases",
       )?.run,
-    ).toContain('[[ "${channel}" == "beta" ]]');
+    ).toContain("--attestation-policy omitted");
     expect(
       reusablePublish.steps?.find((step) => step.name === "Run custom-image Sandbox smoke")?.run,
     ).toContain("sandbox run \\\n");
