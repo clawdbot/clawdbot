@@ -1,6 +1,7 @@
 // Sleep utility tests cover timer-safe delay clamping and abort-listener cleanup
 // for long-running agent waits.
 import { describe, expect, it, vi } from "vitest";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { sleep } from "./sleep.js";
 
@@ -36,5 +37,17 @@ describe("agents sleep", () => {
       removeListenerSpy.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it("rejects cancellation with the canonical abort classification and cause", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    const sleeper = sleep(60_000, controller.signal);
+
+    controller.abort(reason);
+
+    const error = await sleeper.catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ name: "AbortError", message: "aborted", cause: reason });
+    expect(isAbortError(error)).toBe(true);
   });
 });
