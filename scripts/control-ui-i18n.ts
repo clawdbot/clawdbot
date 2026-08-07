@@ -526,8 +526,9 @@ export function appendBoundedProcessOutput(
   if (nextText.length <= maxChars) {
     return { text: nextText, truncatedChars: capture.truncatedChars };
   }
-  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
-  return { text: sliceUtf16Safe(nextText, -maxChars), truncatedChars };
+  const text = sliceUtf16Safe(nextText, -maxChars);
+  const truncatedChars = capture.truncatedChars + nextText.length - text.length;
+  return { text, truncatedChars };
 }
 
 function formatProcessOutput(capture: ProcessOutputCapture): string {
