@@ -1,7 +1,3 @@
-import {
-  createOpenClawCodingToolsForAgentHarness as createCoreOpenClawCodingToolsForAgentHarness,
-  createOpenClawCodingToolsForAgentHarnessSideQuestion as createCoreOpenClawCodingToolsForAgentHarnessSideQuestion,
-} from "../agents/agent-tools-internal.js";
 import type {
   AgentHarnessSideQuestionParams,
   EmbeddedRunAttemptParams,
@@ -15,10 +11,16 @@ type OpenClawCodingToolsOptions = NonNullable<
  * Build tools for the exact host-admitted attempt without exposing its private
  * execution attribution to plugin code.
  */
-export function createOpenClawCodingToolsForAgentHarness(
+export async function createOpenClawCodingToolsForAgentHarness(
   attempt: EmbeddedRunAttemptParams,
   options?: OpenClawCodingToolsOptions,
-): ReturnType<typeof createCoreOpenClawCodingToolsForAgentHarness> {
+): Promise<
+  ReturnType<
+    typeof import("../agents/agent-tools-internal.js").createOpenClawCodingToolsForAgentHarness
+  >
+> {
+  const { createOpenClawCodingToolsForAgentHarness: createCoreOpenClawCodingToolsForAgentHarness } =
+    await import("../agents/agent-tools-internal.js");
   return createCoreOpenClawCodingToolsForAgentHarness(attempt, options);
 }
 
@@ -26,9 +28,17 @@ export function createOpenClawCodingToolsForAgentHarness(
  * Build tools for the exact host-admitted side-question request without
  * exposing its private execution attribution to plugin code.
  */
-export function createOpenClawCodingToolsForAgentHarnessSideQuestion(
+export async function createOpenClawCodingToolsForAgentHarnessSideQuestion(
   params: AgentHarnessSideQuestionParams,
   options?: OpenClawCodingToolsOptions,
-): ReturnType<typeof createCoreOpenClawCodingToolsForAgentHarnessSideQuestion> {
+): Promise<
+  ReturnType<
+    typeof import("../agents/agent-tools-internal.js").createOpenClawCodingToolsForAgentHarnessSideQuestion
+  >
+> {
+  const {
+    createOpenClawCodingToolsForAgentHarnessSideQuestion:
+      createCoreOpenClawCodingToolsForAgentHarnessSideQuestion,
+  } = await import("../agents/agent-tools-internal.js");
   return createCoreOpenClawCodingToolsForAgentHarnessSideQuestion(params, options);
 }

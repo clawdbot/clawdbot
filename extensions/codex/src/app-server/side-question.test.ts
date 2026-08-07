@@ -115,9 +115,17 @@ const bindingStore: CodexAppServerBindingStore = {
 
 function runCodexAppServerSideQuestion(
   params: Parameters<typeof runCodexAppServerSideQuestionImpl>[0],
-  options: Omit<Parameters<typeof runCodexAppServerSideQuestionImpl>[1], "bindingStore"> = {},
+  options: Omit<
+    Parameters<typeof runCodexAppServerSideQuestionImpl>[1],
+    "agentHarnessCodingToolsFactory" | "bindingStore"
+  > = {},
 ) {
-  return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
+  return runCodexAppServerSideQuestionImpl(params, {
+    ...options,
+    agentHarnessCodingToolsFactory: (attributionParams, toolOptions) =>
+      createOpenClawCodingToolsForSideQuestionMock(attributionParams, toolOptions),
+    bindingStore,
+  });
 }
 
 function createFakeClient() {

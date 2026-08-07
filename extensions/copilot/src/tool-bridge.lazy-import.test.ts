@@ -1,24 +1,12 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createCopilotToolBridge } from "./tool-bridge.js";
 
-afterEach(() => {
-  vi.doUnmock("openclaw/plugin-sdk/agent-harness-tool-authority-runtime");
-  vi.resetModules();
-});
-
-it("loads the private tool builder only after the tool-construction guard", async () => {
-  let toolBuilderImports = 0;
-  vi.doMock("openclaw/plugin-sdk/agent-harness-tool-authority-runtime", () => {
-    toolBuilderImports += 1;
-    return {
-      createOpenClawCodingToolsForAgentHarness: vi.fn(() => []),
-    };
-  });
-
-  const { createCopilotToolBridge } = await import("./tool-bridge.js");
-  expect(toolBuilderImports).toBe(0);
+it("invokes host tool authority only after the tool-construction guard", async () => {
+  const agentHarnessCodingToolsFactory = vi.fn(async () => []);
 
   await expect(
     createCopilotToolBridge({
+      agentHarnessCodingToolsFactory,
       admittedAttempt: {} as never,
       agentId: "agent-1",
       attemptParams: { disableTools: true } as never,
@@ -27,10 +15,11 @@ it("loads the private tool builder only after the tool-construction guard", asyn
       sessionId: "session-1",
     }),
   ).resolves.toEqual({ codeModeEngaged: false, sdkTools: [], sourceTools: [] });
-  expect(toolBuilderImports).toBe(0);
+  expect(agentHarnessCodingToolsFactory).not.toHaveBeenCalled();
 
   await expect(
     createCopilotToolBridge({
+      agentHarnessCodingToolsFactory,
       admittedAttempt: {} as never,
       agentId: "agent-1",
       attemptParams: {} as never,
@@ -39,5 +28,5 @@ it("loads the private tool builder only after the tool-construction guard", asyn
       sessionId: "session-1",
     }),
   ).resolves.toMatchObject({ sdkTools: [], sourceTools: [] });
-  expect(toolBuilderImports).toBe(1);
+  expect(agentHarnessCodingToolsFactory).toHaveBeenCalledOnce();
 });
