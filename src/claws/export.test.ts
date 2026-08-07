@@ -522,6 +522,66 @@ describe("exportClawAgent", () => {
     expect(exported.packageBootstrap).toBeUndefined();
   });
 
+  it("refuses to export a locally modified package bootstrap", async () => {
+    const fixture = await installedFixture({ packageBootstrap: true });
+    await writeFile(
+      join(fixture.plan.agent.workspace, "BOOTSTRAP.md"),
+      "# Edited onboarding\n",
+      "utf8",
+    );
+    const out = join(fixture.root, "exported-modified-bootstrap");
+
+    await expect(
+      exportClawAgent("worker", out, {
+        env: fixture.env,
+        config: fixture.config,
+        packageDeps: fixture.packageDeps,
+        sourceMcpServers: fixture.sourceMcpServers,
+      }),
+    ).rejects.toMatchObject({ code: "bootstrap_drifted" });
+    await expect(stat(out)).rejects.toThrow();
+  });
+
+  it("still exports a consumed package bootstrap without a package BOOTSTRAP.md", async () => {
+    const fixture = await installedFixture({ packageBootstrap: true });
+    await rm(join(fixture.plan.agent.workspace, "BOOTSTRAP.md"));
+    const out = join(fixture.root, "exported-consumed-bootstrap");
+
+    const result = await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      packageDeps: fixture.packageDeps,
+      sourceMcpServers: fixture.sourceMcpServers,
+    });
+
+    expect(result.filesWritten).not.toContain("BOOTSTRAP.md");
+  });
+
+  it("exports a drifted package bootstrap when a reviewed replacement is supplied", async () => {
+    const fixture = await installedFixture({ packageBootstrap: true });
+    await writeFile(
+      join(fixture.plan.agent.workspace, "BOOTSTRAP.md"),
+      "# Edited onboarding\n",
+      "utf8",
+    );
+    const bootstrapPath = join(fixture.root, "reviewed-replacement.md");
+    await writeFile(bootstrapPath, "# First run\n\nAsk for the operator's timezone.\n", "utf8");
+    const out = join(fixture.root, "exported-replaced-bootstrap");
+
+    const result = await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      packageDeps: fixture.packageDeps,
+      sourceMcpServers: fixture.sourceMcpServers,
+      bootstrapPath,
+    });
+
+    expect(result.filesWritten).toContain("BOOTSTRAP.md");
+    await expect(readFile(join(out, "BOOTSTRAP.md"), "utf8")).resolves.toContain(
+      "operator's timezone",
+    );
+  });
+
   it("exports a large pending package bootstrap within the native size limit", async () => {
     const content = Buffer.from("# First run\n\n" + "x".repeat(1024 * 1024 + 32));
     expect(content.byteLength).toBeLessThanOrEqual(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);

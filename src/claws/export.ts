@@ -54,6 +54,8 @@ type ClawExportResult = {
   filesWritten: string[];
 };
 
+const DRIFTED_BOOTSTRAP_STATES = new Set<string>(["modified", "unsafe", "unknown"]);
+
 export class ClawExportError extends Error {
   constructor(
     readonly code: string,
@@ -357,6 +359,19 @@ export async function exportClawAgent(
     throw new ClawExportError(
       "packages_drifted",
       `Cannot export drifted packages: ${driftedPackages.map((pkg) => `${pkg.kind}:${pkg.ref}@${pkg.version} (${pkg.extensionCompatibility?.state ?? pkg.state})`).join(", ")}.`,
+    );
+  }
+  // A drifted package bootstrap is managed state like any other: exporting it
+  // silently would publish a package with no BOOTSTRAP.md at all. An explicitly
+  // reviewed --bootstrap replacement is the supported way through.
+  if (
+    record.install.bootstrap &&
+    !options.bootstrapPath &&
+    DRIFTED_BOOTSTRAP_STATES.has(record.bootstrapState)
+  ) {
+    throw new ClawExportError(
+      "bootstrap_drifted",
+      `Cannot export the package bootstrap ${JSON.stringify(record.bootstrap.path)} in ${JSON.stringify(record.bootstrapState)} state; restore the seeded file or pass a reviewed --bootstrap replacement.`,
     );
   }
   const unresolvedCronJobs = record.cronJobs.filter(
