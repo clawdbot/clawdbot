@@ -13,7 +13,15 @@ import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
 // reconstructs tool-call arguments from raw deltas forwarded over the Worker
 // RPC connection, so it can receive the identical small-delta stream a large
 // Bedrock tool call produces and must not silently truncate or drop the
-// result once per-delta re-parsing is throttled for size.
+// result now that per-delta re-parsing is handled by the incremental,
+// time-bounded preview (see packages/ai/src/utils/json-parse.ts) instead of
+// a fixed size cutoff. That shared helper's own tests
+// (src/llm/utils/json-parse.test.ts) cover the liveness guarantee in
+// isolation with deterministic clock control; this adapter can't observe
+// intermediate preview snapshots the same way because the fake client below
+// (like the real Worker RPC client) delivers every delta synchronously
+// before the consumer's `for await` gets a chance to run, so only the final,
+// fully-resolved state is observable here.
 function fakeClientEmittingToolCallDeltas(
   deltas: string[],
   finalArguments: Record<string, unknown>,
@@ -78,7 +86,7 @@ function fakeClientEmittingToolCallDeltas(
 }
 
 describe("createWorkerInferenceStreamAdapter tool-call argument reconstruction", () => {
-  it("resolves the full tool-call arguments in the live toolcall_end preview even when the buffer exceeds the streaming preview threshold", async () => {
+  it("resolves the full tool-call arguments in the live toolcall_end preview for a large, multi-chunk argument", async () => {
     const longContent = "lorem ipsum dolor sit amet ".repeat(2000); // ~54KB
     const expectedArguments = { filename: "report.docx", content: longContent };
     const fullArgsJson = JSON.stringify(expectedArguments);
@@ -119,6 +127,7 @@ describe("createWorkerInferenceStreamAdapter tool-call argument reconstruction",
       arguments: expectedArguments,
     });
     expect(toolcallEnd?.toolCall).not.toHaveProperty("partialJson");
+    expect(toolcallEnd?.toolCall).not.toHaveProperty("jsonPreview");
     expect(result.content[0]).toMatchObject({ type: "toolCall", arguments: expectedArguments });
   });
 });

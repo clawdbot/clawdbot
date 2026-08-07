@@ -35,8 +35,12 @@ import {
   calculateCost,
   clampReasoning,
   createHttpProxyAgentsForTarget,
+  createStreamingJsonPreviewState,
+  finalizeStreamingJsonPreview,
   parseStreamingJson,
+  pushStreamingJsonPreview,
   sanitizeSurrogates,
+  type StreamingJsonPreviewState,
   transformMessages,
   type Api,
   type AssistantMessage,
@@ -75,25 +79,45 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
+type Block = (TextContent | ThinkingContent | ToolCall) & {
+  index?: number;
+  partialJson?: string;
+  jsonPreview?: StreamingJsonPreviewState;
+};
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 
 /**
- * Above this many accumulated characters, stop re-parsing a tool call's full
- * argument buffer on every streamed delta. `parseStreamingJson` re-derives the
- * whole buffer from scratch each call, so re-running it on every delta makes
- * the total streaming cost O(n^2) in the argument size instead of O(n): a
- * single large argument (e.g. a multi-KB document body written via a
- * `write_file`-style tool) can cost multiple seconds of synchronous CPU time
- * spread across the stream. That synchronous work can starve the event loop
- * long enough to look like network idleness to timeout/watchdog logic further
- * up the stack, and has been observed to correlate with tool-call arguments
- * silently resolving to `{}` on large payloads. Below this threshold the live
- * "arguments so far" preview stays exact and updates on every delta; above it,
- * the preview simply stops updating until `handleContentBlockStop` resolves
- * the final value once from the complete buffer (see below).
+ * A tool call's argument buffer used to be re-derived from scratch via
+ * `parseStreamingJson(fullBufferSoFar)` on every single streamed delta.
+ * That makes total streaming cost O(n^2) in the argument size: a single
+ * large argument (e.g. a multi-KB document body written via a
+ * `write_file`-style tool) could cost multiple seconds of synchronous CPU
+ * time spread across the stream, starving the event loop long enough to
+ * look like network idleness to timeout/watchdog logic further up the
+ * stack - this has been observed to correlate with tool-call arguments
+ * silently resolving to `{}` on large payloads.
+ *
+ * `pushStreamingJsonPreview` (see packages/ai/src/utils/json-parse.ts) fixes
+ * this at the root instead of trading it off: the JSON-repair step is now
+ * genuinely incremental (O(delta) per call, proven byte-identical to the
+ * non-incremental repair via a differential fuzz test), and the remaining
+ * JSON.parse/partial-json fallback - which has no incremental API and must
+ * still scan the whole buffer - is capped to at most once per
+ * `MIN_STREAMING_JSON_REPARSE_INTERVAL_MS` (20ms) of wall-clock time rather
+ * than once per delta. 20ms is far below anything perceptible as "stale" (a
+ * 60fps frame is ~16ms), so the live preview keeps refreshing continuously
+ * for arguments of any realistic size, unlike the previous design which
+ * simply froze the preview once a size threshold was crossed.
+ * `handleContentBlockStop` still forces one final, unthrottled resolution
+ * (see below) so correctness never depends on the interval.
  */
-const MAX_TOOLCALL_STREAMING_PREVIEW_CHARS = 8_000;
+
+function getOrCreateJsonPreview(block: Block): StreamingJsonPreviewState {
+  if (!block.jsonPreview) {
+    block.jsonPreview = createStreamingJsonPreviewState();
+  }
+  return block.jsonPreview;
+}
 
 function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
   return resolveClaudeFable5ModelIdentity(model) !== undefined;
@@ -392,8 +416,9 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     } catch (error) {
       for (const block of output.content) {
         delete (block as Block).index;
-        // partialJson is only a streaming scratch buffer; never persist it.
+        // partialJson/jsonPreview are only streaming scratch buffers; never persist them.
         delete (block as Block).partialJson;
+        delete (block as Block).jsonPreview;
       }
       if (refusalBuffer) {
         refusalBuffer.discard();
@@ -579,10 +604,9 @@ function handleContentBlockDelta(
       stream.push({ type: "text_delta", contentIndex: index, delta: delta.text, partial: output });
     }
   } else if (delta?.toolUse && block?.type === "toolCall") {
-    block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
-    if (block.partialJson.length <= MAX_TOOLCALL_STREAMING_PREVIEW_CHARS) {
-      block.arguments = parseStreamingJson(block.partialJson);
-    }
+    const input = delta.toolUse.input || "";
+    block.partialJson = (block.partialJson || "") + input;
+    block.arguments = pushStreamingJsonPreview(getOrCreateJsonPreview(block), input);
     stream.push({
       type: "toolcall_delta",
       contentIndex: index,
@@ -707,14 +731,17 @@ function handleContentBlockStop(
       });
       break;
     case "toolCall":
-      // Always resolve the final arguments from the complete buffer exactly
-      // once here, regardless of whether per-delta re-parsing above was
-      // skipped for size - this is what guarantees correctness for large
-      // arguments once the preview stops tracking every delta.
-      block.arguments = parseStreamingJson(block.partialJson);
-      // Finalize in-place and strip the scratch buffer so replay only
-      // carries parsed arguments.
+      // Always force one final, unthrottled resolution from the complete
+      // buffer here, regardless of the reparse-interval cap applied to the
+      // live preview above - this is what guarantees correctness
+      // independent of stream timing.
+      block.arguments = block.jsonPreview
+        ? finalizeStreamingJsonPreview(block.jsonPreview)
+        : parseStreamingJson(block.partialJson);
+      // Finalize in-place and strip scratch buffers so replay only carries
+      // parsed arguments.
       delete (block as Block).partialJson;
+      delete (block as Block).jsonPreview;
       stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
       break;
   }
