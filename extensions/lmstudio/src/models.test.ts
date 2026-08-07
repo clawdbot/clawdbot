@@ -925,6 +925,53 @@ describe("lmstudio-models", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+  it("redacts reflected credentials from model load error body text", async () => {
+    // Upstream proxies may reflect an Authorization header in error bodies.
+    // Sanitize that text through the tool-payload redactor so credentials
+    // never reach the thrown error message.
+    const body = `upstream proxy error: rejected Bearer sk-reflected-secret-abc123xyz`;
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return jsonResponse({
+          models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+        });
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return new Response(body, { status: 502 });
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    const error = await ensureLmstudioModelLoaded({
+      baseUrl: "http://localhost:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    // The Bearer credential must be absent from the operator-visible error.
+    expect((error as Error).message).not.toMatch(/sk-reflected-secret/);
+    // Safe diagnostics (status code, upstream error label) must still appear.
+    expect((error as Error).message).toMatch(/LM Studio model load failed \(502\)/);
+    expect((error as Error).message).toContain("upstream proxy error");
+  });
+
+  it("reloads model to the clamped default target when already loaded below the default window", async () => {
+    const fetchMock = createModelLoadFetchMock({
+      loadedContextLength: 4096,
+      maxContextLength: 32768,
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    await expect(
+      ensureLmstudioModelLoaded({
+        baseUrl: "http://localhost:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+      }),
+    ).resolves.toBe("qwen3-8b-instruct");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expectLoadContextLength(fetchMock, 32768);
+  });
   it("loads model with clamped context length and merged headers", async () => {
     const fetchMock = createModelLoadFetchMock({ maxContextLength: 32768 });
     vi.stubGlobal("fetch", asFetch(fetchMock));
