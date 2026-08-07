@@ -70,6 +70,7 @@ const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 // Without this, gateway.ts waits forever for close/error when TCP accepts but
 // never upgrades, pinning the monitor reconnect loop.
 const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
+const CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS = 15_000;
 const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
 const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
 const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
@@ -139,7 +140,11 @@ export function createClickClackClient(options: ClientOptions) {
     Accept: "application/json",
   };
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function request<T>(
+    path: string,
+    init: RequestInit = {},
+    requestOptions: { timeoutMs?: number; responseMode?: "json" | "none" } = {},
+  ): Promise<T> {
     const requestHeaders = new Headers(init.headers);
     for (const [key, value] of Object.entries(headers)) {
       requestHeaders.set(key, value);
@@ -150,20 +155,43 @@ export function createClickClackClient(options: ClientOptions) {
     if (init.body && !(init.body instanceof FormData)) {
       requestHeaders.set("Content-Type", "application/json");
     }
-    const response = await fetcher(`${baseUrl}${path}`, { ...init, headers: requestHeaders });
-    if (!response.ok) {
-      const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
-      // Remote error bodies are untrusted output; redact them even when the
-      // operator disables log redaction or overrides log-only patterns.
-      throw new ClickClackHttpError(
-        response.status,
-        redactToolPayloadText(detail),
-        new Headers(response.headers),
-      );
+    const controller =
+      requestOptions.timeoutMs !== undefined && !init.signal ? new AbortController() : undefined;
+    const timeout = controller
+      ? setTimeout(() => controller.abort(), requestOptions.timeoutMs)
+      : undefined;
+    try {
+      const response = await fetcher(`${baseUrl}${path}`, {
+        ...init,
+        ...(controller ? { signal: controller.signal } : {}),
+        headers: requestHeaders,
+      });
+      if (!response.ok) {
+        const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+        // Remote error bodies are untrusted output; redact them even when the
+        // operator disables log redaction or overrides log-only patterns.
+        throw new ClickClackHttpError(
+          response.status,
+          redactToolPayloadText(detail),
+          new Headers(response.headers),
+        );
+      }
+      if (requestOptions.responseMode === "none") {
+        try {
+          await response.body?.cancel();
+        } catch {
+          // A successful write does not depend on an optional response body.
+        }
+        return undefined as T;
+      }
+      return await readProviderJsonResponse<T>(response, "ClickClack response", {
+        maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+      });
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
-    return await readProviderJsonResponse<T>(response, "ClickClack response", {
-      maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
-    });
   }
 
   async function fetchEventPage(
@@ -526,6 +554,35 @@ export function createClickClackClient(options: ClientOptions) {
         { method: "PATCH", body: JSON.stringify({ body }) },
       );
       return data.message;
+    },
+    /**
+     * Publishes an ephemeral realtime signal such as native agent progress.
+     * These frames are intentionally not persisted as messages.
+     */
+    publishEphemeral: async (params: {
+      workspaceId: string;
+      channelId?: string;
+      conversationId?: string;
+      type: "typing.started" | "typing.stopped" | "presence.changed" | "agent.progress";
+      payload?: Record<string, unknown>;
+    }): Promise<void> => {
+      await request<void>(
+        "/api/realtime/ephemeral",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            workspace_id: params.workspaceId,
+            ...(params.channelId ? { channel_id: params.channelId } : {}),
+            ...(params.conversationId ? { direct_conversation_id: params.conversationId } : {}),
+            type: params.type,
+            payload: params.payload ?? {},
+          }),
+        },
+        {
+          timeoutMs: CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS,
+          responseMode: "none",
+        },
+      );
     },
     createDirectMessage: async (
       conversationId: string,
