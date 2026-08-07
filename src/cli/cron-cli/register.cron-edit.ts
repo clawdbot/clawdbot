@@ -325,7 +325,7 @@ export function registerCronEditCommand(cron: Command) {
             // stream schedule edits already merge sibling metadata the same way.
             const existing = await readExistingCronJob();
             patch.trigger = {
-              ...(existing.trigger ?? {}),
+              ...existing.trigger,
               script: await readCronTriggerScript(triggerScriptPath),
               ...(opts.triggerOnce ? { once: true } : {}),
             };

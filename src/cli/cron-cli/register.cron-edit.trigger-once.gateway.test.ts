@@ -133,7 +133,6 @@ describe("cron edit trigger-once CLI→gateway", () => {
       ["cron", "edit", jobId, "--trigger-script", nextScriptPath, "--url", url, "--token", token],
       env,
     );
-    // eslint-disable-next-line no-console
     console.log(
       [
         "----- cli-edit-trigger-script-preserve-once -----",
@@ -152,7 +151,6 @@ describe("cron edit trigger-once CLI→gateway", () => {
     };
     expect(job.trigger?.once).toBe(true);
     expect(job.trigger?.script).toContain("fire: true");
-    // eslint-disable-next-line no-console
     console.log(
       [
         "----- gateway-cron-get-trigger -----",
