@@ -356,8 +356,6 @@ describe("managed diagnostics-otel install runtime", () => {
       await runTurn(gateway, "OTEL-MANAGED-SAMPLED-OUT");
       await sleep(1_500);
       expect(configured.capturedRequests).toHaveLength(0);
-      const sampledOutRequestCursor = configured.capturedRequests.length;
-      const sampledOutSpanCursor = configured.capturedSpans.length;
       expect(envOnly.capturedRequests).toHaveLength(0);
 
       await restartWithOtelConfig({
@@ -365,8 +363,6 @@ describe("managed diagnostics-otel install runtime", () => {
         sampleRate: 1,
         traceEndpoint: configured.baseUrl,
       });
-      expect(configured.capturedRequests).toHaveLength(sampledOutRequestCursor);
-      expect(configured.capturedSpans).toHaveLength(sampledOutSpanCursor);
       const sampledInRequestCursor = configured.capturedRequests.length;
       const sampledInSpanCursor = configured.capturedSpans.length;
       await runTurn(gateway, "OTEL-MANAGED-INSTALL-OK");

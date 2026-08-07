@@ -152,21 +152,14 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   },
 }));
 
-vi.mock("./models/list.scoped-catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models/list.scoped-catalog.js")>();
-  return {
-    ...actual,
-    loadScopedListModelCatalogSnapshot: async (
-      params: Parameters<typeof actual.loadScopedListModelCatalogSnapshot>[0],
-    ) => {
-      if (!params.providerIds.includes("zai")) {
-        return await actual.loadScopedListModelCatalogSnapshot(params);
-      }
-      const entries = await loadModelCatalog();
-      return { entries, routeVariants: entries, staticEntries: [] };
-    },
-  };
-});
+vi.mock("./models/list.scoped-catalog.js", () => ({
+  // The scoped-catalog owner covers live discovery; this command fixture supplies
+  // deterministic rows without materializing provider runtime in the shared E2E worker.
+  loadScopedListModelCatalogSnapshot: async () => {
+    const entries = await loadModelCatalog();
+    return { entries, routeVariants: entries, staticEntries: [] };
+  },
+}));
 
 vi.mock("../agents/prepared-model-registry.js", () => ({
   loadPreparedAgentModelRegistry: async (config: object, options?: { agentDir?: string }) => ({
@@ -633,6 +626,7 @@ describe("models list/status", () => {
 
   it("models list all includes catalog rows with unknown auth availability", async () => {
     setDefaultZaiRegistry({ available: false });
+    loadModelCatalog.mockResolvedValueOnce([{ ...MOONSHOT_MODEL, id: "kimi-k3", name: "Kimi K3" }]);
     const runtime = makeRuntime();
 
     await withEnvAsync(
@@ -641,7 +635,7 @@ describe("models list/status", () => {
     );
 
     const payload = parseJsonLog(runtime);
-    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
     expect(payload.models.length).toBeGreaterThan(0);
     const model = payload.models.find(
       (candidate: { key: string }) => candidate.key === "moonshot/kimi-k3",

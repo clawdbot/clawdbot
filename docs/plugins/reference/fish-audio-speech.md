@@ -1,11 +1,11 @@
 ---
 summary: "Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output."
 read_when:
-  - You are installing, configuring, or auditing the fish-audio plugin
-title: "Fish Audio plugin"
+  - You are installing, configuring, or auditing the fish-audio-speech plugin
+title: "Fish Audio Speech plugin"
 ---
 
-# Fish Audio plugin
+# Fish Audio Speech plugin
 
 Fish Audio S2.1 hosted text-to-speech with streaming, voice notes, and telephony output.
 

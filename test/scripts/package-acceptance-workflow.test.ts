@@ -1574,6 +1574,10 @@ describe("package acceptance workflow", () => {
   it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
+    const packageTelegram = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "package_telegram");
+    const dockerAcceptance = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance");
+    const npmTelegram = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
+    const buildPrivateQa = workflowStep(npmTelegram, "Build private QA harness runtime");
 
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
@@ -1638,9 +1642,19 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}",
     );
-    expect(workflow).toContain(
-      "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
+    expect(packageTelegram.with?.harness_ref).toBe("${{ inputs.workflow_ref }}");
+    expect(dockerAcceptance.with?.ref).toBe(
+      "${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
+    expect(buildPrivateQa.env).toMatchObject({
+      NODE_OPTIONS: "--max-old-space-size=8192",
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+    });
+    expectTextToIncludeAll(buildPrivateQa.run, [
+      "node scripts/build-all.mjs qaRuntime",
+      "test -f dist/plugin-sdk/qa-runtime.js",
+      "test -f dist/extensions/qa-lab/runtime-api.js",
+    ]);
     expect(workflow).toContain('fallback_version="$(npm view openclaw@latest version)"');
     expect(workflow).toContain('echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain(
@@ -3465,6 +3479,28 @@ describe("package artifact reuse", () => {
       "printf 'Runtime token-efficiency lane started.\\n' > \"${output_dir}/runtime-lane-started.txt\"",
     );
     expect(reportStep.if).toBe("steps.run_lane.outcome == 'success'");
+  });
+
+  it("runs the core gateway restart pair on its pinned live model", () => {
+    const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
+    const credentialStep = workflowStep(job, "Validate required QA credential env");
+    const runStep = workflowStep(job, "Run pinned GPT-5.4 gateway restart runtime pair");
+    const stepNames = job.steps?.map((step) => step.name) ?? [];
+
+    expect(credentialStep.run).toContain('if [[ -z "${OPENAI_API_KEY:-}" ]]');
+    expect(credentialStep.run).toContain("exit 1");
+    expect(runStep.run).toContain("--provider-mode live-frontier");
+    expect(runStep.run).toContain("--scenario gateway-restart-multi-live");
+    expect(runStep.run).toContain("--model openai/gpt-5.4");
+    expect(runStep.run).toContain("--alt-model openai/gpt-5.4");
+    expect(runStep.run).toContain("--runtime-pair openclaw,codex");
+    expect(runStep.run).toContain(
+      "steps.run_lane.outputs.output_dir }}/gateway-restart-gpt-5.4-runtime-pair",
+    );
+    expect(runStep.run).not.toContain("--allow-failures");
+    expect(stepNames.indexOf("Run pinned GPT-5.4 gateway restart runtime pair")).toBeLessThan(
+      stepNames.indexOf("Generate live runtime token-efficiency report"),
+    );
   });
 
   it("requires release-check QA evidence artifacts when lanes run", () => {

@@ -68,6 +68,57 @@ function createHost(options?: {
 
 const openSession = { onOpenSession: () => {} };
 
+function makeProps(overrides: Partial<BackgroundTasksProps> = {}): BackgroundTasksProps {
+  return {
+    sessionKey: "agent:main:current",
+    statusRowId: "chat-tasks-status-test",
+    collapsed: true,
+    narrowLayout: false,
+    connected: true,
+    canCancel: false,
+    loading: false,
+    error: null,
+    tasks: null,
+    cancellingTaskIds: new Set(),
+    finishedCollapsed: false,
+    selectedTaskId: null,
+    taskDetails: new Map(),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
+    onToggleCollapsed: () => {},
+    onToggleFinished: () => {},
+    onRefresh: () => {},
+    onCancel: () => {},
+    onSelectTask: () => {},
+    onBackToList: () => {},
+    onOpenSession: () => {},
+    ...overrides,
+  };
+}
+
+function renderTaskRail(overrides: Partial<BackgroundTasksProps>) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  render(
+    html`${renderBackgroundTasksRail(
+      makeProps({
+        collapsed: false,
+        tasks: [],
+        ...overrides,
+      }),
+    )}`,
+    container,
+  );
+  return container;
+}
+
+function renderStatusRow(overrides: Partial<BackgroundTasksProps>) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  render(html`${renderBackgroundTasksStatusRow(makeProps(overrides))}`, container);
+  return container;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -539,48 +590,26 @@ describe("background tasks rail rendering", () => {
     const onCancel = vi.fn();
     const onOpenSession = vi.fn();
     const onSelectTask = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: true,
-        loading: false,
-        error: null,
-        tasks: [
-          makeTask({
-            id: "task-1",
-            taskId: "runtime-task-1",
-            childSessionKey: "agent:main:subagent:abc",
-          }),
-          makeTask({
-            id: "task-2",
-            status: "completed",
-            runtime: "cli",
-            title: "Finished work",
-            sessionKey: "agent:main:cli:finished",
-          }),
-        ],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: null,
-        taskDetails: new Map(),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel,
-        onSelectTask,
-        onBackToList: () => {},
-        onOpenSession,
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      canCancel: true,
+      tasks: [
+        makeTask({
+          id: "task-1",
+          taskId: "runtime-task-1",
+          childSessionKey: "agent:main:subagent:abc",
+        }),
+        makeTask({
+          id: "task-2",
+          status: "completed",
+          runtime: "cli",
+          title: "Finished work",
+          sessionKey: "agent:main:cli:finished",
+        }),
+      ],
+      onCancel,
+      onSelectTask,
+      onOpenSession,
+    });
 
     const rows = container.querySelectorAll(".chat-tasks-rail__task");
     expect(rows.length).toBe(2);
@@ -605,45 +634,19 @@ describe("background tasks rail rendering", () => {
   });
 
   it("shows live tool activity for running tasks and duration for finished tasks", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [
-          makeTask({ id: "task-1", toolUseCount: 12, lastToolName: "read" }),
-          makeTask({
-            id: "task-2",
-            status: "completed",
-            startedAt: 1_000,
-            endedAt: 66_000,
-            updatedAt: 70_000,
-            toolUseCount: 1,
-          }),
-        ],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: null,
-        taskDetails: new Map(),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList: () => {},
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [
+        makeTask({ id: "task-1", toolUseCount: 12, lastToolName: "read" }),
+        makeTask({
+          id: "task-2",
+          status: "completed",
+          startedAt: 1_000,
+          endedAt: 66_000,
+          updatedAt: 70_000,
+          toolUseCount: 1,
+        }),
+      ],
+    });
 
     const running = container.querySelector('[data-task-id="task-1"]');
     expect(running?.textContent).toContain("12 tool uses");
@@ -663,40 +666,17 @@ describe("background tasks rail rendering", () => {
       status: "completed",
       terminalSummary: "Audit complete",
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [task],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: "task-1",
-        taskDetails: new Map([
-          [
-            "task-1",
-            { ...task, terminalSummary: "Stale running progress", prompt: "Review running tasks" },
-          ],
-        ]),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList,
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [task],
+      selectedTaskId: "task-1",
+      taskDetails: new Map([
+        [
+          "task-1",
+          { ...task, terminalSummary: "Stale running progress", prompt: "Review running tasks" },
+        ],
+      ]),
+      onBackToList,
+    });
 
     const detail = container.querySelector('[data-task-detail="task-1"]');
     expect(detail?.textContent).toContain("Review running tasks");
@@ -724,35 +704,11 @@ describe("background tasks rail rendering", () => {
       terminalSummary: "Finished in lookup",
       prompt: "Review running tasks",
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [listTask],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: "task-1",
-        taskDetails: new Map([["task-1", lookupTask]]),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList: () => {},
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [listTask],
+      selectedTaskId: "task-1",
+      taskDetails: new Map([["task-1", lookupTask]]),
+    });
 
     const detail = container.querySelector('[data-task-detail="task-1"]');
     expect(detail?.textContent).toContain("Finished in lookup");
@@ -760,35 +716,10 @@ describe("background tasks rail rendering", () => {
   });
 
   it("collapses the finished section", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [makeTask({ id: "task-2", status: "completed" })],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: true,
-        selectedTaskId: null,
-        taskDetails: new Map(),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList: () => {},
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [makeTask({ id: "task-2", status: "completed" })],
+      finishedCollapsed: true,
+    });
 
     expect(container.querySelectorAll(".chat-tasks-rail__task").length).toBe(0);
     expect(
@@ -798,49 +729,14 @@ describe("background tasks rail rendering", () => {
 });
 
 describe("running-tasks status row", () => {
-  function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksProps {
-    return {
-      sessionKey: "agent:main:current",
-      statusRowId: "chat-tasks-status-test",
-      collapsed: true,
-      narrowLayout: false,
-      connected: true,
-      canCancel: false,
-      loading: false,
-      error: null,
-      tasks: null,
-      cancellingTaskIds: new Set(),
-      finishedCollapsed: false,
-      selectedTaskId: null,
-      taskDetails: new Map(),
-      taskDetailErrors: new Map(),
-      taskDetailLoadingIds: new Set(),
-      onToggleCollapsed: () => {},
-      onToggleFinished: () => {},
-      onRefresh: () => {},
-      onCancel: () => {},
-      onSelectTask: () => {},
-      onBackToList: () => {},
-      onOpenSession: () => {},
-      ...overrides,
-    };
-  }
-
   it("ticks from the oldest active start and counts only active tasks", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          tasks: [
-            makeTask({ id: "t1", startedAt: 9_000 }),
-            makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
-            makeTask({ id: "t3", status: "completed", startedAt: 100 }),
-          ],
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [
+        makeTask({ id: "t1", startedAt: 9_000 }),
+        makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
+        makeTask({ id: "t3", status: "completed", startedAt: 100 }),
+      ],
+    });
 
     const elapsed = container.querySelector<HTMLElement & { startMs: number | null }>(
       "openclaw-elapsed-time",
@@ -853,17 +749,10 @@ describe("running-tasks status row", () => {
 
   it("renders count, ticking elapsed time, and opens the collapsed rail", () => {
     const onToggleCollapsed = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          tasks: [makeTask({ id: "t1", startedAt: 9_000 })],
-          onToggleCollapsed,
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [makeTask({ id: "t1", startedAt: 9_000 })],
+      onToggleCollapsed,
+    });
 
     const row = container.querySelector(".chat-tasks-status");
     expect(row).not.toBeNull();
@@ -879,18 +768,11 @@ describe("running-tasks status row", () => {
 
   it("pluralizes the label and leaves an open rail alone", () => {
     const onToggleCollapsed = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          collapsed: false,
-          tasks: [makeTask({ id: "t1" }), makeTask({ id: "t2", status: "queued" })],
-          onToggleCollapsed,
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      collapsed: false,
+      tasks: [makeTask({ id: "t1" }), makeTask({ id: "t2", status: "queued" })],
+      onToggleCollapsed,
+    });
 
     const link = container.querySelector<HTMLButtonElement>(".chat-tasks-status__link");
     expect(link?.textContent?.trim()).toBe("2 running tasks");
@@ -899,23 +781,16 @@ describe("running-tasks status row", () => {
   });
 
   it("anchors a hover preview of the latest tasks, active first, capped at five", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          tasks: [
-            makeTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
-            makeTask({ id: "a2", status: "queued", title: "Queued two", updatedAt: 8_000 }),
-            makeTask({ id: "f1", status: "completed", title: "Finished one", updatedAt: 7_000 }),
-            makeTask({ id: "f2", status: "failed", title: "Finished two", updatedAt: 6_000 }),
-            makeTask({ id: "f3", status: "completed", title: "Finished three", updatedAt: 5_000 }),
-            makeTask({ id: "f4", status: "completed", title: "Finished four", updatedAt: 4_000 }),
-          ],
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [
+        makeTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
+        makeTask({ id: "a2", status: "queued", title: "Queued two", updatedAt: 8_000 }),
+        makeTask({ id: "f1", status: "completed", title: "Finished one", updatedAt: 7_000 }),
+        makeTask({ id: "f2", status: "failed", title: "Finished two", updatedAt: 6_000 }),
+        makeTask({ id: "f3", status: "completed", title: "Finished three", updatedAt: 5_000 }),
+        makeTask({ id: "f4", status: "completed", title: "Finished four", updatedAt: 4_000 }),
+      ],
+    });
 
     const preview = container.querySelector("openclaw-tooltip.chat-tasks-status__preview");
     expect(preview?.firstElementChild?.classList.contains("chat-tasks-status__link")).toBe(true);
@@ -937,40 +812,26 @@ describe("running-tasks status row", () => {
   });
 
   it("sizes the preview to the task list without an overflow line", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({ tasks: [makeTask({ id: "t1", title: "Only task" })] }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [makeTask({ id: "t1", title: "Only task" })],
+    });
 
     expect(container.querySelectorAll(".chat-tasks-preview__row").length).toBe(1);
     expect(container.querySelector(".chat-tasks-preview__more")).toBeNull();
   });
 
   it("renders nothing without active tasks", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({ tasks: [makeTask({ id: "t1", status: "completed" })] }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [makeTask({ id: "t1", status: "completed" })],
+    });
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 
   it("hides the stale snapshot while disconnected", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({ connected: false, tasks: [makeTask({ id: "t1" })] }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      connected: false,
+      tasks: [makeTask({ id: "t1" })],
+    });
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 });
