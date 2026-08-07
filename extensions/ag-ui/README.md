@@ -539,14 +539,14 @@ The header value must match these rules; invalid values return
 
 Non-streaming errors return JSON:
 
-| Status | Type                    | Meaning                                                                                                                                                            |
-| ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 400    | `invalid_request_error` | Invalid request: no prompt, image, or tool result in `messages`; bad JSON; bad session-key header; unknown `X-OpenClaw-Agent-Id`; tool schemas over the size limit |
-| 401    | `unauthorized`          | Invalid device or gateway token                                                                                                                                    |
-| 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved                                                                        |
-| 405    | —                       | Method not allowed (only POST accepted)                                                                                                                            |
-| 409    | `conflict_error`        | A run is already in progress for this session — retry, or use a distinct session key                                                                               |
-| 503    | `service_unavailable`   | (`/v1/ag-ui`) The pairing allow-list could not be read — a gateway storage fault, not a pairing state. Retry after checking the gateway logs                       |
+| Status | Type                    | Meaning                                                                                                                                                                                                                                                  |
+| ------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request_error` | Invalid request: no prompt, image, or tool result in `messages`; bad JSON; bad session-key header; unknown `X-OpenClaw-Agent-Id`; malformed `tools` (not an array, or an entry that is not an object or has no `name`); tool schemas over the size limit |
+| 401    | `unauthorized`          | Invalid device or gateway token                                                                                                                                                                                                                          |
+| 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved                                                                                                                                                              |
+| 405    | —                       | Method not allowed (only POST accepted)                                                                                                                                                                                                                  |
+| 409    | `conflict_error`        | A run is already in progress for this session — retry, or use a distinct session key                                                                                                                                                                     |
+| 503    | `service_unavailable`   | (`/v1/ag-ui`) The pairing allow-list could not be read — a gateway storage fault, not a pairing state. Retry after checking the gateway logs                                                                                                             |
 
 Every error is answered before the stream is committed where that is possible,
 so a failed request gets a JSON status rather than a partial event stream.
@@ -566,6 +566,10 @@ request cannot consume the agent's context window:
 
 Tool schemas are rejected rather than trimmed because silently dropping a tool
 would leave your page believing the agent can call something it can never see.
+
+Both the shape and the size of `tools` are checked before the run is admitted,
+so a malformed toolset returns a JSON `400` rather than a stream that opens and
+then fails.
 
 ---
 

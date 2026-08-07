@@ -46,6 +46,46 @@ import {
  */
 const MAX_CLIENT_TOOL_SCHEMA_CHARS = 24_000;
 
+type DeclaredToolsResult =
+  | { ok: true; tools: Array<{ name: string; description?: string; parameters?: unknown }> }
+  | { ok: false; message: string };
+
+/**
+ * Validates the browser-declared `tools` array before the run is admitted.
+ *
+ * Mirrors the invariant core enforces on the equivalent surface
+ * (`extractClientToolsFromChatRequest`, src/gateway/openai-http.ts): tools must
+ * be an array, every entry an object, and every entry must name a tool. Doing
+ * this up front is what keeps a malformed payload on the documented 400 path
+ * instead of failing later as a committed SSE stream.
+ */
+function parseDeclaredTools(rawTools: unknown): DeclaredToolsResult {
+  if (rawTools == null) {
+    return { ok: true, tools: [] };
+  }
+  if (!Array.isArray(rawTools)) {
+    return { ok: false, message: "`tools` must be an array." };
+  }
+  const tools: Array<{ name: string; description?: string; parameters?: unknown }> = [];
+  for (const [index, tool] of rawTools.entries()) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+      return { ok: false, message: `\`tools[${index}]\` must be an object.` };
+    }
+    const rawName = (tool as { name?: unknown }).name;
+    const name = typeof rawName === "string" ? rawName.trim() : "";
+    if (!name) {
+      return { ok: false, message: `\`tools[${index}].name\` is required.` };
+    }
+    const description = (tool as { description?: unknown }).description;
+    tools.push({
+      name,
+      ...(typeof description === "string" ? { description } : {}),
+      parameters: (tool as { parameters?: unknown }).parameters,
+    });
+  }
+  return { ok: true, tools };
+}
+
 // ---------------------------------------------------------------------------
 // HTTP handler factory
 // ---------------------------------------------------------------------------
@@ -304,9 +344,22 @@ async function dispatchAuthenticatedAguiRequest(
   // Checked HERE, before the SSE headers are committed, so an oversized toolset
   // gets a clean 400 — silently dropping tools would leave the page believing
   // the agent can call something it can never see.
+  // Validate the SHAPE first, and keep the validated array — measuring a
+  // coerced copy while the run later mapped over `input.tools` let a malformed
+  // payload past this gate and blow up after admission, headers, and the
+  // session upsert, turning a 400 into a committed SSE 200 + RUN_ERROR with a
+  // session entry already written. Core enforces the same invariant at the
+  // equivalent boundary (`extractClientToolsFromChatRequest` in
+  // src/gateway/openai-http.ts), so this surface matches it.
+  const declaredTools = parseDeclaredTools(input.tools);
+  if (!declaredTools.ok) {
+    sendJson(res, 400, {
+      error: { message: declaredTools.message, type: "invalid_request_error" },
+    });
+    return;
+  }
   const declaredToolsChars =
-    JSON.stringify(Array.isArray(input.tools) ? input.tools : []).length +
-    JSON.stringify(stateWriterSchemas).length;
+    JSON.stringify(declaredTools.tools).length + JSON.stringify(stateWriterSchemas).length;
   if (declaredToolsChars > MAX_CLIENT_TOOL_SCHEMA_CHARS) {
     sendJson(res, 400, {
       error: {
@@ -654,7 +707,9 @@ async function dispatchAuthenticatedAguiRequest(
       });
     }
 
-    const clientTools = (input.tools ?? []).map((t) => ({
+    // Uses the array validated before admission, never `input.tools` again —
+    // re-reading the raw value is what let a malformed payload reach this line.
+    const clientTools = declaredTools.tools.map((t) => ({
       type: "function" as const,
       function: {
         name: t.name,

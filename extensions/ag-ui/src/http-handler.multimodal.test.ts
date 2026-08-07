@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { EventType } from "@ag-ui/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -120,13 +119,17 @@ describe("AG-UI multimodal image forwarding", () => {
     expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("surfaces a malformed `tools` payload as RUN_ERROR rather than a truncated stream", async () => {
-    // Deliberate decision, not an oversight: `tools` is built by the client SDK
-    // from typed hooks, so junk here is hypothetical rather than observed. It is
-    // read after the SSE headers are committed but inside the run's try/catch,
-    // so it already ends in a defined protocol outcome — a RUN_ERROR event and a
-    // clean close. Pre-validating it would add production code to convert one
-    // visible failure into a slightly nicer visible failure.
+  // A malformed `tools` payload must fail on the documented 400 path, BEFORE the
+  // run is admitted — not as a committed SSE 200 + RUN_ERROR with a session entry
+  // already written. Core enforces the same invariant at the equivalent boundary
+  // (extractClientToolsFromChatRequest, src/gateway/openai-http.ts).
+  it.each([
+    ["a non-array tools value", {}, "`tools` must be an array."],
+    ["a null entry", [null], "`tools[0]` must be an object."],
+    ["an entry that is not an object", ["nope"], "`tools[0]` must be an object."],
+    ["an entry with no name", [{ description: "x" }], "`tools[0].name` is required."],
+    ["an entry with a blank name", [{ name: "   " }], "`tools[0].name` is required."],
+  ])("rejects %s with 400 before opening the stream", async (_label, tools, message) => {
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const res = createRes();
     await handler(
@@ -136,16 +139,18 @@ describe("AG-UI multimodal image forwarding", () => {
           threadId: "t-badtools",
           runId: "r-badtools",
           messages: [{ role: "user", content: "hi" }],
-          tools: [null],
+          tools,
         },
       }),
       res,
     );
 
-    const types = parseEvents(res.chunks).map((e) => e.type);
-    expect(types).toContain(EventType.RUN_STARTED);
-    expect(types).toContain(EventType.RUN_ERROR);
-    expect(res.ended).toBe(true);
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(JSON.parse(res.chunks[0]!).error.message).toBe(message);
+    // No stream, and no session side effects from a rejected request.
+    expect(parseEvents(res.chunks)).toHaveLength(0);
+    expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("forwards a `developer` instruction as a system prompt rather than dropping it", async () => {
