@@ -11,6 +11,10 @@ on:
         description: Source registry image containing the verified release tags
         required: true
         type: string
+      include_browser:
+        description: Whether the tagged Docker release includes browser images
+        required: true
+        type: boolean
     secrets:
       VERCEL_TOKEN:
         required: true
@@ -65,33 +69,23 @@ jobs:
             --scope "${VERCEL_SCOPE}" \
             --format json
 
-      - name: Copy and verify immutable release images
+      - name: Copy and verify release images and channel aliases
         env:
+          INCLUDE_BROWSER: ${{ inputs.include_browser }}
           SOURCE_IMAGE: ${{ inputs.source_image }}
           TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          browser_args=()
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            browser_args+=(--include-browser)
+          fi
           node scripts/vercel-container-registry-publish.mjs \
             --version "${VERSION}" \
             --source-image "${SOURCE_IMAGE}" \
-            --target-image "${TARGET_IMAGE}"
-
-      - name: Promote and verify Vercel channel aliases
-        env:
-          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          channel="$(node scripts/lib/docker-release-policy.mjs "${VERSION}" | jq -r '.channel')"
-          if [[ "${channel}" == "beta" ]]; then
-            echo "Beta releases have no moving Docker channel aliases."
-            exit 0
-          fi
-          node scripts/docker-channel-promote.mjs \
-            --version "${VERSION}" \
-            --image "${TARGET_IMAGE}" \
-            --attestation-policy omitted
+            --target-image "${TARGET_IMAGE}" \
+            "${browser_args[@]}"
 
       # VCR tag status can remain null after an image is usable, so Sandbox
       # creation is the authoritative readiness check for this publication.
@@ -120,13 +114,18 @@ jobs:
 
       - name: Summarize Vercel publication
         env:
+          INCLUDE_BROWSER: ${{ inputs.include_browser }}
           TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
           VERSION: ${{ inputs.version }}
         run: |
+          variants="default, slim"
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            variants="${variants}, browser"
+          fi
           {
             echo "## Vercel Container Registry"
             echo "- Image: ${TARGET_IMAGE}:${VERSION}"
-            echo "- Variants: default, slim, browser"
+            echo "- Variants: ${variants}"
             echo "- Platforms: linux/amd64, linux/arm64"
             echo "- Sandbox smoke: passed"
           } >> "${GITHUB_STEP_SUMMARY}"

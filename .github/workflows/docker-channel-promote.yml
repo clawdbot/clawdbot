@@ -4,17 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing Docker release tag
+        description: Existing stable or extended-stable release tag
         required: true
         type: string
-      publish_target:
-        description: Registry operation to run
-        required: true
-        default: docker-channel
-        type: choice
-        options:
-          - docker-channel
-          - vercel
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -31,18 +23,16 @@ jobs:
     outputs:
       version: ${{ steps.policy.outputs.version }}
       channel: ${{ steps.policy.outputs.channel }}
-      publish_target: ${{ steps.policy.outputs.publish_target }}
       default_aliases: ${{ steps.policy.outputs.default_aliases }}
       slim_aliases: ${{ steps.policy.outputs.slim_aliases }}
       browser_aliases: ${{ steps.policy.outputs.browser_aliases }}
     steps:
-      - name: Validate dispatch source
+      - name: Require a main-branch dispatch
         env:
-          PUBLISH_TARGET: ${{ inputs.publish_target }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${PUBLISH_TARGET}" == "docker-channel" && "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
             echo "::error::Docker channel promotion must be dispatched from main; got ${WORKFLOW_REF}."
             exit 1
           fi
@@ -58,29 +48,23 @@ jobs:
         id: policy
         shell: bash
         env:
-          PUBLISH_TARGET: ${{ inputs.publish_target }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ "${RELEASE_TAG}" != v* ]]; then
-            echo "::error::Expected a Docker release tag with a v prefix; got ${RELEASE_TAG}."
-            exit 1
-          fi
-          version="${RELEASE_TAG#v}"
-          policy="$(node scripts/lib/docker-release-policy.mjs "${version}")"
-          channel="$(jq -r '.channel' <<< "${policy}")"
-          if [[ "${channel}" == "beta" && "${PUBLISH_TARGET}" == "docker-channel" ]]; then
-            echo "::error::Beta releases have no moving Docker channel aliases; select the Vercel target."
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            echo "::error::Expected a final stable or extended-stable release tag; got ${RELEASE_TAG}."
             exit 1
           fi
           git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
+          version="${RELEASE_TAG#v}"
+          policy="$(node scripts/lib/docker-release-policy.mjs "${version}")"
+          channel="$(jq -r '.channel' <<< "${policy}")"
           default_aliases="$(jq -r '.movingAliases.default | join(" ")' <<< "${policy}")"
           slim_aliases="$(jq -r '.movingAliases.slim | join(" ")' <<< "${policy}")"
           browser_aliases="$(jq -r '.movingAliases.browser | join(" ")' <<< "${policy}")"
           {
             echo "version=${version}"
             echo "channel=${channel}"
-            echo "publish_target=${PUBLISH_TARGET}"
             echo "default_aliases=${default_aliases}"
             echo "slim_aliases=${slim_aliases}"
             echo "browser_aliases=${browser_aliases}"
@@ -89,14 +73,13 @@ jobs:
             echo "## Docker channel promotion plan"
             echo "- Version: ${version}"
             echo "- Channel: ${channel}"
-            echo "- Target: ${PUBLISH_TARGET}"
             echo "- Default aliases: ${default_aliases}"
             echo "- Slim aliases: ${slim_aliases}"
             echo "- Browser aliases: ${browser_aliases}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   approve:
-    name: Approve ${{ inputs.tag }} for ${{ needs.resolve.outputs.publish_target }}
+    name: Approve ${{ inputs.tag }} to ${{ needs.resolve.outputs.channel }} (${{ needs.resolve.outputs.default_aliases }})
     needs: resolve
     # Keep human approval outside the queued writer so waiting for approval
     # cannot block a tag-driven Docker release in docker-release-publish.
@@ -108,19 +91,17 @@ jobs:
       - name: Record approval
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          PUBLISH_TARGET: ${{ needs.resolve.outputs.publish_target }}
           DEFAULT_ALIASES: ${{ needs.resolve.outputs.default_aliases }}
           SLIM_ALIASES: ${{ needs.resolve.outputs.slim_aliases }}
           BROWSER_ALIASES: ${{ needs.resolve.outputs.browser_aliases }}
         run: |
-          echo "Approved ${PUBLISH_TARGET} publication for ${RELEASE_TAG}"
+          echo "Approved Docker channel promotion for ${RELEASE_TAG}"
           echo "Default aliases: ${DEFAULT_ALIASES}"
           echo "Slim aliases: ${SLIM_ALIASES}"
           echo "Browser aliases: ${BROWSER_ALIASES}"
 
   promote:
     needs: [resolve, approve]
-    if: ${{ needs.resolve.outputs.publish_target == 'docker-channel' }}
     runs-on: ubuntu-24.04
     concurrency:
       group: docker-release-publish
@@ -199,16 +180,3 @@ jobs:
             echo "- Registries: ${GHCR_IMAGE}, ${DOCKERHUB_IMAGE}"
             echo "- Rollback: explicitly approved"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  publish_vcr:
-    name: Publish Vercel Container Registry images
-    needs: [resolve, approve]
-    if: ${{ needs.resolve.outputs.publish_target == 'vercel' }}
-    uses: ./.github/workflows/vercel-container-registry-publish.yml
-    with:
-      version: ${{ needs.resolve.outputs.version }}
-      source_image: ${{ format('ghcr.io/{0}', github.repository) }}
-    secrets:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-    permissions:
-      contents: read

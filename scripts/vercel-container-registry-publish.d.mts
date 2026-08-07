@@ -8,13 +8,19 @@ export type VercelContainerRegistryPublishPlan = {
 };
 
 export function createVercelContainerRegistryPublishPlan(params: {
+  includeBrowser: boolean;
   version: string;
   sourceImage: string;
   targetImage: string;
 }): VercelContainerRegistryPublishPlan;
 
 export function publishVercelContainerRegistryImages(
-  params: { version: string; sourceImage: string; targetImage: string },
+  params: {
+    includeBrowser: boolean;
+    version: string;
+    sourceImage: string;
+    targetImage: string;
+  },
   options?: {
     execFileSyncImpl?: (command: string, args: string[], options: object) => unknown;
     log?: (message: string) => void;

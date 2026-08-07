@@ -633,6 +633,8 @@ jobs:
     permissions:
       packages: write
       contents: read
+    outputs:
+      browser_supported: ${{ steps.tags.outputs.browser_supported }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -689,6 +691,11 @@ jobs:
             exit 1
           fi
           {
+            if [[ "${browser_supported}" == "1" ]]; then
+              echo "browser_supported=true"
+            else
+              echo "browser_supported=false"
+            fi
             echo "value<<EOF"
             printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
@@ -917,10 +924,11 @@ jobs:
 
   publish-vcr:
     name: Publish Vercel Container Registry images
-    needs: [resolve_release_policy, verify-attestations]
+    needs: [resolve_release_policy, create-manifest, verify-attestations]
     if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.verify-attestations.result == 'success' }}
     uses: ./.github/workflows/vercel-container-registry-publish.yml
     with:
+      include_browser: ${{ needs.create-manifest.outputs.browser_supported == 'true' }}
       version: ${{ needs.resolve_release_policy.outputs.version }}
       source_image: ${{ format('ghcr.io/{0}', github.repository) }}
     secrets:

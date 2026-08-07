@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
@@ -12,6 +12,7 @@ const amd64Digest = `sha256:${"1".repeat(64)}`;
 const arm64Digest = `sha256:${"2".repeat(64)}`;
 const attestationDigest = `sha256:${"3".repeat(64)}`;
 const changedDigest = `sha256:${"4".repeat(64)}`;
+const cleanIndexDigest = `sha256:${"5".repeat(64)}`;
 const imageIndexMediaType = "application/vnd.oci.image.index.v1+json";
 const imageManifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 
@@ -35,7 +36,13 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean; queue?: string };
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    workflow_call?: {
+      inputs?: Record<string, { required?: boolean; type?: string }>;
+    };
+  };
 };
 
 function readWorkflow(path: string): Workflow {
@@ -95,13 +102,30 @@ function requireCommandRef(args: string[]): string {
   return ref;
 }
 
-function successfulExecutor(calls: string[][], changedTargetRef?: string) {
+function imageConfig(version: string) {
+  return JSON.stringify({
+    config: { Labels: { "org.opencontainers.image.version": version } },
+  });
+}
+
+function successfulExecutor(
+  calls: string[][],
+  options: {
+    changedTargetRef?: string;
+    currentAliasVersion?: string;
+    version?: string;
+  } = {},
+) {
+  const version = options.version ?? "2026.7.2";
   return vi.fn((_command: string, args: string[]) => {
     calls.push(args);
     if (args[2] === "create") {
       return "";
     }
     const ref = requireCommandRef(args);
+    if (args.at(-1)?.includes(".Image")) {
+      return imageConfig(ref.includes("@") ? version : (options.currentAliasVersion ?? version));
+    }
     if (ref.startsWith(sourceImage)) {
       const architecture = architectureForRef(ref);
       return indexManifest(architecture ? [architecture] : ["amd64", "arm64"]);
@@ -112,8 +136,13 @@ function successfulExecutor(calls: string[][], changedTargetRef?: string) {
     const architecture = architectureForRef(ref);
     const expectedDigest = architecture === "arm64" ? arm64Digest : amd64Digest;
     return JSON.stringify({
-      digest: ref === changedTargetRef ? changedDigest : expectedDigest,
-      mediaType: imageManifestMediaType,
+      digest:
+        ref === options.changedTargetRef
+          ? changedDigest
+          : architecture
+            ? expectedDigest
+            : cleanIndexDigest,
+      mediaType: architecture ? imageManifestMediaType : imageIndexMediaType,
     });
   });
 }
@@ -125,6 +154,7 @@ describe("Vercel Container Registry publishing", () => {
     ["beta", "2026.7.2-beta.1"],
   ])("plans the full immutable %s image set", (channel, version) => {
     const plan = createVercelContainerRegistryPublishPlan({
+      includeBrowser: true,
       sourceImage,
       targetImage,
       version,
@@ -145,9 +175,29 @@ describe("Vercel Container Registry publishing", () => {
     ]);
   });
 
+  it("omits browser images when the tagged Docker release did not build them", () => {
+    const plan = createVercelContainerRegistryPublishPlan({
+      includeBrowser: false,
+      sourceImage,
+      targetImage,
+      version: "2026.7.2",
+    });
+
+    expect(plan.readinessTags).toEqual(["2026.7.2", "2026.7.2-slim"]);
+    expect(plan.copies.map((copy) => copy.targetTag)).toEqual([
+      "2026.7.2",
+      "2026.7.2-amd64",
+      "2026.7.2-arm64",
+      "2026.7.2-slim",
+      "2026.7.2-slim-amd64",
+      "2026.7.2-slim-arm64",
+    ]);
+  });
+
   it("rejects tagged image names", () => {
     expect(() =>
       createVercelContainerRegistryPublishPlan({
+        includeBrowser: true,
         sourceImage: `${sourceImage}:latest`,
         targetImage,
         version: "2026.7.2",
@@ -160,14 +210,14 @@ describe("Vercel Container Registry publishing", () => {
     const execFileSyncImpl = successfulExecutor(calls);
 
     publishVercelContainerRegistryImages(
-      { sourceImage, targetImage, version: "2026.7.2" },
+      { includeBrowser: true, sourceImage, targetImage, version: "2026.7.2" },
       { execFileSyncImpl, log: () => {} },
     );
 
     const firstCreate = calls.findIndex((args) => args[2] === "create");
     expect(firstCreate).toBe(9);
     expect(calls.slice(0, firstCreate).every((args) => args[2] === "inspect")).toBe(true);
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(12);
     expect(calls[firstCreate]).toEqual([
       "buildx",
       "imagetools",
@@ -204,7 +254,7 @@ describe("Vercel Container Registry publishing", () => {
 
     expect(() =>
       publishVercelContainerRegistryImages(
-        { sourceImage, targetImage, version: "2026.7.2" },
+        { includeBrowser: true, sourceImage, targetImage, version: "2026.7.2" },
         { execFileSyncImpl, log: () => {} },
       ),
     ).toThrow("manifest unknown");
@@ -214,17 +264,69 @@ describe("Vercel Container Registry publishing", () => {
   it("fails when VCR does not preserve a source platform manifest digest", () => {
     const calls: string[][] = [];
     const changedTargetRef = `${targetImage}:2026.7.2-amd64`;
-    const execFileSyncImpl = successfulExecutor(calls, changedTargetRef);
+    const execFileSyncImpl = successfulExecutor(calls, { changedTargetRef });
 
     expect(() =>
       publishVercelContainerRegistryImages(
-        { sourceImage, targetImage, version: "2026.7.2" },
+        { includeBrowser: true, sourceImage, targetImage, version: "2026.7.2" },
         { execFileSyncImpl, log: () => {} },
       ),
     ).toThrow(`${changedTargetRef} resolved to ${changedDigest}, expected ${amd64Digest}`);
   });
 
-  it("wires every Docker release channel and branch-proof publication through one reusable workflow", () => {
+  it("promotes VCR aliases from the verified clean indexes", () => {
+    const calls: string[][] = [];
+    const execFileSyncImpl = successfulExecutor(calls);
+
+    publishVercelContainerRegistryImages(
+      { includeBrowser: false, sourceImage, targetImage, version: "2026.7.2" },
+      { execFileSyncImpl, log: () => {} },
+    );
+
+    expect(calls.filter((args) => args[2] === "create").slice(-2)).toEqual([
+      [
+        "buildx",
+        "imagetools",
+        "create",
+        "--prefer-index=false",
+        "--tag",
+        `${targetImage}:latest`,
+        "--tag",
+        `${targetImage}:main`,
+        `${targetImage}@${cleanIndexDigest}`,
+      ],
+      [
+        "buildx",
+        "imagetools",
+        "create",
+        "--prefer-index=false",
+        "--tag",
+        `${targetImage}:slim`,
+        "--tag",
+        `${targetImage}:main-slim`,
+        `${targetImage}@${cleanIndexDigest}`,
+      ],
+    ]);
+  });
+
+  it("refuses to move a VCR channel alias backward", () => {
+    const calls: string[][] = [];
+    const execFileSyncImpl = successfulExecutor(calls, {
+      currentAliasVersion: "2026.7.3",
+    });
+
+    expect(() =>
+      publishVercelContainerRegistryImages(
+        { includeBrowser: false, sourceImage, targetImage, version: "2026.7.2" },
+        { execFileSyncImpl, log: () => {} },
+      ),
+    ).toThrow(`Refusing to move ${targetImage}:latest backward from 2026.7.3 to 2026.7.2`);
+    expect(
+      calls.some((args) => args[2] === "create" && args.includes(`${targetImage}:latest`)),
+    ).toBe(false);
+  });
+
+  it("uses production VCR credentials only from the serialized release workflow", () => {
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
     const manualPromotion = readWorkflow(".github/workflows/docker-channel-promote.yml");
@@ -232,30 +334,51 @@ describe("Vercel Container Registry publishing", () => {
     const releasePublish = requireJob(dockerRelease, "publish-vcr");
     const manualResolve = requireJob(manualPromotion, "resolve");
     const manualApproval = requireJob(manualPromotion, "approve");
-    const manualVcrPublish = requireJob(manualPromotion, "publish_vcr");
 
-    expect(releasePublish.needs).toEqual(["resolve_release_policy", "verify-attestations"]);
+    expect(dockerRelease.concurrency).toEqual({
+      group: "docker-release-publish",
+      "cancel-in-progress": false,
+      queue: "max",
+    });
+    expect(releasePublish.needs).toEqual([
+      "resolve_release_policy",
+      "create-manifest",
+      "verify-attestations",
+    ]);
     expect(releasePublish.if).not.toContain("outputs.channel != 'beta'");
     expect(releasePublish.uses).toBe("./.github/workflows/vercel-container-registry-publish.yml");
+    expect(releasePublish.with).toMatchObject({
+      include_browser: "${{ needs.create-manifest.outputs.browser_supported == 'true' }}",
+    });
     expect(releasePublish.secrets).toEqual({
       VERCEL_TOKEN: "${{ secrets.VERCEL_TOKEN }}",
     });
 
-    const validateDispatch = manualResolve.steps?.find(
-      (step) => step.name === "Validate dispatch source",
+    const validateDispatch = manualResolve.steps?.find((step) =>
+      step.name?.includes("main-branch dispatch"),
     );
     const resolvePolicy = manualResolve.steps?.find(
       (step) => step.name === "Resolve release channel policy",
     );
-    expect(validateDispatch?.run).toContain('"${PUBLISH_TARGET}" == "docker-channel"');
-    expect(resolvePolicy?.run).not.toContain("Expected a final stable or extended-stable");
-    expect(resolvePolicy?.run).toContain(
-      '"${channel}" == "beta" && "${PUBLISH_TARGET}" == "docker-channel"',
-    );
+    expect(validateDispatch?.run).toContain('"${WORKFLOW_REF}" != "refs/heads/main"');
+    expect(resolvePolicy?.run).toContain("Expected a final stable or extended-stable");
     expect(manualApproval.environment).toBe("docker-release");
-    expect(manualVcrPublish.needs).toEqual(["resolve", "approve"]);
-    expect(manualVcrPublish.if).toBe("${{ needs.resolve.outputs.publish_target == 'vercel' }}");
-    expect(manualVcrPublish.uses).toBe("./.github/workflows/vercel-container-registry-publish.yml");
+    expect(JSON.stringify(manualPromotion)).not.toContain("VERCEL_TOKEN");
+    expect(JSON.stringify(manualPromotion)).not.toContain("vercel-container-registry-publish.yml");
+
+    const reusableCallers = readdirSync(".github/workflows")
+      .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+      .filter((name) =>
+        readFileSync(`.github/workflows/${name}`, "utf8").includes(
+          "uses: ./.github/workflows/vercel-container-registry-publish.yml",
+        ),
+      );
+    expect(reusableCallers).toEqual(["docker-release.yml"]);
+    expect(reusable.on?.workflow_call?.inputs?.include_browser).toEqual({
+      description: "Whether the tagged Docker release includes browser images",
+      required: true,
+      type: "boolean",
+    });
 
     expect(reusablePublish.steps?.find((step) => step.name === "Set up Docker Builder")?.uses).toBe(
       "docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5",
@@ -265,11 +388,7 @@ describe("Vercel Container Registry publishing", () => {
         (step) => step.name === "Authenticate Docker to Vercel Container Registry",
       )?.run,
     ).toContain("vercel@${VERCEL_CLI_VERSION}");
-    expect(
-      reusablePublish.steps?.find(
-        (step) => step.name === "Promote and verify Vercel channel aliases",
-      )?.run,
-    ).toContain("--attestation-policy omitted");
+    expect(JSON.stringify(reusablePublish)).not.toContain("docker-channel-promote.mjs");
     expect(
       reusablePublish.steps?.find((step) => step.name === "Run custom-image Sandbox smoke")?.run,
     ).toContain("sandbox run \\\n");

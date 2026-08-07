@@ -5,6 +5,7 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import { compareReleaseVersions } from "./lib/release-version.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -14,7 +15,18 @@ const IMAGE_MANIFEST_MEDIA_TYPES = new Set([
   "application/vnd.oci.image.manifest.v1+json",
 ]);
 const ARCHITECTURES = Object.freeze(["amd64", "arm64"]);
-const VARIANTS = Object.freeze([{ suffix: "" }, { suffix: "-slim" }, { suffix: "-browser" }]);
+const VARIANTS = Object.freeze([
+  { aliasKey: "default", suffix: "" },
+  { aliasKey: "slim", suffix: "-slim" },
+  { aliasKey: "browser", suffix: "-browser" },
+]);
+
+function resolveVariants(includeBrowser) {
+  if (typeof includeBrowser !== "boolean") {
+    throw new Error("includeBrowser must be a boolean.");
+  }
+  return includeBrowser ? VARIANTS : VARIANTS.filter(({ aliasKey }) => aliasKey !== "browser");
+}
 
 function requireImageName(value, label) {
   const normalized = value?.trim();
@@ -25,13 +37,19 @@ function requireImageName(value, label) {
 }
 
 /** Build the immutable tag-copy plan for one Docker release. */
-export function createVercelContainerRegistryPublishPlan({ version, sourceImage, targetImage }) {
+export function createVercelContainerRegistryPublishPlan({
+  includeBrowser,
+  version,
+  sourceImage,
+  targetImage,
+}) {
   const policy = resolveDockerReleasePolicy(version);
   const source = requireImageName(sourceImage, "Source image");
   const target = requireImageName(targetImage, "Target image");
+  const variants = resolveVariants(includeBrowser);
   const copies = [];
   const readinessTags = [];
-  for (const { suffix } of VARIANTS) {
+  for (const { suffix } of variants) {
     const manifestTag = `${policy.version}${suffix}`;
     readinessTags.push(manifestTag);
     copies.push({
@@ -103,6 +121,67 @@ function inspectManifestDescriptor(imageRef, execFileSyncImpl) {
   }
 }
 
+function formatCommandError(error) {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const output = [error.message];
+  for (const field of ["stderr", "stdout"]) {
+    const value = error[field];
+    if (typeof value === "string") {
+      output.push(value);
+    } else if (Buffer.isBuffer(value)) {
+      output.push(value.toString("utf8"));
+    }
+  }
+  return output.join("\n");
+}
+
+function isMissingManifestError(error) {
+  return /(?:manifest unknown|no such manifest|:\s*not found(?:\s|$))/i.test(
+    formatCommandError(error),
+  );
+}
+
+function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false } = {}) {
+  const versions = new Map();
+  for (const [index, architecture] of ARCHITECTURES.entries()) {
+    const platform = `linux/${architecture}`;
+    let raw;
+    try {
+      raw = runImagetools(
+        ["inspect", imageRef, "--format", `{{json (index .Image "${platform}")}}`],
+        execFileSyncImpl,
+      );
+    } catch (error) {
+      if (allowMissing && index === 0 && isMissingManifestError(error)) {
+        return null;
+      }
+      throw error;
+    }
+    let version;
+    try {
+      version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
+    } catch (error) {
+      throw new Error(`Could not parse the ${platform} image config for ${imageRef}.`, {
+        cause: error,
+      });
+    }
+    if (typeof version !== "string" || version.trim().length === 0) {
+      throw new Error(
+        `${imageRef} does not have an org.opencontainers.image.version label for ${platform}.`,
+      );
+    }
+    versions.set(platform, version.trim());
+  }
+  const uniqueVersions = new Set(versions.values());
+  if (uniqueVersions.size !== 1) {
+    const details = [...versions].map(([platform, version]) => `${platform}=${version}`).join(", ");
+    throw new Error(`${imageRef} has inconsistent platform versions: ${details}.`);
+  }
+  return uniqueVersions.values().next().value;
+}
+
 function resolvePlatformDigests(imageRef, execFileSyncImpl, architectures) {
   const manifest = inspectRawManifest(imageRef, execFileSyncImpl);
   if (manifest.mediaType !== IMAGE_INDEX_MEDIA_TYPE || !Array.isArray(manifest.manifests)) {
@@ -159,12 +238,13 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
   const plan = createVercelContainerRegistryPublishPlan(params);
+  const selectedVariants = resolveVariants(params.includeBrowser);
 
   // Docker release indexes also contain provenance attestation manifests with
   // unknown/unknown platforms. VCR stores those indexes but does not prepare
   // them for Sandbox, so publish a clean amd64+arm64 index from the exact image
   // manifest digests and keep the architecture tags as carbon-copy manifests.
-  const variants = VARIANTS.map(({ suffix }) => {
+  const variants = selectedVariants.map(({ aliasKey, suffix }) => {
     const manifestTag = `${plan.version}${suffix}`;
     const manifestSourceRef = `${plan.sourceImage}:${manifestTag}`;
     const platformDigests = resolvePlatformDigests(
@@ -183,10 +263,11 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
         );
       }
     }
-    return { manifestTag, platformDigests };
+    return { aliasKey, manifestTag, platformDigests };
   });
 
-  for (const { manifestTag, platformDigests } of variants) {
+  const publishedVariants = [];
+  for (const { aliasKey, manifestTag, platformDigests } of variants) {
     const manifestTargetRef = `${plan.targetImage}:${manifestTag}`;
     const platformSourceRefs = ARCHITECTURES.map(
       (architecture) => `${plan.sourceImage}@${platformDigests[architecture]}`,
@@ -197,7 +278,18 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
       { inherit: true },
     );
     verifyCleanIndex(manifestTargetRef, platformDigests, execFileSyncImpl);
+    const manifestDescriptor = inspectManifestDescriptor(manifestTargetRef, execFileSyncImpl);
+    if (manifestDescriptor.mediaType !== IMAGE_INDEX_MEDIA_TYPE) {
+      throw new Error(
+        `${manifestTargetRef} must resolve to an OCI image index, got ${manifestDescriptor.mediaType}.`,
+      );
+    }
     log(`Verified ${manifestTargetRef} as a clean linux/amd64+linux/arm64 index.`);
+    publishedVariants.push({
+      aliasKey,
+      manifestDigest: manifestDescriptor.digest,
+      manifestTag,
+    });
 
     for (const architecture of ARCHITECTURES) {
       const targetRef = `${plan.targetImage}:${manifestTag}-${architecture}`;
@@ -227,12 +319,77 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
       log(`Verified ${targetRef} -> ${sourceDigest}.`);
     }
   }
+
+  // The caller serializes the complete Docker release workflow under
+  // docker-release-publish, so these digest-bound alias writes cannot race a
+  // newer release. Keep this clean-index promotion VCR-local: VCR intentionally
+  // omits upstream attestation descriptors for Sandbox compatibility.
+  const policy = resolveDockerReleasePolicy(plan.version);
+  const promotions = publishedVariants.flatMap(({ aliasKey, manifestDigest, manifestTag }) => {
+    const targetRefs = policy.movingAliases[aliasKey].map(
+      (alias) => `${plan.targetImage}:${alias}`,
+    );
+    return targetRefs.length === 0 ? [] : [{ manifestDigest, manifestTag, targetRefs }];
+  });
+
+  // Preflight every clean source and existing alias before the first moving-tag
+  // write so an out-of-order retry cannot partially roll a channel backward.
+  for (const { manifestDigest, targetRefs } of promotions) {
+    const sourceDigestRef = `${plan.targetImage}@${manifestDigest}`;
+    const sourceVersion = inspectImageVersion(sourceDigestRef, execFileSyncImpl);
+    if (sourceVersion !== plan.version) {
+      throw new Error(
+        `${sourceDigestRef} reports version ${sourceVersion}, expected ${plan.version}.`,
+      );
+    }
+    for (const targetRef of targetRefs) {
+      const currentVersion = inspectImageVersion(targetRef, execFileSyncImpl, {
+        allowMissing: true,
+      });
+      if (currentVersion === null) {
+        continue;
+      }
+      const comparison = compareReleaseVersions(plan.version, currentVersion);
+      if (comparison === null) {
+        throw new Error(
+          `Cannot compare candidate version ${plan.version} with ${targetRef} version ${currentVersion}.`,
+        );
+      }
+      if (comparison < 0) {
+        throw new Error(
+          `Refusing to move ${targetRef} backward from ${currentVersion} to ${plan.version}.`,
+        );
+      }
+    }
+  }
+
+  for (const { manifestDigest, manifestTag, targetRefs } of promotions) {
+    const targetArgs = targetRefs.flatMap((targetRef) => ["--tag", targetRef]);
+    const sourceDigestRef = `${plan.targetImage}@${manifestDigest}`;
+    runImagetools(
+      ["create", "--prefer-index=false", ...targetArgs, sourceDigestRef],
+      execFileSyncImpl,
+      { inherit: true },
+    );
+    for (const targetRef of targetRefs) {
+      const descriptor = inspectManifestDescriptor(targetRef, execFileSyncImpl);
+      if (descriptor.mediaType !== IMAGE_INDEX_MEDIA_TYPE) {
+        throw new Error(`${targetRef} must resolve to an OCI image index.`);
+      }
+      if (descriptor.digest !== manifestDigest) {
+        throw new Error(
+          `${targetRef} resolved to ${descriptor.digest}, expected ${manifestDigest}.`,
+        );
+      }
+      log(`Verified ${targetRef} -> ${manifestTag} (${manifestDigest}).`);
+    }
+  }
   return plan;
 }
 
 function printHelp() {
   console.log(
-    "Usage: node scripts/vercel-container-registry-publish.mjs --version YYYY.M.P --source-image REGISTRY/IMAGE --target-image REGISTRY/IMAGE",
+    "Usage: node scripts/vercel-container-registry-publish.mjs --version YYYY.M.P --source-image REGISTRY/IMAGE --target-image REGISTRY/IMAGE [--include-browser]",
   );
 }
 
@@ -241,6 +398,7 @@ function main() {
     args: process.argv.slice(2),
     options: {
       help: { type: "boolean", short: "h" },
+      "include-browser": { type: "boolean" },
       "source-image": { type: "string" },
       "target-image": { type: "string" },
       version: { type: "string" },
@@ -255,6 +413,7 @@ function main() {
     throw new Error("--version, --source-image, and --target-image are required.");
   }
   const plan = publishVercelContainerRegistryImages({
+    includeBrowser: values["include-browser"] ?? false,
     sourceImage: values["source-image"],
     targetImage: values["target-image"],
     version: values.version,

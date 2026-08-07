@@ -327,24 +327,13 @@ describe("Docker channel promotion", () => {
     ).toEqual(Array(3).fill(`ghcr.io/openclaw/openclaw@${digest}`));
   });
 
-  it("allows an explicit omitted-attestation policy for clean registry indexes", () => {
-    const execFileSyncImpl = createDockerMock({
-      candidateVersion: "2026.6.33",
-      currentVersion: "2026.6.33",
-    });
-    const verifyAttestationsImpl = vi.fn();
-
-    promoteDockerChannel(
-      { version: "2026.6.33", images: images.slice(0, 1) },
-      {
-        attestationPolicy: "omitted",
-        execFileSyncImpl,
-        verifyAttestationsImpl,
-      },
+  it("does not expose an attestation bypass", () => {
+    expect(readFileSync("scripts/docker-channel-promote.mjs", "utf8")).not.toContain(
+      "attestation-policy",
     );
-
-    expect(verifyAttestationsImpl).not.toHaveBeenCalled();
-    expect(execFileSyncImpl.mock.calls.some(([, args]) => args[2] === "create")).toBe(true);
+    expect(readFileSync("scripts/docker-channel-promote.d.mts", "utf8")).not.toContain(
+      "attestationPolicy",
+    );
   });
 
   it("rejects a source whose version label does not match the requested release", () => {
