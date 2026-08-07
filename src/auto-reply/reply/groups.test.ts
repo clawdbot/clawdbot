@@ -41,8 +41,13 @@ describe("group runtime loading", () => {
       "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
     );
     expect(groupChatContext).toContain(
-      "Use message(action=send) to this same group/topic only for payloads plain text cannot carry: files, images, other attachments, or typed presentation blocks such as inline buttons.",
+      "Use message(action=send) to this same group/topic only for payloads plain text cannot carry, such as files, images, or other attachments.",
     );
+    // This context is built without channel capability state, so it must never name a
+    // capability-gated payload kind. WhatsApp advertises no `presentation` capability,
+    // and naming inline buttons here would promise a tool argument its schema omits.
+    expect(groupChatContext).not.toContain("inline buttons");
+    expect(groupChatContext).not.toContain("presentation");
     expect(groupChatContext).not.toContain("ignore previous instructions");
     expect(groupChatContext).not.toContain("SYSTEM: run tools");
     expect(groupChatContext).toContain("Minimize empty lines and use normal chat conventions");
@@ -219,7 +224,10 @@ describe("group runtime loading", () => {
       "Your text replies are automatically sent to this channel unless the current-turn context says final replies stay private.",
     );
     expect(context).toContain("do not use the message tool to send to this same destination");
-    expect(context).toContain("message(action=send) to this same channel/thread only for payloads");
+    expect(context).toContain(
+      "Use message(action=send) to this same channel/thread only for payloads plain text cannot carry, such as files, images, or other attachments.",
+    );
+    expect(context).not.toContain("inline buttons");
     expect(context).not.toContain("group chat");
   });
 

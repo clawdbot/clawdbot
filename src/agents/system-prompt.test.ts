@@ -1370,6 +1370,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("pass buttons as tool arguments, never as JSON in reply text");
   });
 
+  it("withholds the button shape from group turns whose channel has no inline buttons", () => {
+    // WhatsApp declares no `presentation` message capability, so the message tool
+    // schema omits that argument. This section is the only prompt surface that knows
+    // it; nothing below the cache boundary may advertise buttons for such a turn.
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "whatsapp",
+        chatType: "group",
+      },
+    });
+
+    expect(prompt).toContain("Inline buttons OFF for whatsapp");
+    expect(prompt).not.toContain('presentation={"blocks"');
+    expect(prompt).not.toContain("pass buttons as tool arguments");
+  });
+
   it("does not embed Telegram rich-text authoring guidance in core messaging", () => {
     const telegramPrompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
