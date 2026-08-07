@@ -5517,6 +5517,32 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("defaults a blank POSIX AI agent backend override", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    process.env.AI_AGENT = "inherited";
+    try {
+      mockSuccessfulCliRun();
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          backend: {
+            env: { AI_AGENT: "   " },
+            clearEnv: ["AI_AGENT"],
+          },
+        }),
+        "thread-123",
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as {
+        env?: Record<string, string | undefined>;
+      };
+      expect(input.env?.AI_AGENT).toBe("openclaw");
+    } finally {
+      delete process.env.AI_AGENT;
+    }
+  });
+
   it("collapses Windows AI agent aliases when applying backend env overrides", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     process.env.AI_AGENT = "inherited";

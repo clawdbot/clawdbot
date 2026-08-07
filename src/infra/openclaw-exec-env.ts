@@ -38,15 +38,13 @@ function normalizeAiAgentEnv(
   env[AI_AGENT_ENV_VAR] = normalizeAiAgentEnvValue(explicitAgent);
 }
 
-/** Returns cloned overrides with Windows AI agent aliases collapsed to the canonical key. */
+/** Returns cloned overrides with present agent markers normalized without adding a missing marker. */
 export function canonicalizeAiAgentEnvOverrides<T extends Record<string, string | undefined>>(
   env: T,
   platform: NodeJS.Platform = process.platform,
 ): T {
   const canonical = { ...env };
-  if (platform === "win32") {
-    normalizeAiAgentEnv(canonical, platform, false);
-  }
+  normalizeAiAgentEnv(canonical, platform, false);
   return canonical;
 }
 

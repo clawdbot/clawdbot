@@ -58,11 +58,21 @@ describe("canonicalizeAiAgentEnvOverrides", () => {
     });
   });
 
-  it("does not add a marker when the overrides do not contain one", () => {
-    expect(canonicalizeAiAgentEnvOverrides({ SAFE_KEY: "ok" }, "win32")).toEqual({
+  it("defaults a blank POSIX marker", () => {
+    expect(canonicalizeAiAgentEnvOverrides({ AI_AGENT: "   ", SAFE_KEY: "ok" }, "linux")).toEqual({
+      AI_AGENT: AI_AGENT_ENV_VALUE,
       SAFE_KEY: "ok",
     });
   });
+
+  it.each(["linux", "win32"] as const)(
+    "does not add a marker when %s overrides do not contain one",
+    (platform) => {
+      expect(canonicalizeAiAgentEnvOverrides({ SAFE_KEY: "ok" }, platform)).toEqual({
+        SAFE_KEY: "ok",
+      });
+    },
+  );
 });
 
 describe("ensureOpenClawExecMarkerOnProcess", () => {
