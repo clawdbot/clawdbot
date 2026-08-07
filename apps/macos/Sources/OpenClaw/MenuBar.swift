@@ -495,7 +495,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case let .continueLaunch(startUpdater):
             if startUpdater {
-                self.updaterController.start()
+                if OpenClawConfigFile.gatewayUpdateChannel() == nil {
+                    self.updaterController.startAfterResolvingGatewayUpdateChannel()
+                } else {
+                    self.updaterController.start()
+                }
             }
         }
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
@@ -769,11 +773,13 @@ protocol UpdaterProviding: AnyObject {
     var isAvailable: Bool { get }
     var updateStatus: UpdateStatus { get }
     func start()
+    func startAfterResolvingGatewayUpdateChannel()
     func checkForUpdates(_ sender: Any?)
 }
 
 extension UpdaterProviding {
     func start() {}
+    func startAfterResolvingGatewayUpdateChannel() { self.start() }
 }
 
 /// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
@@ -807,6 +813,7 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         userDriverDelegate: nil)
     let updateStatus = UpdateStatus()
     private var started = false
+    private var gatewayUpdateChannel: String?
 
     init(savedAutoUpdate: Bool) {
         super.init()
@@ -819,6 +826,23 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         guard !self.started else { return }
         self.started = true
         self.controller.startUpdater()
+    }
+
+    func startAfterResolvingGatewayUpdateChannel() {
+        Task { @MainActor in
+            struct UpdateStatusResponse: Decodable {
+                let effectiveChannel: String?
+            }
+            guard let data = try? await GatewayConnection.shared.requestRaw(
+                method: "update.status",
+                timeoutMs: 5000),
+                  let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data),
+                  let channel = OpenClawConfigFile.normalizedGatewayUpdateChannel(
+                      response.effectiveChannel)
+            else { return }
+            self.gatewayUpdateChannel = channel
+            self.start()
+        }
     }
 
     var automaticallyChecksForUpdates: Bool {
@@ -887,11 +911,14 @@ func isSparkleUpdateAllowed(itemChannel: String?, forGatewayUpdateChannel channe
 
 extension SparkleUpdaterController: SPUUpdaterDelegate {
     func allowedChannels(for _: SPUUpdater) -> Set<String> {
-        allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+        allowedSparkleChannels(
+            forGatewayUpdateChannel: self.gatewayUpdateChannel ?? OpenClawConfigFile.gatewayUpdateChannel())
     }
 
     func bestValidUpdate(in appcast: SUAppcast, for _: SPUUpdater) -> SUAppcastItem? {
-        guard OpenClawConfigFile.gatewayUpdateChannel() == "extended-stable" else { return nil }
+        guard self.gatewayUpdateChannel ?? OpenClawConfigFile.gatewayUpdateChannel() == "extended-stable" else {
+            return nil
+        }
         let comparator = SUStandardVersionComparator.default
         let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         // Sparkle always admits the default channel. Filter it here so an

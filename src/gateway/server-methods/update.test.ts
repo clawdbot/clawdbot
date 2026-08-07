@@ -31,6 +31,8 @@ const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentin
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
+const checkUpdateStatusMock = vi.fn();
+const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
 const getUpdateAvailableMock = vi.fn(
@@ -149,13 +151,26 @@ vi.mock("../../infra/package-json.js", () => ({
   readPackageVersion: readPackageVersionMock,
 }));
 
+vi.mock("../../infra/update-check.js", () => ({
+  checkUpdateStatus: checkUpdateStatusMock,
+}));
+
+vi.mock("../../version.js", () => ({
+  get VERSION() {
+    return versionMock.value;
+  },
+}));
+
 vi.mock("../../infra/supervisor-markers.js", () => ({
   detectRespawnSupervisor: detectRespawnSupervisorMock,
 }));
 
-vi.mock("../../infra/update-channels.js", () => ({
-  normalizeUpdateChannel: normalizeUpdateChannelMock,
-}));
+vi.mock("../../infra/update-channels.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-channels.js")>(
+    "../../infra/update-channels.js",
+  );
+  return { ...actual, normalizeUpdateChannel: normalizeUpdateChannelMock };
+});
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
@@ -235,6 +250,13 @@ beforeEach(() => {
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
   readPackageVersionMock.mockResolvedValue("1.0.0");
+  checkUpdateStatusMock.mockReset();
+  checkUpdateStatusMock.mockResolvedValue({
+    root: "/tmp/openclaw",
+    installKind: "package",
+    packageManager: "npm",
+  });
+  versionMock.value = "1.0.0";
   normalizeUpdateChannelMock.mockReset();
   normalizeUpdateChannelMock.mockReturnValue(null);
   getUpdateAvailableMock.mockReset();
@@ -801,6 +823,20 @@ describe("update.run restart scheduling", () => {
     );
   });
 
+  it("keeps a configless extended-stable package install on that channel", async () => {
+    versionMock.value = "2026.6.33";
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+
+    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "extended-stable" }),
+    );
+  });
+
   it("keeps unsupervised git/dev updates on the in-process gateway update path", async () => {
     runGatewayUpdateMock.mockResolvedValueOnce({
       status: "ok",
@@ -1039,6 +1075,32 @@ describe("update.run post-core plugin finalize", () => {
 });
 
 describe("update.status", () => {
+  it("reports a verified configless extended-stable package channel", async () => {
+    versionMock.value = "2026.6.33";
+    checkUpdateStatusMock.mockResolvedValueOnce({
+      root: "/tmp/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    });
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+
+    await expectDefined(
+      updateHandlers["update.status"],
+      'updateHandlers["update.status"] test invariant',
+    )({
+      params: {},
+      respond,
+      context: { getRuntimeConfig: () => ({ update: {} }) },
+    } as never);
+
+    const [, response] = firstMockCall(respond, "update status response") as [
+      boolean,
+      { effectiveChannel?: string | null } | undefined,
+    ];
+    expect(response?.effectiveChannel).toBe("extended-stable");
+  });
+
   it("refreshes the latest update sentinel before responding", async () => {
     getUpdateAvailableMock.mockReturnValueOnce({
       currentVersion: "1.0.0",

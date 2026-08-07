@@ -252,13 +252,13 @@ describe("resolveUpdateChannelDisplay", () => {
 describe("resolveRegistryUpdateChannel", () => {
   it.each([
     { currentVersion: "2026.6.32", expected: "stable" },
-    { currentVersion: "2026.6.33", expected: "extended-stable" },
-    { currentVersion: "2026.6.34", expected: "extended-stable" },
+    { currentVersion: "2026.6.33", expected: "stable" },
+    { currentVersion: "2026.6.34", expected: "stable" },
     { currentVersion: "2026.6.33-1", expected: "stable" },
     { currentVersion: "1.33.1", expected: "stable" },
     { currentVersion: "1.6.33", expected: "stable" },
   ] as const)(
-    "selects $expected for the installed version $currentVersion",
+    "does not infer a package-only channel for $currentVersion",
     ({ currentVersion, expected }) => {
       expect(resolveRegistryUpdateChannel({ currentVersion })).toBe(expected);
     },

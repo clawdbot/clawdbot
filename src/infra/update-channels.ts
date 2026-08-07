@@ -106,13 +106,6 @@ export function resolveRegistryUpdateChannel(params: {
   ) {
     return "beta";
   }
-  if (
-    !params.configChannel &&
-    params.currentVersion &&
-    isExtendedStableReleaseVersion(params.currentVersion)
-  ) {
-    return "extended-stable";
-  }
   return params.configChannel ?? DEFAULT_PACKAGE_CHANNEL;
 }
 
