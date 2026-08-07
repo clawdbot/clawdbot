@@ -165,10 +165,11 @@ class GatewaySessionReconnectTest {
       val unexpectedRequest = CompletableDeferred<Unit>()
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
-          if (method == "connect") {
-            webSocket.send(connectResponseFrame(id))
-          } else {
-            unexpectedRequest.complete(Unit)
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "node.protocolFeatures.update" ->
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"ok":true}}""")
+            else -> unexpectedRequest.complete(Unit)
           }
         }
       val harness =
