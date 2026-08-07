@@ -458,9 +458,10 @@ async function resolveMemoryManagerStatusSnapshot(
     // Harden vector fields when the probe is authoritative and negative,
     // So the operator sees the degraded state.
     if (probeAvailable === false && status.vector) {
+      const isBuiltin = currentStatus.backend === "builtin";
       status.vector = {
         ...status.vector,
-        storeAvailable: isStoreProbe ? false : status.vector.storeAvailable,
+        storeAvailable: isBuiltin ? false : status.vector.storeAvailable,
         semanticAvailable: isStoreProbe ? status.vector.semanticAvailable : false,
         available: isStoreProbe ? status.vector.available : false,
       };

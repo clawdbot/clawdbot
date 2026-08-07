@@ -699,6 +699,51 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(result?.vector?.available).toBe(undefined);
   });
 
+  it("hardens vector.storeAvailable when builtin fallback probe throws without optional store probe", async () => {
+    const manager = {
+      // No probeVectorStoreAvailability — builtin without the optional store probe
+      probeVectorAvailability: vi.fn(async () => {
+        throw new Error("embedding provider unavailable");
+      }),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "local",
+        files: 10,
+        chunks: 20,
+        vector: {
+          enabled: true,
+          storeAvailable: true,
+          semanticAvailable: true,
+          available: true,
+        },
+        fts: { enabled: true, available: true },
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const resolveMemoryConfig = vi.fn(() => ({
+      store: {
+        databasePath: `/tmp/openclaw-status-builtin-fb-throw-${process.pid}.sqlite`,
+      },
+    }));
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { memory: { search: { provider: "local" } } },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig,
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () =>
+        `/tmp/openclaw-status-builtin-fb-throw-default-${process.pid}.sqlite`,
+    });
+
+    expect(manager.probeVectorAvailability).toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalled();
+    expect(result?.vector?.storeAvailable).toBe(false);
+    expect(result?.vector?.semanticAvailable).toBe(false);
+    expect(result?.vector?.available).toBe(false);
+  });
+
   it("hardens vector.semanticAvailable when builtin semantic probe throws", async () => {
     const manager = {
       probeVectorAvailability: vi.fn(async () => {
