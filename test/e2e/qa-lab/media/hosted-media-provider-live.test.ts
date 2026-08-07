@@ -80,7 +80,7 @@ describe("hosted media provider live QA producer", () => {
     expect(classifyHostedMediaFailureStatus("provider response was malformed")).toBe("fail");
   });
 
-  it("leaves video provider coverage mapping to the scenario catalog", () => {
+  it("binds video provider coverage from the scenario catalog", () => {
     const artifactBase = path.join(os.tmpdir(), "openclaw-hosted-media-live-test");
     const options = parseHostedMediaOptions(["--suite", "video", "--artifact-base", artifactBase]);
     const evidence = buildHostedMediaEvidence({
@@ -91,7 +91,11 @@ describe("hosted media provider live QA producer", () => {
       },
     });
 
-    expect(evidence.entries[0]?.coverage).toEqual([]);
+    expect(evidence.entries[0]?.coverage).toEqual([
+      { id: "hosted-providers.video-generation-providers", role: "primary" },
+      { id: "media.reference-image-video-and-audio-inputs", role: "primary" },
+      { id: "media.video-generation-tool-invocation", role: "secondary" },
+    ]);
   });
 });
 

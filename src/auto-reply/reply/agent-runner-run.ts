@@ -5,6 +5,7 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -113,14 +114,16 @@ export async function runReplyAgent(
 
   const isHeartbeat = opts?.isHeartbeat === true;
   let didDeliverVisiblePartialReply = false;
-  const runOpts = opts?.onPartialReply
+  const onPartialReply = opts?.onPartialReply;
+  const runOpts = onPartialReply
     ? {
         ...opts,
         onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
-          await opts.onPartialReply?.(payload);
-          if (hasOutboundReplyContent(payload, { trimText: true })) {
+          const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
+          if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
             didDeliverVisiblePartialReply = true;
           }
+          return observed.result;
         },
       }
     : opts;

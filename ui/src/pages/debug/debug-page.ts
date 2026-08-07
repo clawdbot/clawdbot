@@ -34,6 +34,7 @@ class DebugPage extends OpenClawLightDomElement {
   @state() private debugCallParams = "{}";
   @state() private debugCallResult: string | null = null;
   @state() private debugCallError: string | null = null;
+  @state() private debugDiagnosticsError: string | null = null;
   @state() private eventLog: readonly EventLogEntry[] = [];
 
   private readonly polling = new PollController(
@@ -55,6 +56,7 @@ class DebugPage extends OpenClawLightDomElement {
       client ? loadGatewayDiagnostics(client, signal) : initialState,
     onComplete: (result) => {
       this.diagnosticsTaskActiveClient = null;
+      this.debugDiagnosticsError = null;
       this.debugStatus = result.status;
       this.debugHealth = result.health;
       this.debugModels = result.models;
@@ -62,7 +64,7 @@ class DebugPage extends OpenClawLightDomElement {
     },
     onError: (error) => {
       this.diagnosticsTaskActiveClient = null;
-      this.debugCallError = String(error);
+      this.debugDiagnosticsError = String(error);
     },
   });
   private readonly subscriptions = new SubscriptionsController(this)
@@ -122,6 +124,7 @@ class DebugPage extends OpenClawLightDomElement {
     this.debugHeartbeat = null;
     this.debugCallResult = null;
     this.debugCallError = null;
+    this.debugDiagnosticsError = null;
   }
 
   private syncPolling() {
@@ -156,7 +159,7 @@ class DebugPage extends OpenClawLightDomElement {
     this.debugCallError = null;
     this.debugCallResult = null;
     const gateway = this.gatewaySource;
-    const epoch = this.callEpoch;
+    const epoch = ++this.callEpoch;
     const isCurrent = () =>
       this.connected &&
       this.client === client &&
@@ -179,12 +182,13 @@ class DebugPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    const body = renderDebug({
+    const debugView = renderDebug({
       loading: this.diagnosticsTask.status === TaskStatus.PENDING,
       status: this.debugStatus,
       health: this.debugHealth,
       models: this.debugModels,
       heartbeat: this.debugHeartbeat,
+      diagnosticsError: this.debugDiagnosticsError,
       eventLog: this.eventLog,
       methods: (this.context.gateway.snapshot.hello?.features?.methods ?? []).toSorted(),
       callMethod: this.debugCallMethod,
@@ -202,7 +206,7 @@ class DebugPage extends OpenClawLightDomElement {
           <div class="page-title">${titleForRoute("debug")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(debugView)}
     `;
   }
 }

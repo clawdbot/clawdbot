@@ -608,13 +608,14 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.logsCursor).toBeNull();
   });
 
-  it("clears diagnostics loaded by the previous provider", async () => {
+  it("clears diagnostics data and errors loaded by the previous provider", async () => {
     const client = {} as GatewayBrowserClient;
     const page = createPage("openclaw-debug-page", contextWithClient(client)) as TestPage & {
       debugStatus: unknown;
       debugHealth: unknown;
       debugModels: unknown[];
       debugHeartbeat: unknown;
+      debugDiagnosticsError: string | null;
     };
     document.body.append(page);
     await page.updateComplete;
@@ -622,6 +623,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     page.debugHealth = { ok: true };
     page.debugModels = [{ id: "old" }];
     page.debugHeartbeat = { provider: "old" };
+    page.debugDiagnosticsError = "old diagnostics failure";
 
     await replaceContext(page, client);
 
@@ -629,6 +631,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.debugHealth).toBeNull();
     expect(page.debugModels).toEqual([]);
     expect(page.debugHeartbeat).toBeNull();
+    expect(page.debugDiagnosticsError).toBeNull();
   });
 
   it("discards diagnostics from a replaced provider that reuses its client", async () => {

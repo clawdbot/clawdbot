@@ -265,22 +265,26 @@ export async function runCliFallbackCandidate(params: {
             }
             const textForTyping = classified.text;
             const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
+            const onPartialReply = turn.opts?.onPartialReply;
             if (!params.preserveProgressCallbackStartOrder) {
               await turn.typingSignals.signalTextDelta(textForTyping);
-              if (sanitized.skip || !sanitized.text || !turn.opts?.onPartialReply) {
-                return;
+              if (sanitized.skip || !sanitized.text || !onPartialReply) {
+                return false;
               }
-              await turn.opts.onPartialReply({ text: sanitized.text });
-              return;
+              return await onPartialReply({ text: sanitized.text });
             }
             if (sanitized.skip || !sanitized.text) {
               await turn.typingSignals.signalTextDelta(textForTyping);
-              return;
+              return false;
+            }
+            if (!onPartialReply) {
+              await turn.typingSignals.signalTextDelta(textForTyping);
+              return false;
             }
             // Assistant and tool CLI bridges drain independently. Stage presentation first.
-            await params.presentation.startPresentationWhileTyping(
+            return await params.presentation.startPresentationWhileTyping(
               turn.typingSignals.signalTextDelta(textForTyping),
-              () => turn.opts?.onPartialReply?.({ text: sanitized.text }),
+              () => onPartialReply({ text: sanitized.text }),
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
@@ -320,14 +324,15 @@ export async function runCliFallbackCandidate(params: {
               summaryPromise,
               params.presentation.startPresentationWhileTyping(
                 turn.typingSignals.signalToolStart(),
-                () =>
-                  turn.opts?.onToolStart?.({
+                async () => {
+                  await turn.opts?.onToolStart?.({
                     ...(toolCallId ? { toolCallId } : {}),
                     name,
                     phase,
                     args,
                     detailMode: turn.toolProgressDetail,
-                  }),
+                  });
+                },
               ),
             ]);
           },

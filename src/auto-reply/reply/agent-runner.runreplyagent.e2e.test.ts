@@ -50,7 +50,7 @@ import { createMockTypingController } from "./test-helpers.js";
 type AgentRunParams = {
   sessionId?: string;
   sessionFile?: string;
-  onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+  onPartialReply?: (payload: { text?: string }) => Promise<boolean | void> | boolean | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: {
@@ -115,12 +115,62 @@ async function createSessionStoreFile(entry: SessionEntry, sessionKey = "main"):
   return storePath;
 }
 
+function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: "session",
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+async function makeSessionFixture<SessionKey extends string = "main">(
+  overrides: Partial<SessionEntry> = {},
+  sessionKey: SessionKey = "main" as SessionKey,
+): Promise<{
+  sessionEntry: SessionEntry;
+  sessionStore: Record<SessionKey, SessionEntry>;
+  storePath: string;
+}> {
+  const sessionEntry = makeSessionEntry(overrides);
+  const sessionStore = { [sessionKey]: sessionEntry } as Record<SessionKey, SessionEntry>;
+  const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+  return { sessionEntry, sessionStore, storePath };
+}
+
 async function readStoredMainSession(storePath: string): Promise<SessionEntry> {
   return requireStoredSessionEntry(storePath);
 }
 
 let modelFallbackModule: typeof import("../../agents/model-fallback-runner.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
+
+function makeCompletedFallbackRunner(
+  overrides: {
+    provider?: string;
+    model?: string;
+    attempts?: Awaited<
+      ReturnType<typeof modelFallbackModule.runWithModelFallback<unknown>>
+    >["attempts"];
+  } = {},
+) {
+  const provider = overrides.provider ?? "openai";
+  const model = overrides.model ?? "gpt-5.5";
+  const attempts = overrides.attempts ?? [
+    {
+      provider: "lmstudio",
+      model: "gemma-4-e4b-it",
+      error: "Connection error.",
+      reason: "timeout",
+    },
+  ];
+  return async <T>({ run }: Parameters<typeof modelFallbackModule.runWithModelFallback<T>>[0]) => ({
+    outcome: "completed" as const,
+    result: await run(provider, model),
+    provider,
+    model,
+    attempts,
+  });
+}
 
 let runReplyAgentPromise:
   | Promise<(typeof import("./agent-runner.js"))["runReplyAgent"]>
@@ -792,12 +842,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("admits an ordinary rejected steering turn with durable recovery state", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const onAdopted = vi.fn(async () => {
       expect((await readStoredMainSession(storePath)).restartRecoveryBeforeAgentReplyState).toBe(
         "admitted",
@@ -1178,24 +1223,28 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it.each([
-    { label: "direct chat", sessionCtx: {} },
+    { label: "legacy void in a direct chat", callbackResult: undefined, sessionCtx: {} },
+    { label: "explicit acceptance in a direct chat", callbackResult: true, sessionCtx: {} },
+    { label: "explicit rejection in a direct chat", callbackResult: false, sessionCtx: {} },
     {
-      label: "group chat",
+      label: "legacy void in a group chat",
+      callbackResult: undefined,
       sessionCtx: {
         ChatType: "group" as const,
         SessionKey: "agent:test:telegram:group:-100123",
       },
     },
   ])(
-    "returns a terminal failure in a $label after a delivered partial with block streaming disabled",
-    async ({ sessionCtx }) => {
+    "preserves $label through terminal failure with block streaming disabled",
+    async ({ callbackResult, sessionCtx }) => {
       const accounting = await import("./session-run-accounting.js");
       const persistSpy = vi
         .spyOn(accounting, "persistRunSessionUsage")
         .mockRejectedValueOnce(new Error("persist exploded"));
-      const onPartialReply = vi.fn();
+      const onPartialReply = vi.fn(async () => callbackResult);
+      let observedCallbackResult: boolean | void = undefined;
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-        await params.onPartialReply?.({ text: "partial answer" });
+        observedCallbackResult = await params.onPartialReply?.({ text: "partial answer" });
         return {
           payloads: [{ text: "final answer" }],
           meta: { agentMeta: { usage: { input: 1, output: 1 } } },
@@ -1205,20 +1254,24 @@ describe("runReplyAgent heartbeat followup guard", () => {
       try {
         const { run } = createMinimalRun({
           blockStreamingEnabled: false,
-          opts: { onPartialReply },
+          opts: { onPartialReply, preserveProgressCallbackStartOrder: true },
           sessionCtx,
         });
-        const result = await run();
-        const payload = Array.isArray(result) ? result[0] : result;
-
+        if (callbackResult === false) {
+          await expect(run()).rejects.toThrow("persist exploded");
+        } else {
+          const result = await run();
+          const payload = Array.isArray(result) ? result[0] : result;
+          expect(payload).toMatchObject({
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            isError: true,
+          });
+        }
         expect(onPartialReply).toHaveBeenCalledWith({
           text: "partial answer",
           mediaUrls: undefined,
         });
-        expect(payload).toMatchObject({
-          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-          isError: true,
-        });
+        expect(observedCallbackResult).toBe(callbackResult);
       } finally {
         persistSpy.mockRestore();
       }
@@ -1349,10 +1402,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         defaults: { compaction: { memoryFlush: {} } },
       },
     };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
+    const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     const storePath = join(
       tempDirs.make("openclaw-custom-default-agent-"),
@@ -1446,12 +1496,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "private final" }],
       meta: {},
@@ -1472,13 +1517,9 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("does not persist sendPolicy-denied final replies for heartbeat replay", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       sendPolicy: "deny",
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "denied final" }],
       meta: {},
@@ -1498,12 +1539,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("persists only visible non-reasoning final reply text", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hidden reasoning", isReasoning: true }, { text: "visible final" }],
       meta: {},
@@ -1535,12 +1571,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
   it("persists canonical SQLite pending final delivery after its intent commits", async () => {
     const sessionKey = "agent:main:main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "visible canonical final" }],
       meta: {},
@@ -1573,12 +1604,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
   it("rejects canonical SQLite pending final delivery when its session is deleted", async () => {
     const sessionKey = "agent:main:main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       await applySessionEntryLifecycleMutation({
         removals: [{ sessionKey }],
@@ -1605,12 +1631,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 
   it("does not persist canonical SQLite pending final delivery on a reset session", async () => {
     const sessionKey = "agent:main:main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       await replaceSessionEntry(
         { sessionKey, storePath },
@@ -1638,12 +1659,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("persists auto-reply delivery context for restart recovery", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       accountId: "work",
@@ -1709,12 +1725,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("fails closed and retires an unknown terminal receipt when the live run returns", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       conversationId: "channel:24680",
@@ -1776,12 +1787,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("rejects channel recovery admission without a source-keyed user turn", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const { run } = createMinimalRun({
       sessionCtx: {
         Provider: "discord",
@@ -1807,12 +1813,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("does not arm channel recovery without a source turn id", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       expect((await readStoredMainSession(storePath)).restartRecoveryDeliveryRunId).toBeUndefined();
       return { payloads: [{ text: "visible final" }], meta: {} };
@@ -1837,12 +1838,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("drops a redelivered terminal channel source before hooks or model work", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const sessionCtx = {
       Provider: "discord",
       OriginatingChannel: "discord",
@@ -1912,8 +1908,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       conversationId: "channel:24680",
       messageId: "redelivered-active-message",
     });
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       status: "running",
       restartRecoveryDeliveryRunId: "active-recovery-run",
       restartRecoveryDeliverySourceRunId: sourceTurnId,
@@ -1921,10 +1916,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         channel: "discord",
         to: "channel:24680",
       },
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const onAdopted = vi.fn();
     const duplicate = createMinimalRun({
       isActive: true,
@@ -1971,8 +1963,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       conversationId: "channel:24680",
       messageId: "redelivered-terminal-message",
     });
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       status: "done",
       restartRecoveryDeliveryRunId: "terminal-recovery-run",
       restartRecoveryDeliverySourceRunId: sourceTurnId,
@@ -1980,10 +1971,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         channel: "discord",
         to: "channel:24680",
       },
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const onAdopted = vi.fn();
     const duplicate = createMinimalRun({
       isActive: true,
@@ -2013,7 +2001,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("atomically replaces a terminal stale recovery claim for the next run", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryDeliveryContext: {
         channel: "webchat",
@@ -2021,12 +2009,8 @@ describe("runReplyAgent pending final delivery capture", () => {
       },
       restartRecoveryDeliveryRunId: "stale-run",
       restartRecoveryDeliverySourceRunId: "stale-control-ui-run",
-      sessionId: "session",
       status: "done",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       accountId: "work",
@@ -2089,15 +2073,11 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("admits the next channel turn after a failed recovery became terminal", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: true,
       restartRecoveryTerminalRunIds: ["failed-source-turn"],
-      sessionId: "session",
       status: "failed",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       accountId: "work",
@@ -2152,17 +2132,13 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("migrates a legacy transcript-only claim before preserving its pending final", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      sessionId: "session",
       status: "running",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       const storedDuringRun = await readStoredMainSession(storePath);
       expect(storedDuringRun.restartRecoveryBeforeAgentReplyState).toBe("admitted");
@@ -2212,19 +2188,15 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("advances a transcript-only admission to pending before running a discovered hook", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryBeforeAgentReplyState: "admitted",
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       restartRecoverySourceIngress: "control-ui",
-      sessionId: "session",
       status: "running",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -2265,18 +2237,14 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("does not rerun a hook after a durable continue checkpoint", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryBeforeAgentReplyState: "continue",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       restartRecoverySourceIngress: "control-ui",
-      sessionId: "session",
       status: "running",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -2302,13 +2270,9 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("does not carry a stale hook checkpoint into a fresh claim", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       restartRecoveryBeforeAgentReplyState: "continue",
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -2348,16 +2312,12 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("adopts a transcript-only claim by its short id when the full id differs", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      sessionId: "session",
       status: "running",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const { run } = createMinimalRun({
       sessionCtx: {
         MessageSid: "msg",
@@ -2382,17 +2342,13 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("rejects a transcript-only claim already aborted for restart", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: true,
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      sessionId: "session",
       status: "running",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const onAdopted = vi.fn();
     const { run } = createMinimalRun({
       opts: { turnAdoptionLifecycle: { onAdopted } },
@@ -2421,17 +2377,13 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("clears an adopted transcript-only claim after user cancellation", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      sessionId: "session",
       status: "running",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const replyOperation = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
@@ -2475,17 +2427,13 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("preserves an adopted restart claim when the replacement takes the SQLite lease", async () => {
-    const sessionEntry: SessionEntry = {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      sessionId: "session",
       status: "running",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    });
     const replyOperation = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
@@ -2546,12 +2494,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("fires onAdopted after restart recovery delivery context persist completes", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       accountId: "work",
@@ -2651,12 +2594,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         buildToolContext: () => ({ sameChannelThreadRequired: true }),
       },
     });
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const onAdopted = vi.fn(async () => {
       expect(
         (await readStoredMainSession(storePath)).restartRecoverySameChannelThreadRequired,
@@ -2698,12 +2636,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("runs a deferred before_agent_reply hook only after durable admission", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const expectedSourceTurnId = requireBuiltChannelSourceTurnId({
       provider: "discord",
       conversationId: "channel:24680",
@@ -2776,12 +2709,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -2823,12 +2751,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("checkpoints an unhandled before_agent_reply hook before the model starts", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -2880,12 +2803,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("fires onAdopted for suppressed-delivery runs before the agent turn", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const events: string[] = [];
     const onAdopted = vi.fn(async () => {
       const storedAtAdoption = await readStoredMainSession(storePath);
@@ -2929,12 +2847,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("keeps heartbeat replies with real content in pending final delivery", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Sent daily summary to channel." }],
       meta: {},
@@ -2961,12 +2874,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     // When a heartbeat response contains HEARTBEAT_OK followed by substantive content,
     // the remainder after stripping the token must be persisted for durable delivery.
     // The default ackMaxChars is 300 — any remainder longer than that is treated as real content.
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
-    const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const longRemainder = "Sent daily digest to channel. ".repeat(12).trimEnd(); // ~360 chars, > 300
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: `HEARTBEAT_OK ${longRemainder}` }],
@@ -3475,13 +3383,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       { name: "verbose off", verbose: "off" as const },
     ] as const;
     for (const testCase of cases) {
-      const sessionEntry: SessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
+      const sessionEntry = makeSessionEntry({
         providerOverride: "openai",
         modelOverride: "gpt-5.6-luna",
         modelOverrideSource: "user",
-      };
+      });
       await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
       const sessionStore = { main: sessionEntry };
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -3562,11 +3468,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const storePath = join(root, "sessions.json");
     const sessionFile = join(root, "session.jsonl");
     const runId = "run-exhausted-trace";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = makeSessionEntry({
       traceLevel: "raw",
-    };
+    });
     await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
     try {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -3873,13 +3777,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not persist active fallback state for internal subagent announce fallback", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = makeSessionEntry({
       modelProvider: "openai",
       model: "gpt-5.5",
       responseUsage: "tokens",
-    };
+    });
     const sessionStore = { main: sessionEntry };
     const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
     const storePath = join(storeRoot, "sessions.json");
@@ -3959,12 +3861,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces empty internal fallback failures without persisting visible fallback state", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = makeSessionEntry({
       modelProvider: "openai",
       model: "gpt-5.5",
-    };
+    });
     const sessionStore = { main: sessionEntry };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
@@ -4022,10 +3922,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("keeps fallback transition notices when block streaming has no final text", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
+    const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     const onBlockReply = vi.fn();
 
@@ -4036,9 +3933,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+        makeCompletedFallbackRunner({
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
           attempts: [
@@ -4072,10 +3967,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("threads fallback notices without consuming the first assistant reply slot", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
+    const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
 
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -4085,9 +3977,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+        makeCompletedFallbackRunner({
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
           attempts: [
@@ -4165,22 +4055,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4215,22 +4090,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4257,15 +4117,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces a persisted configured backend failure when the active fallback is silent", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = makeSessionEntry({
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "auto",
       modelOverrideFallbackOriginProvider: "lmstudio",
       modelOverrideFallbackOriginModel: "gemma-4-e4b-it",
-    };
+    });
     const sessionStore = { main: sessionEntry };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
@@ -4303,22 +4161,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4355,22 +4198,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4409,22 +4237,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4460,22 +4273,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4512,22 +4310,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4564,22 +4347,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4612,22 +4380,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("openai", "gpt-5.5"),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [
-            {
-              provider: "lmstudio",
-              model: "gemma-4-e4b-it",
-              error: "Connection error.",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
+      .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
       const { run } = createMinimalRun({
@@ -4653,34 +4406,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces model fallback only once per active fallback state", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
+    const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
 
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          outcome: "completed" as const,
-          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "fireworks",
-              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-              error: "Provider fireworks is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
-        }),
-      );
+    const fallbackSpy = vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementation(
+      makeCompletedFallbackRunner({
+        provider: "deepinfra",
+        model: "moonshotai/Kimi-K2.5",
+        attempts: [
+          {
+            provider: "fireworks",
+            model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+            error: "Provider fireworks is in cooldown (all profiles unavailable)",
+            reason: "rate_limit",
+          },
+        ],
+      }),
+    );
     try {
       const { run } = createMinimalRun({
         resolvedVerboseLevel: "on",
@@ -4709,10 +4455,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("re-announces model fallback after returning to selected model", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
+    const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
@@ -4781,10 +4524,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces fallback-cleared once when runtime returns to selected model", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
+    const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
@@ -4863,10 +4603,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-    };
+    const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
@@ -4961,9 +4698,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const sessionEntry: SessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
+      const sessionEntry = makeSessionEntry({
         fallbackNotice: {
           kind: "active" as const,
           selectedModel: "anthropic/claude",
@@ -4972,7 +4707,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         },
         modelProvider: "deepinfra",
         model: "moonshotai/Kimi-K2.5",
-      };
+      });
       const sessionStore = { main: sessionEntry };
 
       state.runEmbeddedAgentMock.mockResolvedValue({
@@ -5015,16 +4750,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not persist fallback state for an equivalent CLI runtime alias", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = makeSessionEntry({
       fallbackNotice: {
         kind: "active",
         selectedModel: "anthropic/claude-opus-4-7",
         activeModel: "claude-cli/claude-opus-4-7",
         reason: "selected model unavailable",
       },
-    };
+    });
     const sessionStore = { main: sessionEntry };
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-cli-alias-"));
     const storePath = join(dir, "sessions.json");

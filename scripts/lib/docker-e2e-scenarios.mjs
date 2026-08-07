@@ -82,6 +82,9 @@ function lane(name, command, options = {}) {
     timeoutMs: options.timeoutMs,
     upgradeSurvivorScenario: options.upgradeSurvivorScenario,
     weight: options.weight ?? 1,
+    ...(options.prepublishPluginPackages
+      ? { prepublishPluginPackages: options.prepublishPluginPackages }
+      : {}),
   };
 }
 
@@ -198,6 +201,8 @@ function createPackageUpdateMaintenanceLanes() {
       weight: 3,
     }),
     npmLane("update-restart-auth", updateRestartAuthCommand, {
+      // Credential hydration auto-enables the candidate's Codex runtime during restart.
+      prepublishPluginPackages: ["@openclaw/codex"],
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
       upgradeSurvivorScenario: "base",

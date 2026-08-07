@@ -278,7 +278,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         onPartialReply: async (payload) => {
           const classified = params.presentation.classifyStreamingPartial(payload);
           if (classified.skip || !classified.text) {
-            return;
+            return false;
           }
           const textForTyping = classified.text;
           let didMaterialize = false;
@@ -294,17 +294,21 @@ export async function runEmbeddedFallbackCandidate(params: {
             },
             mediaUrls: payload.mediaUrls,
           };
+          const onPartialReply = turn.opts?.onPartialReply;
           if (!params.preserveProgressCallbackStartOrder) {
             await turn.typingSignals.signalTextDelta(textForTyping);
-            if (!turn.opts?.onPartialReply) {
-              return;
+            if (!onPartialReply) {
+              return false;
             }
-            await turn.opts.onPartialReply(partialPayload);
-            return;
+            return await onPartialReply(partialPayload);
           }
-          await params.presentation.startPresentationWhileTyping(
+          if (!onPartialReply) {
+            await turn.typingSignals.signalTextDelta(textForTyping);
+            return false;
+          }
+          return await params.presentation.startPresentationWhileTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            () => turn.opts?.onPartialReply?.(partialPayload),
+            () => onPartialReply(partialPayload),
           );
         },
         onAssistantMessageStart: async () => {
@@ -315,7 +319,9 @@ export async function runEmbeddedFallbackCandidate(params: {
           }
           await params.presentation.startPresentationWhileTyping(
             turn.typingSignals.signalMessageStart(),
-            () => turn.opts?.onAssistantMessageStart?.(),
+            async () => {
+              await turn.opts?.onAssistantMessageStart?.();
+            },
           );
         },
         onReasoningStream:
@@ -336,18 +342,23 @@ export async function runEmbeddedFallbackCandidate(params: {
                 }
                 await params.presentation.startPresentationWhileTyping(
                   turn.typingSignals.signalReasoningDelta(),
-                  () =>
-                    turn.opts?.onReasoningStream?.({
+                  async () => {
+                    await turn.opts?.onReasoningStream?.({
                       text: payload.text,
                       mediaUrls: payload.mediaUrls,
                       isReasoningSnapshot: payload.isReasoningSnapshot,
                       requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                    }),
+                    });
+                  },
                 );
               }
             : undefined,
         streamReasoningInNonStreamModes: turn.opts?.streamReasoningInNonStreamModes,
-        onReasoningEnd: turn.opts?.onReasoningEnd,
+        onReasoningEnd: turn.opts?.onReasoningEnd
+          ? async () => {
+              await turn.opts?.onReasoningEnd?.();
+            }
+          : undefined,
         onAgentEvent: createAgentRunEventHandler({
           turn,
           lifecycleBackstop,

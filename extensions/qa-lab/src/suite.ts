@@ -71,6 +71,7 @@ export type QaSuiteScenarioResult = {
   details?: string;
   timing?: QaEvidenceTiming;
   runtimeParity?: RuntimeParityResult;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type QaSuiteEnvironment = {

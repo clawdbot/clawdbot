@@ -1506,7 +1506,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.toolMetas).toEqual([{ meta: "wrote file", toolName: "write" }]);
+    expect(result.toolMetas).toEqual([{ meta: "wrote file", toolName: "write", isError: false }]);
     expect(result.replayMetadata).toEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
