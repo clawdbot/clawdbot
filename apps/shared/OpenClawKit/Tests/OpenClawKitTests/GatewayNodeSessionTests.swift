@@ -2388,7 +2388,7 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `node invoke negotiation carries authoritative session envelopes`() async throws {
-        let session = FakeGatewayWebSocketSession()
+        let session = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
         let gateway = GatewayNodeSession()
         let capture = SessionKeyEnvelopeCapture()
         let options = GatewayConnectOptions(
@@ -2423,9 +2423,9 @@ struct GatewayNodeSessionTests {
             "node-invoke-session-key-envelope-v1",
         ])
 
-        try await waitUntil("receive loop ready for attributed invoke") {
-            task.hasPendingReceiveHandler()
-        }
+        try task.emitResponse(
+            id: #require(publication["id"] as? String),
+            payload: ["ok": true])
         task.emitInvokeRequest(
             id: "attributed",
             command: "mcp.tools.call.v1",
@@ -2458,7 +2458,7 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `node invoke receipt timeout dispatch preserves authoritative session envelopes`() async throws {
-        let session = FakeGatewayWebSocketSession()
+        let session = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
         let gateway = GatewayNodeSession()
         let capture = SessionKeyEnvelopeCapture()
         let options = nodeConnectOptions(
@@ -2480,7 +2480,11 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
                 task.hasPendingReceiveHandler()
         }
+        let publication = try #require(task.sentRequests(method: "node.protocolFeatures.update").first)
 
+        try task.emitResponse(
+            id: #require(publication["id"] as? String),
+            payload: ["ok": true])
         task.emitInvokeRequest(
             id: "computer-attributed",
             command: "computer.act",
@@ -2516,11 +2520,8 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `node invoke negotiation resets legacy fallback after reconnect`() async throws {
-        let legacySession = FakeGatewayWebSocketSession(protocolFeaturesError: [
-            "code": "INVALID_REQUEST",
-            "message": "unknown method: node.protocolFeatures.update",
-        ])
-        let currentSession = FakeGatewayWebSocketSession()
+        let legacySession = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
+        let currentSession = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
         let gateway = GatewayNodeSession()
         let capture = SessionKeyEnvelopeCapture()
         let options = GatewayConnectOptions(
@@ -2551,6 +2552,14 @@ struct GatewayNodeSessionTests {
             legacyTask.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
                 legacyTask.hasPendingReceiveHandler()
         }
+        let legacyPublication = try #require(
+            legacyTask.sentRequests(method: "node.protocolFeatures.update").first)
+        try legacyTask.emitError(
+            id: #require(legacyPublication["id"] as? String),
+            error: [
+                "code": "INVALID_REQUEST",
+                "message": "unknown method: node.protocolFeatures.update",
+            ])
         legacyTask.emitInvokeRequest(id: "legacy", command: "mcp.tools.call.v1")
         try await waitUntil("legacy envelope delivered") {
             await capture.all().count == 1
@@ -2569,6 +2578,11 @@ struct GatewayNodeSessionTests {
             currentTask.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
                 currentTask.hasPendingReceiveHandler()
         }
+        let currentPublication = try #require(
+            currentTask.sentRequests(method: "node.protocolFeatures.update").first)
+        try currentTask.emitResponse(
+            id: #require(currentPublication["id"] as? String),
+            payload: ["ok": true])
         currentTask.emitInvokeRequest(id: "current", command: "mcp.tools.call.v1")
         try await waitUntil("current envelope delivered") {
             await capture.all().count == 2
@@ -2583,10 +2597,7 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `node invoke negotiation fails closed on non compatibility errors`() async throws {
-        let session = FakeGatewayWebSocketSession(protocolFeaturesError: [
-            "code": "UNAVAILABLE",
-            "message": "temporary failure",
-        ])
+        let session = FakeGatewayWebSocketSession(protocolFeaturesAutoResponse: false)
         let gateway = GatewayNodeSession()
         let capture = SessionKeyEnvelopeCapture()
         let options = GatewayConnectOptions(
@@ -2616,6 +2627,13 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
                 task.hasPendingReceiveHandler()
         }
+        let publication = try #require(task.sentRequests(method: "node.protocolFeatures.update").first)
+        try task.emitError(
+            id: #require(publication["id"] as? String),
+            error: [
+                "code": "UNAVAILABLE",
+                "message": "temporary failure",
+            ])
         task.emitInvokeRequest(id: "fail-closed", command: "mcp.tools.call.v1")
         try await waitUntil("fail-closed envelope delivered") {
             await capture.all().count == 1
@@ -3038,6 +3056,53 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `stale receipt retry dispatches exactly once without a deadline`() async throws {
+        let gateway = GatewayNodeSession()
+        let staleGate = AsyncGate()
+        let freshProbe = ComputerInvokeProbe()
+        let paramsJSON = #"{"action":"type","text":"hello"}"#
+        let key = "computer.act:v1:stale-no-deadline"
+        let scope = "gateway:stale-no-deadline"
+        let stale = Task {
+            await gateway.invokeComputerWithReceiptForTesting(
+                requestId: "stale",
+                paramsJSON: paramsJSON,
+                idempotencyKey: key,
+                receiptScope: scope,
+                onInvoke: { request in
+                    await staleGate.wait()
+                    return GatewayNodeSession.staleRouteInvokeResponse(requestId: request.id)
+                })
+        }
+        try await waitUntil("stale receipt without deadline is in flight") {
+            await staleGate.hasStarted()
+        }
+
+        let replay = Task {
+            await gateway.invokeComputerWithReceiptForTesting(
+                requestId: "replay",
+                paramsJSON: paramsJSON,
+                idempotencyKey: key,
+                receiptScope: scope,
+                onInvoke: { request in await freshProbe.execute(request) })
+        }
+        try await waitUntil("no-deadline replay joined the stale receipt") {
+            await gateway.computerReceiptJoinCountForTesting(
+                idempotencyKey: key,
+                receiptScope: scope) == 1
+        }
+        await staleGate.release()
+        try await waitUntil("no-deadline retry dispatched once") {
+            await freshProbe.count() == 1
+        }
+        await freshProbe.release()
+
+        #expect(await stale.value.ok == false)
+        #expect(await replay.value.ok)
+        #expect(await freshProbe.count() == 1)
+    }
+
+    @Test
     func `stale receipt retry preserves the original invoke deadline`() async throws {
         let gateway = GatewayNodeSession()
         let staleGate = AsyncGate()
@@ -3074,22 +3139,13 @@ struct GatewayNodeSessionTests {
                 idempotencyKey: key,
                 receiptScope: scope) == 1
         }
-        let releaseStale = Task {
-            try? await Task.sleep(for: .milliseconds(60))
-            await staleGate.release()
-        }
-        let releaseFresh = Task {
-            try? await Task.sleep(for: .milliseconds(120))
-            await freshProbe.release()
-        }
-
+        await staleGate.release()
         let response = await replay.value
         #expect(!response.ok)
         #expect(response.error?.message == "node invoke timed out")
-        _ = await releaseStale.value
-        _ = await releaseFresh.value
+        await freshProbe.release()
         #expect(await stale.value.ok == false)
-        #expect(await freshProbe.count() == 1)
+        #expect(await freshProbe.count() <= 1)
     }
 
     @Test
