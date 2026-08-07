@@ -16,6 +16,12 @@ vi.mock("./client.js", () => ({ createFeishuClient: mocks.createClient }));
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: mocks.resolveAccount,
   resolveFeishuRuntimeAccount: mocks.resolveAccount,
+  isFeishuSecretRefUnavailableError: (err: unknown) =>
+    Boolean(
+      err &&
+      typeof err === "object" &&
+      (err as { name?: string }).name === "FeishuSecretRefUnavailableError",
+    ),
 }));
 vi.mock("./targets.js", () => ({
   normalizeFeishuTarget: () => "ou_target",

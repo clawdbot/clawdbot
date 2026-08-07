@@ -2566,6 +2566,7 @@ describe("feishuOutbound.sendMedia SecretRef visibility", () => {
       feishuOutbound.sendMedia?.({
         cfg: emptyConfig,
         to: "chat_1",
+        text: "",
         mediaUrl: "https://example.com/file.png",
         accountId: "main",
       }),
@@ -2588,11 +2589,14 @@ describe("feishuOutbound.sendMedia SecretRef visibility", () => {
       feishuOutbound.sendMedia?.({
         cfg: emptyConfig,
         to: "chat_1",
+        text: "",
         mediaUrl: "https://example.com/file.png",
         accountId: "main",
       }),
     ).rejects.toSatisfy((err: unknown) => {
-      if (err instanceof FeishuSecretRefUnavailableError) return true;
+      if (err instanceof FeishuSecretRefUnavailableError) {
+        return true;
+      }
       return err instanceof Error && err.cause instanceof FeishuSecretRefUnavailableError;
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
