@@ -1137,20 +1137,58 @@ describe("embedded-agent runner run registry", () => {
 
   it("tracks and clears per-session transcript snapshots for active runs", () => {
     const handle = createRunHandle();
+    const snapshot = {
+      transcriptLeafId: "assistant-1",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
+      inFlightPrompt: "keep going",
+    };
 
     setActiveEmbeddedRun("session-snapshot", handle);
-    updateActiveEmbeddedRunSnapshot("session-snapshot", {
-      transcriptLeafId: "assistant-1",
-      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
-      inFlightPrompt: "keep going",
-    });
-    expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toEqual({
-      transcriptLeafId: "assistant-1",
-      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
-      inFlightPrompt: "keep going",
-    });
+    updateActiveEmbeddedRunSnapshot("session-snapshot", handle, snapshot);
+    expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toEqual(snapshot);
 
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
+  });
+
+  it("discards the previous attempt snapshot when another handle reuses its run id", () => {
+    const previous = createRunHandle({ runId: "shared-run" });
+    const replacement = createRunHandle({ runId: "shared-run" });
+
+    setActiveEmbeddedRun("snapshot-replaced", previous);
+    updateActiveEmbeddedRunSnapshot("snapshot-replaced", previous, {
+      transcriptLeafId: "previous-leaf",
+      inFlightPrompt: "previous private task",
+    });
+    setActiveEmbeddedRun("snapshot-replaced", replacement);
+
+    expect(getActiveEmbeddedRunSnapshot("snapshot-replaced")).toBeUndefined();
+  });
+
+  it("rejects a superseded attempt sharing its replacement owner's run id", () => {
+    const previous = createRunHandle({ runId: "shared-run" });
+    const replacement = createRunHandle({ runId: "shared-run" });
+    const currentSnapshot = { transcriptLeafId: "current-leaf", inFlightPrompt: "current task" };
+
+    setActiveEmbeddedRun("snapshot-replaced", previous);
+    setActiveEmbeddedRun("snapshot-replaced", replacement);
+    updateActiveEmbeddedRunSnapshot("snapshot-replaced", replacement, currentSnapshot);
+    updateActiveEmbeddedRunSnapshot("snapshot-replaced", previous, {
+      transcriptLeafId: "previous-leaf",
+      inFlightPrompt: "previous private task",
+    });
+
+    expect(getActiveEmbeddedRunSnapshot("snapshot-replaced")).toEqual(currentSnapshot);
+  });
+
+  it("preserves an owned snapshot when its exact run handle is registered again", () => {
+    const handle = createRunHandle({ runId: "shared-run" });
+    const snapshot = { transcriptLeafId: "assistant-1", inFlightPrompt: "keep going" };
+
+    setActiveEmbeddedRun("snapshot-reregistered", handle);
+    updateActiveEmbeddedRunSnapshot("snapshot-reregistered", handle, snapshot);
+    setActiveEmbeddedRun("snapshot-reregistered", handle);
+
+    expect(getActiveEmbeddedRunSnapshot("snapshot-reregistered")).toEqual(snapshot);
   });
 });

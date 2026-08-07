@@ -50,6 +50,7 @@ type PromptPreflightPhaseInput = PromptDispatchInput["preflight"] & {
 type PromptSubmissionPhaseInput = Pick<
   PromptDispatchInput["submission"],
   | "promptActiveSession"
+  | "queueHandle"
   | "sessionPromptState"
   | "toolResultPromptProjectionState"
   | "trajectoryRecorder"

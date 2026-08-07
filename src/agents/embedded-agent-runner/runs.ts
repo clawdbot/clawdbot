@@ -1038,6 +1038,10 @@ export function setActiveEmbeddedRun(
   const wasActive = previousHandle !== undefined;
   if (previousHandle) {
     clearEmbeddedRunAbortability(previousHandle, { retainFinalizing: true });
+    if (previousHandle !== handle) {
+      // Retry attempts reuse run ids, but snapshots belong to their exact handle.
+      ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
+    }
   }
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
@@ -1063,9 +1067,10 @@ export function setActiveEmbeddedRun(
 
 export function updateActiveEmbeddedRunSnapshot(
   sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
   snapshot: ActiveEmbeddedRunSnapshot,
 ) {
-  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+  if (ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle) {
     return;
   }
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);

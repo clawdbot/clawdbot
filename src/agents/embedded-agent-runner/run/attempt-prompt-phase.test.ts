@@ -78,6 +78,7 @@ type PromptErrorCall = {
 
 function createFixture() {
   const order: string[] = [];
+  const queueHandle = { kind: "embedded", runId: "run-1" };
   const state: PromptPhaseState = {
     contextBudgetStatus: undefined,
     preflightRecovery: undefined,
@@ -230,6 +231,7 @@ function createFixture() {
     },
     submission: {
       promptActiveSession: vi.fn(),
+      queueHandle,
       toolResultPromptProjectionState: {},
       trajectoryRecorder: null,
     },
@@ -253,6 +255,7 @@ function createFixture() {
     input,
     markYieldAborted,
     order,
+    queueHandle,
     setFinalPromptText,
     setPrePromptMessageCount,
     setPromptCacheChangesForTurn,
@@ -289,6 +292,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         observation: expect.objectContaining({ transcriptLeafId: "leaf-1" }),
         submission: expect.objectContaining({
           leasedSteering: { leaseId: "lease-1", runIds: ["run-1"] },
+          queueHandle: fixture.queueHandle,
           transcriptLeafId: "leaf-1",
         }),
       }),

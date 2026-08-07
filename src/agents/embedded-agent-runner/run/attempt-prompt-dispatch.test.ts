@@ -55,7 +55,7 @@ function createInput(overrides: Partial<DispatchInput> = {}): DispatchInput {
     execution: {},
     observation: {},
     preflight: {},
-    submission: {},
+    submission: { queueHandle: { kind: "embedded", runId: "run-1" } },
     ...overrides,
   } as unknown as DispatchInput;
 }
@@ -122,6 +122,7 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
       expect.objectContaining({
         images: [expect.objectContaining({ type: "image" })],
         modelPrompt: "model prompt",
+        queueHandle: input.submission.queueHandle,
         runtimeContextMessage: expect.objectContaining({ content: "runtime" }),
         transcriptPrompt: "session prompt",
       }),

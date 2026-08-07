@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
+  clearActiveEmbeddedRun,
+  getActiveEmbeddedRunSnapshot,
+  setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
+} from "../runs.js";
+import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
@@ -10,6 +16,16 @@ import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 const sessionId = "attempt-prompt-submit-test";
+
+function createQueueHandle(runId = "shared-run"): EmbeddedAgentQueueHandle {
+  return {
+    runId,
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort: () => {},
+  };
+}
 
 function createSession() {
   const state = {
@@ -37,6 +53,7 @@ function createBaseInput() {
   const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
   return {
     attempt: { sessionId },
+    queueHandle: createQueueHandle(),
     appendContext: "append context",
     contextTokenBudget: 8_000,
     images: [] as ImageContent[],
@@ -61,6 +78,47 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it("publishes the prepared prompt for the exact active attempt handle", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    setActiveEmbeddedRun(sessionId, input.queueHandle);
+
+    try {
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        activeSession,
+        promptActiveSession: async () => {},
+      });
+
+      expect(getActiveEmbeddedRunSnapshot(sessionId)).toMatchObject({
+        transcriptLeafId: null,
+        inFlightPrompt: "transcript prompt",
+      });
+    } finally {
+      clearActiveEmbeddedRun(sessionId, input.queueHandle);
+    }
+  });
+
+  it("never publishes a stale attempt when its replacement reuses the same run id", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const replacement = createQueueHandle(input.queueHandle.runId);
+    setActiveEmbeddedRun(sessionId, input.queueHandle);
+    setActiveEmbeddedRun(sessionId, replacement);
+
+    try {
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        activeSession,
+        promptActiveSession: async () => {},
+      });
+
+      expect(getActiveEmbeddedRunSnapshot(sessionId)).toBeUndefined();
+    } finally {
+      clearActiveEmbeddedRun(sessionId, replacement);
+    }
+  });
+
   it("submits runtime-only prompts without images and acknowledges steering", async () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
     const input = createBaseInput();

@@ -254,6 +254,7 @@ export async function runEmbeddedAttemptSettledPhase(
           : {}),
       },
       submission: {
+        queueHandle,
         promptActiveSession,
         sessionPromptState,
         toolResultPromptProjectionState,

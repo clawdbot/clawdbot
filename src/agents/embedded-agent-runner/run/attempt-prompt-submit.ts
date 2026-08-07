@@ -7,7 +7,7 @@ import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtim
 import type { AgentMessage } from "../../runtime/index.js";
 import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
-import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
+import { type EmbeddedAgentQueueHandle, updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type {
   getEmbeddedSessionPromptState,
   ToolResultPromptProjectionState,
@@ -60,6 +60,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   onSteeringAcknowledged: () => void;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
+  queueHandle: EmbeddedAgentQueueHandle;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
   sessionPromptState: ReturnType<typeof getEmbeddedSessionPromptState>;
@@ -118,7 +119,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     messages: activeSession.messages,
     imagesCount: input.images.length,
   });
-  updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
+  updateActiveEmbeddedRunSnapshot(attempt.sessionId, input.queueHandle, {
     transcriptLeafId: input.transcriptLeafId,
     messages: snapshotRecentMessages(normalizedReplayMessages),
     inFlightPrompt: input.transcriptPrompt,

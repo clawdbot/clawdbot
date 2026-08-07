@@ -286,6 +286,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             catalogEntries: [],
           },
         }),
+        submission: expect.objectContaining({ queueHandle: fixture.queueHandle }),
       }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
