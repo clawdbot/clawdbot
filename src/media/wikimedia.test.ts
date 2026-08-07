@@ -53,6 +53,36 @@ describe("withWikimediaOriginalFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not rewrite an incomplete thumbnail-shaped URL whose tail is not a <width>px- rendition", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Foo.jpg/notarendition",
+        () => true,
+        run,
+      ),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rewrite when the rendition filename does not match the source file", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Foo.jpg/800px-Bar.jpg",
+        () => true,
+        run,
+      ),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces the ORIGINAL error when the fallback fetch also fails", async () => {
     const firstErr = new Error("thumbnail 400");
     const run = vi.fn(async (url: string) => {

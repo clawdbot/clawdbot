@@ -33,6 +33,19 @@ function resolveWikimediaOriginalUrl(url: string): string | undefined {
   if (parts.length < 5 || parts[0] !== "wikipedia" || parts[2] !== "thumb") {
     return undefined;
   }
+  // The last segment must be a genuine width-prefixed rendition OF THE SOURCE FILE
+  // (e.g. "Foo.jpg" -> "800px-Foo.jpg", or "Foo.svg" -> "800px-Foo.svg.png"), not an
+  // arbitrary extra path segment. That is what makes "drop the last segment" the
+  // correct original-file URL; an incomplete thumbnail-shaped URL whose tail is not a
+  // "<width>px-...<sourcefile>..." rendition is left alone rather than rewritten.
+  const sourceFile = parts[parts.length - 2];
+  const rendition = parts[parts.length - 1];
+  if (sourceFile === undefined || rendition === undefined) {
+    return undefined;
+  }
+  if (!/\d+px-/.test(rendition) || !rendition.includes(sourceFile)) {
+    return undefined;
+  }
   const rest = parts.slice(0, 2).concat(parts.slice(3, -1));
   return `${parsed.origin}/${rest.join("/")}`;
 }
