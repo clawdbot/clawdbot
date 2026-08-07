@@ -55,19 +55,29 @@ export function createCodexSteeringQueue(params: {
   signal: AbortSignal;
 }) {
   type PendingSteerMessage = {
-    accepted: boolean;
     text: string;
     images?: EmbeddedRunAttemptParams["images"];
     resolve: (outcome: CodexSteeringQueueOutcome) => void;
     reject: (error: unknown) => void;
-    settled: boolean;
   };
+  type PendingSteerBatchState =
+    | "queued"
+    | "dispatched"
+    | "acknowledged"
+    | "consumed"
+    | "failed"
+    | "cancelled";
   type PendingSteerBatch = {
     items: PendingSteerMessage[];
+    state: PendingSteerBatchState;
+    clientUserMessageId?: string;
+    releaseClaim?: () => void;
+    send: Promise<void>;
+    settleSend: (error?: unknown) => void;
   };
-  let batchedMessages: PendingSteerMessage[] = [];
+  let batchedBatch: PendingSteerBatch | undefined;
   const dispatchedBatches = new Map<string, PendingSteerBatch>();
-  const pendingMessages = new Set<PendingSteerMessage>();
+  const pendingBatches = new Set<PendingSteerBatch>();
   let batchTimer: NodeJS.Timeout | undefined;
   let batchSequence = 0;
   let sendChain: Promise<void> = Promise.resolve();
@@ -81,28 +91,91 @@ export function createCodexSteeringQueue(params: {
   };
 
   const resolveItem = (item: PendingSteerMessage, outcome: CodexSteeringQueueOutcome) => {
-    if (item.settled) {
-      return;
-    }
-    item.settled = true;
-    pendingMessages.delete(item);
     item.resolve(outcome);
   };
 
-  const rejectItem = (item: PendingSteerMessage, error: unknown) => {
-    if (item.settled) {
-      return;
-    }
-    item.settled = true;
-    pendingMessages.delete(item);
+  const rejectItem = (item: PendingSteerMessage, error: unknown, accepted = false) => {
     item.reject(
-      item.accepted
+      accepted && !(error instanceof CodexSteeringAcceptedUnconfirmedError)
         ? new CodexSteeringAcceptedUnconfirmedError(
             "Codex accepted steering but did not confirm transcript consumption",
             { cause: error },
           )
         : error,
     );
+  };
+
+  const isTerminalBatch = (batch: PendingSteerBatch) =>
+    batch.state === "consumed" || batch.state === "failed" || batch.state === "cancelled";
+
+  const finishBatch = (
+    batch: PendingSteerBatch,
+    state: Extract<PendingSteerBatchState, "consumed" | "failed" | "cancelled">,
+    itemError?: unknown,
+    sendError = itemError,
+  ) => {
+    if (isTerminalBatch(batch)) {
+      return false;
+    }
+    const accepted = batch.state === "acknowledged";
+    if (batch.clientUserMessageId) {
+      dispatchedBatches.delete(batch.clientUserMessageId);
+    }
+    batch.state = state;
+    pendingBatches.delete(batch);
+    if (state === "consumed") {
+      for (const item of batch.items) {
+        resolveItem(item, STEERED_OUTCOME);
+      }
+      batch.settleSend();
+      return true;
+    }
+    for (const item of batch.items) {
+      rejectItem(item, itemError, accepted);
+    }
+    batch.settleSend(sendError);
+    return true;
+  };
+
+  const createBatch = (
+    items: PendingSteerMessage[],
+    releaseClaim?: () => void,
+  ): PendingSteerBatch => {
+    let resolveSend!: () => void;
+    let rejectSend!: (error: unknown) => void;
+    const send = new Promise<void>((resolve, reject) => {
+      resolveSend = resolve;
+      rejectSend = reject;
+    });
+    let sendSettled = false;
+    // Cancellation can reject a queued batch before its serialization turn.
+    void send.catch(() => undefined);
+    const batch: PendingSteerBatch = {
+      items,
+      state: "queued",
+      releaseClaim,
+      send,
+      settleSend: (error) => {
+        if (sendSettled) {
+          return;
+        }
+        sendSettled = true;
+        try {
+          releaseClaim?.();
+        } catch (releaseError) {
+          embeddedAgentLog.debug("codex app-server pending input release failed", {
+            error: releaseError,
+          });
+        }
+        if (error === undefined) {
+          resolveSend();
+        } else {
+          rejectSend(error);
+        }
+      },
+    };
+    pendingBatches.add(batch);
+    return batch;
   };
 
   const closeQueue = (error: Error) => {
@@ -112,10 +185,9 @@ export function createCodexSteeringQueue(params: {
     closedError = error;
     params.signal.removeEventListener("abort", abortQueue);
     clearBatchTimer();
-    batchedMessages = [];
-    dispatchedBatches.clear();
-    for (const item of pendingMessages) {
-      rejectItem(item, error);
+    batchedBatch = undefined;
+    for (const batch of pendingBatches) {
+      finishBatch(batch, "cancelled", error);
     }
   };
   const abortQueue = () => {
@@ -125,65 +197,69 @@ export function createCodexSteeringQueue(params: {
     closeQueue(new Error("codex app-server steering queue cancelled"));
   };
 
-  const sendBatch = async (items: PendingSteerMessage[]) => {
-    const liveItems = items.filter((item) => !item.settled);
-    if (liveItems.length === 0) {
-      return;
+  const dispatchBatch = (batch: PendingSteerBatch): Promise<void> => {
+    if (batch.state !== "queued") {
+      return batch.send;
     }
     const unavailableError =
       closedError ??
       (params.signal.aborted ? new Error("codex app-server steering queue aborted") : undefined);
     if (unavailableError) {
-      for (const item of liveItems) {
-        rejectItem(item, unavailableError);
-      }
-      throw unavailableError;
+      finishBatch(batch, "cancelled", unavailableError);
+      return batch.send;
     }
     const clientUserMessageId = `openclaw:${params.turnId}:steer:${++batchSequence}`;
-    const batch = { items: liveItems };
+    batch.clientUserMessageId = clientUserMessageId;
+    batch.state = "dispatched";
     // RPC acceptance is not delivery: interrupt clears accepted pending input.
     // Keep the batch unsettled until Codex echoes this id on userMessage completion.
     dispatchedBatches.set(clientUserMessageId, batch);
+    let request: Promise<unknown>;
     try {
-      // turn/steer is an ack, but nothing guarantees the app-server answers it.
-      // Without a deadline and the run signal the caller only unblocks when the
-      // app-server client closes, which strands whichever channel handler is
-      // awaiting delivery and wedges every later steer behind sendChain.
-      await params.client.request(
+      request = params.client.request(
         "turn/steer",
         {
           threadId: params.threadId,
           expectedTurnId: params.turnId,
-          input: liveItems.flatMap((item) => buildCodexUserInput(item.text, item.images)),
+          input: batch.items.flatMap((item) => buildCodexUserInput(item.text, item.images)),
           clientUserMessageId,
         },
         { timeoutMs: params.requestTimeoutMs, signal: params.signal },
       );
-      for (const item of liveItems) {
-        item.accepted = true;
-      }
     } catch (error) {
-      dispatchedBatches.delete(clientUserMessageId);
-      const acceptedUnconfirmed =
-        isCodexAppServerIndeterminateRequestCancellationError(error) ||
-        isCodexAppServerIndeterminateTransportError(error);
-      for (const item of liveItems.filter((candidate) => !candidate.settled)) {
-        rejectItem(
-          item,
-          acceptedUnconfirmed
+      finishBatch(batch, "failed", error);
+      return batch.send;
+    }
+    void request.then(
+      () => {
+        if (batch.state !== "dispatched") {
+          return;
+        }
+        batch.state = "acknowledged";
+        // Acknowledgment releases transport serialization, but logical callers
+        // still wait for the correlated userMessage completion.
+        batch.settleSend();
+      },
+      (error: unknown) => {
+        if (isTerminalBatch(batch)) {
+          return;
+        }
+        const itemError =
+          isCodexAppServerIndeterminateRequestCancellationError(error) ||
+          isCodexAppServerIndeterminateTransportError(error)
             ? new CodexSteeringAcceptedUnconfirmedError(
                 "Codex steering request may have been accepted before confirmation",
                 { cause: error },
               )
-            : error,
-        );
-      }
-      throw error;
-    }
+            : error;
+        finishBatch(batch, "failed", itemError, error);
+      },
+    );
+    return batch.send;
   };
 
-  const enqueueSend = (items: PendingSteerMessage[]) => {
-    const send = sendChain.then(() => sendBatch(items));
+  const enqueueBatch = (batch: PendingSteerBatch) => {
+    const send = sendChain.then(() => dispatchBatch(batch));
     // Preserve serialization without allowing one failed request to poison
     // later steering. Callers still receive the original batch failure.
     sendChain = send.catch(() => undefined);
@@ -195,12 +271,12 @@ export function createCodexSteeringQueue(params: {
 
   const flushBatch = (): Promise<void> => {
     clearBatchTimer();
-    const items = batchedMessages;
-    batchedMessages = [];
-    if (items.length === 0) {
+    const batch = batchedBatch;
+    batchedBatch = undefined;
+    if (!batch) {
       return sendChain;
     }
-    const send = enqueueSend(items);
+    const send = enqueueBatch(batch);
     void send.catch(() => undefined);
     return send;
   };
@@ -216,14 +292,11 @@ export function createCodexSteeringQueue(params: {
       rejectDelivery = reject;
     });
     const item = {
-      accepted: false,
       text,
       images,
       resolve: resolveDelivery,
       reject: rejectDelivery,
-      settled: false,
     };
-    pendingMessages.add(item);
     return { item, delivery };
   };
 
@@ -251,14 +324,13 @@ export function createCodexSteeringQueue(params: {
           // before releasing the prompt so no partial text answer can win the race.
           void flushBatch().catch(() => undefined);
           const { item, delivery } = createPendingMessage(text, options.images);
-          void enqueueSend([item])
-            .finally(() => pendingUserInput.cancel())
-            .catch(() => undefined);
+          void enqueueBatch(createBatch([item], pendingUserInput.cancel)).catch(() => undefined);
           return await delivery;
         }
       }
       const { item, delivery } = createPendingMessage(text, options?.images);
-      batchedMessages.push(item);
+      batchedBatch ??= createBatch([]);
+      batchedBatch.items.push(item);
       clearBatchTimer();
       const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
       if (debounceMs === 0) {
@@ -282,11 +354,7 @@ export function createCodexSteeringQueue(params: {
       if (!batch) {
         return false;
       }
-      dispatchedBatches.delete(clientUserMessageId);
-      for (const item of batch.items) {
-        resolveItem(item, STEERED_OUTCOME);
-      }
-      return true;
+      return finishBatch(batch, "consumed");
     },
     cancel: cancelQueue,
   };

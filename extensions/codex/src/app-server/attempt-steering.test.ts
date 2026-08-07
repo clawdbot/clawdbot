@@ -128,32 +128,35 @@ describe("Codex app-server steering queue", () => {
     harness.client.close();
   });
 
-  it("keeps matched consumption authoritative over a later steer rejection", async () => {
-    let rejectSteer: ((error: Error) => void) | undefined;
+  it("dispatches the next batch when consumption precedes the first RPC response", async () => {
+    let resolveSteer: (() => void) | undefined;
     const request = vi
       .fn()
       .mockImplementationOnce(
         () =>
-          new Promise<{ turnId: string }>((_resolve, reject) => {
-            rejectSteer = reject;
+          new Promise<{ turnId: string }>((resolve) => {
+            resolveSteer = () => resolve({ turnId: "turn-1" });
           }),
       )
       .mockResolvedValue({ turnId: "turn-1" });
     const queue = createQueue(request);
 
-    const queued = queue.queue("consumed first", { debounceMs: 0 });
+    const first = queue.queue("consumed first", { debounceMs: 0 });
     await vi.advanceTimersByTimeAsync(0);
+    const second = queue.queue("next steer", { debounceMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await expect(queued).resolves.toEqual({ kind: "steered" });
-
-    rejectSteer?.(new Error("response failed after consumption"));
-    await vi.advanceTimersByTimeAsync(0);
-
-    const next = queue.queue("next steer", { debounceMs: 0 });
+    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
+    await expect(first).resolves.toEqual({ kind: "steered" });
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(2);
+
+    resolveSteer?.();
+    await vi.advanceTimersByTimeAsync(0);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
-    await expect(next).resolves.toEqual({ kind: "steered" });
+    await expect(second).resolves.toEqual({ kind: "steered" });
   });
 
   it("keeps every matched image batch item authoritative over a later rejection", async () => {
@@ -223,6 +226,7 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
     await expect(queued).resolves.toEqual({ kind: "steered" });
+    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
 
     rejectSteer?.(new Error("response failed after image consumption"));
     await vi.advanceTimersByTimeAsync(0);
@@ -316,6 +320,7 @@ describe("Codex app-server steering queue", () => {
     expect(request).toHaveBeenCalledTimes(1);
 
     queue.cancel();
+    queue.cancel();
     await rejected;
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
     await expect(queue.queue("too late", { debounceMs: 0 })).rejects.toThrow(
@@ -333,6 +338,7 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(1);
 
+    controller.abort();
     controller.abort();
     await rejected;
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
@@ -367,6 +373,32 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
     await Promise.all([firstRejected, secondRejected]);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not admit a pending-input image batch after reentrant abort", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const cancelPendingUserInput = vi.fn(() => true);
+    const queue = createQueue(request, {
+      signal: controller.signal,
+      claimPendingUserInput: () => {
+        controller.abort();
+        return {
+          answer: vi.fn(() => true),
+          cancel: cancelPendingUserInput,
+        };
+      },
+    });
+
+    const queued = queue.queue("too late", {
+      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+    });
+    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    await vi.advanceTimersByTimeAsync(0);
+
+    await rejected;
+    expect(request).not.toHaveBeenCalled();
+    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
   });
 
   it("answers pending user input without steering", async () => {
@@ -473,6 +505,10 @@ describe("Codex app-server steering queue", () => {
     const imageQueued = queue.queue("image reply", {
       images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
     });
+    let imageSettled = false;
+    void imageQueued.finally(() => {
+      imageSettled = true;
+    });
     await vi.advanceTimersByTimeAsync(0);
     const laterQueued = queue.queue("later reply", { debounceMs: 0 });
     await vi.advanceTimersByTimeAsync(0);
@@ -482,6 +518,7 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(2);
     expect(cancelPendingUserInput).toHaveBeenCalledOnce();
+    expect(imageSettled).toBe(false);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
     await expect(Promise.all([imageQueued, laterQueued])).resolves.toEqual([

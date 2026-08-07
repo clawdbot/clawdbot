@@ -256,6 +256,87 @@ describe("runCodexAppServerAttempt steering", () => {
     });
   });
 
+  it("dispatches the next steer when completion beats the first RPC response", async () => {
+    let resolveFirstSteer: (() => void) | undefined;
+    let steerCount = 0;
+    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness(
+      async (method) => {
+        if (method !== "turn/steer") {
+          return undefined;
+        }
+        steerCount += 1;
+        if (steerCount === 1) {
+          return await new Promise<{ turnId: string }>((resolve) => {
+            resolveFirstSteer = () => resolve({ turnId: "turn-1" });
+          });
+        }
+        return { turnId: "turn-1" };
+      },
+    );
+    const params = createSteeringParams();
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    let handle:
+      | {
+          queueMessage: (
+            text: string,
+            options?: Parameters<typeof queueActiveRunMessageForTest>[2],
+          ) => Promise<void>;
+        }
+      | undefined;
+    await vi.waitFor(() => {
+      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+        (call) => call[0] === params.sessionId,
+      )?.[1] as typeof handle;
+      expect(handle).toBeDefined();
+    }, fastWait);
+
+    const first = handle!.queueMessage("first steer", { debounceMs: 0 });
+    await vi.waitFor(
+      () => expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1),
+      fastWait,
+    );
+    const second = handle!.queueMessage("second steer", { debounceMs: 0 });
+    await Promise.resolve();
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1);
+
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "first-steered-user-message",
+          type: "userMessage",
+          clientId: "openclaw:turn-1:steer:1",
+        },
+      },
+    });
+    await first;
+    await vi.waitFor(
+      () => expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(2),
+      fastWait,
+    );
+
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "second-steered-user-message",
+          type: "userMessage",
+          clientId: "openclaw:turn-1:steer:2",
+        },
+      },
+    });
+    await second;
+    resolveFirstSteer?.();
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("forwards queued text and images to the active app-server turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
