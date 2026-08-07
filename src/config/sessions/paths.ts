@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -193,14 +194,6 @@ function resolveStructuralSessionFallbackPath(
     return undefined;
   }
   return path.normalize(path.resolve(candidateAbsPath));
-}
-
-function safeRealpathSync(filePath: string): string | undefined {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return undefined;
-  }
 }
 
 function resolvePathWithinSessionsDir(
