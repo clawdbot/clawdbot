@@ -712,6 +712,9 @@ describe("plugin sdk alias helpers", () => {
     const sourceCodexAliases = buildPluginLoaderAliasMap(sourceCodexEntry);
     const sourceCopilotAliases = buildPluginLoaderAliasMap(sourceCopilotEntry);
     const sourceOtherAliases = buildPluginLoaderAliasMap(sourceOtherEntry);
+    const sourceOtherPrivateQaAliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
+      buildPluginLoaderAliasMap(sourceOtherEntry),
+    );
     const installedCodexAliases = withCwd(installedCodexRoot, () =>
       buildPluginLoaderAliasMap(
         installedCodexEntry,
@@ -736,6 +739,16 @@ describe("plugin sdk alias helpers", () => {
         "dist",
       ),
     );
+    const installedOtherPrivateQaAliases = withCwd(installedOtherRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
+        buildPluginLoaderAliasMap(
+          installedOtherEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
     const specifier = `openclaw/plugin-sdk/${authoritySubpath}`;
 
     expect(fs.realpathSync(sourceCodexAliases[specifier] ?? "")).toBe(
@@ -751,7 +764,9 @@ describe("plugin sdk alias helpers", () => {
       fs.realpathSync(distAuthorityPath),
     );
     expect(sourceOtherAliases[specifier]).toBeUndefined();
+    expect(sourceOtherPrivateQaAliases[specifier]).toBeUndefined();
     expect(installedOtherAliases[specifier]).toBeUndefined();
+    expect(installedOtherPrivateQaAliases[specifier]).toBeUndefined();
   });
 
   it("does not reuse a non-private cached subpath list after private qa gets enabled", () => {
