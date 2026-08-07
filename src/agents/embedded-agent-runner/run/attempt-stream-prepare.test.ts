@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createReplyOperation,
+  type ReplyOperation,
+} from "../../../auto-reply/reply/reply-run-registry.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
+import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
@@ -45,6 +50,10 @@ function prepareCatalogExecutor(
     runAbortController?: AbortController;
     sandboxSessionKey?: string;
     sessionKey?: string;
+    replyOperation?: ReplyOperation;
+    onAttemptAbort?: () => void;
+    abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
+    markExternalAbort?: () => void;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -53,6 +62,8 @@ function prepareCatalogExecutor(
       runId: "run-output-schema",
       sessionId: "session-output-schema",
       sessionKey: options?.sessionKey ?? "agent:main:main",
+      replyOperation: options?.replyOperation,
+      onAttemptAbort: options?.onAttemptAbort,
     } as never,
     activeSession: { agent: {}, isStreaming: false } as never,
     hookRunner: undefined as never,
@@ -62,8 +73,8 @@ function prepareCatalogExecutor(
     toolSearchTargetTranscriptProjections: projections,
     isReplaySafeTool: () => false,
     runAbortController,
-    abortRun: vi.fn(),
-    markExternalAbort: vi.fn(),
+    abortRun: options?.abortRun ?? vi.fn(),
+    markExternalAbort: options?.markExternalAbort ?? vi.fn(),
     getRunState:
       options?.getRunState ??
       (() => ({
@@ -442,5 +453,57 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     aborted = true;
     expect(prepared.queueHandle.isAborted?.()).toBe(true);
+  });
+
+  it("processes aliased cancel and abort through one external-abort sequence", () => {
+    const markExternalAbort = vi.fn();
+    const onAttemptAbort = vi.fn();
+    const abortRun = vi.fn();
+    const prepared = prepareCatalogExecutor([], {
+      markExternalAbort,
+      onAttemptAbort,
+      abortRun,
+    });
+
+    prepared.queueHandle.abort("restart");
+    prepared.queueHandle.cancel("user_abort");
+
+    expect(markExternalAbort).toHaveBeenCalledOnce();
+    expect(onAttemptAbort).toHaveBeenCalledOnce();
+    expect(abortRun).toHaveBeenCalledOnce();
+    expect(abortRun.mock.calls[0]?.[0]).toBe(false);
+    expect(isAgentRunRestartAbortReason(abortRun.mock.calls[0]?.[1])).toBe(true);
+  });
+
+  it("latches external abort before reply cancellation can synchronously re-enter", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-output-schema",
+      resetTriggered: false,
+    });
+    const markExternalAbort = vi.fn();
+    const abortRun = vi.fn();
+    const onAttemptAbort = vi.fn(() => {
+      operation.abortByUser();
+    });
+
+    try {
+      const prepared = prepareCatalogExecutor([], {
+        replyOperation: operation,
+        markExternalAbort,
+        onAttemptAbort,
+        abortRun,
+      });
+
+      prepared.queueHandle.cancel("superseded");
+      prepared.queueHandle.abort("restart");
+
+      expect(markExternalAbort).toHaveBeenCalledOnce();
+      expect(onAttemptAbort).toHaveBeenCalledOnce();
+      expect(abortRun).toHaveBeenCalledOnce();
+      expect(abortRun).toHaveBeenCalledWith(false, undefined);
+    } finally {
+      operation.complete();
+    }
   });
 });

@@ -383,7 +383,14 @@ export function prepareEmbeddedAttemptStream(input: {
     }
   };
 
+  let externalAbortAccepted = false;
   const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
+    // Reply cancellation can synchronously re-enter through this same backend.
+    // Latch before callbacks so the first reason owns every abort side effect.
+    if (externalAbortAccepted) {
+      return;
+    }
+    externalAbortAccepted = true;
     input.markExternalAbort();
     attempt.onAttemptAbort?.();
     input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
