@@ -6,6 +6,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
+import { createAgentExecutionAttribution } from "../../agent-execution-attribution.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -125,6 +126,41 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     expect(state.getLifecycleGeneration()).toBe(currentGeneration);
     expect(state.getParams().lifecycleGeneration).toBe(currentGeneration);
     expect(getAgentRunContext("queued-across-restart")).toMatchObject({
+      lifecycleGeneration: currentGeneration,
+    });
+  });
+
+  it("rebinds admitted attribution with foreground work across lifecycle rotation", async () => {
+    const queue = deferredTaskQueue();
+    const generation = getAgentEventLifecycleGeneration();
+    const attribution = createAgentExecutionAttribution({
+      runId: "attributed-across-restart",
+      lifecycleGeneration: generation,
+      sessionKey: "agent:main:session-1",
+      sessionId: "session-1",
+      agentId: "main",
+    });
+    claimAgentRunContext(attribution.runId, {
+      attribution,
+      ...(attribution.sessionKey ? { sessionKey: attribution.sessionKey } : {}),
+      ...(attribution.sessionId ? { sessionId: attribution.sessionId } : {}),
+      ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
+      lifecycleGeneration: generation,
+    });
+    const state = createController({
+      lifecycleGeneration: generation,
+      enqueue: queue.enqueue as LaneParams["enqueue"],
+      trigger: "user",
+      runId: attribution.runId,
+    });
+    const run = state.controller.enqueueGlobal(async () => completedResult);
+
+    const currentGeneration = rotateAgentEventLifecycleGeneration();
+    queue.release();
+    await run;
+
+    expect(getAgentRunContext(attribution.runId)?.attribution).toEqual({
+      ...attribution,
       lifecycleGeneration: currentGeneration,
     });
   });

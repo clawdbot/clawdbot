@@ -3090,6 +3090,44 @@ describe("memory index", () => {
     expect(status.vector?.available).toBeUndefined();
   });
 
+  it("reports persisted vector index state on the unprobed status path", async () => {
+    const cfg = createCfg({ provider: "gemini", vectorEnabled: true });
+    const emptyManager = await getFreshManager(cfg, "status");
+    try {
+      const emptyStatus = emptyManager.status();
+      expect(emptyStatus.chunks).toBe(0);
+      expect(emptyStatus.vector?.storeAvailable).toBeUndefined();
+      expect(emptyStatus.vector?.index).toEqual({ state: "empty" });
+    } finally {
+      await emptyManager.close?.();
+    }
+
+    const indexingManager = await getFreshManager(cfg);
+    try {
+      await indexingManager.sync({ reason: "test", force: true });
+      expect(indexingManager.status().chunks).toBeGreaterThan(0);
+    } finally {
+      await indexingManager.close?.();
+    }
+
+    const statusManager = await getFreshManager(cfg, "status");
+    try {
+      expect(Reflect.get(statusManager, "vector")).toMatchObject({ available: null, dims: 4 });
+      expect(statusManager.status().vector).toMatchObject({
+        index: { state: "complete" },
+        storeAvailable: undefined,
+      });
+
+      const db = Reflect.get(statusManager, "db") as DatabaseSync;
+      db.prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?").run(
+        "memory_vector_rebuild_v1",
+      );
+      expect(statusManager.status().vector?.index).toEqual({ state: "incomplete" });
+    } finally {
+      await statusManager.close?.();
+    }
+  });
+
   it("keeps current vector indexes clean after vector store probing", async () => {
     const cfg = createCfg({ provider: "gemini" });
     const manager = await getFreshManager(cfg);

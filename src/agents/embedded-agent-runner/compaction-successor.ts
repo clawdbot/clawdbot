@@ -32,6 +32,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
     const resolvedTarget = await resolveAgentRunSessionTarget({
       agentId: target.agentId ?? current.agentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionId: target.sessionId ?? successorId ?? current.sessionId,
       sessionFile: successorFile,
       sessionKey: target.sessionKey ?? current.sessionKey,
@@ -118,6 +119,7 @@ export async function resolveContextEngineCompactionSuccessor(params: {
     const resolvedTarget = await resolveAgentRunSessionTarget({
       agentId: legacyTarget.agentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionId: legacyTarget.sessionId,
       sessionKey: legacyTarget.sessionKey,
       sessionTarget: legacyTarget,

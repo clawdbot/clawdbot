@@ -57,7 +57,11 @@ afterEach(() => {
   resetNodeWakeStateForTest();
 });
 
-function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: AbortSignal }) {
+function startNodeInvoke(options: {
+  invoke: ReturnType<typeof vi.fn>;
+  signal?: AbortSignal;
+  requestParams?: Record<string, unknown>;
+}) {
   const respond = vi.fn();
   const handler = nodeInvokeHandlers["node.invoke"];
   if (!handler) {
@@ -71,6 +75,7 @@ function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: A
       params: { model: "node-local:small", prompt: "answer locally" },
       timeoutMs: 10_000,
       idempotencyKey: "paired-inference-idempotency-key",
+      ...options.requestParams,
     },
     client: null,
     isWebchatConnect: () => false,
@@ -90,6 +95,28 @@ function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: A
 }
 
 describe("node.invoke caller cancellation", () => {
+  it("forwards the normalized gateway session key through plugin policy", async () => {
+    const invoke = vi.fn(async () => ({ ok: true, payload: { response: "node-only inference" } }));
+    const sessionKey = "agent:main:main";
+    const { invocation } = startNodeInvoke({
+      invoke,
+      requestParams: {
+        sessionKey,
+        params: {
+          model: "node-local:small",
+          prompt: "answer locally",
+          sessionKey: "agent:attacker:forged",
+        },
+      },
+    });
+
+    await invocation;
+
+    expect(mocks.applyPluginNodeInvokePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey }),
+    );
+  });
+
   it("cancels paired-node work without breaking pairing lifecycle identity", async () => {
     const controller = new AbortController();
     const invoke = vi.fn(

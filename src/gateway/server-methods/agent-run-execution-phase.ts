@@ -53,10 +53,7 @@ import {
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import {
-  resolveAgentRestartRecoveryChannelContext,
-  resolveAgentRestartRecoveryExecutionIdentityAdmission,
-} from "./agent-restart-recovery-context.js";
+import { resolveAgentRestartRecoveryChannelContext } from "./agent-restart-recovery-context.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
   resolveAbortedAgentStopReason,
@@ -342,13 +339,6 @@ export function startAgentRunExecution(params: {
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
-      const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
-        collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
-        isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
-        retryOnly: params.request.internalExecutionIdentityRetry,
-        runId: params.runId,
-        sessionEntry: params.sessionEntry,
-      });
       const restartRecoveryChannelContext = resolveAgentRestartRecoveryChannelContext({
         canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
         expectedExistingSessionId: params.request.expectedExistingSessionId,
@@ -445,7 +435,7 @@ export function startAgentRunExecution(params: {
           swarmOutputSchema: params.request.swarmOutputSchema,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           forceCodeModeTools: params.request.forceCodeModeTools,
-          ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
+          executionAttribution: prepared.attribution,
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
           suppressPromptPersistence:

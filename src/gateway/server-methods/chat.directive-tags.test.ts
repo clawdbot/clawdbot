@@ -33,6 +33,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
@@ -1358,7 +1359,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).not.toHaveBeenCalled();
   });
 
-  it("allows an explicit steer after its active owner advances the transcript leaf", async () => {
+  it("allows an explicit steer during injectable non-streaming tool work", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-moving-leaf-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1377,7 +1378,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     operation.attachBackend({
       kind: "embedded",
       cancel: () => {},
-      isStreaming: () => true,
+      isStreaming: () => false,
+      isStopped: () => false,
       queueMessage: async () => {},
     });
 
@@ -1401,6 +1403,54 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
     expect(mockState.lastDispatchOriginatingLeafEntryId).toBe("leaf-before-active-run-output");
+  });
+
+  it("rejects a moved-leaf steer when the non-streaming owner evidence is stale", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-stale-owner-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "stale tool work" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "leaf-before-stale-run-output",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      isStreaming: () => false,
+      isStopped: () => false,
+      queueMessage: async () => {},
+    });
+
+    try {
+      vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
+      await send({
+        idempotencyKey: "idem-steer-stale-owner",
+        requestParams: {
+          expectedLeafEntryId: "leaf-before-stale-run-output",
+          queueMode: "steer",
+        },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+      vi.useRealTimers();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
   });
 
   it("rejects a stale explicit steer when a different leaf owns the active run", async () => {

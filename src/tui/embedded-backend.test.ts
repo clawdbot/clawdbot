@@ -30,6 +30,11 @@ const loadAgentRuntimePluginRegistryHandleMock = vi.fn();
 const withPluginRuntimeRegistryScopeMock = vi.fn((_registry: unknown, run: () => unknown) => run());
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
+const refreshPreparedModelRuntimeSnapshotsMock = vi.fn<
+  (_config: unknown, _options?: unknown) => Promise<void>
+>(async () => undefined);
+const unregisterConfigWriteListenerMock = vi.fn();
+let configWriteListener: ((event: { runtimeConfig: Record<string, unknown> }) => void) | undefined;
 const createGatewaySessionMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
@@ -155,6 +160,11 @@ vi.mock("../agents/context.js", () => ({
   ensureContextWindowCacheLoaded: () => ensureContextWindowCacheLoadedMock(),
 }));
 
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  refreshPreparedModelRuntimeSnapshots: (config: unknown, options?: unknown) =>
+    refreshPreparedModelRuntimeSnapshotsMock(config, options),
+}));
+
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
@@ -177,6 +187,12 @@ vi.mock("../agents/model-selection.js", () => ({
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
   loadConfig: () => getRuntimeConfigMock(),
+  registerConfigWriteListener: (
+    listener: (event: { runtimeConfig: Record<string, unknown> }) => void,
+  ) => {
+    configWriteListener = listener;
+    return unregisterConfigWriteListenerMock;
+  },
 }));
 
 vi.mock("../config/sessions/startup-migration.js", () => ({
@@ -326,6 +342,10 @@ describe("EmbeddedTuiBackend", () => {
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
     runSessionStartupMigrationMock.mockReset();
     runSessionStartupMigrationMock.mockResolvedValue(undefined);
+    refreshPreparedModelRuntimeSnapshotsMock.mockReset();
+    refreshPreparedModelRuntimeSnapshotsMock.mockResolvedValue(undefined);
+    unregisterConfigWriteListenerMock.mockReset();
+    configWriteListener = undefined;
     createGatewaySessionMock.mockReset();
     createGatewaySessionMock.mockResolvedValue({
       ok: true,
@@ -848,6 +868,150 @@ describe("EmbeddedTuiBackend", () => {
       },
     });
     expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a static configured runtime before admitting the first local turn", async () => {
+    const initialConfig = { agents: { list: [{ id: "main" }] } };
+    getRuntimeConfigMock.mockReturnValue(initialConfig);
+    const publication = deferred<void>();
+    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+
+    const send = backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello",
+      runId: "run-waits-for-static-runtime",
+    });
+    await flushMicrotasks();
+
+    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(initialConfig, {
+      catalogMode: "static",
+    });
+    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+
+    publication.resolve();
+    await send;
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
+    await backend.stop();
+  });
+
+  it("queues config runtime publication ahead of later local turns and unregisters on stop", async () => {
+    const initialConfig = { agents: { list: [{ id: "main" }] } };
+    const nextConfig = { agents: { list: [{ id: "main" }], defaults: { model: "openai/next" } } };
+    getRuntimeConfigMock.mockReturnValue(initialConfig);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await vi.waitFor(() => expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce());
+
+    const replacement = deferred<void>();
+    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(replacement.promise);
+    configWriteListener?.({ runtimeConfig: nextConfig });
+
+    const send = backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "after config write",
+      runId: "run-waits-for-config-runtime",
+    });
+    await flushMicrotasks();
+
+    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenLastCalledWith(nextConfig, {
+      catalogMode: "static",
+    });
+    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+
+    replacement.resolve();
+    await send;
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
+    await backend.stop();
+
+    expect(unregisterConfigWriteListenerMock).toHaveBeenCalledOnce();
+  });
+
+  it("forwards overlapping config publications immediately for runtime latest-wins coalescing", async () => {
+    const initialConfig = { agents: { list: [{ id: "main" }] } };
+    const middleConfig = { agents: { defaults: { model: "openai/middle" } } };
+    const latestConfig = { agents: { defaults: { model: "openai/latest" } } };
+    getRuntimeConfigMock.mockReturnValue(initialConfig);
+    const initial = deferred<void>();
+    const middle = deferred<void>();
+    const latest = deferred<void>();
+    refreshPreparedModelRuntimeSnapshotsMock
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(middle.promise)
+      .mockReturnValueOnce(latest.promise);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await vi.waitFor(() => expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce());
+
+    try {
+      configWriteListener?.({ runtimeConfig: middleConfig });
+      configWriteListener?.({ runtimeConfig: latestConfig });
+      await flushMicrotasks();
+
+      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenNthCalledWith(2, middleConfig, {
+        catalogMode: "static",
+      });
+      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenNthCalledWith(3, latestConfig, {
+        catalogMode: "static",
+      });
+    } finally {
+      initial.resolve();
+      middle.resolve();
+      latest.resolve();
+      await backend.stop();
+    }
+  });
+
+  it("rechecks runtime publication when a queued turn reaches model admission", async () => {
+    const first = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ payloads: [{ text: "second done" }], meta: {} });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: { messages: { queue: { mode: "followup" } } },
+      canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: { queueDebounceMs: 0 },
+    }));
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "first",
+      runId: "runtime-refresh-first",
+    });
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "queued second",
+      runId: "runtime-refresh-second",
+    });
+
+    const replacement = deferred<void>();
+    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(replacement.promise);
+    configWriteListener?.({
+      runtimeConfig: { agents: { defaults: { model: "openai/next" } } },
+    });
+    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+    await flushMicrotasks();
+
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+    replacement.resolve();
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
+    await backend.stop();
   });
 
   it("creates a local session entry before starting a goal", async () => {

@@ -2,6 +2,7 @@
 // prefixes/aliases and runtime config for cron delivery destinations.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -441,12 +442,7 @@ function expectCronReadSuccess(respond: ReturnType<typeof vi.fn>, job: CronJob):
   );
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireCronAddPayload(
   context: ReturnType<typeof createCronContext>,

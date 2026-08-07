@@ -118,6 +118,7 @@ async function runEmbeddedAgentInternal(
   assertAgentHarnessRunAdmission({ ...paramsBase, sessionKey: effectiveSessionKey });
   const runSessionTarget = await resolveAgentRunSessionTarget({
     ...paramsBase,
+    missingSessionKey: "create",
     sessionKey: effectiveSessionKey,
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
@@ -345,8 +346,7 @@ async function runEmbeddedAgentInternal(
             sessionKey: normalizedSessionKey,
             modelFallbacksOverride: params.modelFallbacksOverride,
           });
-          const resolvedSessionKey =
-            normalizedSessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
+          const resolvedSessionKey = normalizedSessionKey ?? runSessionTarget.sessionKey;
           const hookRunner = getGlobalHookRunner();
           const hookCtx = {
             runId: params.runId,

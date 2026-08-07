@@ -185,8 +185,8 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Testbox mechanics: warm from the task checkout; ownership is checkout-path scoped; `--reclaim` only for intentional transfer, and it does not retarget the remote checkout — never cross repos. One lease, one active command; never sync/reclaim during a run; base/head changed means stop and rewarm — never override stale lease checks. Warmup must print a lease id; silent success is unusable — verify before reuse, else fall back to one-shot `run`. Wrapper reuse requires its local SSH key; missing after restart/handoff means warm fresh. Direct lease: `blacksmith testbox run`; Crabbox wrapper reuse needs a wrapper-created lease. Status/stop: `blacksmith testbox status|stop --id <tbx_id>` — id is not positional, no status `--json` flag. Delegated runs reject `--fresh-pr` and `--stop-after`; sync current checkout, workflow owns lifecycle. Compound commands: `bash -lc`, never `sh -lc`; job env uses Bash `declare`. Testbox owns Chromium; never pass Crabbox `--browser` to `provider=blacksmith-testbox`.
 - Crabbox mechanics: a Crabbox request means real scenario proof — install/update/call/repro the user path, not just copied tests run remotely. Final timing JSON = proof complete; if portal sync hangs after it, interrupt the wrapper only. Wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`. Sparse-sync temp checkout may claim a kept Testbox; repo-path reuse needs `--reclaim`. Dirty-sync generator proof: compare hashes before/after; `git diff` includes the synced patch.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
-- In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
-- Repo-native PR worktree may omit `node_modules`; prove remotely, then use `git commit --no-verify`, not `scripts/committer`.
+- In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, and `pnpm crabbox:run` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
+- Repo-native PR worktrees may omit `node_modules`; prove remotely, then use `git commit --no-verify`.
 - Release-branch formatting: Testbox or existing binary; never local `pnpm exec` reconciliation. Targeted local format/lint: existing `./node_modules/.bin/*`; never `pnpm exec` reconciliation.
 - Parallel agents share the checkout; never switch its branch while sibling work runs.
 - QA CLI `--output-dir` must be repo-relative.
@@ -331,7 +331,7 @@ Mechanics only; policy lives above.
 
 ## Git
 
-- Commit via `scripts/committer "<msg>" <file...>`; stage intended files only.
+- Commit with standard Git commands; stage intended files only.
 - Commits: conventional-ish, concise, grouped.
 - No manual stash/autostash unless explicit. Branch switches ok when useful; no new worktrees unless requested.
 - `main`: no merge commits; rebase on latest `origin/main` before push. After one green run plus clean rebase sanity, do not chase moving `main` with repeated full gates.

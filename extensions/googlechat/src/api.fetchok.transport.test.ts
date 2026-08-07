@@ -216,9 +216,16 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
   });
 
   it("preserves Google Chat errors without exposing the bearer token", async () => {
-    const server = createServer((_request, response) => {
+    let receivedAuthorization: string | undefined;
+    const server = createServer((request, response) => {
+      receivedAuthorization = request.headers.authorization;
       response.writeHead(403, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: { message: "Chat permission denied" } }));
+      response.end(
+        JSON.stringify({
+          error: { message: "Chat permission denied" },
+          reflectedHeader: `Authorization: ${receivedAuthorization}`,
+        }),
+      );
     });
 
     loopback.baseUrl = await listen(server);
@@ -230,8 +237,10 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
         ),
       );
       expect(outcome).toBeInstanceOf(Error);
+      expect(receivedAuthorization).toBe(`Bearer ${proofToken}`);
       expect((outcome as Error).message).toContain("Google Chat API 403");
       expect((outcome as Error).message).toContain("Chat permission denied");
+      expect((outcome as Error).message).toContain("Authorization: Bearer");
       expect((outcome as Error).message).not.toContain(proofToken);
       expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
     } finally {
