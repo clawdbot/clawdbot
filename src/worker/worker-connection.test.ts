@@ -132,6 +132,28 @@ function installThrowingThenHealthyListeners(connection: ReturnType<typeof creat
 }
 
 describe("worker connection error coercion", () => {
+  it("preserves existing Error identity without invoking custom toString", () => {
+    class ThrowingToStringError extends Error {
+      override toString(): string {
+        throw new Error("unexpected stringification");
+      }
+    }
+    const cause = { code: "ECONNRESET" };
+    const original = new ThrowingToStringError("worker failed", { cause });
+    original.name = "WorkerFailure";
+    const originalStack = original.stack;
+
+    const error = toError(original);
+
+    expect(error).toBe(original);
+    expect(error).toMatchObject({
+      cause,
+      message: "worker failed",
+      name: "WorkerFailure",
+      stack: originalStack,
+    });
+  });
+
   it("preserves structured non-Error causes", () => {
     const cause = { code: "ECONNRESET", status: 503 };
 

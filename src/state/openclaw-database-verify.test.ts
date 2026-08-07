@@ -48,7 +48,51 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
+async function captureDatabaseVerifyWorkerSendFailure(failure: unknown): Promise<Error> {
+  return await runDatabaseVerifyWorker([], {
+    onWorker: (worker) => {
+      if (!worker) {
+        return;
+      }
+      worker.send = ((...args: unknown[]) => {
+        const callback = args.at(-1);
+        if (typeof callback === "function") {
+          callback(failure);
+        }
+        return true;
+      }) as ChildProcess["send"];
+    },
+  }).then(
+    () => {
+      throw new Error("expected database verification worker failure");
+    },
+    (rejection: unknown) => rejection as Error,
+  );
+}
+
 describe("database verification error coercion", () => {
+  it("preserves existing Error identity without invoking custom toString", async () => {
+    class ThrowingToStringError extends Error {
+      override toString(): string {
+        throw new Error("unexpected stringification");
+      }
+    }
+    const cause = { code: "SQLITE_IOERR" };
+    const failure = new ThrowingToStringError("database failed", { cause });
+    failure.name = "DatabaseFailure";
+    const originalStack = failure.stack;
+
+    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
+
+    expect(error).toBe(failure);
+    expect(error).toMatchObject({
+      cause,
+      message: "database failed",
+      name: "DatabaseFailure",
+      stack: originalStack,
+    });
+  });
+
   it("preserves adapter-owned Error fields when structured failure fields collide", async () => {
     const detailKey = Symbol("detail");
     let reservedReads = 0;
@@ -74,25 +118,7 @@ describe("database verification error coercion", () => {
       [detailKey]: "symbol detail",
     };
 
-    const error = await runDatabaseVerifyWorker([], {
-      onWorker: (worker) => {
-        if (!worker) {
-          return;
-        }
-        worker.send = ((...args: unknown[]) => {
-          const callback = args.at(-1);
-          if (typeof callback === "function") {
-            callback(failure);
-          }
-          return true;
-        }) as ChildProcess["send"];
-      },
-    }).then(
-      () => {
-        throw new Error("expected database verification worker failure");
-      },
-      (rejection: unknown) => rejection as Error,
-    );
+    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
 
     expect(reservedReads).toBe(0);
     expect(error.message).toBe("[object Object]");

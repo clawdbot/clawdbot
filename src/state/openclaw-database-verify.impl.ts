@@ -28,11 +28,11 @@ const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 const ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 
 function toError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
   const message = String(error);
-  if (
-    error instanceof Error ||
-    ((typeof error !== "object" || error === null) && typeof error !== "function")
-  ) {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
     return toErrorObject(error, message);
   }
   const details = Object.fromEntries(

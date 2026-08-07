@@ -97,11 +97,11 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
 }
 
 export function toError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
   const message = String(error);
-  if (
-    error instanceof Error ||
-    ((typeof error !== "object" || error === null) && typeof error !== "function")
-  ) {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
     return toErrorObject(error, message);
   }
   const details = Object.fromEntries(
