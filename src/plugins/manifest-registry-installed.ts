@@ -569,7 +569,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
             .map(normalizePreparedManifestRecord),
           diagnostics: [
             ...diagnostics,
-            ...params.manifestRegistry.diagnostics.filter(
+            ...(params.manifestRegistry.diagnostics ?? []).filter(
               (diagnostic) =>
                 isTransientPluginDiagnostic(diagnostic) &&
                 (!pluginIdSet || !diagnostic.pluginId || pluginIdSet.has(diagnostic.pluginId)),

@@ -1,24 +1,14 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadBundleAgentTemplates } from "./bundle-agent-manifest.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeBundleRoot(): string {
-  const rootDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundle-agents-")),
-  );
-  tempDirs.push(rootDir);
-  return rootDir;
+  return fs.realpathSync(tempDirs.make("openclaw-bundle-agents-"));
 }
 
 function writeAgent(rootDir: string, relativePath: string, content: string): string {
