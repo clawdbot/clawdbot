@@ -112,7 +112,7 @@ type StatusArgs = {
   activeModelAuth?: string;
   usageLine?: string;
   timeLine?: string;
-  uptimeLine?: string;
+  uptimeValue?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
@@ -578,8 +578,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const now = args.now ?? Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
-  const timeLine =
-    args.timeLine ?? (args.config ? resolveCronStyleNow(args.config, now).timeLine : undefined);
+  const cronNow = args.config ? resolveCronStyleNow(args.config, now) : undefined;
+  const timeLine = args.timeLine ?? cronNow?.timeLine;
+  const uptimeLine = args.uptimeValue ? `⏱️ Uptime: ${args.uptimeValue}` : undefined;
   const entry = args.sessionEntry;
   const selectionConfig = {
     agents: {
@@ -1144,7 +1145,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const text = [
     versionLine,
     timeLine,
-    args.uptimeLine,
+    uptimeLine,
     ...modelLines,
     configuredFallbacksLine,
     fallbackLine,
@@ -1202,6 +1203,18 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
 
   const contextBlock = (value: string | null | undefined): MessagePresentationBlock[] =>
     value?.trim() ? [{ type: "context", text: value }] : [];
+  // Presentation-only curation: the reference-UTC line and the rich-messages
+  // feature hint stay in the plain text body, where they are diagnostic; native
+  // renders keep one compact time-and-uptime line under the table.
+  const presentationClockValue = cronNow
+    ? `${cronNow.formattedTime} (${cronNow.userTimezone})`
+    : args.timeLine;
+  const clockUptimeValue = [
+    presentationClockValue,
+    args.uptimeValue ? `⏱️ ${args.uptimeValue}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // The header row doubles as the card title on native renderers, so the
   // presentation carries no separate title.
   const presentation: MessagePresentation = {
@@ -1213,13 +1226,11 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         rows: statusRows,
         rowHeaderColumnIndex: 0,
       },
-      ...contextBlock(timeLine),
-      ...contextBlock(args.uptimeLine),
+      ...contextBlock(clockUptimeValue),
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
       ...contextBlock(args.taskLine),
-      ...contextBlock(args.channelFeatureLine),
       ...contextBlock(args.pluginHealthLine),
       ...contextBlock(pluginStatusLine ? `🧩 ${pluginStatusLine}` : null),
       ...contextBlock(voiceLine),

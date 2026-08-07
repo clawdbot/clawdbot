@@ -64,7 +64,7 @@ import {
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import type { StatusMessageParts } from "./status-message.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
-import { appendSessionCostLine, buildStatusUptimeLine } from "./status-runtime-lines.js";
+import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
@@ -703,7 +703,7 @@ export async function buildStatusReplyParts(
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,
-    uptimeLine: buildStatusUptimeLine(),
+    uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

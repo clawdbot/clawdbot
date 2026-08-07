@@ -50,7 +50,7 @@ describe("buildStatusMessageParts presentation", () => {
       sessionScope: "per-sender",
       queue: { mode: "steer", depth: 0 },
       modelAuth: "api-key",
-      uptimeLine: "⏱️ Uptime: gateway 1h",
+      uptimeValue: "gateway 1h · system 2d",
       channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
     });
 
@@ -63,10 +63,12 @@ describe("buildStatusMessageParts presentation", () => {
         sessionScope: "per-sender",
         queue: { mode: "steer", depth: 0 },
         modelAuth: "api-key",
-        uptimeLine: "⏱️ Uptime: gateway 1h",
+        uptimeValue: "gateway 1h · system 2d",
         channelFeatureLine: "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
       }),
     );
+    expect(parts.text).toContain("⏱️ Uptime: gateway 1h · system 2d");
+    expect(parts.text).toContain("Telegram rich messages: on");
     expect(parts.presentation.title).toBeUndefined();
     const table = parts.presentation.blocks.find((block) => block.type === "table");
     expect(table).toBeDefined();
@@ -87,10 +89,12 @@ describe("buildStatusMessageParts presentation", () => {
     const contextTexts = parts.presentation.blocks.flatMap((block) =>
       block.type === "context" ? [block.text] : [],
     );
-    expect(contextTexts).toContain("⏱️ Uptime: gateway 1h");
-    expect(contextTexts).toContain(
-      "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled",
-    );
+    // One compact clock-and-uptime context line; channel feature hint and
+    // reference-UTC stay text-only.
+    const clockLine = contextTexts.find((entry) => entry.includes("⏱️ gateway 1h · system 2d"));
+    expect(clockLine).toContain("(UTC)");
+    expect(contextTexts.join("\n")).not.toContain("Reference UTC");
+    expect(contextTexts.join("\n")).not.toContain("Telegram rich messages");
   });
 });
 
