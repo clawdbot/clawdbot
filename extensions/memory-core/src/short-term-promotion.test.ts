@@ -3712,7 +3712,7 @@ describe("short-term promotion", () => {
   });
 
   describe("unparseable lastRecalledAt timestamps", () => {
-    it("does not grant recency boost to entries with malformed timestamps", async () => {
+    it("recovers recency from valid recallDays when lastRecalledAt is malformed", async () => {
       await withTempWorkspace(async (workspaceDir) => {
         await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Valid timestamp note."]);
         await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Malformed timestamp note."]);
@@ -3754,7 +3754,10 @@ describe("short-term promotion", () => {
               firstRecalledAt: "2026-04-02T00:00:00.000Z",
               lastRecalledAt: "not-a-valid-date",
               queryHashes: ["a", "b"],
-              recallDays: ["2026-04-03"],
+              // Fresh recall day (2026-04-02, one day older than the valid
+              // entry's lastRecalledAt) so recency is recovered from
+              // recallDays instead of being zeroed.
+              recallDays: ["2026-04-02"],
               conceptTags: [],
             },
           },
@@ -3772,19 +3775,101 @@ describe("short-term promotion", () => {
         const malformed = ranked.find((entry) => entry.key === "malformed");
         expect(valid).toBeDefined();
         expect(malformed).toBeDefined();
-        // The valid entry earns a recency component; the malformed one gets 0
-        // instead of the previous fallback that silently granted a maximum
-        // recency boost to broken timestamps via calculateRecencyComponent(0).
+        // Both entries earn a non-zero recency: the valid one from its
+        // lastRecalledAt, the malformed one recovered from its newest valid
+        // recallDay. The previous fix zeroed recency for malformed timestamps,
+        // under-scoring entries that the shared freshness owner
+        // (entryWithinLookback) still treats as recently recalled.
         expect(valid?.components.recency).toBeGreaterThan(0);
-        expect(malformed?.components.recency).toBe(0);
+        expect(malformed?.components.recency).toBeGreaterThan(0);
+        // The valid entry (recalled 04-03) outranks the malformed one
+        // (recallDays fallback resolves to 04-02, one day older).
+        expect(valid?.components.recency).toBeGreaterThan(malformed?.components.recency ?? 0);
         expect(valid?.score).toBeGreaterThan(malformed?.score ?? 0);
-        // ageDays stays numeric (0 for invalid) to preserve the Gateway doctor
-        // payload contract; the recency fix is in the recency calculation, not
-        // in the ageDays representation.
+        // ageDays reflects the effective recall timestamp: 1 for valid
+        // (04-03 -> 04-04), 2 for malformed (recallDays 04-02 -> 04-04),
+        // preserving the numeric candidate-age contract.
         expect(valid?.ageDays).toBe(1);
-        expect(malformed?.ageDays).toBe(0);
+        expect(malformed?.ageDays).toBe(2);
         // Verify the candidate is JSON-serializable with a numeric ageDays.
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON round-trip verifies the candidate survives JSON transport (NaN/Infinity become null).
         const serialized = JSON.parse(JSON.stringify(malformed));
+        expect(serialized.ageDays).toBe(2);
+      });
+    });
+
+    it("assigns zero recency when neither lastRecalledAt nor recallDays is valid", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Neither-valid note."]);
+        await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Valid reference note."]);
+        const recentIso = "2026-04-04T00:00:00.000Z";
+        await testing.writeRawRecallStore(workspaceDir, {
+          version: 1,
+          updatedAt: recentIso,
+          entries: {
+            valid: {
+              key: "valid",
+              path: "memory/2026-04-02.md",
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Valid reference note.",
+              recallCount: 2,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1.8,
+              maxScore: 0.9,
+              firstRecalledAt: "2026-04-02T00:00:00.000Z",
+              lastRecalledAt: "2026-04-03T00:00:00.000Z",
+              queryHashes: ["a", "b"],
+              recallDays: ["2026-04-03"],
+              conceptTags: [],
+            },
+            neither: {
+              key: "neither",
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              source: "memory",
+              snippet: "Neither-valid note.",
+              recallCount: 2,
+              dailyCount: 0,
+              groundedCount: 0,
+              totalScore: 1.8,
+              maxScore: 0.9,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "not-a-valid-date",
+              queryHashes: ["a", "b"],
+              // No recallDays and a malformed lastRecalledAt: neither
+              // freshness source yields a valid timestamp, so recency
+              // must fall back to 0.
+              recallDays: [],
+              conceptTags: [],
+            },
+          },
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse(recentIso),
+        });
+
+        const valid = ranked.find((entry) => entry.key === "valid");
+        const neither = ranked.find((entry) => entry.key === "neither");
+        expect(valid).toBeDefined();
+        expect(neither).toBeDefined();
+        // When neither lastRecalledAt nor recallDays yields a valid
+        // timestamp, recency is 0 (no artificial boost, no recovery).
+        expect(valid?.components.recency).toBeGreaterThan(0);
+        expect(neither?.components.recency).toBe(0);
+        expect(valid?.score).toBeGreaterThan(neither?.score ?? 0);
+        // ageDays stays numeric (0) to preserve the candidate payload contract.
+        expect(neither?.ageDays).toBe(0);
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- JSON round-trip verifies the candidate survives JSON transport (NaN/Infinity become null).
+        const serialized = JSON.parse(JSON.stringify(neither));
         expect(serialized.ageDays).toBe(0);
       });
     });
