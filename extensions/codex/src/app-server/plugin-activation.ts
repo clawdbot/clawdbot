@@ -3,7 +3,6 @@
  * marketplaces outside OpenClaw's install authority.
  */
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
-import { CodexAppServerRpcError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -18,6 +17,7 @@ import {
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 /** Terminal reason reported after trying to activate one Codex plugin policy. */
 type CodexPluginActivationReason =
