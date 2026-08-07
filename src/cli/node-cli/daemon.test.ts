@@ -32,6 +32,14 @@ const mocks = vi.hoisted(() => {
       environmentValueSources: {},
     })),
     loadNodeHostConfig: vi.fn(),
+    isSystemdUserServiceAvailable: vi.fn(async () => true),
+    resolveSystemdUserServiceAccount: vi.fn(() => "pi"),
+    readSystemdUserLingerStatus: vi.fn(
+      async (): Promise<{ user: string; linger: "yes" | "no" }> => ({
+        user: "pi",
+        linger: "no",
+      }),
+    ),
   };
 });
 
@@ -58,6 +66,17 @@ vi.mock("../../daemon/runtime-hints.js", () => ({
   ],
   buildPlatformServiceStartHints: () => ["openclaw node install", "openclaw node start"],
 }));
+
+vi.mock("../../daemon/systemd.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../daemon/systemd.js")>("../../daemon/systemd.js");
+  return {
+    ...actual,
+    isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
+    resolveSystemdUserServiceAccount: mocks.resolveSystemdUserServiceAccount,
+    readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
+  };
+});
 
 vi.mock("../../../packages/terminal-core/src/theme.js", async () => {
   const actual = await vi.importActual<
@@ -110,6 +129,12 @@ describe("runNodeDaemonInstall", () => {
         tls: true,
         tlsFingerprint: "saved-fingerprint",
       },
+    });
+    mocks.isSystemdUserServiceAvailable.mockReset().mockResolvedValue(true);
+    mocks.resolveSystemdUserServiceAccount.mockReset().mockReturnValue("pi");
+    mocks.readSystemdUserLingerStatus.mockReset().mockResolvedValue({
+      user: "pi",
+      linger: "no",
     });
   });
 
@@ -178,6 +203,109 @@ describe("runNodeDaemonInstall", () => {
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
     );
+  });
+
+  it("warns about disabled systemd lingering after a fresh install (text mode)", async () => {
+    // isLoaded=true so the service-load verification passes and the linger
+    // diagnostic runs on the verified-success path.
+    mocks.service.isLoaded.mockResolvedValue(true);
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalled();
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("sudo loginctl enable-linger pi"),
+    );
+  });
+
+  it("checks lingering for the same sudo target user as the systemd service", async () => {
+    mocks.service.isLoaded.mockResolvedValue(true);
+    mocks.resolveSystemdUserServiceAccount.mockReturnValue("debian");
+    mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "debian", linger: "no" });
+
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.resolveSystemdUserServiceAccount).toHaveBeenCalledWith(process.env);
+    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalledWith({
+      env: process.env,
+      user: "debian",
+    });
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("sudo loginctl enable-linger debian"),
+    );
+  });
+
+  it("includes the linger warning in JSON warnings after a fresh install", async () => {
+    mocks.service.isLoaded.mockResolvedValue(true);
+    await runNodeDaemonInstall({ force: true, json: true });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        warnings: expect.arrayContaining([expect.stringContaining("enable-linger pi")]),
+      }),
+    );
+  });
+
+  it("warns about disabled lingering on the already-installed short-circuit path", async () => {
+    mocks.service.isLoaded.mockResolvedValue(true);
+    await runNodeDaemonInstall({ force: false });
+
+    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalled();
+    expect(mocks.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("sudo loginctl enable-linger pi"),
+    );
+  });
+
+  it("does not warn when systemd lingering is already enabled", async () => {
+    mocks.service.isLoaded.mockResolvedValue(true);
+    mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "pi", linger: "yes" });
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("enable-linger"));
+  });
+
+  it("does not pollute the failure output when service.install throws", async () => {
+    mocks.service.isLoaded.mockResolvedValue(true);
+    mocks.service.install.mockRejectedValue(new Error("disk full"));
+    await runNodeDaemonInstall({ force: true, json: true });
+
+    // install() threw before verification, so onVerified never runs and no
+    // linger warning accompanies the install-failure payload.
+    const calls = mocks.runtime.writeJson.mock.calls;
+    const failurePayload = calls
+      .map(([payload]) => payload as { ok?: boolean; error?: string; warnings?: string[] })
+      .find((payload) => payload.ok === false);
+    expect(failurePayload).toBeDefined();
+    expect(failurePayload?.error).toContain("install failed");
+    expect(failurePayload?.warnings ?? []).toEqual(
+      expect.not.arrayContaining([expect.stringContaining("enable-linger")]),
+    );
+  });
+
+  it("does not warn when service-load verification fails (regression for #107033 review)", async () => {
+    // install() succeeded but the service is not loaded: the linger diagnostic
+    // must NOT run, so a failed verification never tells the operator to fix
+    // lingering for a service that was not successfully installed.
+    mocks.service.isLoaded.mockResolvedValue(false);
+    await runNodeDaemonInstall({ force: true, json: true });
+
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+    const calls = mocks.runtime.writeJson.mock.calls;
+    const failurePayload = calls
+      .map(([payload]) => payload as { ok?: boolean; error?: string; warnings?: string[] })
+      .find((payload) => payload.ok === false);
+    expect(failurePayload).toBeDefined();
+    expect(failurePayload?.error).toContain("verification failed");
+    expect(failurePayload?.warnings ?? []).toEqual(
+      expect.not.arrayContaining([expect.stringContaining("enable-linger")]),
+    );
+  });
+
+  it("skips the linger check when systemd user services are unavailable", async () => {
+    mocks.service.isLoaded.mockResolvedValue(true);
+    mocks.isSystemdUserServiceAvailable.mockResolvedValue(false);
+    await runNodeDaemonInstall({ force: true });
+
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
 });
 

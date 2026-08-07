@@ -2095,6 +2095,34 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
+  it("preserves terminal cumulative usage when reparsing completed Claude JSONL", () => {
+    const output = parseCliJsonl(
+      readFileSync("test/fixtures/cli/claude-2.1-thinking-progress.jsonl", "utf8"),
+      {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(output.usage).toEqual({
+      input: 4418,
+      output: 5,
+      cacheRead: undefined,
+      cacheWrite: 36955,
+      total: undefined,
+    });
+    expect(output.diagnosticUsage).toEqual({
+      input: 4418,
+      output: 534,
+      cacheRead: undefined,
+      cacheWrite: 36955,
+      total: undefined,
+    });
+  });
+
   it.each([
     {
       name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",

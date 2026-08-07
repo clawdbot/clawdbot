@@ -989,6 +989,16 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   };
 }
 
+/**
+ * Resolves the account whose user manager owns the service operation.
+ * Keep linger diagnostics on this identity so sudo never checks root while
+ * systemctl targets the invoking user's manager.
+ */
+export function resolveSystemdUserServiceAccount(env: GatewayServiceEnv): string | null {
+  const { machineUser } = resolveSystemctlUserScope(env);
+  return machineUser ?? readSystemctlEffectiveUser() ?? readSystemctlEnvUser(env);
+}
+
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
   const trimmedUser = user.trim();
   if (!trimmedUser) {

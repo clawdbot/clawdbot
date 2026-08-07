@@ -18,6 +18,18 @@ type PlatformClaimParams = {
 
 export const PLATFORM_SEND_OWNER_LEASE_MS = 30_000;
 
+/** Creates the owner published atomically with an immediate live delivery. */
+export function createInitialDeliveryProducerClaim(now = Date.now()) {
+  return {
+    requiresProducerClaim: true,
+    availableAt: now + PLATFORM_SEND_OWNER_LEASE_MS,
+    producerClaimId: generateSecureUuid(),
+    recoveryState: "producer_claimed",
+  } as const;
+}
+
+export type InitialDeliveryProducerClaim = ReturnType<typeof createInitialDeliveryProducerClaim>;
+
 /** Runs an existing queue mutation only while its exact platform owner survives. */
 export function transitionOwnedDeliveryQueueEntry(
   params: {
@@ -132,7 +144,7 @@ export function claimDeliveryQueueEntryPlatformSend(
     : undefined;
 }
 
-/** Renew only the exact unexpired reusable producer that already owns the row. */
+/** Renew only the exact unexpired producer that already owns the row. */
 export function renewDeliveryQueueEntryPlatformSendLease(
   params: Pick<PlatformClaimParams, "queueName" | "id" | "stateDir"> & {
     claimId: string;
@@ -192,7 +204,7 @@ export function promoteDeliveryQueueEntryPlatformSend(
     entry.availableAt > now
       ? {
           ...entry,
-          // Only an explicitly reusable owner keeps its cross-process fence;
+          // Only an explicitly leased owner keeps its cross-process fence;
           // legacy recovery must remain immediately eligible after a crash.
           availableAt:
             entry.requiresProducerClaim === true ? now + PLATFORM_SEND_OWNER_LEASE_MS : undefined,

@@ -1003,6 +1003,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
+        idempotencyKey: "stable-send-key",
         dryRun: true,
         silent: true,
         gateway: {
@@ -1023,6 +1024,7 @@ describe("executeSendAction", () => {
       content: "hello",
       dryRun: true,
       silent: true,
+      idempotencyKey: "stable-send-key",
     });
     expectFields(requireRecord(sendArgs.gateway, "send gateway"), {
       url: "http://127.0.0.1:18789",
@@ -1200,6 +1202,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
+        idempotencyKey: "stable-poll-key",
         dryRun: true,
         silent: true,
         gateway: {
@@ -1226,6 +1229,7 @@ describe("executeSendAction", () => {
       durationHours: 6,
       dryRun: true,
       silent: true,
+      idempotencyKey: "stable-poll-key",
     });
     expectFields(requireRecord(pollArgs.gateway, "poll gateway"), {
       url: "http://127.0.0.1:18789",

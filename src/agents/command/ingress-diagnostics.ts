@@ -4,26 +4,23 @@ import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-for
 import { hasNonzeroUsage } from "../usage.js";
 import type { AgentCommandIngressOpts } from "./types.js";
 
+type AgentCommandUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
 type AgentCommandResult = {
   meta?: {
     agentMeta?: {
       provider?: string;
       model?: string;
       sessionId?: string;
-      usage?: {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      };
-      lastCallUsage?: {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      };
+      usage?: AgentCommandUsage;
+      diagnosticUsage?: AgentCommandUsage;
+      lastCallUsage?: AgentCommandUsage;
       contextTokens?: number;
       promptTokens?: number;
     };
@@ -46,7 +43,7 @@ export function emitIngressModelUsageDiagnostic(
     return;
   }
   const agentMeta = result.meta?.agentMeta;
-  const usage = agentMeta?.usage;
+  const usage = agentMeta?.diagnosticUsage ?? agentMeta?.usage;
   if (!agentMeta || !hasNonzeroUsage(usage)) {
     return;
   }

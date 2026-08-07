@@ -196,6 +196,8 @@ private final class FirstCancelGate: @unchecked Sendable {
 }
 
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    private typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
+
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
@@ -203,6 +205,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
     private let protocolFeaturesError: [String: Any]?
+    private let protocolFeaturesAutoResponse: Bool
     private let protocolFeaturesResponseDelay: Duration
     private let protocolFeaturesPostResponseInvoke: Bool
     private let cancelGate: FirstCancelGate?
@@ -213,8 +216,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var sentRequestMethods: [String] = []
     private var sentRequestPayloads: [[String: Any]] = []
     private var receivePhase = 0
-    private var pendingReceiveHandler:
-        (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
+    private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
+    private var pendingInboundFrames: [ReceiveResult] = []
 
     init(
         helloAuth: [String: Any]? = nil,
@@ -223,6 +226,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
         protocolFeaturesError: [String: Any]? = nil,
+        protocolFeaturesAutoResponse: Bool = true,
         protocolFeaturesResponseDelay: Duration = .zero,
         protocolFeaturesPostResponseInvoke: Bool = false,
         cancelGate: FirstCancelGate? = nil)
@@ -233,6 +237,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
         self.protocolFeaturesError = protocolFeaturesError
+        self.protocolFeaturesAutoResponse = protocolFeaturesAutoResponse
         self.protocolFeaturesResponseDelay = protocolFeaturesResponseDelay
         self.protocolFeaturesPostResponseInvoke = protocolFeaturesPostResponseInvoke
         self.cancelGate = cancelGate
@@ -276,31 +281,22 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 self.sentRequestMethods.append(method)
                 self.sentRequestPayloads.append(obj)
             }
-            if method == "node.protocolFeatures.update", let id = obj["id"] as? String {
+            if method == "node.protocolFeatures.update",
+               self.protocolFeaturesAutoResponse,
+               let id = obj["id"] as? String
+            {
                 Task { [weak self] in
                     guard let self else { return }
                     try? await Task.sleep(for: self.protocolFeaturesResponseDelay)
-                    for _ in 0..<100 {
-                        if self.hasPendingReceiveHandler() {
-                            break
-                        }
-                        try? await Task.sleep(for: .milliseconds(1))
-                    }
                     if let protocolFeaturesError = self.protocolFeaturesError {
                         self.emitError(id: id, error: protocolFeaturesError)
                     } else {
                         self.emitResponse(id: id, payload: ["ok": true])
                     }
                     if self.protocolFeaturesPostResponseInvoke {
-                        for _ in 0..<100 {
-                            if self.hasPendingReceiveHandler() {
-                                self.emitInvokeRequest(
-                                    id: "post-negotiation",
-                                    command: "mcp.tools.call.v1")
-                                break
-                            }
-                            try? await Task.sleep(for: .milliseconds(1))
-                        }
+                        self.emitInvokeRequest(
+                            id: "post-negotiation",
+                            command: "mcp.tools.call.v1")
                     }
                 }
             }
@@ -381,19 +377,21 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     func receive(
         completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
     {
-        self.lock.withLock { self.pendingReceiveHandler = completionHandler }
+        let queued = self.lock.withLock { () -> ReceiveResult? in
+            guard !self.pendingInboundFrames.isEmpty else {
+                self.pendingReceiveHandler = completionHandler
+                return nil
+            }
+            return self.pendingInboundFrames.removeFirst()
+        }
+        if let queued {
+            completionHandler(queued)
+        }
     }
 
     func emitReceiveFailure() {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            self._state = .canceling
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
-        handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.networkConnectionLost)))
+        self.lock.withLock { self._state = .canceling }
+        self.emitInbound(.failure(URLError(.networkConnectionLost)))
     }
 
     func emitInvokeRequest(
@@ -405,14 +403,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         sessionKey: String? = nil,
         timeoutMs: Int? = nil)
     {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
-        handler?(.success(.data(Self.invokeRequestData(
+        self.emitInbound(.success(.data(Self.invokeRequestData(
             id: id,
             command: command,
             paramsJSON: paramsJSON,
@@ -423,13 +414,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func emitResponse(id: String, payload: [String: Any]) {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
         let frame: [String: Any] = [
             "type": "res",
             "id": id,
@@ -437,17 +421,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             "payload": payload,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
-        handler?(.success(.data(data)))
+        self.emitInbound(.success(.data(data)))
     }
 
     func emitError(id: String, error: [String: Any]) {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
         let frame: [String: Any] = [
             "type": "res",
             "id": id,
@@ -455,7 +432,21 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             "error": error,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
-        handler?(.success(.data(data)))
+        self.emitInbound(.success(.data(data)))
+    }
+
+    private func emitInbound(_ result: ReceiveResult) {
+        let handler = self.lock.withLock { () -> (@Sendable (ReceiveResult) -> Void)? in
+            guard let handler = self.pendingReceiveHandler else {
+                // URLSession preserves socket frame order even while the actor is
+                // processing one callback and has not registered the next receive.
+                self.pendingInboundFrames.append(result)
+                return nil
+            }
+            self.pendingReceiveHandler = nil
+            return handler
+        }
+        handler?(result)
     }
 
     private static func connectChallengeData(nonce: String) -> Data {
@@ -577,6 +568,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
     private let helloDelayNanoseconds: UInt64
     private let connectError: [String: Any]?
     private let protocolFeaturesError: [String: Any]?
+    private let protocolFeaturesAutoResponse: Bool
     private let protocolFeaturesResponseDelay: Duration
     private let protocolFeaturesPostResponseInvoke: Bool
     private let cancelGate: FirstCancelGate?
@@ -592,6 +584,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         helloDelayNanoseconds: UInt64 = 0,
         connectError: [String: Any]? = nil,
         protocolFeaturesError: [String: Any]? = nil,
+        protocolFeaturesAutoResponse: Bool = true,
         protocolFeaturesResponseDelay: Duration = .zero,
         protocolFeaturesPostResponseInvoke: Bool = false,
         cancelGate: FirstCancelGate? = nil,
@@ -603,6 +596,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.connectError = connectError
         self.protocolFeaturesError = protocolFeaturesError
+        self.protocolFeaturesAutoResponse = protocolFeaturesAutoResponse
         self.protocolFeaturesResponseDelay = protocolFeaturesResponseDelay
         self.protocolFeaturesPostResponseInvoke = protocolFeaturesPostResponseInvoke
         self.cancelGate = cancelGate
@@ -636,6 +630,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLS
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 connectError: self.connectError,
                 protocolFeaturesError: self.protocolFeaturesError,
+                protocolFeaturesAutoResponse: self.protocolFeaturesAutoResponse,
                 protocolFeaturesResponseDelay: self.protocolFeaturesResponseDelay,
                 protocolFeaturesPostResponseInvoke: self.protocolFeaturesPostResponseInvoke,
                 cancelGate: self.cancelGate)
@@ -920,7 +915,9 @@ struct GatewayNodeSessionTests {
 
     @Test func `canvas surface refresh is shared across callers with different timeouts`() async throws {
         let expectedFingerprint = String(repeating: "ab", count: 32)
-        let session = FakeGatewayWebSocketSession(effectiveTLSFingerprintSHA256: expectedFingerprint)
+        let session = FakeGatewayWebSocketSession(
+            protocolFeaturesAutoResponse: false,
+            effectiveTLSFingerprintSHA256: expectedFingerprint)
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(caps: ["canvas"], clientId: "openclaw-macos", clientDisplayName: "macOS Test")
 
@@ -929,14 +926,20 @@ struct GatewayNodeSessionTests {
         async let first = gateway.refreshCanvasHostUrl(replacing: nil)
         async let second = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         async let third = gateway.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: 2)
-        try await waitUntil("single surface refresh sent") {
-            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        try await waitUntil("protocol feature and surface refresh sent") {
+            guard let task = session.latestTask() else { return false }
+            return task.sentRequestCount(method: "node.protocolFeatures.update") == 1 &&
+                task.sentRequestCount(method: "node.pluginSurface.refresh") == 1
         }
         let task = try #require(session.latestTask())
-        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
-        let requestID = try #require(request["id"] as? String)
-        task.emitResponse(
-            id: requestID,
+        let featureRequest = try #require(task.sentRequests(method: "node.protocolFeatures.update").first)
+        let surfaceRequest = try #require(task.sentRequests(method: "node.pluginSurface.refresh").first)
+
+        try task.emitResponse(
+            id: #require(featureRequest["id"] as? String),
+            payload: ["ok": true])
+        try task.emitResponse(
+            id: #require(surfaceRequest["id"] as? String),
             payload: [
                 "surface": "canvas",
                 "pluginSurfaceUrls": [

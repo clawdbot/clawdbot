@@ -1,3 +1,4 @@
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -27,12 +28,26 @@ import {
 } from "./chat-send-request.ts";
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import {
   OFFLINE_QUEUE_STORAGE_ERROR,
   steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
   type SteerSendDependencies,
 } from "./steer-lifecycle.ts";
 import { isInflightSteer } from "./steered-chip.ts";
+
+function applyChatSendError(state: ChatState, err: unknown, canApplyError: () => boolean): string {
+  const error = isActiveLeafChangedError(err)
+    ? t("chat.sendErrors.activeLeafChanged")
+    : formatConnectError(err);
+  if (canApplyError()) {
+    setChatError(state, error);
+    if (isActiveLeafChangedError(err)) {
+      void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+    }
+  }
+  return error;
+}
 
 export async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
@@ -60,18 +75,8 @@ export async function sendChatMessageWithGeneratedRunId(
       ...(options.queueMode ? { queueMode: options.queueMode } : {}),
     });
   } catch (err) {
-    if (canApplyError()) {
-      setChatError(
-        state,
-        isActiveLeafChangedError(err)
-          ? t("chat.sendErrors.activeLeafChanged")
-          : formatConnectError(err),
-      );
-      if (isActiveLeafChangedError(err)) {
-        void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-      }
-    }
-    return null;
+    const error = applyChatSendError(state, err, canApplyError);
+    return err instanceof GatewayRequestError ? { kind: "rejected" as const, error } : null;
   }
 }
 
@@ -128,6 +133,25 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     item.sendState === "sending" ||
     item.sendState === "waiting-model"
   ) {
+    return;
+  }
+  if (item.kind === "steered") {
+    if (!host.connected || !host.client || !hasAbortableSessionRun(host)) {
+      setChatError(host, t("chat.sendErrors.steerRunNoLongerActive"));
+      return;
+    }
+    const retry = updateQueuedMessage(host, id, (entry) => ({
+      ...entry,
+      sendAttempts: 0,
+      sendError: undefined,
+      sendRequestStartedAtMs: undefined,
+      sendState: "waiting-idle",
+    }));
+    if (!retry) {
+      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      return;
+    }
+    await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
     return;
   }
   let outbox = findStoredOutbox(host, item.id);

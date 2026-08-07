@@ -8603,6 +8603,69 @@ describe("handleSendChat", () => {
     }
   });
 
+  it("keeps a definitive steer rejection retryable as the same steer", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const original = {
+      id: "rejected-durable-steer",
+      text: "tighten the plan",
+      createdAt: 1,
+      sendAttempts: 0,
+      sendRunId: "stable-steer-request",
+      sendState: "waiting-idle" as const,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "definitive steer rejection payload");
+          payloads.push(payload);
+          if (payloads.length === 1) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "no active turn to steer",
+            });
+          }
+          return { status: "started", runId: payload.idempotencyKey };
+        },
+      },
+      chatRunId: "active-run",
+      chatQueue: [original],
+      sessionKey: original.sessionKey,
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await steerQueuedChatMessage(host, original.id);
+
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        id: original.id,
+        kind: "steered",
+        sendError: "no active turn to steer",
+        sendRunId: original.sendRunId,
+        sendState: "failed",
+      }),
+    ]);
+    expect(host.lastError).toBe("no active turn to steer");
+
+    host.chatRunId = null;
+    await retryQueuedChatMessage(host, original.id);
+    expect(payloads).toHaveLength(1);
+    expect(host.lastError).toBe(
+      "This steer still targets the previous run, but that run is no longer active.",
+    );
+
+    host.chatRunId = "active-run";
+    await retryQueuedChatMessage(host, original.id);
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((payload) => payload.idempotencyKey)).toEqual([
+      original.sendRunId,
+      original.sendRunId,
+    ]);
+    expect(payloads.map((payload) => payload.queueMode)).toEqual(["steer", "steer"]);
+  });
+
   it("removes queued steer indicators when chat.send returns terminal ok", async () => {
     const original = { id: "queued-1", text: "tighten the plan", createdAt: 1 };
     const host = makeChatHost({

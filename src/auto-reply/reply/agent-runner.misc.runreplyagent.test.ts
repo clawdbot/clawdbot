@@ -866,11 +866,18 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
-    const { usageEvent } = await runBaseReplyWithAgentMeta({
+    const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
       tmpPrefix: "openclaw-usage-diagnostic-",
       collectDiagnostics: true,
       agentMeta: {
         usage: { input: 75_000, output: 5_000, cacheRead: 25_000, total: 105_000 },
+        diagnosticUsage: {
+          input: 90_000,
+          output: 8_000,
+          cacheRead: 30_000,
+          cacheWrite: 2_000,
+          total: 130_000,
+        },
         lastCallUsage: { input: 55_000, output: 2_000, cacheRead: 25_000, total: 82_000 },
         promptTokens: 44_000,
       },
@@ -887,11 +894,12 @@ describe("runReplyAgent auto-compaction token update", () => {
     expectRecordFields(
       usagePayload.usage,
       {
-        input: 75_000,
-        output: 5_000,
-        cacheRead: 25_000,
-        promptTokens: 100_000,
-        total: 105_000,
+        input: 90_000,
+        output: 8_000,
+        cacheRead: 30_000,
+        cacheWrite: 2_000,
+        promptTokens: 122_000,
+        total: 130_000,
       },
       "usage diagnostic usage",
     );
@@ -903,6 +911,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
       "usage diagnostic context",
     );
+    expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(44_000);
   });
 
   it("falls back to last-call prompt usage for live diagnostic context", async () => {
