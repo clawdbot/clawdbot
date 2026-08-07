@@ -79,7 +79,7 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 
 ```json5
 {
-  agents: { defaults: { repoRoot: "~/Projects/openclaw" } },
+  agents: { defaults: { repoRoot: "/home/user/Projects/openclaw" } },
 }
 ```
 
