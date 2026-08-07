@@ -153,30 +153,6 @@ describe("AG-UI multimodal image forwarding", () => {
     expect(fakeApi.runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("forwards a `developer` instruction as a system prompt rather than dropping it", async () => {
-    // `developer` is a first-class AG-UI role alongside `system`. Matching only
-    // `system` accepted the request and silently ignored the instruction.
-    const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
-    await handler(
-      createReq({
-        headers: { authorization: `Bearer ${token}` },
-        body: {
-          threadId: "t-dev",
-          runId: "r-dev",
-          messages: [
-            { role: "developer", content: "Always answer in JSON." },
-            { role: "user", content: "status?" },
-          ],
-        },
-      }),
-      createRes(),
-    );
-
-    const call = fakeApi.runtime.agent.runEmbeddedAgent.mock.calls[0]?.[0];
-    expect(call).toBeDefined();
-    expect(call.extraSystemPrompt).toContain("Always answer in JSON.");
-  });
-
   it("accepts an image-only turn instead of rejecting it as an empty prompt", async () => {
     // A pasted/dragged image with no caption is a normal multimodal turn, but
     // the prompt builder only extracts text — so a text-empty body must not be

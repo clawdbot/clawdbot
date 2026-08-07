@@ -127,17 +127,17 @@ describeIntegration("ag-ui integration", () => {
 
   // -- Validation --------------------------------------------------------
 
-  it("returns empty SSE run when no user/tool messages (AG-UI init/sync)", async () => {
+  it("refuses system messages on the paired route", async () => {
+    // This suite posts to /v1/ag-ui with a device token — the untrusted route.
+    // system/developer messages become the run's extraSystemPrompt, i.e.
+    // authority over the agent's instructions, which a paired device does not
+    // have. Empty init/sync is covered by the next case.
     const res = await postRun({
       threadId: "int-test",
       runId: "run-1",
       messages: [{ role: "system", content: "sys" }],
     });
-    expect(res.status).toBe(200);
-    const events = await collectEvents(res);
-    const types = events.map((e) => e.type);
-    expect(types).toContain(EventType.RUN_STARTED);
-    expect(types).toContain(EventType.RUN_FINISHED);
+    expect(res.status).toBe(400);
   });
 
   it("returns empty SSE run when messages array is empty (AG-UI init/sync)", async () => {

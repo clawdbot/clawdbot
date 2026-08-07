@@ -376,7 +376,11 @@ POST a JSON body matching the AG-UI `RunAgentInput` schema:
 Supported roles: `user`, `assistant`, `system`, `developer`, `tool`.
 
 `system` and `developer` both carry instructions and are applied to the turn's
-system prompt. Send the whole conversation each turn as AG-UI clients normally
+system prompt — **on the operator route only**. They set the agent's
+instructions, which is authority a paired device does not have, so sending them
+on `/v1/ag-ui` is refused with `400` rather than quietly dropped. A browser app
+that needs to set instructions does so through its AG-UI runtime proxy on the
+operator route, which is the documented topology. Send the whole conversation each turn as AG-UI clients normally
 do — only the messages after the last assistant turn are forwarded as the new
 prompt, and the rest are already in the session's history.
 
@@ -546,14 +550,14 @@ The header value must match these rules; invalid values return
 
 Non-streaming errors return JSON:
 
-| Status | Type                    | Meaning                                                                                                                                                                                                                                                                                                 |
-| ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | `invalid_request_error` | Invalid request: no prompt, image, or tool result in `messages`; bad JSON; bad session-key header; `X-OpenClaw-Agent-Id` on the pairing route, or unknown on the operator route; malformed `tools` (not an array, or an entry that is not an object or has no `name`); tool schemas over the size limit |
-| 401    | `unauthorized`          | Invalid device or gateway token                                                                                                                                                                                                                                                                         |
-| 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved                                                                                                                                                                                                             |
-| 405    | —                       | Method not allowed (only POST accepted)                                                                                                                                                                                                                                                                 |
-| 409    | `conflict_error`        | A run is already in progress for this session — retry, or use a distinct session key                                                                                                                                                                                                                    |
-| 503    | `service_unavailable`   | (`/v1/ag-ui`) The pairing allow-list could not be read — a gateway storage fault, not a pairing state. Retry after checking the gateway logs                                                                                                                                                            |
+| Status | Type                    | Meaning                                                                                                                                                                                                                                                                                                                                           |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request_error` | Invalid request: no prompt, image, or tool result in `messages`; bad JSON; bad session-key header; `X-OpenClaw-Agent-Id` or `system`/`developer` messages on the pairing route, or an unknown agent on the operator route; malformed `tools` (not an array, or an entry that is not an object or has no `name`); tool schemas over the size limit |
+| 401    | `unauthorized`          | Invalid device or gateway token                                                                                                                                                                                                                                                                                                                   |
+| 403    | `pairing_pending`       | (`/v1/ag-ui`) No auth header (initiates pairing) or valid token but device not yet approved                                                                                                                                                                                                                                                       |
+| 405    | —                       | Method not allowed (only POST accepted)                                                                                                                                                                                                                                                                                                           |
+| 409    | `conflict_error`        | A run is already in progress for this session — retry, or use a distinct session key                                                                                                                                                                                                                                                              |
+| 503    | `service_unavailable`   | (`/v1/ag-ui`) The pairing allow-list could not be read — a gateway storage fault, not a pairing state. Retry after checking the gateway logs                                                                                                                                                                                                      |
 
 Every error is answered before the stream is committed where that is possible,
 so a failed request gets a JSON status rather than a partial event stream.

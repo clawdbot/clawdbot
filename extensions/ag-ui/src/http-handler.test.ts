@@ -85,7 +85,10 @@ describe("AG-UI HTTP handler", () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it("returns empty run for messages with only system role", async () => {
+  it("refuses a system-only submission on the paired route", async () => {
+    // system/developer messages become extraSystemPrompt, i.e. authority over
+    // the agent's instructions, which an untrusted paired caller may not supply.
+    // See http-handler.agent-routing.test.ts for the full trust split.
     const token = createDeviceToken(GATEWAY_SECRET, APPROVED_DEVICE_ID);
     const req = createReq({
       headers: { authorization: `Bearer ${token}` },
@@ -97,9 +100,8 @@ describe("AG-UI HTTP handler", () => {
     });
     const res = createRes();
     await handler(req, res);
-    expect(res.statusCode).toBe(200);
-    const events = parseEvents(res.chunks);
-    expect(events.map((e) => e.type)).toEqual([EventType.RUN_STARTED, EventType.RUN_FINISHED]);
+    expect(res.statusCode).toBe(400);
+    expect(parseEvents(res.chunks)).toHaveLength(0);
   });
 
   it("returns empty run for empty messages array (AG-UI session init)", async () => {

@@ -39,7 +39,7 @@ function extractTextContent(msg: Message): string {
  * treats a role as an instruction and the other doesn't, the same message lands
  * in the system prompt on one path and is dropped on the other.
  */
-function isInstructionRole(role: string): boolean {
+export function isInstructionRole(role: string): boolean {
   return role === "system" || role === "developer";
 }
 

@@ -20,6 +20,7 @@ import {
   applyStateWriter,
   formatSharedState,
   isSharedState,
+  isInstructionRole,
 } from "./prompt-builder.js";
 import {
   sendJson,
@@ -142,7 +143,7 @@ export function createAguiHttpHandler(api: OpenClawPluginApi) {
     await dispatchAuthenticatedAguiRequest(req, res, runtime, {
       id: deviceId,
       fromLabel: `ag-ui:${deviceId}`,
-      canSelectAgent: false,
+      trusted: false,
     });
   };
 }
@@ -193,7 +194,7 @@ export function createOperatorAguiHttpHandler(api: OpenClawPluginApi) {
     await dispatchAuthenticatedAguiRequest(req, res, runtime, {
       id: OPERATOR_CALLER_ID,
       fromLabel: "ag-ui:operator",
-      canSelectAgent: true,
+      trusted: true,
     });
   };
 }
@@ -210,15 +211,20 @@ interface AuthenticatedCaller {
   /** Envelope "From" label (typically `ag-ui:<id>`). */
   fromLabel: string;
   /**
-   * Whether this caller may pick the agent with `X-OpenClaw-Agent-Id`.
+   * Whether this caller is gateway-authenticated, and therefore trusted to
+   * supply privileged request inputs. Exactly two things depend on it, and both
+   * must move together — a paired device is an UNTRUSTED caller:
    *
-   * Only the gateway-authenticated operator route may. A paired device is an
-   * UNTRUSTED caller whose agent is decided by its peer/channel binding, so
-   * honouring the header there would let a device bound to one agent run
-   * another agent's workspace, tools, and credentials — the binding would
-   * describe nothing. Its agent comes from the binding alone.
+   * - Choosing the agent with `X-OpenClaw-Agent-Id`. A paired device's agent is
+   *   decided by its peer/channel binding; honouring the header would let a
+   *   device bound to one agent run another agent's workspace, tools, and
+   *   credentials, and the binding would describe nothing.
+   * - Supplying `system`/`developer` messages, which become the run's
+   *   `extraSystemPrompt`. Core appends that to the agent's assembled system
+   *   prompt, so accepting it from an untrusted caller hands it authority over
+   *   the agent's instructions.
    */
-  canSelectAgent: boolean;
+  trusted: boolean;
 }
 
 async function dispatchAuthenticatedAguiRequest(
@@ -307,11 +313,29 @@ async function dispatchAuthenticatedAguiRequest(
   // a request the caller believes targeted a different agent, and the mismatch
   // would never surface. Failing closed keeps the binding authoritative and
   // tells the caller its request was not honoured.
-  if (agentIdHeader !== undefined && !caller.canSelectAgent) {
+  if (agentIdHeader !== undefined && !caller.trusted) {
     sendJson(res, 400, {
       error: {
         message:
           "X-OpenClaw-Agent-Id is not accepted on this route. A paired device runs the agent its binding selects; use the operator route to choose an agent.",
+        type: "invalid_request_error",
+      },
+    });
+    return;
+  }
+
+  // `system`/`developer` messages become extraSystemPrompt, which core appends
+  // to the agent's system prompt. That is instruction authority over the agent,
+  // so an untrusted paired caller may not supply it. Refused rather than
+  // dropped: silently discarding instructions would run the turn while ignoring
+  // what the caller asked for, with no way to tell. Browser clients that need
+  // to set instructions belong behind an AG-UI runtime proxy on the operator
+  // route, which is the documented topology.
+  if (!caller.trusted && messages.some((m) => isInstructionRole(m.role?.trim() ?? ""))) {
+    sendJson(res, 400, {
+      error: {
+        message:
+          "system/developer messages are not accepted on this route. A paired device cannot set the agent's instructions; use the operator route.",
         type: "invalid_request_error",
       },
     });
@@ -854,7 +878,8 @@ async function dispatchAuthenticatedAguiRequest(
         agentDir,
         config: cfg,
         prompt,
-        ...(systemPrompt ? { extraSystemPrompt: systemPrompt } : {}),
+        // Trusted callers only — see AuthenticatedCaller.trusted.
+        ...(systemPrompt && caller.trusted ? { extraSystemPrompt: systemPrompt } : {}),
         // Turn 0 only. Continuation turns re-run the SAME session to narrate a
         // state-writer result, so the images are already in the transcript;
         // resending them duplicates the attachments and re-bills the context on
