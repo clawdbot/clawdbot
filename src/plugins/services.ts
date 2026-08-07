@@ -7,7 +7,12 @@ import {
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
+import {
+  recordDiagnosticExporterHealth,
+  type DiagnosticExporterHealthUpdate,
+} from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
@@ -18,6 +23,12 @@ import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+type TrustedExporterInternalDiagnostics = NonNullable<
+  OpenClawPluginServiceContext["internalDiagnostics"]
+> & {
+  reportExporterHealth: (update: DiagnosticExporterHealthUpdate) => void;
+};
+
 function createPluginLogger(): PluginLogger {
   return {
     info: (msg) => log.info(msg),
@@ -38,9 +49,23 @@ function createServiceContext(params: {
     params.service?.pluginId === params.service?.service.id &&
     (params.service?.service.id === "diagnostics-otel" ||
       params.service?.service.id === "diagnostics-prometheus");
+  const isOtelExporter = isDiagnosticsExporter && params.service.service.id === "diagnostics-otel";
   const grantsInternalDiagnostics =
     isDiagnosticsExporter &&
     (params.service?.origin === "bundled" || params.service?.trustedOfficialInstall === true);
+  const internalDiagnostics: TrustedExporterInternalDiagnostics | undefined =
+    grantsInternalDiagnostics
+      ? {
+          emit: emitTrustedDiagnosticEventWithPrivateData,
+          onEvent: isOtelExporter
+            ? (listener) =>
+                onTrustedInternalDiagnosticEvent(markTrustedOtelDiagnosticListener(listener))
+            : onTrustedInternalDiagnosticEvent,
+          registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
+          reportExporterHealth: (update) =>
+            recordDiagnosticExporterHealth(params.service.service.id, update),
+        }
+      : undefined;
 
   return {
     config: params.config,
@@ -56,15 +81,7 @@ function createServiceContext(params: {
           ),
         }
       : {}),
-    ...(grantsInternalDiagnostics
-      ? {
-          internalDiagnostics: {
-            emit: emitTrustedDiagnosticEventWithPrivateData,
-            onEvent: onTrustedInternalDiagnosticEvent,
-            registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
-          },
-        }
-      : {}),
+    ...(internalDiagnostics ? { internalDiagnostics } : {}),
   };
 }
 

@@ -1,9 +1,10 @@
-/**
- * Session message event indexing and broadcast tests.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+/**
+ * Session message event indexing and broadcast tests.
+ */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { RawData } from "ws";
 import {
@@ -164,12 +165,7 @@ async function expectNoMessageWithin(params: {
   await expect(received).resolves.toBe(false);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label-object");
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
   const record = requireRecord(value, "record");

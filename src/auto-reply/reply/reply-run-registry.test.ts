@@ -107,20 +107,32 @@ describe("reply run registry", () => {
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
-  it("matches streaming owners only to their immutable originating leaf", () => {
+  it("matches injectable owners only to their immutable originating leaf", () => {
     const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+    let stopped = false;
+    const queueMessage = vi.fn(async () => {});
     operation.setPhase("running");
     operation.attachBackend({
       kind: "embedded",
       cancel: () => {},
-      isStreaming: () => true,
-      queueMessage: async () => {},
+      isStreaming: () => false,
+      isStopped: () => stopped,
+      queueMessage,
     });
 
-    expect(replyRunRegistry.isStreamingFromOriginatingLeaf("agent:main:main", "leaf-a")).toBe(true);
-    expect(replyRunRegistry.isStreamingFromOriginatingLeaf("agent:main:main", "leaf-b")).toBe(
-      false,
-    );
+    expect(
+      replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+    ).toBe(true);
+    expect(
+      replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-b"),
+    ).toBe(false);
+    expect(queueReplyRunMessage(operation.sessionId, "steer during tool work")).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("steer during tool work");
+    stopped = true;
+    expect(
+      replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+    ).toBe(false);
+    expect(queueReplyRunMessage(operation.sessionId, "late steer")).toBe(false);
   });
 
   it("records reply-operation progress without claiming embedded-run activity", () => {
@@ -1204,28 +1216,40 @@ describe("reply run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("hello");
   });
 
-  it("refuses stale reply-run steering until real activity resumes", () => {
+  it("refuses stale injectable owners for admission and delivery until activity resumes", () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
       const operation = createTestReplyOperation({
         sessionId: "session-running",
+        originatingLeafEntryId: "leaf-a",
       });
       operation.attachBackend({
         kind: "embedded",
         cancel: vi.fn(),
-        isStreaming: () => true,
+        isStreaming: () => false,
+        isStopped: () => false,
         queueMessage,
       });
       operation.setPhase("running");
 
+      expect(
+        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+      ).toBe(true);
+
       vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
 
+      expect(
+        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+      ).toBe(false);
       expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
       expect(queueMessage).not.toHaveBeenCalled();
 
       operation.recordActivity();
 
+      expect(
+        replyRunRegistry.isMessageInjectableFromOriginatingLeaf("agent:main:main", "leaf-a"),
+      ).toBe(true);
       expect(queueReplyRunMessage("session-running", "fresh")).toBe(true);
       expect(queueMessage).toHaveBeenCalledWith("fresh");
     } finally {

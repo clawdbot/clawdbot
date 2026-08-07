@@ -78,6 +78,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         cfg,
         token: ctx.botToken,
         accountId: account.accountId,
+        conversationChannelId: message.channel,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
         // Impersonated Slack messages cannot be deleted. Keep the temporary
         // preview app-authored and apply custom identity only to final delivery.

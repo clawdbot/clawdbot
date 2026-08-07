@@ -112,6 +112,26 @@ internal sealed interface TalkPttOnceStart {
   ) : TalkPttOnceStart
 }
 
+internal sealed interface TalkSessionKeyEnvelope {
+  data object Legacy : TalkSessionKeyEnvelope
+
+  data class Authoritative(
+    val sessionKey: String?,
+  ) : TalkSessionKeyEnvelope
+}
+
+internal fun resolveTalkChatSessionKey(
+  envelope: TalkSessionKeyEnvelope,
+  deviceSessionKey: String,
+): String =
+  when (envelope) {
+    TalkSessionKeyEnvelope.Legacy -> deviceSessionKey.ifBlank { "main" }
+    is TalkSessionKeyEnvelope.Authoritative ->
+      // chat.send requires a non-empty routing key. An explicit null clears the
+      // device-selected session and uses the Gateway's canonical main route.
+      envelope.sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: "main"
+  }
+
 internal suspend fun requestPhoneRealtimeSessionWithLanguageFallback(
   language: String?,
   request: suspend (language: String?) -> String,
@@ -220,6 +240,7 @@ class TalkModeManager internal constructor(
   private val realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val realtimeMarkAcknowledger: (suspend (sessionId: String, markName: String) -> Unit)? = null,
+  private val requestGatewayOverride: (suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String)? = null,
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -313,6 +334,7 @@ class TalkModeManager internal constructor(
   private var pttAutoStopEnabled = false
   private var pttTimeoutJob: Job? = null
   private var pttCompletion: CompletableDeferred<TalkPttStopPayload>? = null
+  private var pttSessionKeyEnvelope: TalkSessionKeyEnvelope = TalkSessionKeyEnvelope.Legacy
   private var pttRecognitionRung: PushToTalkRecognitionRung? = null
   private var pttReleaseCompletion: CompletableDeferred<Unit>? = null
   private val pttFinalSegments = mutableListOf<String>()
@@ -472,6 +494,7 @@ class TalkModeManager internal constructor(
     paramsJson: String?,
     timeoutMs: Long = 15_000,
   ): String {
+    requestGatewayOverride?.let { return it(method, paramsJson, timeoutMs) }
     val gatewayId = gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() }
     return if (gatewayId == null) {
       session.request(method, paramsJson, timeoutMs)
@@ -505,8 +528,20 @@ class TalkModeManager internal constructor(
     allowNewCapture: Boolean,
     canStartCapture: () -> Boolean = { true },
   ): TalkPttStartPayload =
+    beginPushToTalk(
+      allowNewCapture = allowNewCapture,
+      sessionKeyEnvelope = TalkSessionKeyEnvelope.Legacy,
+      canStartCapture = canStartCapture,
+    )
+
+  internal suspend fun beginPushToTalk(
+    allowNewCapture: Boolean,
+    sessionKeyEnvelope: TalkSessionKeyEnvelope,
+    canStartCapture: () -> Boolean = { true },
+  ): TalkPttStartPayload =
     startPushToTalk(
       allowNewCapture = allowNewCapture,
+      sessionKeyEnvelope = sessionKeyEnvelope,
       canStartCapture = canStartCapture,
       completion = null,
     ).payload
@@ -526,6 +561,7 @@ class TalkModeManager internal constructor(
   private data class ClearedPushToTalkCapture(
     val transcript: String,
     val completion: CompletableDeferred<TalkPttStopPayload>?,
+    val sessionKeyEnvelope: TalkSessionKeyEnvelope,
   )
 
   private data class RealtimeCapturePause(
@@ -545,6 +581,7 @@ class TalkModeManager internal constructor(
 
   private suspend fun startPushToTalk(
     allowNewCapture: Boolean,
+    sessionKeyEnvelope: TalkSessionKeyEnvelope,
     canStartCapture: () -> Boolean,
     completion: CompletableDeferred<TalkPttStopPayload>?,
     autoStopAfterMs: Long? = null,
@@ -622,6 +659,9 @@ class TalkModeManager internal constructor(
         lastHeardAtMs = null
         activePttCaptureId = captureId
         pttCompletion = completion
+        // Bind routing to the capture owner. Later UI selection or retry invokes
+        // must not rebound this turn to another session.
+        pttSessionKeyEnvelope = sessionKeyEnvelope
         try {
           // PTT owns the microphone until its turn finishes. Waiting here prevents
           // SpeechRecognizer from racing the realtime AudioRecord teardown.
@@ -651,6 +691,7 @@ class TalkModeManager internal constructor(
           clearListenWatchdog()
           activePttCaptureId = null
           pttCompletion = null
+          pttSessionKeyEnvelope = TalkSessionKeyEnvelope.Legacy
           completion?.cancel()
           resumeRealtimeCaptureAfterPushToTalk(captureId)
           setStatus(if (_isEnabled.value) nativeText("Listening") else nativeText("Ready"))
@@ -716,7 +757,7 @@ class TalkModeManager internal constructor(
           // finally still resumes capture when the scope cancels this job.
           gatewayWorkScope.launch(start = CoroutineStart.LAZY) {
             try {
-              finalizeTranscript(transcript)
+              finalizeTranscript(transcript, cleared.sessionKeyEnvelope)
             } finally {
               withContext(NonCancellable + Dispatchers.Main) {
                 resumeRealtimeCaptureAfterPushToTalk(captureId)
@@ -781,6 +822,7 @@ class TalkModeManager internal constructor(
   /** Starts a bounded one-shot PTT turn that auto-stops on silence or timeout. */
   internal suspend fun beginPushToTalkOnce(
     maxDurationMs: Long = 12_000L,
+    sessionKeyEnvelope: TalkSessionKeyEnvelope = TalkSessionKeyEnvelope.Legacy,
     canStartCapture: () -> Boolean = { true },
   ): TalkPttOnceStart {
     val busyCaptureId = activePttCaptureId ?: finishingPttCaptureId
@@ -799,6 +841,7 @@ class TalkModeManager internal constructor(
       val start =
         startPushToTalk(
           allowNewCapture = true,
+          sessionKeyEnvelope = sessionKeyEnvelope,
           canStartCapture = canStartCapture,
           completion = completion,
           autoStopAfterMs = maxDurationMs,
@@ -1029,6 +1072,7 @@ class TalkModeManager internal constructor(
     finalizeInFlight = false
     listeningMode = false
     activePttCaptureId = null
+    pttSessionKeyEnvelope = TalkSessionKeyEnvelope.Legacy
     synchronized(finishingPttLock) {
       finishingPttJob?.cancel()
     }
@@ -2338,14 +2382,17 @@ class TalkModeManager internal constructor(
     finalizeInFlight = true
     gatewayWorkScope.launch {
       try {
-        finalizeTranscript(transcript)
+        finalizeTranscript(transcript, TalkSessionKeyEnvelope.Legacy)
       } finally {
         finalizeInFlight = false
       }
     }
   }
 
-  private suspend fun finalizeTranscript(transcript: String) {
+  private suspend fun finalizeTranscript(
+    transcript: String,
+    sessionKeyEnvelope: TalkSessionKeyEnvelope,
+  ) {
     listeningMode = false
     _isListening.value = false
     setStatus(nativeText("Thinking…"), awaitingAgent = true)
@@ -2373,8 +2420,9 @@ class TalkModeManager internal constructor(
 
     try {
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
-      val ack = sendChat(prompt, session)
+      val chatSessionKey = resolveTalkChatSessionKey(sessionKeyEnvelope, mainSessionKey)
+      Log.d(tag, "chat.send start sessionKey=$chatSessionKey chars=${prompt.length}")
+      val ack = sendChat(prompt, chatSessionKey)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
       Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
@@ -2486,10 +2534,12 @@ class TalkModeManager internal constructor(
     if (activePttCaptureId != captureId) return null
     val transcript = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
     val completion = pttCompletion
+    val sessionKeyEnvelope = pttSessionKeyEnvelope
     pttTimeoutJob?.cancel()
     pttTimeoutJob = null
     pttAutoStopEnabled = false
     pttCompletion = null
+    pttSessionKeyEnvelope = TalkSessionKeyEnvelope.Legacy
     pttReleaseCompletion?.cancel()
     pttReleaseCompletion = null
     activePttCaptureId = null
@@ -2505,7 +2555,11 @@ class TalkModeManager internal constructor(
     lastTranscript = ""
     lastHeardAtMs = null
     _inputLevel.value = 0f
-    return ClearedPushToTalkCapture(transcript = transcript, completion = completion)
+    return ClearedPushToTalkCapture(
+      transcript = transcript,
+      completion = completion,
+      sessionKeyEnvelope = sessionKeyEnvelope,
+    )
   }
 
   private fun finishPushToTalk(
@@ -2561,13 +2615,13 @@ class TalkModeManager internal constructor(
 
   private suspend fun sendChat(
     message: String,
-    session: GatewaySession,
+    sessionKey: String,
   ): ChatSendAck {
     val runId = UUID.randomUUID().toString()
     armPendingRun(runId)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(sessionKey))
         put("message", JsonPrimitive(message))
         put("thinking", JsonPrimitive("low"))
         put("timeoutMs", JsonPrimitive(30_000))

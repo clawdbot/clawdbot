@@ -411,6 +411,9 @@ export class ChatPane extends ChatPaneHeader {
             selectedSession,
             agentDefaultModel,
             mutationAccess: mutationAccess.runtimePatch,
+            preferencesBrowserOnly:
+              this.context.runtimeConfig.state.connected &&
+              this.context.runtimeConfig.canPatch === false,
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,

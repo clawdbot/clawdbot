@@ -14,6 +14,7 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import {
   ensureAuthProfileStore,
@@ -1254,6 +1255,7 @@ export async function modelsStatusCommand(
         provider?: string;
         kind: "cooldown" | "disabled";
         reason?: string;
+        recoveryHint: string;
         until: number;
         remainingMs: number;
       }> = [];
@@ -1267,11 +1269,19 @@ export async function modelsStatusCommand(
           typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
             ? "disabled"
             : "cooldown";
+        const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
+        const provider = store.profiles[profileId]?.provider;
         out.push({
           profileId,
-          provider: store.profiles[profileId]?.provider,
+          provider,
           kind,
-          reason: stats?.disabledReason,
+          reason,
+          recoveryHint: buildAuthProfileUnusableHint({
+            kind,
+            reason,
+            provider: provider ?? profileId,
+            profileId,
+          }),
           until: unusableUntil,
           remainingMs: unusableUntil - now,
         });
@@ -1619,6 +1629,18 @@ export async function modelsStatusCommand(
           includeEnvVar: !requiresSubscription,
         });
         runtime.log(`- ${theme.heading(provider)} ${hint}`);
+      }
+    }
+
+    if (unusableProfiles.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
+      for (const profile of unusableProfiles) {
+        const reason = profile.reason ? `:${profile.reason}` : "";
+        const provider = profile.provider ? ` (${profile.provider})` : "";
+        runtime.log(
+          `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,
+        );
       }
     }
 

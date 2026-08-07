@@ -896,9 +896,11 @@ docker_build_exec -t setup-image .
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
-  it("keeps reused Docker image probes behind the timeout-aware helper", () => {
-    const workDir = tempDirs.make("openclaw-docker-image-reuse-timeout-");
-    const script = repoShell(workDir)`
+  it.each([
+    {
+      title: "keeps reused Docker image probes behind the timeout-aware helper",
+      tempPrefix: "openclaw-docker-image-reuse-timeout-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
 export DOCKER_COMMAND_TIMEOUT=3s
 export OPENCLAW_SKIP_DOCKER_BUILD=1
 
@@ -951,7 +953,729 @@ docker_e2e_build_or_reuse \\
 test "$(grep -c '^--kill-after=30s 3s|' "$TMPDIR/timeout-seen")" = "2"
 grep -q '^image inspect openclaw-reuse-image$' "$TMPDIR/docker-seen"
 grep -q '^pull openclaw-reuse-image$' "$TMPDIR/docker-seen"
-`;
+`,
+    },
+    {
+      title: "explains how to opt out when Docker rejects default resource limits",
+      tempPrefix: "openclaw-docker-resource-diagnostic-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "docker: Error response from daemon: NanoCPUs can not be set, as the cgroup is not mounted" >&2
+  return 125
+}
+
+mktemp() {
+  local dir=""
+  dir="$(/usr/bin/mktemp "$@")" || return
+  printf "%s\\n" "$*" >"$TMPDIR/mktemp-seen"
+  printf "%s\\n" "$dir" >"$TMPDIR/diagnostic-dir"
+  printf "%s\\n" "$dir"
+}
+
+tail() {
+  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
+  /usr/bin/tail "$@"
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+printf "before Docker\\n" >"$TMPDIR/stderr"
+docker_e2e_docker_cmd run demo 2>>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = before\\ Docker* ]]
+[[ "$stderr" = *"NanoCPUs can not be set"* ]]
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
+[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]]
+[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]]
+`,
+    },
+    {
+      title: "does not suggest resource opt-out for other Docker failures",
+      tempPrefix: "openclaw-docker-resource-unrelated-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "docker: Error response from daemon: No such image: cgroup-helper" >&2
+  return 125
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = *"No such image: cgroup-helper"* ]]
+[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+`,
+    },
+    {
+      title: "rejects invalid Docker run pids limits before invoking docker",
+      tempPrefix: "openclaw-docker-resource-pids-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+docker() {
+  printf invoked >"$TMPDIR/docker-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+set +e
+OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+[[ "$status" = "2" ]]
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
+[[ ! -e "$TMPDIR/docker-seen" ]]
+`,
+    },
+    {
+      title: "rejects invalid package-backed Docker run pids limits before invoking docker",
+      tempPrefix: "openclaw-docker-package-pids-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker() {
+  printf invoked >"$TMPDIR/docker-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+set +e
+OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+[[ "$status" = "2" ]]
+[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
+[[ ! -e "$TMPDIR/docker-seen" ]]
+`,
+    },
+    {
+      title: "diagnoses rejected resource limits through the canonical package helper",
+      tempPrefix: "openclaw-docker-package-diagnostic-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+timeout() {
+  if [[ "$1" = "--kill-after=1s" ]]; then
+    return 0
+  fi
+  shift 2
+  "$@"
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "OCI runtime create failed: crun: controller pids is not available" >&2
+  return 125
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+set +e
+docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = *"controller pids is not available"* ]]
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+`,
+    },
+    {
+      title: "removes functional Docker build package inputs after the build",
+      tempPrefix: "openclaw-docker-build-cleanup-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+node() {
+  local script="$1"
+  shift
+  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+    command node "$script" "$@"
+    return
+  fi
+
+  local output_dir=""
+  local output_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-dir)
+        output_dir="$2"
+        shift 2
+        ;;
+      --output-name)
+        output_name="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  mkdir -p "$output_dir"
+  printf fixture >"$output_dir/$output_name"
+  printf "%s\\n" "$output_dir/$output_name"
+}
+export -f node
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+docker_build_run() {
+  local build_context=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      openclaw_package=*)
+        build_context="\${arg#openclaw_package=}"
+        ;;
+    esac
+  done
+
+  test -n "$build_context"
+  test -f "$build_context/openclaw-current.tgz"
+  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
+}
+
+docker_e2e_build_or_reuse \\
+  openclaw-test-image \\
+  cleanup-proof \\
+  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
+  "$ROOT_DIR" \\
+  functional
+
+test -f "$TMPDIR/build-context-seen"
+leftovers="$(find "$TMPDIR" -maxdepth 1 \\( \\
+  -name 'openclaw-docker-e2e-pack.*' \\
+  -o -name 'openclaw-docker-e2e-package-context.*' \\
+\\) -print)"
+if [[ -n "$leftovers" ]]; then
+  printf 'leftover functional build inputs:\\n%s\\n' "$leftovers" >&2
+  exit 1
+fi
+`,
+    },
+    {
+      title: "keeps caller-provided functional Docker build packages",
+      tempPrefix: "openclaw-docker-build-external-package-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+external_dir="$TMPDIR/external-package"
+mkdir -p "$external_dir"
+printf fixture >"$external_dir/openclaw-current.tgz"
+OPENCLAW_CURRENT_PACKAGE_TGZ="$external_dir/openclaw-current.tgz"
+export OPENCLAW_CURRENT_PACKAGE_TGZ
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+docker_build_run() {
+  local build_context=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      openclaw_package=*)
+        build_context="\${arg#openclaw_package=}"
+        ;;
+    esac
+  done
+
+  test -n "$build_context"
+  test -f "$build_context/openclaw-current.tgz"
+  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
+}
+
+docker_e2e_build_or_reuse \\
+  openclaw-test-image \\
+  external-package-proof \\
+  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
+  "$ROOT_DIR" \\
+  functional
+
+test -f "$TMPDIR/build-context-seen"
+test -f "$OPENCLAW_CURRENT_PACKAGE_TGZ"
+leftovers="$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-package-context.*' -print)"
+if [[ -n "$leftovers" ]]; then
+  printf 'leftover functional build context:\\n%s\\n' "$leftovers" >&2
+  exit 1
+fi
+`,
+    },
+    {
+      title: "cleans generated package mounts after harness Docker runs",
+      tempPrefix: "openclaw-docker-package-mount-cleanup-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+export DOCKER_COMMAND_TIMEOUT=3s
+
+mkdir -p "$TMPDIR/bin"
+cat >"$TMPDIR/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  --kill-after=1s)
+    exit 0
+    ;;
+  --kill-after=30s)
+    timeout_args="$1 $2"
+    shift 2
+    ;;
+  *)
+    timeout_args="$1"
+    shift
+    ;;
+esac
+if [[ "\${1:-}" == "docker" && "\${2:-}" == "run" ]]; then
+  printf "%s\\n" "$timeout_args" >"$TMPDIR/docker-timeout-seen"
+fi
+"$@"
+SH
+chmod +x "$TMPDIR/bin/timeout"
+export PATH="$TMPDIR/bin:$PATH"
+
+node() {
+  local script="$1"
+  shift
+  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+    command node "$script" "$@"
+    return
+  fi
+
+  local output_dir=""
+  local output_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-dir)
+        output_dir="$2"
+        shift 2
+        ;;
+      --output-name)
+        output_name="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  mkdir -p "$output_dir"
+  printf fixture >"$output_dir/$output_name"
+  printf "%s\\n" "$output_dir/$output_name"
+}
+export -f node
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker() {
+  if [[ "$1" == "rm" ]]; then
+    shift
+    test "$1" = "-f"
+    shift
+    printf "%s\\n" "$1" >>"$TMPDIR/docker-rm-seen"
+    return 0
+  fi
+
+  local cidfile=""
+  local mount_path=""
+  local expect_volume_path=0
+  local expect_cidfile=0
+  local arg
+  for arg in "$@"; do
+    if [[ "$expect_cidfile" == "1" ]]; then
+      cidfile="$arg"
+      expect_cidfile=0
+      continue
+    fi
+    if [[ "$expect_volume_path" == "1" ]]; then
+      mount_path="\${arg%%:*}"
+      expect_volume_path=0
+      continue
+    fi
+    if [[ "$arg" == "--cidfile" ]]; then
+      expect_cidfile=1
+      continue
+    fi
+    if [[ "$arg" == "-v" ]]; then
+      expect_volume_path=1
+    fi
+  done
+
+  test -n "$cidfile"
+  test ! -e "$cidfile"
+  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-}" >"$cidfile"
+  test -n "$mount_path"
+  test -f "$mount_path"
+  printf "%s\\n" "$mount_path" >"$TMPDIR/package-mount-seen"
+  return "\${DOCKER_STUB_STATUS:-0}"
+}
+export -f docker
+
+package_tgz="$(docker_e2e_prepare_package_tgz mount-cleanup)"
+pack_dir="$(dirname "$package_tgz")"
+docker_e2e_package_mount_args "$package_tgz"
+DOCKER_STUB_STATUS=7 docker_e2e_run_with_harness image-name bash -lc true || run_status="$?"
+test "\${run_status:-0}" = "7"
+test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3s"
+grep -qx "container-7" "$TMPDIR/docker-rm-seen"
+test -f "$TMPDIR/package-mount-seen"
+test ! -e "$pack_dir"
+test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
+
+external_dir="$TMPDIR/external-package"
+mkdir -p "$external_dir"
+printf fixture >"$external_dir/openclaw-current.tgz"
+docker_e2e_package_mount_args "$external_dir/openclaw-current.tgz"
+unset DOCKER_COMMAND_TIMEOUT
+rm -f "$TMPDIR/docker-timeout-seen"
+docker_e2e_run_with_harness image-name bash -lc true
+test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3600s"
+grep -qx "container-" "$TMPDIR/docker-rm-seen"
+test -f "$external_dir/openclaw-current.tgz"
+`,
+    },
+    {
+      title: "propagates shared E2E command timeouts into package-backed containers",
+      tempPrefix: "openclaw-docker-package-timeout-env-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+package="$TMPDIR/openclaw-current.tgz"
+printf fixture >"$package"
+export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=42s
+export OPENCLAW_E2E_COMMAND_TIMEOUT=23s
+docker_e2e_package_mount_args "$package"
+printf "%s\\n" "\${DOCKER_E2E_PACKAGE_ARGS[@]}" >"$TMPDIR/package-args"
+
+grep -qx -- "-e" "$TMPDIR/package-args"
+grep -qx -- "OPENCLAW_CURRENT_PACKAGE_TGZ=/tmp/openclaw-current.tgz" "$TMPDIR/package-args"
+grep -qx -- "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=42s" "$TMPDIR/package-args"
+grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
+`,
+    },
+    {
+      title:
+        "keeps both harness run wrappers available when the package helper is sourced directly",
+      tempPrefix: "openclaw-docker-package-helper-guard-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+mkdir -p "$TMPDIR/bin"
+cat >"$TMPDIR/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  --kill-after=1s)
+    exit 0
+    ;;
+  --kill-after=30s)
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+esac
+"$@"
+SH
+chmod +x "$TMPDIR/bin/timeout"
+export PATH="$TMPDIR/bin:$PATH"
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-run-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker_e2e_run_with_harness image-name bash -lc true
+docker_e2e_run_detached_with_harness image-name
+[[ $(wc -l <"$TMPDIR/docker-run-seen") -eq 2 ]]
+`,
+    },
+    {
+      title: "forwards harness stdin to backgrounded Docker runs",
+      tempPrefix: "openclaw-docker-harness-stdin-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+mkdir -p "$TMPDIR/bin"
+cat >"$TMPDIR/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  --kill-after=1s)
+    exit 0
+    ;;
+  --kill-after=30s)
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+esac
+"$@"
+SH
+chmod +x "$TMPDIR/bin/timeout"
+export PATH="$TMPDIR/bin:$PATH"
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker() {
+  if [[ "$1" == "rm" ]]; then
+    return 0
+  fi
+
+  local cidfile=""
+  local expect_cidfile=0
+  local arg
+  for arg in "$@"; do
+    if [[ "$expect_cidfile" == "1" ]]; then
+      cidfile="$arg"
+      expect_cidfile=0
+      continue
+    fi
+    if [[ "$arg" == "--cidfile" ]]; then
+      expect_cidfile=1
+    fi
+  done
+
+  test -n "$cidfile"
+  printf "container-stdin\\n" >"$cidfile"
+  cat >"$TMPDIR/docker-stdin-seen"
+}
+export -f docker
+
+docker_e2e_run_with_harness image-name bash -s <<'SH'
+printf "heredoc reached docker\\n"
+SH
+
+grep -Fxq 'printf "heredoc reached docker\\n"' "$TMPDIR/docker-stdin-seen"
+`,
+    },
+    {
+      title: "bounds printed Docker E2E logs to the configured tail",
+      tempPrefix: "openclaw-docker-e2e-log-print-tail-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+output="$(run_logged_print_heartbeat plugins-run 30 bash -c 'printf "DO_NOT_PRINT_OLD_LOG_START"; printf "%0200d" 0; printf "recent container log tail\\\\n"')"
+[[ "$output" = *"truncated: showing last 64"* ]]
+[[ "$output" = *"recent container log tail"* ]]
+[[ "$output" != *"DO_NOT_PRINT_OLD_LOG_START"* ]]
+`,
+    },
+    {
+      title: "prints heartbeat progress for long successful Docker E2E log captures",
+      tempPrefix: "openclaw-docker-e2e-log-heartbeat-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+printf "captured container log\\n" >"$TMPDIR/run.log"
+output="$(docker_e2e_maybe_print_log_heartbeat plugins-run 1 1 "$TMPDIR/run.log")"
+[[ "$output" = *"still running plugins-run ("* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" != *"captured container log"* ]]
+`,
+    },
+    {
+      title: "cleans the heartbeat command when the wrapper is terminated",
+      tempPrefix: "openclaw-docker-e2e-log-term-cleanup-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+export OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS=1
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+command_pid_file="$TMPDIR/command.pid"
+(
+  run_logged_print_heartbeat plugins-run 30 bash -c 'trap "exit 0" TERM; printf "%s" "$$" > "$1"; while true; do /bin/sleep 0.05; done' bash "$command_pid_file"
+) &
+wrapper_pid="$!"
+for _ in $(seq 1 100); do
+  [ -s "$command_pid_file" ] && break
+  /bin/sleep 0.01
+done
+if [ ! -s "$command_pid_file" ]; then
+  kill -TERM "$wrapper_pid" 2>/dev/null || true
+  echo "heartbeat command pid was not recorded" >&2
+  exit 1
+fi
+command_pid="$(cat "$command_pid_file")"
+kill -TERM "$wrapper_pid"
+for _ in $(seq 1 50); do
+  if ! kill -0 "$command_pid" 2>/dev/null; then
+    wait "$wrapper_pid" 2>/dev/null || true
+    exit 0
+  fi
+  /bin/sleep 0.01
+done
+kill -TERM "$command_pid" 2>/dev/null || true
+kill -TERM "$wrapper_pid" 2>/dev/null || true
+echo "heartbeat command still alive after wrapper termination: $command_pid" >&2
+exit 1
+`,
+    },
+    {
+      title: "cleans harness containers when heartbeat-wrapped Docker runs are terminated",
+      tempPrefix: "openclaw-docker-e2e-harness-term-cleanup-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+mkdir -p "$TMPDIR/bin"
+cat >"$TMPDIR/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  --kill-after=1s)
+    exit 0
+    ;;
+  --kill-after=30s)
+    shift 2
+    ;;
+  *)
+    shift
+    ;;
+esac
+"$@"
+SH
+chmod +x "$TMPDIR/bin/timeout"
+export PATH="$TMPDIR/bin:$PATH"
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker() {
+  if [[ "$1" == "rm" ]]; then
+    shift
+    test "$1" = "-f"
+    shift
+    printf "%s\\n" "$1" >>"$TMPDIR/docker-rm-seen"
+    return 0
+  fi
+
+  local cidfile=""
+  local expect_cidfile=0
+  local arg
+  for arg in "$@"; do
+    if [[ "$expect_cidfile" == "1" ]]; then
+      cidfile="$arg"
+      expect_cidfile=0
+      continue
+    fi
+    if [[ "$arg" == "--cidfile" ]]; then
+      expect_cidfile=1
+    fi
+  done
+
+  test -n "$cidfile"
+  printf "container-term\\n" >"$cidfile"
+  printf "started\\n" >"$TMPDIR/docker-started"
+  printf "docker running\\n"
+  trap 'exit 143' TERM
+  while true; do /bin/sleep 0.05; done
+}
+export -f docker
+
+(
+  docker_e2e_run_logged_print_with_harness plugins-run image-name bash -lc true
+) &
+wrapper_pid="$!"
+for _ in $(seq 1 50); do
+  [ -s "$TMPDIR/docker-started" ] && break
+  /bin/sleep 0.01
+  kill -0 "$wrapper_pid" 2>/dev/null || true
+done
+test -s "$TMPDIR/docker-started"
+kill -TERM "$wrapper_pid" 2>/dev/null || true
+wait "$wrapper_pid" 2>/dev/null || true
+for _ in $(seq 1 50); do
+  grep -qx "container-term" "$TMPDIR/docker-rm-seen" 2>/dev/null && break
+  /bin/sleep 0.01
+done
+grep -qx "container-term" "$TMPDIR/docker-rm-seen"
+test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
+`,
+    },
+    {
+      title: "normalizes zero-padded Docker E2E stats heartbeat intervals",
+      tempPrefix: "openclaw-docker-e2e-stats-zero-heartbeat-",
+      scriptSource: (workDir: string) => repoShell(workDir)`
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+docker_e2e_docker_cmd() {
+  case "$1" in
+    inspect) return 0 ;;
+    stats) printf '{"MemUsage":"1MiB / 2MiB","CPUPerc":"0.1%%"}\\n'; return 0 ;;
+    *) return 0 ;;
+  esac
+}
+
+sleep() {
+  SECONDS=$((SECONDS + \${1%%.*}))
+}
+
+kill_checks=0
+kill() {
+  if [[ "\${1:-}" == "-0" && "\${2:-}" == "sampled-docker-pid" ]]; then
+    kill_checks=$((kill_checks + 1))
+    [[ "$kill_checks" -le 6 ]]
+    return
+  fi
+  command kill "$@"
+}
+
+stats_log="$TMPDIR/stats.log"
+run_log="$TMPDIR/run.log"
+sampler_log="$TMPDIR/sampler.log"
+printf "container output\\n" >"$run_log"
+
+docker_e2e_sample_stats_until_exit demo sampled-docker-pid "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1
+output="$(cat "$sampler_log")"
+
+[[ "$output" =~ Docker\\ stats\\ still\\ running\\ \\(([0-9]+)s\\ elapsed, ]]
+heartbeat_elapsed="\${BASH_REMATCH[1]}"
+(( heartbeat_elapsed >= 8 ))
+[[ "$output" != *"value too great for base"* ]]
+[[ -s "$stats_log" ]]
+`,
+    },
+  ])("$title", ({ tempPrefix, scriptSource }) => {
+    const workDir = tempDirs.make(tempPrefix);
+    const script = scriptSource(workDir);
 
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
@@ -1178,93 +1902,6 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
-  it("explains how to opt out when Docker rejects default resource limits", () => {
-    const workDir = tempDirs.make("openclaw-docker-resource-diagnostic-");
-    const script = repoShell(workDir)`
-export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
-unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
-unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
-
-docker() {
-  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
-  echo "docker: Error response from daemon: NanoCPUs can not be set, as the cgroup is not mounted" >&2
-  return 125
-}
-
-mktemp() {
-  local dir=""
-  dir="$(/usr/bin/mktemp "$@")" || return
-  printf "%s\\n" "$*" >"$TMPDIR/mktemp-seen"
-  printf "%s\\n" "$dir" >"$TMPDIR/diagnostic-dir"
-  printf "%s\\n" "$dir"
-}
-
-tail() {
-  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
-  /usr/bin/tail "$@"
-}
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
-docker_e2e_timeout_cmd() {
-  shift
-  "$@"
-}
-
-set +e
-printf "before Docker\\n" >"$TMPDIR/stderr"
-docker_e2e_docker_cmd run demo 2>>"$TMPDIR/stderr"
-status="$?"
-set -e
-
-stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = before\\ Docker* ]]
-[[ "$stderr" = *"NanoCPUs can not be set"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
-[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
-[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]]
-[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("does not suggest resource opt-out for other Docker failures", () => {
-    const workDir = tempDirs.make("openclaw-docker-resource-unrelated-");
-    const script = repoShell(workDir)`
-export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
-unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
-unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
-
-docker() {
-  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
-  echo "docker: Error response from daemon: No such image: cgroup-helper" >&2
-  return 125
-}
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
-docker_e2e_timeout_cmd() {
-  shift
-  "$@"
-}
-
-set +e
-docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
-status="$?"
-set -e
-
-stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"No such image: cgroup-helper"* ]]
-[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
   it("runs Docker when resource diagnostic capture is unavailable", () => {
     const workDir = tempDirs.make("openclaw-docker-resource-no-temp-");
     const missingTmpDir = join(workDir, "missing");
@@ -1293,30 +1930,6 @@ set -e
 
 [[ "$status" = "7" ]]
 [[ "$(grep -c '^run ' ${shellQuote(join(workDir, "docker-seen"))})" = "1" ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("rejects invalid Docker run pids limits before invoking docker", () => {
-    const workDir = tempDirs.make("openclaw-docker-resource-pids-");
-    const script = repoShell(workDir)`
-
-docker() {
-  printf invoked >"$TMPDIR/docker-seen"
-}
-export -f docker
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
-
-set +e
-OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
-status="$?"
-set -e
-
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
 `;
 
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -1477,34 +2090,6 @@ stderr="$(<"$TMPDIR/stderr")"
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
-  it("rejects invalid package-backed Docker run pids limits before invoking docker", () => {
-    const workDir = tempDirs.make("openclaw-docker-package-pids-");
-    const script = repoShell(workDir)`
-
-dirname() {
-  /usr/bin/dirname "$@"
-}
-
-docker() {
-  printf invoked >"$TMPDIR/docker-seen"
-}
-export -f docker
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-set +e
-OPENCLAW_DOCKER_E2E_PIDS_LIMIT=many docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
-status="$?"
-set -e
-
-[[ "$status" = "2" ]]
-[[ "$(<"$TMPDIR/stderr")" = *"invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: many"* ]]
-[[ ! -e "$TMPDIR/docker-seen" ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
   it("uses gtimeout for package-backed Docker runs sourced through the package helper", () => {
     const workDir = tempDirs.make("openclaw-docker-package-gtimeout-");
     writeExecutables(join(workDir, "bin"), {
@@ -1541,321 +2126,6 @@ docker_e2e_docker_run_cmd run demo
 
 [[ "$(<"$TMPDIR/timeout-seen")" = "gtimeout:--kill-after=30s 15s|docker run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
 [[ "$(<"$TMPDIR/docker-seen")" = "run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("diagnoses rejected resource limits through the canonical package helper", () => {
-    const workDir = tempDirs.make("openclaw-docker-package-diagnostic-");
-    const script = repoShell(workDir)`
-export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
-unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
-unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
-
-timeout() {
-  if [[ "$1" = "--kill-after=1s" ]]; then
-    return 0
-  fi
-  shift 2
-  "$@"
-}
-
-docker() {
-  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
-  echo "OCI runtime create failed: crun: controller pids is not available" >&2
-  return 125
-}
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-set +e
-docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
-status="$?"
-set -e
-
-stderr="$(<"$TMPDIR/stderr")"
-[[ "$status" = "125" ]]
-[[ "$stderr" = *"controller pids is not available"* ]]
-[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
-[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
-[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("removes functional Docker build package inputs after the build", () => {
-    const workDir = tempDirs.make("openclaw-docker-build-cleanup-");
-    const script = repoShell(workDir)`
-
-node() {
-  local script="$1"
-  shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
-    command node "$script" "$@"
-    return
-  fi
-
-  local output_dir=""
-  local output_name=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --output-dir)
-        output_dir="$2"
-        shift 2
-        ;;
-      --output-name)
-        output_name="$2"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  mkdir -p "$output_dir"
-  printf fixture >"$output_dir/$output_name"
-  printf "%s\\n" "$output_dir/$output_name"
-}
-export -f node
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-
-docker_build_run() {
-  local build_context=""
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      openclaw_package=*)
-        build_context="\${arg#openclaw_package=}"
-        ;;
-    esac
-  done
-
-  test -n "$build_context"
-  test -f "$build_context/openclaw-current.tgz"
-  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
-}
-
-docker_e2e_build_or_reuse \\
-  openclaw-test-image \\
-  cleanup-proof \\
-  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
-  "$ROOT_DIR" \\
-  functional
-
-test -f "$TMPDIR/build-context-seen"
-leftovers="$(find "$TMPDIR" -maxdepth 1 \\( \\
-  -name 'openclaw-docker-e2e-pack.*' \\
-  -o -name 'openclaw-docker-e2e-package-context.*' \\
-\\) -print)"
-if [[ -n "$leftovers" ]]; then
-  printf 'leftover functional build inputs:\\n%s\\n' "$leftovers" >&2
-  exit 1
-fi
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("keeps caller-provided functional Docker build packages", () => {
-    const workDir = tempDirs.make("openclaw-docker-build-external-package-");
-    const script = repoShell(workDir)`
-
-external_dir="$TMPDIR/external-package"
-mkdir -p "$external_dir"
-printf fixture >"$external_dir/openclaw-current.tgz"
-OPENCLAW_CURRENT_PACKAGE_TGZ="$external_dir/openclaw-current.tgz"
-export OPENCLAW_CURRENT_PACKAGE_TGZ
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-
-docker_build_run() {
-  local build_context=""
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      openclaw_package=*)
-        build_context="\${arg#openclaw_package=}"
-        ;;
-    esac
-  done
-
-  test -n "$build_context"
-  test -f "$build_context/openclaw-current.tgz"
-  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
-}
-
-docker_e2e_build_or_reuse \\
-  openclaw-test-image \\
-  external-package-proof \\
-  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
-  "$ROOT_DIR" \\
-  functional
-
-test -f "$TMPDIR/build-context-seen"
-test -f "$OPENCLAW_CURRENT_PACKAGE_TGZ"
-leftovers="$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-package-context.*' -print)"
-if [[ -n "$leftovers" ]]; then
-  printf 'leftover functional build context:\\n%s\\n' "$leftovers" >&2
-  exit 1
-fi
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("cleans generated package mounts after harness Docker runs", () => {
-    const workDir = tempDirs.make("openclaw-docker-package-mount-cleanup-");
-    const script = repoShell(workDir)`
-export DOCKER_COMMAND_TIMEOUT=3s
-
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    timeout_args="$1 $2"
-    shift 2
-    ;;
-  *)
-    timeout_args="$1"
-    shift
-    ;;
-esac
-if [[ "\${1:-}" == "docker" && "\${2:-}" == "run" ]]; then
-  printf "%s\\n" "$timeout_args" >"$TMPDIR/docker-timeout-seen"
-fi
-"$@"
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
-
-node() {
-  local script="$1"
-  shift
-  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
-    command node "$script" "$@"
-    return
-  fi
-
-  local output_dir=""
-  local output_name=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --output-dir)
-        output_dir="$2"
-        shift 2
-        ;;
-      --output-name)
-        output_name="$2"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  mkdir -p "$output_dir"
-  printf fixture >"$output_dir/$output_name"
-  printf "%s\\n" "$output_dir/$output_name"
-}
-export -f node
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-docker() {
-  if [[ "$1" == "rm" ]]; then
-    shift
-    test "$1" = "-f"
-    shift
-    printf "%s\\n" "$1" >>"$TMPDIR/docker-rm-seen"
-    return 0
-  fi
-
-  local cidfile=""
-  local mount_path=""
-  local expect_volume_path=0
-  local expect_cidfile=0
-  local arg
-  for arg in "$@"; do
-    if [[ "$expect_cidfile" == "1" ]]; then
-      cidfile="$arg"
-      expect_cidfile=0
-      continue
-    fi
-    if [[ "$expect_volume_path" == "1" ]]; then
-      mount_path="\${arg%%:*}"
-      expect_volume_path=0
-      continue
-    fi
-    if [[ "$arg" == "--cidfile" ]]; then
-      expect_cidfile=1
-      continue
-    fi
-    if [[ "$arg" == "-v" ]]; then
-      expect_volume_path=1
-    fi
-  done
-
-  test -n "$cidfile"
-  test ! -e "$cidfile"
-  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-}" >"$cidfile"
-  test -n "$mount_path"
-  test -f "$mount_path"
-  printf "%s\\n" "$mount_path" >"$TMPDIR/package-mount-seen"
-  return "\${DOCKER_STUB_STATUS:-0}"
-}
-export -f docker
-
-package_tgz="$(docker_e2e_prepare_package_tgz mount-cleanup)"
-pack_dir="$(dirname "$package_tgz")"
-docker_e2e_package_mount_args "$package_tgz"
-DOCKER_STUB_STATUS=7 docker_e2e_run_with_harness image-name bash -lc true || run_status="$?"
-test "\${run_status:-0}" = "7"
-test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3s"
-grep -qx "container-7" "$TMPDIR/docker-rm-seen"
-test -f "$TMPDIR/package-mount-seen"
-test ! -e "$pack_dir"
-test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
-
-external_dir="$TMPDIR/external-package"
-mkdir -p "$external_dir"
-printf fixture >"$external_dir/openclaw-current.tgz"
-docker_e2e_package_mount_args "$external_dir/openclaw-current.tgz"
-unset DOCKER_COMMAND_TIMEOUT
-rm -f "$TMPDIR/docker-timeout-seen"
-docker_e2e_run_with_harness image-name bash -lc true
-test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3600s"
-grep -qx "container-" "$TMPDIR/docker-rm-seen"
-test -f "$external_dir/openclaw-current.tgz"
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("propagates shared E2E command timeouts into package-backed containers", () => {
-    const workDir = tempDirs.make("openclaw-docker-package-timeout-env-");
-    const script = repoShell(workDir)`
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-package="$TMPDIR/openclaw-current.tgz"
-printf fixture >"$package"
-export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=42s
-export OPENCLAW_E2E_COMMAND_TIMEOUT=23s
-docker_e2e_package_mount_args "$package"
-printf "%s\\n" "\${DOCKER_E2E_PACKAGE_ARGS[@]}" >"$TMPDIR/package-args"
-
-grep -qx -- "-e" "$TMPDIR/package-args"
-grep -qx -- "OPENCLAW_CURRENT_PACKAGE_TGZ=/tmp/openclaw-current.tgz" "$TMPDIR/package-args"
-grep -qx -- "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=42s" "$TMPDIR/package-args"
-grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
 `;
 
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -2378,104 +2648,6 @@ fi
     expect(publishedRunner).not.toContain('cat "$log_file"');
   });
 
-  it("keeps both harness run wrappers available when the package helper is sourced directly", () => {
-    const workDir = tempDirs.make("openclaw-docker-package-helper-guard-");
-    const script = repoShell(workDir)`
-
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-"$@"
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
-
-docker() {
-  printf "%s\\n" "$*" >>"$TMPDIR/docker-run-seen"
-}
-export -f docker
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-docker_e2e_run_with_harness image-name bash -lc true
-docker_e2e_run_detached_with_harness image-name
-[[ $(wc -l <"$TMPDIR/docker-run-seen") -eq 2 ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("forwards harness stdin to backgrounded Docker runs", () => {
-    const workDir = tempDirs.make("openclaw-docker-harness-stdin-");
-    const script = repoShell(workDir)`
-
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-"$@"
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-docker() {
-  if [[ "$1" == "rm" ]]; then
-    return 0
-  fi
-
-  local cidfile=""
-  local expect_cidfile=0
-  local arg
-  for arg in "$@"; do
-    if [[ "$expect_cidfile" == "1" ]]; then
-      cidfile="$arg"
-      expect_cidfile=0
-      continue
-    fi
-    if [[ "$arg" == "--cidfile" ]]; then
-      expect_cidfile=1
-    fi
-  done
-
-  test -n "$cidfile"
-  printf "container-stdin\\n" >"$cidfile"
-  cat >"$TMPDIR/docker-stdin-seen"
-}
-export -f docker
-
-docker_e2e_run_with_harness image-name bash -s <<'SH'
-printf "heredoc reached docker\\n"
-SH
-
-grep -Fxq 'printf "heredoc reached docker\\n"' "$TMPDIR/docker-stdin-seen"
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
   it("preserves caller-owned file descriptors around harness runs", () => {
     const workDir = tempDirs.make("openclaw-docker-harness-fd-");
     const script = String.raw`
@@ -2859,22 +3031,6 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(runner).not.toContain("docker run --rm");
   });
 
-  it("bounds printed Docker E2E logs to the configured tail", () => {
-    const workDir = tempDirs.make("openclaw-docker-e2e-log-print-tail-");
-    const script = repoShell(workDir)`
-export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-
-output="$(run_logged_print_heartbeat plugins-run 30 bash -c 'printf "DO_NOT_PRINT_OLD_LOG_START"; printf "%0200d" 0; printf "recent container log tail\\\\n"')"
-[[ "$output" = *"truncated: showing last 64"* ]]
-[[ "$output" = *"recent container log tail"* ]]
-[[ "$output" != *"DO_NOT_PRINT_OLD_LOG_START"* ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
   it.each([
     ["printed log bytes", "OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES", "64kb"],
     ["heartbeat termination grace", "OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS", "soon"],
@@ -2916,22 +3072,6 @@ docker_e2e_run_logged_print_with_harness plugins-run image-name
     expect(result.stdout).toBe("");
   });
 
-  it("prints heartbeat progress for long successful Docker E2E log captures", () => {
-    const workDir = tempDirs.make("openclaw-docker-e2e-log-heartbeat-");
-    const script = repoShell(workDir)`
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-
-printf "captured container log\\n" >"$TMPDIR/run.log"
-output="$(docker_e2e_maybe_print_log_heartbeat plugins-run 1 1 "$TMPDIR/run.log")"
-[[ "$output" = *"still running plugins-run ("* ]]
-[[ "$output" = *"log bytes captured"* ]]
-[[ "$output" != *"captured container log"* ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
   it("preserves heredoc stdin through Docker E2E heartbeat logging", () => {
     const workDir = tempDirs.make("openclaw-docker-e2e-log-stdin-");
     const script = repoShell(workDir)`
@@ -2967,125 +3107,6 @@ SH
     expect(result.stderr).toBe("");
   });
 
-  it("cleans the heartbeat command when the wrapper is terminated", () => {
-    const workDir = tempDirs.make("openclaw-docker-e2e-log-term-cleanup-");
-    const script = repoShell(workDir)`
-export OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS=1
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-
-command_pid_file="$TMPDIR/command.pid"
-(
-  run_logged_print_heartbeat plugins-run 30 bash -c 'trap "exit 0" TERM; printf "%s" "$$" > "$1"; while true; do /bin/sleep 0.05; done' bash "$command_pid_file"
-) &
-wrapper_pid="$!"
-for _ in $(seq 1 100); do
-  [ -s "$command_pid_file" ] && break
-  /bin/sleep 0.01
-done
-if [ ! -s "$command_pid_file" ]; then
-  kill -TERM "$wrapper_pid" 2>/dev/null || true
-  echo "heartbeat command pid was not recorded" >&2
-  exit 1
-fi
-command_pid="$(cat "$command_pid_file")"
-kill -TERM "$wrapper_pid"
-for _ in $(seq 1 50); do
-  if ! kill -0 "$command_pid" 2>/dev/null; then
-    wait "$wrapper_pid" 2>/dev/null || true
-    exit 0
-  fi
-  /bin/sleep 0.01
-done
-kill -TERM "$command_pid" 2>/dev/null || true
-kill -TERM "$wrapper_pid" 2>/dev/null || true
-echo "heartbeat command still alive after wrapper termination: $command_pid" >&2
-exit 1
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("cleans harness containers when heartbeat-wrapped Docker runs are terminated", () => {
-    const workDir = tempDirs.make("openclaw-docker-e2e-harness-term-cleanup-");
-    const script = repoShell(workDir)`
-
-mkdir -p "$TMPDIR/bin"
-cat >"$TMPDIR/bin/timeout" <<'SH'
-#!/usr/bin/env bash
-case "$1" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-"$@"
-SH
-chmod +x "$TMPDIR/bin/timeout"
-export PATH="$TMPDIR/bin:$PATH"
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
-
-docker() {
-  if [[ "$1" == "rm" ]]; then
-    shift
-    test "$1" = "-f"
-    shift
-    printf "%s\\n" "$1" >>"$TMPDIR/docker-rm-seen"
-    return 0
-  fi
-
-  local cidfile=""
-  local expect_cidfile=0
-  local arg
-  for arg in "$@"; do
-    if [[ "$expect_cidfile" == "1" ]]; then
-      cidfile="$arg"
-      expect_cidfile=0
-      continue
-    fi
-    if [[ "$arg" == "--cidfile" ]]; then
-      expect_cidfile=1
-    fi
-  done
-
-  test -n "$cidfile"
-  printf "container-term\\n" >"$cidfile"
-  printf "started\\n" >"$TMPDIR/docker-started"
-  printf "docker running\\n"
-  trap 'exit 143' TERM
-  while true; do /bin/sleep 0.05; done
-}
-export -f docker
-
-(
-  docker_e2e_run_logged_print_with_harness plugins-run image-name bash -lc true
-) &
-wrapper_pid="$!"
-for _ in $(seq 1 50); do
-  [ -s "$TMPDIR/docker-started" ] && break
-  /bin/sleep 0.01
-  kill -0 "$wrapper_pid" 2>/dev/null || true
-done
-test -s "$TMPDIR/docker-started"
-kill -TERM "$wrapper_pid" 2>/dev/null || true
-wait "$wrapper_pid" 2>/dev/null || true
-for _ in $(seq 1 50); do
-  grep -qx "container-term" "$TMPDIR/docker-rm-seen" 2>/dev/null && break
-  /bin/sleep 0.01
-done
-grep -qx "container-term" "$TMPDIR/docker-rm-seen"
-test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
   it("does not delay fast successful Docker E2E log captures until the next heartbeat", () => {
     const workDir = tempDirs.make("openclaw-docker-e2e-log-fast-heartbeat-");
     const script = repoShell(workDir)`
@@ -3109,52 +3130,6 @@ export ROOT_DIR
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 [[ "$(docker_e2e_normalize_positive_int_value 'Docker E2E log heartbeat interval' 08)" = "8" ]]
-`;
-
-    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-  });
-
-  it("normalizes zero-padded Docker E2E stats heartbeat intervals", () => {
-    const workDir = tempDirs.make("openclaw-docker-e2e-stats-zero-heartbeat-");
-    const script = repoShell(workDir)`
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-
-docker_e2e_docker_cmd() {
-  case "$1" in
-    inspect) return 0 ;;
-    stats) printf '{"MemUsage":"1MiB / 2MiB","CPUPerc":"0.1%%"}\\n'; return 0 ;;
-    *) return 0 ;;
-  esac
-}
-
-sleep() {
-  SECONDS=$((SECONDS + \${1%%.*}))
-}
-
-kill_checks=0
-kill() {
-  if [[ "\${1:-}" == "-0" && "\${2:-}" == "sampled-docker-pid" ]]; then
-    kill_checks=$((kill_checks + 1))
-    [[ "$kill_checks" -le 6 ]]
-    return
-  fi
-  command kill "$@"
-}
-
-stats_log="$TMPDIR/stats.log"
-run_log="$TMPDIR/run.log"
-sampler_log="$TMPDIR/sampler.log"
-printf "container output\\n" >"$run_log"
-
-docker_e2e_sample_stats_until_exit demo sampled-docker-pid "$stats_log" "$run_log" "Docker stats" 08 >"$sampler_log" 2>&1
-output="$(cat "$sampler_log")"
-
-[[ "$output" =~ Docker\\ stats\\ still\\ running\\ \\(([0-9]+)s\\ elapsed, ]]
-heartbeat_elapsed="\${BASH_REMATCH[1]}"
-(( heartbeat_elapsed >= 8 ))
-[[ "$output" != *"value too great for base"* ]]
-[[ -s "$stats_log" ]]
 `;
 
     execFileSync("bash", ["-lc", script], { encoding: "utf8" });

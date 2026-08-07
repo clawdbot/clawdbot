@@ -1,11 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { testing as workerTesting } from "../../scripts/bench-agent-concurrency-worker.ts";
 import {
   testing,
   WORKER_RESULT_SENTINEL,
   type WorkerResult,
   type WorkerScenario,
 } from "../../scripts/bench-agent-concurrency.ts";
+import {
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../src/process/gateway-work-admission.js";
+import { createDeferred } from "../../src/test-utils/deferred.js";
 
 function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
   const invariant: Record<string, number | boolean> =
@@ -25,6 +31,7 @@ function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2,
           postTeardownTaskRows: 0,
           postTeardownDurableSubagentRows: 0,
           postTeardownDurableTaskRows: 0,
+          postTeardownActiveRootWork: 0,
         }
       : scenario === "admission"
         ? { ok: true, admissionCap: size, overflowRejected: true, released: true }
@@ -106,6 +113,37 @@ describe("agent concurrency benchmark", () => {
     });
     const summary = testing.summarizeTimings(Array.from({ length: 20 }, (_, index) => index + 1));
     expect(summary).toMatchObject({ count: 20, p50: 10, p95: 19, p99: 20, max: 20 });
+  });
+
+  it("drains detached gateway root work before the next spawn sample", async () => {
+    resetGatewayWorkAdmission();
+    const deferred = createDeferred();
+    const rootWork = runWithGatewayIndependentRootWorkAdmission(() => deferred.promise);
+    try {
+      const drain = workerTesting.drainSpawnSampleRootWork();
+      await expect(
+        Promise.race([
+          drain.then(() => "drained"),
+          new Promise<string>((resolve) => setImmediate(() => resolve("pending"))),
+        ]),
+      ).resolves.toBe("pending");
+
+      deferred.resolve();
+      await expect(drain).resolves.toBeUndefined();
+    } finally {
+      deferred.resolve();
+      await rootWork;
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("rejects a spawn sample when detached gateway root work does not drain", async () => {
+    await expect(
+      workerTesting.drainSpawnSampleRootWork(async (timeoutMs) => {
+        expect(timeoutMs).toBe(30_000);
+        return { drained: false, active: 2 };
+      }),
+    ).rejects.toThrow("spawn sample left 2 active gateway root work items");
   });
 
   it("aggregates synthetic worker results into schema version 2", () => {

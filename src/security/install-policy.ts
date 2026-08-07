@@ -267,7 +267,7 @@ async function assertSecureCommandAncestorDirs(params: {
     }
     if (process.platform === "win32" && perms.source === "unknown") {
       throw new Error(
-        `${params.label} parent directory ACL verification unavailable on Windows for ${dir}. Set allowInsecurePath=true for this policy to bypass this check when the path is trusted.`,
+        `${params.label} parent directory ACL verification unavailable on Windows for ${dir}. Move ${params.label} to a direct path whose ACLs can be verified.`,
       );
     }
   }
@@ -277,31 +277,15 @@ async function assertSecureCommandPath(params: {
   targetPath: string;
   label: string;
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
-  allowSymlinkPath?: boolean;
 }): Promise<string> {
   if (!isAbsolutePathname(params.targetPath)) {
     throw new Error(`${params.label} must be an absolute path.`);
   }
 
-  let effectivePath = params.targetPath;
-  let stat = await readFileStatOrThrow(effectivePath, params.label);
+  const effectivePath = params.targetPath;
+  const stat = await readFileStatOrThrow(effectivePath, params.label);
   if (stat.isSymlink) {
-    if (!params.allowSymlinkPath) {
-      throw new Error(`${params.label} must not be a symlink: ${effectivePath}`);
-    }
-    try {
-      effectivePath = await fs.realpath(effectivePath);
-    } catch {
-      throw new Error(`${params.label} symlink target is not readable: ${params.targetPath}`);
-    }
-    if (!isAbsolutePathname(effectivePath)) {
-      throw new Error(`${params.label} resolved symlink target must be an absolute path.`);
-    }
-    stat = await readFileStatOrThrow(effectivePath, params.label);
-    if (stat.isSymlink) {
-      throw new Error(`${params.label} symlink target must not be a symlink: ${effectivePath}`);
-    }
+    throw new Error(`${params.label} must not be a symlink: ${effectivePath}`);
   }
 
   if (params.trustedDirs && params.trustedDirs.length > 0) {
@@ -311,10 +295,6 @@ async function assertSecureCommandPath(params: {
       throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
     }
   }
-  if (params.allowInsecurePath) {
-    return effectivePath;
-  }
-
   const perms = await inspectPathPermissions(effectivePath);
   if (!perms.ok) {
     throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
@@ -326,7 +306,7 @@ async function assertSecureCommandPath(params: {
 
   if (process.platform === "win32" && perms.source === "unknown") {
     throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this policy to bypass this check when the path is trusted.`,
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move ${params.label} to a direct path whose ACLs can be verified.`,
     );
   }
 
@@ -345,8 +325,6 @@ async function assertSecurePolicyScriptArg(params: {
   command: string;
   args: string[];
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
-  allowSymlinkPath?: boolean;
 }): Promise<void> {
   const scriptArg = resolvePolicyScriptArg({ command: params.command, args: params.args });
   if (!scriptArg) {
@@ -360,8 +338,6 @@ async function assertSecurePolicyScriptArg(params: {
       targetPath: script.path,
       label: `security.installPolicy.exec.args[${script.index}]`,
       trustedDirs: params.trustedDirs,
-      allowInsecurePath: params.allowInsecurePath,
-      allowSymlinkPath: false,
     });
   }
 }
@@ -476,7 +452,6 @@ export async function validateInstallPolicyStatic(
       targetPath: policy.exec.command,
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
-      allowSymlinkPath: false,
     });
   } catch (err) {
     issues.push({
@@ -489,7 +464,6 @@ export async function validateInstallPolicyStatic(
       command: policy.exec.command,
       args: policy.exec.args ?? [],
       trustedDirs: policy.exec.trustedDirs,
-      allowSymlinkPath: false,
     });
   } catch (err) {
     issues.push({
@@ -625,7 +599,6 @@ export async function runInstallPolicy(params: {
       targetPath: commandPath,
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
-      allowSymlinkPath: false,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));
@@ -635,7 +608,6 @@ export async function runInstallPolicy(params: {
       command: secureCommandPath,
       args: policy.exec.args ?? [],
       trustedDirs: policy.exec.trustedDirs,
-      allowSymlinkPath: false,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));
@@ -746,4 +718,3 @@ export async function probeInstallPolicy(params: {
     },
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

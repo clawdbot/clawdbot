@@ -130,7 +130,10 @@ export async function compactEmbeddedAgentSessionDirect(
       failure: { reason: "model_selection_locked" },
     };
   }
-  const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
+  const runSessionTarget = await resolveAgentRunSessionTarget({
+    ...paramsBase,
+    missingSessionKey: "resolve-existing",
+  });
   const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
     ...paramsBase,
     agentId: runSessionTarget.agentId,

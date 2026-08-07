@@ -486,6 +486,7 @@ export async function persistCliTurnTranscript(params: {
   const sessionTarget = await resolveAgentRunSessionTarget({
     agentId: params.sessionAgentId,
     config: params.config,
+    missingSessionKey: "resolve-existing",
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

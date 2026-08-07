@@ -446,7 +446,6 @@ function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined
 function classifyStateSqliteBackupSourcePath(
   sourcePath: string,
   stateDir: string,
-  gatewayLockDirs: readonly string[],
 ): "excluded" | "sqlite" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
   if (!isPathWithin(resolvedSourcePath, stateDir)) {
@@ -455,7 +454,7 @@ function classifyStateSqliteBackupSourcePath(
   if (isStatePackageContentPath(resolvedSourcePath, stateDir)) {
     return undefined;
   }
-  if (isTransientSqliteBackupPath(resolvedSourcePath, gatewayLockDirs)) {
+  if (isTransientSqliteBackupPath(resolvedSourcePath)) {
     return "excluded";
   }
   const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
@@ -472,7 +471,7 @@ function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").Re
 async function listStateSqlitePaths(params: {
   stateDir: string;
   globalStateSqlitePath: string;
-  gatewayLockDirs: readonly string[];
+  gatewayLockDir: string;
   preservedStatePaths?: readonly string[];
 }): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
   const snapshotPaths = new Set<string>();
@@ -512,7 +511,11 @@ async function listStateSqlitePaths(params: {
         continue;
       }
       if (entry.isDirectory()) {
-        if (stateFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
+        if (
+          stateFilter(entryPath) &&
+          !isPathWithin(entryPath, params.gatewayLockDir) &&
+          !isStatePackageContentPath(entryPath, params.stateDir)
+        ) {
           await visit(entryPath);
         }
       } else if (
@@ -524,7 +527,6 @@ async function listStateSqlitePaths(params: {
         const sqliteSourceKind = classifyStateSqliteBackupSourcePath(
           resolvedEntryPath,
           params.stateDir,
-          params.gatewayLockDirs,
         );
         if (sqliteSourceKind === "sqlite") {
           discoveredSourcePaths.add(resolvedEntryPath);
@@ -596,12 +598,7 @@ async function createStateSqliteBackupPlan(params: {
   const discovery = await listStateSqlitePaths({
     stateDir: params.stateDir,
     globalStateSqlitePath,
-    // CLI and managed services use different temp roots for the same
-    // disposable gateway/device coordination databases.
-    gatewayLockDirs: [
-      resolveGatewayLockDir(),
-      resolveGatewayLockDir(() => path.join(params.stateDir, "tmp")),
-    ],
+    gatewayLockDir: resolveGatewayLockDir(params.stateDir),
     preservedStatePaths: params.preservedStatePaths,
   });
   const globalStateIdentity = await fs.stat(globalStateSqlitePath).catch((error: unknown) => {
@@ -866,10 +863,7 @@ export async function createBackupArchive(
     const stateFilter = stateAsset
       ? buildStateBackupFilter(stateAsset.sourcePath, preservedStatePaths)
       : undefined;
-    const gatewayLockDirs = [
-      resolveGatewayLockDir(),
-      resolveGatewayLockDir(() => path.join(plan.stateDir, "tmp")),
-    ];
+    const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     // node-tar invokes filters from async stat callbacks, so throwing inside
@@ -888,6 +882,9 @@ export async function createBackupArchive(
       if (stateFilter && !stateFilter(entryPath)) {
         return false;
       }
+      if (isPathWithin(resolvedEntryPath, gatewayLockDir)) {
+        return false;
+      }
       if (
         stateAsset &&
         isLegacyAuditMigrationBackupPath(resolvedEntryPath, stateAsset.sourcePath)
@@ -895,11 +892,7 @@ export async function createBackupArchive(
         return false;
       }
       const sqliteSourceKind = stateAsset
-        ? classifyStateSqliteBackupSourcePath(
-            resolvedEntryPath,
-            stateAsset.sourcePath,
-            gatewayLockDirs,
-          )
+        ? classifyStateSqliteBackupSourcePath(resolvedEntryPath, stateAsset.sourcePath)
         : undefined;
       if (sqliteSourceKind === "excluded") {
         return false;
