@@ -495,6 +495,13 @@ describe("run-oxlint", () => {
     expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
   });
 
+  it.each([["--only"], ["--only", "--split-core"], ["--only="]])(
+    "rejects shard selectors without a name: %s",
+    (...args) => {
+      expect(() => parseShardRunnerArgs(args)).toThrow("--only requires a shard name");
+    },
+  );
+
   it("filters split core shards by shard family", () => {
     const shards = filterOxlintShards(
       createOxlintShards({

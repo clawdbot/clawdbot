@@ -332,17 +332,19 @@ export function parseShardRunnerArgs(args) {
     }
     if (arg === "--only") {
       const value = args[index + 1];
-      if (value) {
-        only.add(value);
-        index += 1;
+      if (!value || value.startsWith("-")) {
+        throw new Error("--only requires a shard name");
       }
+      only.add(value);
+      index += 1;
       continue;
     }
     if (arg.startsWith("--only=")) {
       const value = arg.slice("--only=".length);
-      if (value) {
-        only.add(value);
+      if (!value) {
+        throw new Error("--only requires a shard name");
       }
+      only.add(value);
       continue;
     }
     oxlintArgs.push(arg);
