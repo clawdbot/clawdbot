@@ -110,6 +110,7 @@ describe("buildStatusMessageParts presentation", () => {
       config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
       agent: { model: "anthropic/claude-haiku-4-5", contextTokens: 100_000 },
       sessionEntry: {
+        sessionId: "status-meter-session",
         totalTokens: 87_000,
         totalTokensFresh: true,
         compactionCount: 2,
