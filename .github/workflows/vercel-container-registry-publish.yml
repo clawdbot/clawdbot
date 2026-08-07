@@ -18,7 +18,6 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   VERCEL_CLI_VERSION: 58.4.4
-  REGCTL_VERSION: v0.11.5
 
 jobs:
   publish:
@@ -34,11 +33,6 @@ jobs:
 
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Install regctl
-        uses: regclient/actions/regctl-installer@1b705e32d40851370799ea5814e83d0a5f6a70dc # v0.1.0
-        with:
-          release: ${{ env.REGCTL_VERSION }}
 
       - name: Validate Vercel Container Registry configuration
         env:
