@@ -54,6 +54,9 @@ function resolveWikimediaOriginalUrl(url: string): string | undefined {
     return undefined;
   }
   const renditionFile = renditionMatch[1];
+  if (renditionFile === undefined) {
+    return undefined;
+  }
   if (renditionFile !== sourceFile && !renditionFile.startsWith(`${sourceFile}.`)) {
     return undefined;
   }
