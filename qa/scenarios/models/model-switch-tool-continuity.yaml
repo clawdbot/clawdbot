@@ -77,20 +77,21 @@ flow:
         - assert:
             expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
             message: alternate-model run did not return exact owned successful read evidence
+        - assert:
+            expr: "alternateRun?.waited?.terminalReply?.disposition === 'visible' && hasModelSwitchContinuitySignal(alternateRun.waited.terminalReply.text)"
+            message: alternate-model terminal reply missed kickoff continuity
         - call: waitForCondition
           saveAs: outbound
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && hasModelSwitchContinuitySignal(candidate.text)).at(-1)"
+                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && alternateRun?.waited?.terminalReply?.disposition === 'visible' && candidate.text === alternateRun.waited.terminalReply.text).at(-1)"
             - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
-        - assert:
-            expr: hasModelSwitchContinuitySignal(outbound.text)
-            message:
-              expr: "`switch reply missed kickoff continuity: ${outbound.text}`"
         - set: modelSwitchEvidence
           value:
             primary:
               ref: primaryRun.waited.terminalReceipt
             alternate:
               ref: alternateRun.waited.terminalReceipt
-      detailsExpr: outbound.text
+            terminalReply:
+              ref: alternateRun.waited.terminalReply
+      detailsExpr: alternateRun.waited.terminalReply.text

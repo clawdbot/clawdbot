@@ -44,11 +44,17 @@ type QaChatHistoryResponse = {
   messages?: unknown[];
 };
 
+type QaAgentTerminalReply =
+  | { disposition: "visible"; text: string }
+  | { disposition: "silent" }
+  | { disposition: "empty" };
+
 type QaAgentWaitResult = {
   status?: string;
   error?: string;
   stopReason?: string;
   terminalReceipt?: Record<string, unknown>;
+  terminalReply?: QaAgentTerminalReply;
 };
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");

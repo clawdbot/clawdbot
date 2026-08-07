@@ -80,11 +80,14 @@ flow:
         - assert:
             expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
             message: alternate-model run did not return distinct exact owned model evidence
+        - assert:
+            expr: "(() => { const reply = alternateRun?.waited?.terminalReply; if (reply?.disposition !== 'visible') return false; const lower = normalizeLowercaseStringOrEmpty(reply.text); return lower.includes('switch') || lower.includes('handoff'); })()"
+            message: alternate-model terminal reply missed switch continuity
         - call: waitForCondition
           saveAs: outbound
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && (() => { const lower = normalizeLowercaseStringOrEmpty(candidate.text); return lower.includes('switch') || lower.includes('handoff'); })()).at(-1)"
+                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && alternateRun?.waited?.terminalReply?.disposition === 'visible' && candidate.text === alternateRun.waited.terminalReply.text).at(-1)"
             - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
         - set: modelSwitchEvidence
           value:
@@ -92,4 +95,6 @@ flow:
               ref: primaryRun.waited.terminalReceipt
             alternate:
               ref: alternateRun.waited.terminalReceipt
-      detailsExpr: outbound.text
+            terminalReply:
+              ref: alternateRun.waited.terminalReply
+      detailsExpr: alternateRun.waited.terminalReply.text

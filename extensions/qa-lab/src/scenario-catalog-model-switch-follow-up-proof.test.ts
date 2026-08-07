@@ -31,6 +31,8 @@ function terminalReceipt(params: {
 async function runFollowUp(params?: {
   alternateModel?: string;
   alternateReceiptRunId?: string;
+  alternateReplyText?: string;
+  unrelatedLaterOutboundText?: string;
   deleteAlternateReply?: boolean;
   onRun?: () => void;
 }) {
@@ -43,18 +45,30 @@ async function runFollowUp(params?: {
       const runId = `run-${call}`;
       const provider = prompt.provider ?? "openai";
       const model = prompt.model ?? "primary-model";
+      const replyText =
+        call === 1
+          ? "hello from the primary model"
+          : (params?.alternateReplyText ?? "the model switch handoff completed");
       const outbound = state.addOutboundMessage({
         accountId: "qa-channel",
         to: "dm:qa-operator",
-        text: call === 1 ? "hello from the primary model" : "the model switch handoff completed",
+        text: replyText,
       });
       if (call === 2 && params?.deleteAlternateReply) {
         state.deleteMessage({ accountId: "qa-channel", messageId: outbound.id });
+      }
+      if (call === 2 && params?.unrelatedLaterOutboundText) {
+        state.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "dm:qa-operator",
+          text: params.unrelatedLaterOutboundText,
+        });
       }
       return {
         started: { runId },
         waited: {
           status: "ok",
+          terminalReply: { disposition: "visible", text: replyText },
           terminalReceipt: terminalReceipt({
             runId: call === 2 ? (params?.alternateReceiptRunId ?? runId) : runId,
             provider,
@@ -92,7 +106,9 @@ describe("model-switch follow-up terminal evidence", () => {
     expect(result.modelSwitchEvidence).toMatchObject({
       primary: { runId: "run-1", effective: { responseModel: "primary-model" } },
       alternate: { runId: "run-2", effective: { responseModel: "alternate-model" } },
+      terminalReply: { disposition: "visible", text: "the model switch handoff completed" },
     });
+    expect(result.steps[1]?.details).toBe("the model switch handoff completed");
   });
 
   it("rejects a delayed prior-run receipt", async () => {
@@ -113,5 +129,14 @@ describe("model-switch follow-up terminal evidence", () => {
     await expect(runFollowUp({ deleteAlternateReply: true })).rejects.toThrow(
       "test condition was not met",
     );
+  });
+
+  it("rejects unrelated later continuity text when the alternate reply lacks it", async () => {
+    await expect(
+      runFollowUp({
+        alternateReplyText: "the alternate run completed",
+        unrelatedLaterOutboundText: "the model switch handoff completed",
+      }),
+    ).rejects.toThrow("alternate-model terminal reply missed switch continuity");
   });
 });
