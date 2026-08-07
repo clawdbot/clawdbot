@@ -297,7 +297,7 @@ test.each([
     entry: sessionStoreEntry("operator-owned-session"),
   },
 ])("sessions.abort prevents a plugin from aborting $name", async ({ key, entry }) => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionStoreDir();
   await writeSessionStore({ entries: { [key]: entry } });
   const pluginClient = {
     connect: { scopes: ["operator.write"] },
