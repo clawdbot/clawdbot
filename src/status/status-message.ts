@@ -1218,24 +1218,25 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   ]
     .filter(Boolean)
     .join(" · ");
-  // The header row doubles as the card title on native renderers, so the
-  // presentation carries no separate title.
   // Silence means nominal: the pressure line renders only when the context
   // window is running hot, so its presence alone is the signal.
   const contextPressureLine =
     contextPct !== null && contextPct >= 80 ? `⚠️ Context ${contextPct}% full` : null;
+  // Lead with the product/version title and the clock so the card does not open
+  // straight into a table; the header row then just labels the two columns.
   const presentation: MessagePresentation = {
+    title: versionLine,
     blocks: [
+      ...contextBlock(clockUptimeValue),
       {
         type: "table",
         caption: "Session status",
-        headers: ["🦞 OpenClaw", `${VERSION}${commit ? ` (${commit})` : ""}`],
+        headers: ["Item", "Value"],
         rows: statusRows,
         rowHeaderColumnIndex: 0,
       },
       // A warning is not low-emphasis context; keep it a plain text block.
       ...(contextPressureLine ? [{ type: "text", text: contextPressureLine } as const] : []),
-      ...contextBlock(clockUptimeValue),
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
