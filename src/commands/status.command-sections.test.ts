@@ -372,6 +372,7 @@ describe("status.command-sections", () => {
   it("renders builtin vector store and semantic health independently", () => {
     const value = buildStatusMemoryValue({
       memory: {
+        agentId: "main",
         backend: "builtin",
         provider: "local",
         files: 1,
@@ -397,6 +398,7 @@ describe("status.command-sections", () => {
   it("keeps builtin vector store-only rendering when semantic health is unknown", () => {
     const value = buildStatusMemoryValue({
       memory: {
+        agentId: "main",
         backend: "builtin",
         provider: "local",
         files: 1,
@@ -417,6 +419,7 @@ describe("status.command-sections", () => {
   it("keeps builtin vector rendering on aggregate availability when store health is unknown", () => {
     const value = buildStatusMemoryValue({
       memory: {
+        agentId: "main",
         backend: "builtin",
         provider: "local",
         files: 1,
