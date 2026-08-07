@@ -107,7 +107,6 @@ What still needs Playwright:
 - AI snapshots that depend on Playwright's native AI snapshot format
 - CSS-selector element screenshots (`--element`)
 - full browser PDF export
-- page-question extraction
 
 Element screenshots also reject `--full-page`; the route returns `fullPage is
 not supported for element screenshots`.
