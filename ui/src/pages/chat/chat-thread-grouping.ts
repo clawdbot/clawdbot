@@ -532,7 +532,7 @@ type WorkGroupRenderItem = {
   hasError: boolean;
 };
 
-export type ActivityRunRenderItem = {
+type ActivityRunRenderItem = {
   kind: "activity-run";
   key: string;
   groups: MessageGroup[];
