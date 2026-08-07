@@ -170,6 +170,32 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("does not fallback-steer after a permanent completion direct failure", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      reason: "message_tool_delivery_missing" as const,
+      error: "completion agent did not use the required message tool",
+      disposition: "permanent_failure" as const,
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledOnce();
+    expect(steer).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "message_tool_delivery_missing",
+      disposition: "permanent_failure",
+    });
+  });
+
   it("returns direct failure when completion fallback steering cannot deliver", async () => {
     const steer = vi.fn(async () => ({ status: "none" }) as const);
     const direct = vi.fn(async () => ({

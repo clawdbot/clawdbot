@@ -5489,6 +5489,58 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("suspends missing message-tool delivery without replaying the requester turn", async () => {
+    const runId = "run-message-tool-delivery-missing";
+    const endedAt = Date.parse("2026-03-24T12:00:00Z");
+    mocks.runSubagentAnnounceFlow.mockImplementationOnce(async (...args: unknown[]) => {
+      const params = args[0] as {
+        onDeliveryResult?: (delivery: {
+          delivered: false;
+          path: "direct";
+          reason: "message_tool_delivery_missing";
+          error: string;
+          disposition: "permanent_failure";
+        }) => void;
+      };
+      params.onDeliveryResult?.({
+        delivered: false,
+        path: "direct",
+        reason: "message_tool_delivery_missing",
+        error: "completion agent did not use the message tool for message-tool-only delivery",
+        disposition: "permanent_failure",
+      });
+      return false;
+    });
+    mocks.callGateway.mockResolvedValueOnce({
+      status: "ok",
+      startedAt: endedAt - 500,
+      endedAt,
+    });
+
+    mod.registerSubagentRun({
+      runId,
+      task: "message-tool completion delivery",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForFast(() => {
+      expect(findRequesterRun(runId)?.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "permanent_failure",
+        suspendedReason: "permanent_failure",
+      });
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+
+    mod.resumeSubagentRun(runId);
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(findRequesterRun(runId)?.cleanupCompletedAt).toBeUndefined();
+  });
+
   it("retries and retires completion delete runs regardless of prior attempt count", async () => {
     const endedHookRunner = {
       hasHooks: (hookName: string) => hookName === "subagent_ended",

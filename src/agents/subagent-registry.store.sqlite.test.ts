@@ -227,6 +227,14 @@ describe("subagent registry sqlite store", () => {
           batchRunIds: ["run-one"],
         },
       });
+      run.delivery = {
+        ...run.delivery!,
+        status: "suspended",
+        disposition: "permanent_failure",
+        suspendedAt: 290,
+        suspendedReason: "permanent_failure",
+        lastError: "required message-tool delivery missing",
+      };
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
       const { db } = openOpenClawStateDatabase();
@@ -249,12 +257,18 @@ describe("subagent registry sqlite store", () => {
       const restored = loadSubagentRegistryFromSqlite().get(run.runId);
       expect(restored?.expectsCompletionMessage).toBe(true);
       expect(restored?.completion?.resultText).toBe("done");
-      expect(restored?.delivery).toMatchObject({ status: "pending", lastError: "retry later" });
+      expect(restored?.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "permanent_failure",
+        suspendedAt: 290,
+        suspendedReason: "permanent_failure",
+        lastError: "required message-tool delivery missing",
+      });
       expect(restored?.requesterSettleWake).toEqual(run.requesterSettleWake);
       expect(restored?.execution.outcome?.status).toBe("ok");
       const sessionListRun = loadSubagentSessionListRunsFromSqlite().get(run.runId);
       expect(sessionListRun?.execution.outcome?.status).toBe("ok");
-      expect(sessionListRun?.delivery?.status).toBe("pending");
+      expect(sessionListRun?.delivery?.status).toBe("suspended");
     });
   });
 

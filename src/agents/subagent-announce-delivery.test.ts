@@ -2885,7 +2885,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       reason: "message_tool_delivery_missing",
       error: "completion agent did not use the message tool for message-tool-only delivery",
+      disposition: "permanent_failure",
     });
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
   it("does not count a different channel target as the requester completion delivery", async () => {
@@ -2918,6 +2920,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
       path: "direct",
       reason: "message_tool_delivery_missing",
+      disposition: "permanent_failure",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });

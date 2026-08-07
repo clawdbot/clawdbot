@@ -223,7 +223,7 @@ describe("atomic subagent completion admission store", () => {
         windowStartedAt: now - 31 * 60_000,
         deadlineAt: now - 60_000,
         suspendedAt: now,
-        suspendedReason: "expiry",
+        suspendedReason: "permanent_failure",
         lastError: "requester unavailable",
         payload: {
           requesterSessionKey: input.task.requesterSessionKey,
@@ -280,7 +280,7 @@ describe("atomic subagent completion admission store", () => {
         status: "suspended",
         disposition: "permanent_failure",
         generation: 1,
-        suspendedReason: "expiry",
+        suspendedReason: "permanent_failure",
       });
       expect(subagentRuns.get(input.subagent.runId)?.completion).toMatchObject({
         resultText: "NO_REPLY",
