@@ -173,6 +173,17 @@ function expectTextToIncludeAll(text: string, snippets: readonly string[]): void
   }
 }
 
+function extractUpgradeSurvivorSupervisor(script: string): string {
+  const match = script.match(
+    /cat >"\$supervisor_script" <<'SUPERVISOR'\n(?<source>[\s\S]*?)\nSUPERVISOR/u,
+  );
+  const source = match?.groups?.source;
+  if (!source) {
+    throw new Error("upgrade survivor supervisor source not found");
+  }
+  return source;
+}
+
 function cleanupSmokeLogTailHelpers(): string {
   const script = readFileSync(CLEANUP_SMOKE_RUN_PATH, "utf8");
   const match = script.match(
@@ -2625,12 +2636,62 @@ fi
         'process.on("SIGTERM", stop);',
         'setTimeout(() => child?.kill("SIGKILL"), 3_000).unref();',
         "if (code === 78) return finish();",
-        "setTimeout(start, 100);",
+        "const restartDelayMs = 5_000;",
+        "const restartWindowMs = 60_000;",
+        "const restartBurst = 5;",
+        "if (starts.length >= restartBurst) {",
+        "setTimeout(start, restartDelayMs);",
       ]);
     }
     for (const script of [runner, publishedRunner]) {
       expect(script).toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG"');
       expect(script).toContain("systemctl --user stop openclaw-gateway.service");
+    }
+  });
+
+  it("stops supervised gateway restarts after the systemd burst limit", async () => {
+    const workDir = tempDirs.make("openclaw-update-restart-supervisor-");
+    const scripts = [
+      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+    ];
+
+    for (const [index, script] of scripts.entries()) {
+      const supervisorPath = join(workDir, `supervisor-${index}.mjs`);
+      const countPath = join(workDir, `starts-${index}`);
+      const logPath = join(workDir, `daemon-${index}.log`);
+      const source = extractUpgradeSurvivorSupervisor(script)
+        .replace("const restartDelayMs = 5_000;", "const restartDelayMs = 5;")
+        .replace("const restartWindowMs = 60_000;", "const restartWindowMs = 5_000;");
+      writeFileSync(supervisorPath, source);
+
+      const command =
+        'node -e \'require("node:fs").appendFileSync(process.env.COUNT_FILE, "x"); process.exit(1)\'';
+      const supervisor = spawn(process.execPath, [supervisorPath], {
+        env: {
+          ...process.env,
+          COUNT_FILE: countPath,
+          OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
+        },
+        stdio: "ignore",
+      });
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          supervisor.kill("SIGKILL");
+          reject(new Error("supervisor did not exhaust its restart budget"));
+        }, 5_000);
+        supervisor.once("exit", (code) => {
+          clearTimeout(timeout);
+          resolve(code);
+        });
+      });
+
+      expect(exitCode).toBe(0);
+      expect(readFileSync(countPath, "utf8")).toBe("xxxxx");
+      expect(readFileSync(logPath, "utf8")).toContain(
+        "[systemctl-shim] gateway restart limit reached",
+      );
     }
   });
 

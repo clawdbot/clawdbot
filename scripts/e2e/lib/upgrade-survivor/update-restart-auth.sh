@@ -125,6 +125,10 @@ for (const key of Object.keys(childEnv)) {
   }
 }
 delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+const restartDelayMs = 5_000;
+const restartWindowMs = 60_000;
+const restartBurst = 5;
+const starts = [];
 let child;
 let stopping = false;
 
@@ -145,6 +149,15 @@ const stop = () => {
 
 const start = () => {
   if (stopping) return finish();
+  const now = Date.now();
+  while (starts.length > 0 && starts[0] <= now - restartWindowMs) {
+    starts.shift();
+  }
+  if (starts.length >= restartBurst) {
+    fs.writeSync(output, "[systemctl-shim] gateway restart limit reached\n");
+    return finish();
+  }
+  starts.push(now);
   child = spawn("bash", ["-lc", `exec ${command}`], {
     env: childEnv,
     stdio: ["ignore", output, output],
@@ -157,7 +170,7 @@ const start = () => {
     if (stopping) return finish();
     // Match the generated systemd unit's RestartPreventExitStatus contract.
     if (code === 78) return finish();
-    setTimeout(start, 100);
+    setTimeout(start, restartDelayMs);
   });
 };
 
