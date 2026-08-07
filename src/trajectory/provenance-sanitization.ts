@@ -8,7 +8,7 @@ import {
   type DiagnosticPayloadProjectionReason,
 } from "../agents/payload-redaction.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { isSensitiveFieldKey, redactSensitiveFieldValue } from "../logging/redact.js";
+import { redactSensitiveFieldValue, redactSensitiveFieldValueAtPath } from "../logging/redact.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const ORIGIN_KINDS = new Set(["external_user", "inter_session", "internal_system"]);
@@ -82,6 +82,10 @@ function fieldName(context: DiagnosticPayloadProjectionContext): string {
   return typeof context.path?.key === "string" ? context.path.key : "";
 }
 
+function fieldPath(context: DiagnosticPayloadProjectionContext): string[] {
+  return pathParts(context.path).filter((part): part is string => typeof part === "string");
+}
+
 function projectTrajectoryValue(
   value: unknown,
   scope: Scope,
@@ -97,8 +101,18 @@ function projectTrajectoryValue(
           ? TRAJECTORY_LIMITS.maxDepth + 2
           : TRAJECTORY_LIMITS.maxDepth,
     },
-    redactPrimitive: (entry, context) => (isSensitiveFieldKey(fieldName(context)) ? "***" : entry),
-    redactString: (text, context) => redactSensitiveFieldValue(fieldName(context), text),
+    redactPrimitive: (entry, context) => {
+      const primitiveText = String(entry);
+      return redactSensitiveFieldValueAtPath(
+        fieldName(context),
+        primitiveText,
+        fieldPath(context),
+      ) === primitiveText
+        ? entry
+        : "***";
+    },
+    redactString: (text, context) =>
+      redactSensitiveFieldValueAtPath(fieldName(context), text, fieldPath(context)),
   });
 }
 

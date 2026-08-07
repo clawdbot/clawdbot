@@ -982,6 +982,20 @@ export function redactSensitiveFieldValue(
   return redactSensitiveFieldValueWithOptions(key, value, options ?? resolveToolPayloadRedaction());
 }
 
+export function redactSensitiveFieldValueAtPath(
+  key: string,
+  value: string,
+  path: readonly string[],
+  options?: RedactOptions,
+): string {
+  return redactSensitiveFieldValueWithOptions(
+    key,
+    value,
+    options ?? resolveToolPayloadRedaction(),
+    path,
+  );
+}
+
 export function redactSensitiveFieldValueWithConfig(
   key: string,
   value: string,

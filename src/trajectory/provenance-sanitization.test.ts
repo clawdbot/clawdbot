@@ -255,4 +255,36 @@ describe("TrajectoryProvenanceSanitizer", () => {
     expect(sanitized).not.toBe(data);
     expect(sanitized.messagesSnapshot).not.toBe(data.messagesSnapshot);
   });
+
+  it("redacts authorization codes with full paths while preserving diagnostic codes", () => {
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+
+    expect(
+      sanitizer.sanitizeEventData("tool.call", {
+        arguments: {
+          oauth: { code: "opaque-oauth-code-1234567890" },
+          provider: { code: "opaque-provider-code-1234567890" },
+          providerNumeric: { code: 123_456 },
+          nested: [{ providerAuth: { code: "opaque-array-code-1234567890" } }],
+          error: { code: "ERR_TOOL_FAILED" },
+          errorNumeric: { error: { code: 500 } },
+          status: { code: "RETRY_REQUIRED" },
+          statusNumeric: { status: { code: 429 } },
+          manifest: { warnings: [{ code: "invalid-runtime-event" }] },
+        },
+      }),
+    ).toEqual({
+      arguments: {
+        oauth: { code: "opaque…7890" },
+        provider: { code: "opaque…7890" },
+        providerNumeric: { code: "***" },
+        nested: [{ providerAuth: { code: "opaque…7890" } }],
+        error: { code: "ERR_TOOL_FAILED" },
+        errorNumeric: { error: { code: 500 } },
+        status: { code: "RETRY_REQUIRED" },
+        statusNumeric: { status: { code: 429 } },
+        manifest: { warnings: [{ code: "invalid-runtime-event" }] },
+      },
+    });
+  });
 });

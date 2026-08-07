@@ -109,6 +109,47 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("opaque-source-session-credential");
   });
 
+  it.each(["native", "dynamic", "mcp"])(
+    "redacts path-sensitive authorization codes in %s tool arguments",
+    (toolKind) => {
+      const writes: string[] = [];
+      const recorder = createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        writer: {
+          filePath: "/tmp/session.trajectory.jsonl",
+          write: (line) => {
+            writes.push(line);
+          },
+          flush: async () => undefined,
+        },
+      });
+
+      expectTrajectoryRuntimeRecorder(recorder).recordEvent("tool.call", {
+        name: "test_tool",
+        toolKind,
+        arguments: {
+          oauth: { code: "opaque-oauth-code-1234567890" },
+          provider: { code: "opaque-provider-code-1234567890" },
+          nested: [{ providerAuth: { code: "opaque-array-code-1234567890" } }],
+          error: { code: "ERR_TOOL_FAILED" },
+          status: { code: "RETRY_REQUIRED" },
+          warnings: [{ code: "invalid-runtime-event" }],
+        },
+      });
+
+      const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+      expect(parsed.data.arguments).toEqual({
+        oauth: { code: "opaque…7890" },
+        provider: { code: "opaque…7890" },
+        nested: [{ providerAuth: { code: "opaque…7890" } }],
+        error: { code: "ERR_TOOL_FAILED" },
+        status: { code: "RETRY_REQUIRED" },
+        warnings: [{ code: "invalid-runtime-event" }],
+      });
+    },
+  );
+
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
     const tempDir = makeTempDir();
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
