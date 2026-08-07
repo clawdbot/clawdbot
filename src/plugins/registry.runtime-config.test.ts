@@ -727,6 +727,13 @@ describe("plugin registry runtime config scope", () => {
         archived: true,
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    // Direct Gateway route, not just the subagent facade: the handler-side guard
+    // must reject a foreign session even when the caller reaches sessions.abort
+    // through runtime.gateway.request, so the facade is not the only thing
+    // standing between a plugin and another plugin's active run.
+    await expect(
+      otherApi.runtime.gateway.request("sessions.abort", { key: reservedKey }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
     await expect(
       otherApi.runtime.gateway.request("agent", {
         sessionId: reservedEntry.sessionId,
