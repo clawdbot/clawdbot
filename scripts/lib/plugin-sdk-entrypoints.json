@@ -107,7 +107,6 @@
   "agent-harness",
   "agent-harness-exec-review-runtime",
   "agent-harness-runtime",
-  "agent-harness-tool-authority-runtime",
   "agent-harness-tool-runtime",
   "hook-runtime",
   "html-entity-runtime",

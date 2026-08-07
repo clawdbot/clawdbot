@@ -1,13 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 afterEach(() => {
-  vi.doUnmock("openclaw/plugin-sdk/agent-harness-tool-authority-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/agent-harness-tool-runtime");
   vi.resetModules();
 });
 
 it("does not load the private tool builder before a tool-capable turn", async () => {
   let toolBuilderImports = 0;
-  vi.doMock("openclaw/plugin-sdk/agent-harness-tool-authority-runtime", () => {
+  vi.doMock("openclaw/plugin-sdk/agent-harness-tool-runtime", () => {
     toolBuilderImports += 1;
     return {
       createOpenClawCodingToolsForAgentHarness: vi.fn(() => []),

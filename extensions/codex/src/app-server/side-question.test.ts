@@ -100,7 +100,7 @@ vi.mock("./provider-capabilities.js", () => ({
     resolveCodexProviderWebSearchSupportForClientMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-harness-tool-authority-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-tool-runtime", () => ({
   createOpenClawCodingToolsForAgentHarnessSideQuestion: (params: unknown, options: unknown) =>
     createOpenClawCodingToolsForSideQuestionMock(params, options),
 }));
