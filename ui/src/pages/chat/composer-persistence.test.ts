@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
-  it("round-trips an immutable steer run and transcript leaf", () => {
+  it("round-trips only the immutable steer run identity", () => {
     const state = createState();
     const steer: ChatQueueItem = {
       id: "steer-reload",
@@ -73,14 +73,12 @@ describe("chat composer persistence", () => {
       sendRunId: "steer-request",
       sendState: "unconfirmed",
       steerTargetRunId: "active-run",
-      steerTargetLeafEntryId: "leaf-before-steer",
     };
 
     expect(admitStoredChatComposerQueueItem(state, state.sessionKey, steer)).toBe(true);
 
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).toMatchObject({
       steerTargetRunId: "active-run",
-      steerTargetLeafEntryId: "leaf-before-steer",
     });
   });
 

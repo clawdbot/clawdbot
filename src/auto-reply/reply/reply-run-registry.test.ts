@@ -125,7 +125,7 @@ describe("reply run registry", () => {
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
-  it("matches injectable owners only to their immutable originating leaf", async () => {
+  it("binds modern targets by run while preserving leaf-only legacy targeting", async () => {
     const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
     let stopped = false;
     const queueMessage = vi.fn(async () => {});
@@ -139,7 +139,7 @@ describe("reply run registry", () => {
 
     const target = replyRunRegistry.resolveMessageInjectionTarget({
       sessionKey: "agent:main:main",
-      originatingLeafEntryId: "leaf-a",
+      originatingLeafEntryId: "leaf-b",
       expectedRunId: "run-a",
     });
     expect(target).toBeDefined();
@@ -147,7 +147,6 @@ describe("reply run registry", () => {
       replyRunRegistry.resolveMessageInjectionTarget({
         sessionKey: "agent:main:main",
         originatingLeafEntryId: "leaf-b",
-        expectedRunId: "run-a",
       }),
     ).toBeUndefined();
     await expect(

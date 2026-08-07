@@ -65,14 +65,9 @@ export type SteerSendDependencies = {
   ) => Promise<SteerChatSendResult>;
 };
 
-type SteerTarget = { runId: string; leafEntryId: string | null };
+type SteerTarget = { runId: string; leafEntryId?: string | null };
 
 function resolveSteerTarget(host: SteerLifecycleHost, item: ChatQueueItem): SteerTarget | null {
-  if (item.kind === "steered") {
-    return item.steerTargetRunId && Object.hasOwn(item, "steerTargetLeafEntryId")
-      ? { runId: item.steerTargetRunId, leafEntryId: item.steerTargetLeafEntryId ?? null }
-      : null;
-  }
   const matchingRows =
     host.sessionsResult?.sessions.filter((row) =>
       uiSessionRowMatchesSelectedChat(host, row.key, item.sessionKey ?? host.sessionKey),
@@ -80,20 +75,30 @@ function resolveSteerTarget(host: SteerLifecycleHost, item: ChatQueueItem): Stee
   const serverRunIds = new Set(
     matchingRows.flatMap((row) => (row.hasActiveRun ? (row.activeRunIds ?? []) : [])),
   );
+  const durableRunId = item.kind === "steered" ? item.steerTargetRunId?.trim() : undefined;
+  if (item.kind === "steered" && !durableRunId) {
+    return null;
+  }
   const runId =
-    host.chatRunId?.trim() || (serverRunIds.size === 1 ? [...serverRunIds][0] : undefined);
+    durableRunId ||
+    host.chatRunId?.trim() ||
+    (serverRunIds.size === 1 ? [...serverRunIds][0] : undefined);
   if (!runId) {
     return null;
   }
-  const displayedLeaf = host.chatDisplayedLeafEntryId;
+  const activeRow = matchingRows.find((row) => row.activeRunIds?.includes(runId));
+  const displayedLeaf =
+    host.chatRunId?.trim() === runId ? host.chatDisplayedLeafEntryId : undefined;
   const leafEntryId =
-    displayedLeaf === null
-      ? null
-      : displayedLeaf?.trim() ||
-        matchingRows.find((row) => row.activeRunIds?.includes(runId))?.activeLeafEntryId;
-  return leafEntryId === null || (typeof leafEntryId === "string" && leafEntryId.trim())
-    ? { runId, leafEntryId: leafEntryId === null ? null : leafEntryId.trim() }
-    : null;
+    displayedLeaf === null ? null : displayedLeaf?.trim() || activeRow?.activeLeafEntryId;
+  return {
+    runId,
+    ...(leafEntryId === null
+      ? { leafEntryId: null }
+      : typeof leafEntryId === "string" && leafEntryId.trim()
+        ? { leafEntryId: leafEntryId.trim() }
+        : {}),
+  };
 }
 
 type RejectedSteerChatSend = { kind: "rejected"; error: string };
@@ -318,7 +323,6 @@ export async function sendQueuedChatMessageWithQueueMode(
     ...(steerTarget
       ? {
           steerTargetRunId: steerTarget.runId,
-          steerTargetLeafEntryId: steerTarget.leafEntryId,
         }
       : {}),
     sendError: unconfirmedError,
@@ -367,7 +371,12 @@ export async function sendQueuedChatMessageWithQueueMode(
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
       ...(queueMode ? { queueMode } : {}),
       ...(steerTarget
-        ? { expectedRunId: steerTarget.runId, expectedLeafEntryId: steerTarget.leafEntryId }
+        ? {
+            expectedRunId: steerTarget.runId,
+            ...(steerTarget.leafEntryId !== undefined
+              ? { expectedLeafEntryId: steerTarget.leafEntryId }
+              : {}),
+          }
         : {}),
       runId: claimed.sendRunId,
     },

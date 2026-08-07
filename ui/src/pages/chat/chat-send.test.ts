@@ -8696,8 +8696,8 @@ describe("handleSendChat", () => {
       "This steer still targets the previous run, but that run is no longer active.",
     );
 
-    host.chatRunId = "successor-run";
-    host.chatDisplayedLeafEntryId = "successor-leaf";
+    host.chatRunId = "active-run";
+    host.chatDisplayedLeafEntryId = "leaf-advanced-during-tool-work";
     await retryQueuedChatMessage(host, original.id);
 
     expect(payloads).toHaveLength(2);
@@ -8709,7 +8709,7 @@ describe("handleSendChat", () => {
     expect(payloads.map((payload) => payload.expectedRunId)).toEqual(["active-run", "active-run"]);
     expect(payloads.map((payload) => payload.expectedLeafEntryId)).toEqual([
       "leaf-active",
-      "leaf-active",
+      "leaf-advanced-during-tool-work",
     ]);
   });
 
@@ -8739,6 +8739,51 @@ describe("handleSendChat", () => {
       kind: "steered",
       sendState: "failed",
       sendError: "This restored steer has no original run target and cannot be retried safely.",
+    });
+  });
+
+  it("retries a restored steer against its run with the refreshed current leaf", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const original = {
+      id: "restored-run-bound-steer",
+      text: "continue the same turn",
+      createdAt: 1,
+      kind: "steered" as const,
+      sendRunId: "stable-steer-request",
+      sendState: "failed" as const,
+      steerTargetRunId: "active-run",
+      sessionKey: "agent:main:main",
+    };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "restored run-bound steer payload");
+          payloads.push(payload);
+          return { status: "started", runId: payload.idempotencyKey };
+        },
+      },
+      chatRunId: null,
+      chatQueue: [original],
+      sessionKey: original.sessionKey,
+      sessionsResult: createSessionsResult([
+        row(original.sessionKey, {
+          activeLeafEntryId: "leaf-advanced-during-tool-work",
+          activeRunIds: ["active-run"],
+          hasActiveRun: true,
+          status: "running",
+        }),
+      ]),
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await retryQueuedChatMessage(host, original.id);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      expectedLeafEntryId: "leaf-advanced-during-tool-work",
+      expectedRunId: "active-run",
+      idempotencyKey: original.sendRunId,
+      queueMode: "steer",
     });
   });
 

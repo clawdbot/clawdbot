@@ -772,7 +772,7 @@ suite.define(() => {
     });
   });
 
-  it("steers the exact run and leaf reported by the session row", async () => {
+  it("steers the exact run with the current leaf reported by the session row", async () => {
     await withChatPage(async (page) => {
       const sessionKey = "main";
       const gateway = await installMockGateway(page, {

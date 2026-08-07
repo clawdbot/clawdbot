@@ -495,7 +495,10 @@ function resolveReplyMessageInjectionRejection(params: {
   if (operation.result || operation.phase !== "running") {
     return { reason: "not_running" };
   }
-  if (operation.originatingLeafEntryId !== params.originatingLeafEntryId) {
+  const expectedRunId = normalizeOptionalString(params.expectedRunId);
+  // Exact run identity supersedes the operation's immutable origin leaf. The
+  // same run advances its transcript leaf during ordinary tool/output progress.
+  if (!expectedRunId && operation.originatingLeafEntryId !== params.originatingLeafEntryId) {
     return { reason: "leaf_mismatch" };
   }
   if (isReplyRunEvidenceStale(operation)) {
@@ -506,7 +509,6 @@ function resolveReplyMessageInjectionRejection(params: {
   if (!backend || !injection) {
     return { reason: "injection_unavailable" };
   }
-  const expectedRunId = normalizeOptionalString(params.expectedRunId);
   if (expectedRunId && normalizeOptionalString(backend.runId) !== expectedRunId) {
     return { reason: "run_mismatch" };
   }

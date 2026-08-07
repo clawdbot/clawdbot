@@ -1359,7 +1359,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).not.toHaveBeenCalled();
   });
 
-  it("allows an explicit steer during injectable non-streaming tool work", async () => {
+  it("allows an exact-run steer after the active transcript leaf advances", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-moving-leaf-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1386,7 +1386,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       await send({
         idempotencyKey: "idem-steer-moving-leaf",
         requestParams: {
-          expectedLeafEntryId: "leaf-before-active-run-output",
+          expectedLeafEntryId: "current-leaf",
           expectedRunId: "active-run",
           queueMode: "steer",
         },
@@ -1402,7 +1402,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect.any(Object),
     );
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
-    expect(mockState.lastDispatchOriginatingLeafEntryId).toBe("leaf-before-active-run-output");
+    expect(mockState.lastDispatchOriginatingLeafEntryId).toBe("current-leaf");
   });
 
   it("rejects a steer after the expected active run changes", async () => {
