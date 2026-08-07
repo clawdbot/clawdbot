@@ -1066,6 +1066,8 @@ describe("plugin status reports", () => {
           app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
           remote: { type: "http", url: "https://example.test/mcp" },
           incomplete: { transport: "streamable-http" },
+          invalidScheme: { transport: "streamable-http", url: "ftp://example.test/mcp" },
+          invalidTransport: { transport: "http", url: "https://example.test/mcp" },
         },
       }),
       expectedId: "native-mcp",
@@ -1075,6 +1077,8 @@ describe("plugin status reports", () => {
         { name: "app", hasStdioTransport: true },
         { name: "remote", hasStdioTransport: false },
         { name: "incomplete", hasStdioTransport: false, unsupported: true },
+        { name: "invalidScheme", hasStdioTransport: false, unsupported: true },
+        { name: "invalidTransport", hasStdioTransport: false, unsupported: true },
       ],
     },
   ])(

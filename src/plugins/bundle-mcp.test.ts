@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
 import { loadEnabledBundleLspConfig } from "./bundle-lsp.js";
+import { loadBundleManifest } from "./bundle-manifest.js";
 import { inspectBundleMcpRuntimeSupport, loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import {
   createEnabledPluginEntries,
@@ -581,6 +582,57 @@ describe("loadEnabledBundleMcpConfig", () => {
         expect(loaded.config.mcpServers).toStrictEqual({});
         await expectPathMissing(path.join(homeDir, ".openclaw", "plugin-data", "closed-agent"));
         expect(await fs.realpath(pluginRoot)).toBeTruthy();
+      },
+    );
+  });
+
+  it("isolates Agent Plugins PLUGIN_DATA failures to stdio servers", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-agent-bundle-data-collision",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginId = "data-dir-collision";
+        const pluginRoot = await writeAgentBundle({
+          homeDir,
+          pluginId,
+          mcp: {
+            $schema: AGENT_MCP_SCHEMA,
+            mcpServers: {
+              local: { type: "stdio", command: "node" },
+              remote: { type: "streamable-http", url: "https://example.test/mcp" },
+            },
+          },
+          textFiles: {
+            "skills/weather/SKILL.md": "---\nname: weather\ndescription: Weather skill\n---\n",
+          },
+        });
+        const pluginDataPath = path.join(homeDir, ".openclaw", "plugin-data", pluginId);
+        await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+        await fs.writeFile(pluginDataPath, "directory collision", "utf8");
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig([pluginId]),
+        });
+
+        expect(loaded.config.mcpServers).toEqual({
+          remote: { transport: "streamable-http", url: "https://example.test/mcp" },
+        });
+        expect(loaded.diagnostics).toHaveLength(1);
+        expect(loaded.diagnostics[0]).toMatchObject({ pluginId });
+        expect(loaded.diagnostics[0]?.message).toContain("PLUGIN_DATA");
+        expect(loaded.diagnostics[0]?.message).toContain(pluginDataPath);
+        expect(loaded.diagnostics[0]?.message).toMatch(/EEXIST|file already exists/iu);
+        expect((await fs.stat(pluginDataPath)).isFile()).toBe(true);
+
+        const manifest = loadBundleManifest({ rootDir: pluginRoot, bundleFormat: "agent" });
+        expect(manifest.ok).toBe(true);
+        if (manifest.ok) {
+          expect(manifest.manifest.skills).toEqual(["skills"]);
+          expect(manifest.manifest.capabilities).toEqual(
+            expect.arrayContaining(["skills", "mcpServers"]),
+          );
+        }
       },
     );
   });

@@ -1,8 +1,10 @@
 // Bundles MCP metadata exposed by plugins for package output.
 import fs from "node:fs";
 import path from "node:path";
+import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
 import {
@@ -373,14 +375,27 @@ function extractAgentMcpServerMap(params: {
     servers[serverName] = validated.server;
   }
   const hasStdioServer = Object.values(servers).some((server) => server.transport === "stdio");
-  if (hasStdioServer) {
-    fs.mkdirSync(pluginDataDir, { recursive: true });
+  if (!hasStdioServer) {
+    return { servers, diagnostics };
   }
-  return {
-    servers,
-    diagnostics,
-    ...(hasStdioServer ? { pluginDataDir: fs.realpathSync(pluginDataDir) } : {}),
-  };
+  try {
+    fs.mkdirSync(pluginDataDir, { recursive: true });
+    return {
+      servers,
+      diagnostics,
+      pluginDataDir: fs.realpathSync(pluginDataDir),
+    };
+  } catch (error) {
+    for (const [serverName, server] of Object.entries(servers)) {
+      if (server.transport === "stdio") {
+        delete servers[serverName];
+      }
+    }
+    diagnostics.push(
+      `unable to prepare PLUGIN_DATA directory "${pluginDataDir}" for stdio MCP servers: ${formatErrorMessage(error)}`,
+    );
+    return { servers, diagnostics };
+  }
 }
 
 function loadBundleFileBackedMcpConfig(params: {
@@ -560,18 +575,13 @@ function inspectMcpServerRuntimeSupport(loaded: {
   const stdioServerNames: string[] = [];
   const unsupportedServerNames: string[] = [];
   for (const [serverName, server] of Object.entries(loaded.config.mcpServers)) {
-    if (typeof server.command === "string" && server.command.trim().length > 0) {
+    const transport = resolveMcpTransportConfig(serverName, server, { logWarnings: false });
+    if (transport?.kind === "stdio") {
       supportedServerNames.push(serverName);
       stdioServerNames.push(serverName);
       continue;
     }
-    const rawTransport = typeof server.transport === "string" ? server.transport : server.type;
-    const transport = typeof rawTransport === "string" ? rawTransport.trim().toLowerCase() : "";
-    if (
-      (transport === "http" || transport === "sse" || transport === "streamable-http") &&
-      typeof server.url === "string" &&
-      server.url.trim().length > 0
-    ) {
+    if (transport?.kind === "http") {
       supportedServerNames.push(serverName);
       continue;
     }
