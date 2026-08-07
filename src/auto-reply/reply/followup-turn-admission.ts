@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  incrementGoalContinuationTurns,
+  shouldBlockGoalContinuation,
+} from "../../config/sessions/goals.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -284,7 +288,29 @@ export async function admitFollowupTurn(params: {
     const currentInboundContext =
       params.defaults.opts?.isHeartbeat === true
         ? queued.currentInboundContext
-        : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
+        : (() => {
+            const blockCheck = shouldBlockGoalContinuation(activeEntry?.goal);
+            if (blockCheck.block) {
+              if (replySessionKey && params.defaults.storePath) {
+                incrementGoalContinuationTurns({
+                  sessionKey: replySessionKey,
+                  storePath: params.defaults.storePath,
+                }).catch(() => {});
+              }
+              return queued.currentInboundContext;
+            }
+            if (
+              activeEntry?.goal?.status === "active" &&
+              replySessionKey &&
+              params.defaults.storePath
+            ) {
+              incrementGoalContinuationTurns({
+                sessionKey: replySessionKey,
+                storePath: params.defaults.storePath,
+              }).catch(() => {});
+            }
+            return refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
+          })();
     // Preallocate the one lifecycle identity passed as opts.runId; canonical
     // execution owns registration and cleanup under this same id.
     const turn: AdmittedFollowupTurn = {
@@ -299,8 +325,9 @@ export async function admitFollowupTurn(params: {
       preflightCompactionApplied: false,
     };
     const refreshTurnSessionState = (entry: SessionEntry | undefined) => {
+      const blockCheck = shouldBlockGoalContinuation(entry?.goal);
       const refreshedInboundContext =
-        params.defaults.opts?.isHeartbeat === true
+        params.defaults.opts?.isHeartbeat === true || blockCheck.block
           ? params.queued.currentInboundContext
           : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
       turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
