@@ -21,6 +21,7 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
         : null;
   const timeoutMs = typeof obj.timeoutMs === "number" ? obj.timeoutMs : null;
   const idempotencyKey = typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
+  const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() || null : null;
   return {
     id,
     nodeId,
@@ -28,6 +29,7 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
     paramsJSON,
     timeoutMs,
     idempotencyKey,
+    ...(Object.hasOwn(obj, "sessionKey") ? { sessionKey } : {}),
   };
 }
 

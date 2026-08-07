@@ -2963,29 +2963,97 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes misc extensions to the misc extension shard", () => {
-    const plans = buildVitestRunPlans(["extensions/thread-ownership"], process.cwd());
+  it.each([
+    {
+      title: "routes misc extensions to the misc extension shard",
+      target: "extensions/thread-ownership",
+      config: "test/vitest/vitest.extension-misc.config.ts",
+      includePattern: "extensions/thread-ownership/**/*.test.ts",
+    },
+    {
+      title: "routes explicit plugin-sdk light tests to the lighter plugin-sdk lane",
+      target: "src/plugin-sdk/temp-path.test.ts",
+      config: "test/vitest/vitest.plugin-sdk-light.config.ts",
+      includePattern: "src/plugin-sdk/temp-path.test.ts",
+    },
+    {
+      title: "routes explicit commands light tests to the lighter commands lane",
+      target: "src/commands/status-json-runtime.test.ts",
+      config: "test/vitest/vitest.commands-light.config.ts",
+      includePattern: "src/commands/status-json-runtime.test.ts",
+    },
+    {
+      title: "routes fake-timer unit-fast tests to the serial fake-timer lane",
+      target: "src/acp/control-plane/manager.test.ts",
+      config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+      includePattern: "src/acp/control-plane/manager.test.ts",
+    },
+  ])("$title", ({ target, config, includePattern }) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.extension-misc.config.ts",
+        config,
         forwardedArgs: [],
-        includePatterns: ["extensions/thread-ownership/**/*.test.ts"],
+        includePatterns: [includePattern],
         watchMode: false,
       },
     ]);
   });
 
-  it("routes browser extension changes to the browser extension lane", () => {
+  it.each([
+    {
+      title: "routes browser extension changes to the browser extension lane",
+      changedPath: "extensions/browser/src/browser/cdp.helpers.ts",
+      config: "test/vitest/vitest.extension-browser.config.ts",
+      testPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
+    },
+    {
+      title: "keeps public plugin SDK changes focused by default",
+      changedPath: "src/plugin-sdk/provider-entry.ts",
+      config: "test/vitest/vitest.unit-fast.config.ts",
+      testPath: "src/plugin-sdk/provider-entry.test.ts",
+    },
+    {
+      title: "routes LM Studio changes to the provider extension lane",
+      changedPath: "extensions/lmstudio/src/runtime.ts",
+      config: "test/vitest/vitest.extension-providers.config.ts",
+      testPath: "extensions/lmstudio/src/runtime.test.ts",
+    },
+    {
+      title: "routes QA extension changes to the QA extension lane",
+      changedPath: "extensions/qa-lab/src/scenario-catalog.test.ts",
+      config: "test/vitest/vitest.extension-qa.config.ts",
+      testPath: "extensions/qa-lab/src/scenario-catalog.test.ts",
+    },
+    {
+      title: "routes changed source files to sibling tests when present",
+      changedPath: "src/agents/live-model-turn-probes.ts",
+      config: "test/vitest/vitest.unit-fast.config.ts",
+      testPath: "src/agents/live-model-turn-probes.test.ts",
+    },
+    {
+      title: "routes plugin-sdk source files with sibling tests narrowly by default",
+      changedPath: "src/plugin-sdk/facade-runtime.ts",
+      config: "test/vitest/vitest.bundled.config.ts",
+      testPath: "src/plugin-sdk/facade-runtime.test.ts",
+    },
+    {
+      title: "routes command source files with sibling tests narrowly on the command lane",
+      changedPath: "src/commands/channels.add.ts",
+      config: "test/vitest/vitest.commands.config.ts",
+      testPath: "src/commands/channels.add.test.ts",
+    },
+  ])("$title", ({ changedPath, config, testPath }) => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "extensions/browser/src/browser/cdp.helpers.ts",
+      changedPath,
     ]);
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.extension-browser.config.ts",
+        config,
         forwardedArgs: [],
-        includePatterns: ["extensions/browser/src/browser/cdp.helpers.test.ts"],
+        includePatterns: [testPath],
         watchMode: false,
       },
     ]);
@@ -3159,21 +3227,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps public plugin SDK changes focused by default", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/plugin-sdk/provider-entry.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("adds extension tests for public plugin SDK changes in broad changed mode", () => {
     const plans = buildVitestRunPlans(
       ["--changed", "origin/main"],
@@ -3190,36 +3243,6 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
       ...listExpectedFullExtensionRunPlans(),
-    ]);
-  });
-
-  it("routes LM Studio changes to the provider extension lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "extensions/lmstudio/src/runtime.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.extension-providers.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/lmstudio/src/runtime.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes QA extension changes to the QA extension lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "extensions/qa-lab/src/scenario-catalog.test.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.extension-qa.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/qa-lab/src/scenario-catalog.test.ts"],
-        watchMode: false,
-      },
     ]);
   });
 
@@ -3339,21 +3362,6 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["packages/sdk/src/index.test.ts"],
         includePatterns: null,
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes changed source files to sibling tests when present", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/agents/live-model-turn-probes.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/agents/live-model-turn-probes.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3601,19 +3609,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes explicit plugin-sdk light tests to the lighter plugin-sdk lane", () => {
-    const plans = buildVitestRunPlans(["src/plugin-sdk/temp-path.test.ts"], process.cwd());
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.plugin-sdk-light.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/temp-path.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("uses collision-resistant include-file names for scoped Vitest specs", () => {
     const tempDir = path.join("tmp", "openclaw-vitest-specs");
     const [spec] = createVitestRunSpecs(["src/plugin-sdk/temp-path.test.ts"], {
@@ -3685,19 +3680,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes explicit commands light tests to the lighter commands lane", () => {
-    const plans = buildVitestRunPlans(["src/commands/status-json-runtime.test.ts"], process.cwd());
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.commands-light.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/commands/status-json-runtime.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes the full commands test root to both command shards", () => {
     expect(findUnmatchedExplicitTestTargets(["src/commands"])).toEqual([]);
     expect(buildVitestRunPlans(["src/commands"], process.cwd())).toEqual([
@@ -3748,19 +3730,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes fake-timer unit-fast tests to the serial fake-timer lane", () => {
-    const plans = buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"], process.cwd());
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/acp/control-plane/manager.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
   it("routes changed commands source allowlist files to sibling light tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/commands/status-overview-values.ts",
@@ -3775,21 +3744,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "src/commands/status-overview-values.test.ts",
           "src/commands/gateway-status/helpers.test.ts",
         ],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes plugin-sdk source files with sibling tests narrowly by default", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/plugin-sdk/facade-runtime.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.bundled.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/facade-runtime.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3811,21 +3765,6 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
       ...listExpectedFullExtensionRunPlans(),
-    ]);
-  });
-
-  it("routes command source files with sibling tests narrowly on the command lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/commands/channels.add.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.commands.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/commands/channels.add.test.ts"],
-        watchMode: false,
-      },
     ]);
   });
 
