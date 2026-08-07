@@ -2,6 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   expectObjectFields,
   mockCall,
@@ -99,6 +100,52 @@ describe("handleBtwCommand", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "snapshot answer", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("clears the attribution reservation after a successful side question", async () => {
+    const runId = "btw-success-cleanup";
+    const params = buildParams("/btw what changed?");
+    params.opts = { runId };
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockImplementation(async () => {
+      expect(getAgentRunContext(runId)?.attribution).toMatchObject({ runId });
+      return { text: "snapshot answer" };
+    });
+
+    await handleBtwCommand(params, true);
+
+    expect(getAgentRunContext(runId)).toBeUndefined();
+  });
+
+  it("clears the attribution reservation after a failed side question", async () => {
+    const runId = "btw-failure-cleanup";
+    const params = buildParams("/btw what changed?");
+    params.opts = { runId };
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockImplementation(async () => {
+      expect(getAgentRunContext(runId)?.attribution).toMatchObject({ runId });
+      throw new Error("runner failed");
+    });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(getAgentRunContext(runId)).toBeUndefined();
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /btw failed: runner failed",
+        btw: { question: "what changed?" },
+        isError: true,
+      },
     });
   });
 
