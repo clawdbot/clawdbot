@@ -654,11 +654,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
 
     const authoritySpecifier = "openclaw/plugin-sdk/agent-harness-tool-authority-runtime";
     expect(installedAliases).not.toContain(authoritySpecifier);
-    const resolveFilename = (
-      Module as unknown as {
-        _resolveFilename: (request: string, parent: NodeJS.Module, isMain: boolean) => string;
-      }
-    )._resolveFilename;
+    const resolveFilename = Reflect.get(Module, "_resolveFilename") as (
+      request: string,
+      parent: NodeJS.Module,
+      isMain: boolean,
+    ) => string;
     expect(() =>
       resolveFilename(
         authoritySpecifier,
