@@ -215,7 +215,7 @@ describe("mcp cli login loopback", () => {
       if (!(outcome instanceof Error)) {
         throw new Error("expected the login command to exit with an error");
       }
-      expect(String(outcome.message)).toContain("__exit__:1");
+      expect(outcome.message).toContain("__exit__:1");
 
       expect(mockError).toHaveBeenCalledWith(expect.stringContaining("state mismatch"));
       expect(runMcpOAuthLogin).toHaveBeenCalledTimes(1);
