@@ -280,19 +280,19 @@ const SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES: readonly SubagentAnnounceDelive
 ];
 
 const runAgentAttempt = (params: RunAgentAttemptOverrides) =>
-  runAgentAttemptImpl({
-    ...makeRunAgentAttemptParams(params),
-    lifecycleGeneration: params.lifecycleGeneration ?? "test-generation",
-  });
+  runAgentAttemptImpl(makeRunAgentAttemptParams(params));
 
 type RunAgentAttemptOverrides = Omit<
   Partial<RunAgentAttemptParams>,
   "agentDir" | "opts" | "runContext" | "sessionEntry" | "sessionKey" | "workspaceDir"
-> &
-  Pick<RunAgentAttemptParams, "agentDir" | "sessionEntry" | "sessionKey" | "workspaceDir"> & {
-    opts?: Partial<RunAgentAttemptParams["opts"]>;
-    runContext?: Partial<RunAgentAttemptParams["runContext"]>;
-  };
+> & {
+  agentDir: RunAgentAttemptParams["agentDir"];
+  sessionEntry: NonNullable<RunAgentAttemptParams["sessionEntry"]>;
+  sessionKey: NonNullable<RunAgentAttemptParams["sessionKey"]>;
+  workspaceDir: RunAgentAttemptParams["workspaceDir"];
+  opts?: Partial<RunAgentAttemptParams["opts"]>;
+  runContext?: Partial<RunAgentAttemptParams["runContext"]>;
+};
 
 function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgentAttemptParams {
   const provider = overrides.providerOverride ?? "openai";
@@ -317,6 +317,7 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     authProfileProvider: provider,
     sessionHasHistory: false,
     ...overrides,
+    lifecycleGeneration: overrides.lifecycleGeneration ?? "test-generation",
     opts: { ...overrides.opts } as RunAgentAttemptParams["opts"],
     runContext: { ...overrides.runContext } as RunAgentAttemptParams["runContext"],
   };
