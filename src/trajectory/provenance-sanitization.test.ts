@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { TrajectoryProvenanceSanitizer } from "./provenance-sanitization.js";
@@ -92,6 +93,141 @@ describe("TrajectoryProvenanceSanitizer", () => {
     expect(serialized).not.toContain(sourceSessionKey);
     expect(serialized).not.toContain(spoofedHash);
     expect(serialized).not.toContain("drop-me");
+  });
+
+  it("retains escaped overlapping target replacements for later event and final-prompt text", () => {
+    const sourceIdentity = "agent:source:main";
+    const targetIdentity = "agent:target.+*?^${}()|[]";
+    const nestedTargetIdentity = `${targetIdentity}:child`;
+    const sanitizer = new TrajectoryProvenanceSanitizer({
+      mode: "live",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: sourceIdentity,
+      },
+    });
+    sanitizer.sanitizeEventData("tool.result", { echo: targetIdentity }, targetIdentity);
+    sanitizer.sanitizeEventData(
+      "tool.result",
+      { echo: nestedTargetIdentity },
+      nestedTargetIdentity,
+    );
+    const data = {
+      assistantTexts: [`${nestedTargetIdentity} ${targetIdentity} ${sourceIdentity}`],
+      finalPromptText: `${nestedTargetIdentity} ${targetIdentity} ${sourceIdentity}`,
+    };
+    const original = structuredClone(data);
+
+    const sanitized = sanitizer.sanitizeEventData("model.completed", data);
+
+    const expectedText = [
+      expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, nestedTargetIdentity),
+      expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, targetIdentity),
+      expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, sourceIdentity),
+    ].join(" ");
+    expect(data).toEqual(original);
+    expect(sanitized.assistantTexts).toEqual([expectedText]);
+    expect(sanitized.finalPromptText).toBe(expectedText);
+  });
+
+  it("does not learn target identities from payloads, hashes, or non-result options", () => {
+    const forgedTarget = "forged-target-session-value";
+    const canonicalHash = expectedHash(SOURCE_SESSION_HASH_DOMAIN, forgedTarget);
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+
+    const forged = sanitizer.sanitizeEventData("tool.result", {
+      targetSessionHash: canonicalHash,
+      arguments: { sessionKey: forgedTarget },
+      result: {
+        details: { sourceSessionKey: forgedTarget },
+        echo: forgedTarget,
+      },
+    });
+    const later = sanitizer.sanitizeEventData(
+      "model.completed",
+      { assistantTexts: [forgedTarget] },
+      forgedTarget,
+    );
+
+    expect(forged).toEqual({
+      arguments: {},
+      result: { details: {}, echo: forgedTarget },
+    });
+    expect(later.assistantTexts).toEqual([forgedTarget]);
+  });
+
+  it("keeps 64 target and provenance identities independent, then absorbs target overflow", () => {
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+    const provenanceIdentities = Array.from(
+      { length: 64 },
+      (_value, index) => `provenance-${index.toString().padStart(3, "0")}`,
+    );
+    const targetIdentities = Array.from(
+      { length: 65 },
+      (_value, index) => `target-${index.toString().padStart(3, "0")}`,
+    );
+    for (const identity of provenanceIdentities) {
+      expect(
+        sanitizer.sanitizeEventData("prompt.submitted", {
+          origin: { kind: "inter_session", sourceSessionKey: identity },
+        }),
+      ).not.toHaveProperty("redacted");
+    }
+    for (const identity of targetIdentities.slice(0, 64)) {
+      expect(
+        sanitizer.sanitizeEventData("tool.result", { echo: identity }, identity),
+      ).not.toHaveProperty("redacted");
+    }
+    const firstTarget = expectDefined(targetIdentities[0], "first target");
+    const firstProvenance = expectDefined(provenanceIdentities[0], "first provenance identity");
+    expect(
+      sanitizer.sanitizeEventData("tool.result", { echo: firstTarget }, firstTarget),
+    ).not.toHaveProperty("redacted");
+    expect(
+      sanitizer.sanitizeEventData("model.completed", {
+        assistantTexts: [firstTarget, firstProvenance],
+      }),
+    ).toEqual({
+      assistantTexts: [
+        expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, firstTarget),
+        expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, firstProvenance),
+      ],
+    });
+    const overflowTarget = expectDefined(targetIdentities[64], "overflow target");
+    expect(
+      sanitizer.sanitizeEventData("tool.result", { echo: overflowTarget }, overflowTarget),
+    ).toEqual({
+      redacted: true,
+      reason: "trajectory-target-sanitization-limit",
+    });
+    expect(
+      sanitizer.sanitizeEventData("model.completed", {
+        finalPromptText: firstTarget,
+      }),
+    ).toEqual({
+      redacted: true,
+      reason: "trajectory-target-sanitization-limit",
+    });
+  });
+
+  it.each([
+    { name: "short", targetIdentity: "short" },
+    { name: "oversized", targetIdentity: "x".repeat(4097) },
+  ])("fails closed permanently for a $name trusted target", ({ targetIdentity }) => {
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+
+    expect(
+      sanitizer.sanitizeEventData("tool.result", { echo: targetIdentity }, targetIdentity),
+    ).toEqual({
+      redacted: true,
+      reason: "trajectory-target-sanitization-limit",
+    });
+    expect(
+      sanitizer.sanitizeEventData("model.completed", { finalPromptText: targetIdentity }),
+    ).toEqual({
+      redacted: true,
+      reason: "trajectory-target-sanitization-limit",
+    });
   });
 
   it("pre-scans export provenance and keeps raw identifiers authoritative over hashes", () => {

@@ -49,7 +49,6 @@ type UnsafeReason = "count" | "long" | "short";
 type EventLike = { source?: unknown; type: string; data?: Record<string, unknown> };
 type TranscriptEntryLike = { type?: unknown; message?: unknown };
 type Transforms = {
-  replacements?: ReadonlyMap<string, string>;
   transformKey?: (value: string) => string;
   transformString?: (value: string) => string;
 };
@@ -194,7 +193,9 @@ export function projectTrajectoryDiagnosticValue(value: unknown): unknown {
 export class TrajectoryProvenanceSanitizer {
   private readonly identities = new Set<string>();
   private readonly replacements = new Map<string, string>();
-  private readonly patterns = new WeakMap<ReadonlyMap<string, string>, RegExp>();
+  private readonly targetReplacements = new Map<string, string>();
+  private pattern?: RegExp;
+  private targetUnsafe = false;
   private unsafe?: UnsafeReason;
 
   constructor(private readonly params: { mode: Mode; inputProvenance?: unknown }) {
@@ -206,22 +207,15 @@ export class TrajectoryProvenanceSanitizer {
     data: Record<string, unknown>,
     trustedTargetIdentity?: string,
   ): Record<string, unknown> {
+    this.learnTargetIdentity(type === "tool.result" ? trustedTargetIdentity : undefined);
+    if (this.targetUnsafe) {
+      return { redacted: true, reason: "trajectory-target-sanitization-limit" };
+    }
     this.learnEventData(type, data);
-    const targetIdentity = type === "tool.result" ? trustedTargetIdentity : undefined;
-    const invalidTargetIdentity =
-      targetIdentity !== undefined &&
-      (targetIdentity.length < MIN_IDENTITY_CHARS || targetIdentity.length > MAX_IDENTITY_CHARS);
-    if (this.unsafe || invalidTargetIdentity) {
+    if (this.unsafe) {
       return { redacted: true, reason: "trajectory-provenance-sanitization-limit" };
     }
-    const identityReplacements = targetIdentity
-      ? new Map(this.replacements).set(
-          targetIdentity,
-          hashTrajectoryIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, targetIdentity),
-        )
-      : this.replacements;
-    const transforms = { replacements: identityReplacements };
-    return this.project(this.prepareFinalPrompt(data), { kind: "data", type }, transforms);
+    return this.project(this.prepareFinalPrompt(data), { kind: "data", type });
   }
 
   sanitizeExportSnapshot<
@@ -326,7 +320,28 @@ export class TrajectoryProvenanceSanitizer {
       identity,
       hashTrajectoryIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, identity),
     );
-    this.patterns.delete(this.replacements);
+    this.pattern = undefined;
+  }
+
+  private learnTargetIdentity(identity: string | undefined): void {
+    if (identity === undefined || this.targetUnsafe || this.targetReplacements.has(identity)) {
+      return;
+    }
+    if (
+      identity.length < MIN_IDENTITY_CHARS ||
+      identity.length > MAX_IDENTITY_CHARS ||
+      this.targetReplacements.size >= MAX_IDENTITIES
+    ) {
+      this.targetUnsafe = true;
+      this.targetReplacements.clear();
+      this.pattern = undefined;
+      return;
+    }
+    this.targetReplacements.set(
+      identity,
+      hashTrajectoryIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, identity),
+    );
+    this.pattern = undefined;
   }
 
   private projectOrigin(value: unknown): PersistedOrigin | undefined {
@@ -367,11 +382,10 @@ export class TrajectoryProvenanceSanitizer {
   }
 
   private project<T>(value: T, scope: Scope, transforms: Transforms = {}): T {
-    const replacements = transforms.replacements ?? this.replacements;
     const chain = (external: ((value: string) => string) | undefined) =>
-      replacements.size > 0 || external
+      this.replacements.size > 0 || this.targetReplacements.size > 0 || external
         ? (text: string) => {
-            const replaced = this.replaceIdentities(text, replacements);
+            const replaced = this.replaceIdentities(text);
             return external?.(replaced) ?? replaced;
           }
         : undefined;
@@ -418,7 +432,7 @@ export class TrajectoryProvenanceSanitizer {
     if (typeof raw !== "string") {
       return data;
     }
-    const projected = redactSensitiveFieldValue("", this.replaceIdentities(raw, this.replacements));
+    const projected = redactSensitiveFieldValue("", this.replaceIdentities(raw));
     if (Buffer.byteLength(projected, "utf8") > FINAL_PROMPT_MAX_BYTES) {
       return {
         ...data,
@@ -429,22 +443,23 @@ export class TrajectoryProvenanceSanitizer {
     return projected === raw ? data : { ...data, finalPromptText: projected };
   }
 
-  private replaceIdentities(value: string, replacements: ReadonlyMap<string, string>): string {
-    if (replacements.size === 0) {
+  private replaceIdentities(value: string): string {
+    if (this.replacements.size === 0 && this.targetReplacements.size === 0) {
       return value;
     }
-    let pattern = this.patterns.get(replacements);
-    if (!pattern) {
-      const identities = [...replacements.keys()].toSorted(
-        (left, right) => right.length - left.length || left.localeCompare(right),
-      );
-      pattern = new RegExp(
+    if (!this.pattern) {
+      const identities = [
+        ...new Set([...this.replacements.keys(), ...this.targetReplacements.keys()]),
+      ].toSorted((left, right) => right.length - left.length || left.localeCompare(right));
+      this.pattern = new RegExp(
         identities.map((identity) => identity.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|"),
         "gu",
       );
-      this.patterns.set(replacements, pattern);
     }
-    return value.replace(pattern, (match) => replacements.get(match) ?? match);
+    return value.replace(
+      this.pattern,
+      (match) => this.targetReplacements.get(match) ?? this.replacements.get(match) ?? match,
+    );
   }
 
   private throwIfUnsafe(): void {

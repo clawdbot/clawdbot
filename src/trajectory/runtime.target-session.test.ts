@@ -10,7 +10,10 @@ import {
   snapshotAgentToolExecutionPrivateState,
 } from "../../packages/agent-core/src/tool-execution-private-state.js";
 import { jsonResult } from "../agents/tools/tool-results.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -68,7 +71,7 @@ function createRecorder(writes: string[], inputProvenance?: unknown): Recorder {
 }
 
 describe("trajectory target-session recording", () => {
-  it("redacts trusted target echoes before SQLite export without mutating the tool result", async () => {
+  it("redacts trusted target echoes through completion, SQLite, and export", async () => {
     const tempDir = makeTempDir();
     const storePath = path.join(tempDir, "sessions.json");
     const outputDir = path.join(tempDir, "bundle");
@@ -90,9 +93,29 @@ describe("trajectory target-session recording", () => {
         timestamp: "2026-08-07T12:00:00.000Z",
         cwd: tempDir,
       },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-08-07T12:00:01.000Z",
+        message: {
+          role: "user",
+          content: `transcript echo ${targetSessionKey}`,
+          timestamp: 1,
+        },
+      },
     ]);
     const result = jsonResult({ sessionKey: targetSessionKey });
     const originalResult = structuredClone(result);
+    const messagesSnapshot = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `terminal echo ${targetSessionKey}` }],
+      },
+    ];
+    const originalMessagesSnapshot = structuredClone(messagesSnapshot);
+    const transcriptBefore = await loadTranscriptEvents(sessionTarget);
+    const originalTranscript = structuredClone(transcriptBefore);
     const recorder = expectDefined(
       createTrajectoryRuntimeRecorder({
         sessionId,
@@ -118,33 +141,54 @@ describe("trajectory target-session recording", () => {
       },
       targetSessionSnapshot(targetSessionKey),
     );
+    recorder.recordEvent("model.completed", {
+      assistantTexts: [`assistant echo ${targetSessionKey}`],
+      finalPromptText: `final echo ${targetSessionKey}`,
+      messagesSnapshot,
+    });
     await recorder.flush();
 
     expect(result).toEqual(originalResult);
+    expect(messagesSnapshot).toEqual(originalMessagesSnapshot);
+    expect(await loadTranscriptEvents(sessionTarget)).toEqual(originalTranscript);
     expect(JSON.stringify(result)).toContain(targetSessionKey);
+    expect(JSON.stringify(messagesSnapshot)).toContain(targetSessionKey);
+    expect(JSON.stringify(originalTranscript)).toContain(targetSessionKey);
     const targetSessionHash = hashTrajectoryIdentifier(
       TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
       targetSessionKey,
     );
     const targetTextHash = hashTrajectoryIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, targetSessionKey);
-    const [storedEvent] = await loadSqliteTrajectoryRuntimeEvents({ sessionId, storePath });
-    const storedEventText = JSON.stringify(storedEvent);
-    expect(storedEvent?.data?.targetSessionHash).toBe(targetSessionHash);
+    const storedEvents = await loadSqliteTrajectoryRuntimeEvents({ sessionId, storePath });
+    expect(storedEvents).toHaveLength(2);
+    const storedResult = expectDefined(
+      storedEvents.find((event) => event.type === "tool.result"),
+      "stored tool.result event",
+    );
+    const storedCompletion = expectDefined(
+      storedEvents.find((event) => event.type === "model.completed"),
+      "stored model.completed event",
+    );
+    expect(storedResult.data?.targetSessionHash).toBe(targetSessionHash);
+    expect(storedCompletion.data?.targetSessionHash).toBeUndefined();
+    expect(JSON.stringify(storedCompletion.data?.messagesSnapshot)).toContain(targetTextHash);
+    const storedEventText = JSON.stringify(storedEvents);
     expect(storedEventText).not.toContain(targetSessionKey);
     expect(storedEventText).toContain(targetTextHash);
     expect(storedEventText.match(/"targetSessionHash"/gu)).toHaveLength(1);
 
     const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
     const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-    const row = database.db
+    const rows = database.db
       .prepare(
-        "SELECT event_json FROM trajectory_runtime_events WHERE session_id = ? ORDER BY seq ASC LIMIT 1",
+        "SELECT event_json FROM trajectory_runtime_events WHERE session_id = ? ORDER BY seq ASC",
       )
-      .get(sessionId) as { event_json?: string } | undefined;
-    const eventJson = expectDefined(row?.event_json, "trajectory runtime SQLite row");
-    expect(eventJson).not.toContain(targetSessionKey);
-    expect(eventJson).toContain(targetSessionHash);
-    expect(eventJson).toContain(targetTextHash);
+      .all(sessionId) as Array<{ event_json: string }>;
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.event_json).not.toContain(targetSessionKey);
+    }
+    expect(rows.map((row) => row.event_json).join("\n")).toContain(targetTextHash);
 
     const bundle = await exportTrajectoryBundle({
       outputDir,
@@ -166,6 +210,16 @@ describe("trajectory target-session recording", () => {
     expect(exportedResult.data?.targetSessionHash).toBe(targetSessionHash);
     expect(exportedResultText).toContain(targetTextHash);
     expect(exportedResultText.match(/"targetSessionHash"/gu)).toHaveLength(1);
+    expect(bundle.events.every((event) => event.source === "runtime")).toBe(true);
+    expect(bundle.manifest.transcriptEventCount).toBe(0);
+    expect(bundle.manifest.leafId).toBeNull();
+    const sessionBranch = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
+    ) as { entries?: unknown[]; leafId?: unknown };
+    expect(sessionBranch.entries).toEqual([]);
+    expect(sessionBranch.leafId).toBeNull();
+    expect(await loadTranscriptEvents(sessionTarget)).toEqual(originalTranscript);
+    expect(messagesSnapshot).toEqual(originalMessagesSnapshot);
   });
 
   it("records only trusted target-session hashes and consumes snapshots once", () => {
@@ -258,21 +312,27 @@ describe("trajectory target-session recording", () => {
       },
       targetSessionSnapshot(targetSessionKey),
     );
+    recorder.recordEvent("model.completed", { finalPromptText: targetSessionKey });
 
     const event = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     expect(event.data).toEqual({
       redacted: true,
-      reason: "trajectory-provenance-sanitization-limit",
+      reason: "trajectory-target-sanitization-limit",
       targetSessionHash: hashTrajectoryIdentifier(
         TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
         targetSessionKey,
       ),
     });
+    const laterEvent = JSON.parse(expectDefined(writes[1], "writes[1] test invariant"));
+    expect(laterEvent.data).toEqual({
+      redacted: true,
+      reason: "trajectory-target-sanitization-limit",
+    });
     expect(JSON.stringify(event)).not.toContain(targetSessionKey);
     expect(JSON.stringify(result)).toContain(targetSessionKey);
   });
 
-  it("does not add per-call target identities to the run-wide replacement cache", () => {
+  it("fails closed after 64 distinct targets while duplicates remain safe", () => {
     const writes: string[] = [];
     const recorder = createRecorder(writes);
     const targetSessionKeys = Array.from(
@@ -280,7 +340,7 @@ describe("trajectory target-session recording", () => {
       (_value, index) => `agent:worker:${index}:main`,
     );
 
-    for (const [index, targetSessionKey] of targetSessionKeys.entries()) {
+    for (const [index, targetSessionKey] of targetSessionKeys.slice(0, 64).entries()) {
       recorder.recordToolResult(
         {
           name: "sessions_send",
@@ -291,9 +351,30 @@ describe("trajectory target-session recording", () => {
         targetSessionSnapshot(targetSessionKey),
       );
     }
+    const firstTarget = expectDefined(targetSessionKeys[0], "first target");
+    recorder.recordToolResult(
+      {
+        name: "sessions_send",
+        toolCallId: "call-duplicate",
+        success: true,
+        result: jsonResult({ sessionKey: firstTarget }),
+      },
+      targetSessionSnapshot(firstTarget),
+    );
+    const overflowTarget = expectDefined(targetSessionKeys[64], "overflow target");
+    recorder.recordToolResult(
+      {
+        name: "sessions_send",
+        toolCallId: "call-overflow",
+        success: true,
+        result: jsonResult({ sessionKey: overflowTarget }),
+      },
+      targetSessionSnapshot(overflowTarget),
+    );
+    recorder.recordEvent("model.completed", { finalPromptText: firstTarget });
 
-    expect(writes).toHaveLength(targetSessionKeys.length);
-    for (const [index, targetSessionKey] of targetSessionKeys.entries()) {
+    expect(writes).toHaveLength(67);
+    for (const [index, targetSessionKey] of targetSessionKeys.slice(0, 64).entries()) {
       const event = JSON.parse(expectDefined(writes[index], `writes[${index}] test invariant`));
       expect(event.data.redacted).not.toBe(true);
       expect(event.data.targetSessionHash).toBe(
@@ -301,5 +382,20 @@ describe("trajectory target-session recording", () => {
       );
       expect(JSON.stringify(event)).not.toContain(targetSessionKey);
     }
+    expect(JSON.parse(expectDefined(writes[64], "duplicate target event")).data.redacted).not.toBe(
+      true,
+    );
+    expect(JSON.parse(expectDefined(writes[65], "overflow target event")).data).toEqual({
+      redacted: true,
+      reason: "trajectory-target-sanitization-limit",
+      targetSessionHash: hashTrajectoryIdentifier(
+        TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
+        overflowTarget,
+      ),
+    });
+    expect(JSON.parse(expectDefined(writes[66], "post-overflow event")).data).toEqual({
+      redacted: true,
+      reason: "trajectory-target-sanitization-limit",
+    });
   });
 });

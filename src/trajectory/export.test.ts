@@ -1119,10 +1119,102 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedText).not.toContain("legacy-opaque-session-credential");
     expect(exportedText).not.toContain("legacy-opaque-source-session-credential");
     expect(exportedText).not.toContain("legacy-target-session-credential");
+    expect(bundle.manifest.transcriptEventCount).toBe(0);
+    expect(bundle.manifest.leafId).toBeNull();
+    expect(bundle.events.every((event) => event.source === "runtime")).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8")),
+    ).toMatchObject({
+      leafId: null,
+      entries: [],
+    });
     expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionBytes);
     expect(fs.readFileSync(runtimeFile, "utf8")).toBe(runtimeBytes);
     expect(sessionBytes).toContain(rawSessionKey);
     expect(runtimeBytes).toContain(rawSessionKey);
+  });
+
+  it("does not suppress transcript export for forged, nested, or non-runtime target hashes", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const targetSessionHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "forged-target");
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: {
+        ...userMessage("forged transcript hash"),
+        targetSessionHash,
+      } as AgentMessage,
+    });
+    const runtimeEvents: TrajectoryEvent[] = [
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "context.compiled",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+        data: { targetSessionHash },
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "tool.result",
+        ts: "2026-04-22T08:00:01.000Z",
+        seq: 2,
+        sourceSeq: 2,
+        sessionId: "session-1",
+        data: {
+          targetSessionHash: "sha256:v1:not-canonical",
+          result: { targetSessionHash },
+        },
+      },
+      {
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "transcript",
+        type: "tool.result",
+        ts: "2026-04-22T08:00:02.000Z",
+        seq: 3,
+        sourceSeq: 3,
+        sessionId: "session-1",
+        data: { targetSessionHash },
+      },
+    ];
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(bundle.manifest.leafId).toBe("entry-assistant");
+    expect(eventTypes(bundle.events)).toEqual([
+      "user.message",
+      "assistant.message",
+      "context.compiled",
+      "tool.result",
+    ]);
+    const sessionBranch = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
+    ) as { entries?: unknown[]; leafId?: unknown };
+    expect(sessionBranch.entries).toHaveLength(2);
+    expect(sessionBranch.leafId).toBe("entry-assistant");
+    expect(JSON.stringify(bundle)).not.toContain(targetSessionHash);
   });
 
   it("removes a seeded provenance identity from SQLite and every export artifact", async () => {
