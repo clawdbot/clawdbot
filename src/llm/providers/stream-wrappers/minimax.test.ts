@@ -2,7 +2,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { createMinimaxFastModeWrapper, createMinimaxThinkingDisabledWrapper } from "./minimax.js";
+import { createMinimaxThinkingDisabledWrapper } from "./minimax.js";
 
 function captureThinkingPayload(params: {
   provider: string;
@@ -254,50 +254,5 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
     );
 
     expect(capturedThinking).toEqual({ type: "enabled", budget_tokens: 1024 });
-  });
-});
-
-describe("createMinimaxFastModeWrapper", () => {
-  it("rewrites MiniMax-M2.7 to highspeed variant in fast mode", () => {
-    let capturedId = "";
-    const baseStreamFn: StreamFn = (model) => {
-      capturedId = model.id;
-      return {} as ReturnType<StreamFn>;
-    };
-
-    const wrapped = createMinimaxFastModeWrapper(baseStreamFn, true);
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedId).toBe("MiniMax-M2.7-highspeed");
-  });
-
-  it("resolves dynamic fast mode for each stream call", () => {
-    const capturedIds: string[] = [];
-    const baseStreamFn: StreamFn = (model) => {
-      capturedIds.push(model.id);
-      return {} as ReturnType<StreamFn>;
-    };
-
-    let enabled = true;
-    const wrapped = createMinimaxFastModeWrapper(baseStreamFn, () => enabled);
-    const model = {
-      api: "anthropic-messages",
-      provider: "minimax",
-      id: "MiniMax-M2.7",
-    } as Model<"anthropic-messages">;
-
-    void wrapped(model, { messages: [] } as Context, {});
-    enabled = false;
-    void wrapped(model, { messages: [] } as Context, {});
-
-    expect(capturedIds).toEqual(["MiniMax-M2.7-highspeed", "MiniMax-M2.7"]);
   });
 });

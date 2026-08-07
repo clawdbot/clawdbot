@@ -42,7 +42,6 @@ const EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS: Record<string, ExpectedShared
   },
   minimax: {
     replayFamilies: ["hybrid-anthropic-openai"],
-    streamFamilies: ["minimax-fast-mode"],
   },
   openai: {
     streamFamilies: ["openai-responses-defaults"],
