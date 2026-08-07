@@ -279,6 +279,16 @@ export async function prepareAgentRunDispatch(params: {
         clientRunId: params.runId,
       });
     }
+    if (params.resolvedSessionKey) {
+      claimAgentRunContext(params.runId, {
+        attribution,
+        ...(attribution.sessionKey ? { sessionKey: attribution.sessionKey } : {}),
+        ...(attribution.sessionId ? { sessionId: attribution.sessionId } : {}),
+        ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
+        ...(params.suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
+        lifecycleGeneration: attribution.lifecycleGeneration,
+      });
+    }
   }
 
   const resolvedThreadId =
@@ -411,18 +421,6 @@ export async function prepareAgentRunDispatch(params: {
       params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       return undefined;
     }
-  }
-  if (activeRunAbort.registered && params.resolvedSessionKey) {
-    // Failed admission must not publish first-writer correlation that a same-key
-    // retry cannot replace. Claim only after every fallible admission gate succeeds.
-    claimAgentRunContext(params.runId, {
-      attribution,
-      ...(attribution.sessionKey ? { sessionKey: attribution.sessionKey } : {}),
-      ...(attribution.sessionId ? { sessionId: attribution.sessionId } : {}),
-      ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
-      ...(params.suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
-      lifecycleGeneration: attribution.lifecycleGeneration,
-    });
   }
   const accepted = {
     runId: params.runId,

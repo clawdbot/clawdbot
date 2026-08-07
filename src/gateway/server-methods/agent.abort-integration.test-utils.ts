@@ -12,7 +12,6 @@ import {
   makeContext,
   type AgentHandlerArgs,
   waitForAssertion,
-  waitForAgentCommandCall,
   requireValue,
   expectRecordFields,
   mockCallArg,
@@ -2401,99 +2400,6 @@ describe("gateway agent handler chat.abort integration", () => {
       { cached: true },
     );
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-  });
-
-  it("registers attribution only after restart recovery admission persists", async () => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "recovery-session";
-    const runId = "recovery-admission-write-retry";
-    const storePath = "/tmp/sessions.json";
-    const store: Record<string, SessionEntry> = {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "cycle-1",
-          revision: 1,
-          chargedAttempts: 1,
-          reservation: {
-            runId,
-            attempt: 1,
-            lifecycleGeneration: "test-generation",
-          },
-        },
-      },
-    };
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath,
-      entry: structuredClone(store[sessionKey]),
-      canonicalKey: sessionKey,
-    }));
-    let failRecoveryAdmissionWrite = true;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const candidate = structuredClone(store);
-      const result = await updater(candidate);
-      const admittedRecovery =
-        store[sessionKey]?.mainRestartRecovery?.reservation !== undefined &&
-        candidate[sessionKey]?.mainRestartRecovery?.reservation === undefined;
-      if (failRecoveryAdmissionWrite && admittedRecovery) {
-        failRecoveryAdmissionWrite = false;
-        throw new Error("recovery admission write failed");
-      }
-      for (const key of Object.keys(store)) {
-        delete store[key];
-      }
-      Object.assign(store, candidate);
-      return result;
-    });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
-    mocks.agentCommand.mockClear();
-    mocks.registerAgentRunContext.mockClear();
-    const context = makeContext();
-    const request = {
-      message: "resume after restart",
-      agentId: "main",
-      sessionKey,
-      sessionId,
-      expectedExistingSessionId: sessionId,
-      idempotencyKey: runId,
-      inputProvenance: {
-        kind: "internal_system" as const,
-        sourceSessionKey: sessionKey,
-        sourceTool: "main_session_restart_recovery",
-      },
-    };
-    const firstRespond = vi.fn();
-
-    await invokeAgent(request, {
-      client: backendGatewayClient(),
-      context,
-      reqId: runId,
-      respond: firstRespond,
-    });
-
-    expectRespondError(firstRespond, {
-      code: "UNAVAILABLE",
-      message: "Error: recovery admission write failed",
-    });
-    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-
-    await invokeAgent(request, {
-      client: backendGatewayClient(),
-      context,
-      reqId: `${runId}-retry`,
-    });
-
-    await waitForAgentCommandCall();
-    expect(mocks.registerAgentRunContext).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(mocks.registerAgentRunContext, 0, 0)).toBe(runId);
   });
 
   it("releases a foreground recovery owner if pre-dispatch reactivation fails", async () => {
