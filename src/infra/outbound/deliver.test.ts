@@ -3246,6 +3246,50 @@ describe("deliverOutboundPayloads", () => {
     expect(renderArg.presentation?.blocks?.[0]?.type).toBe("table");
   });
 
+  it("keeps authored fallback text when formatting-aware capabilities disable tables", async () => {
+    const renderPresentation = vi.fn(({ payload }) => ({ ...payload, text: "native table" }));
+    const resolvePresentationCapabilities = vi.fn(
+      (params: { formatting?: { parseMode?: string } }) => ({
+        supported: true,
+        tables: params.formatting?.parseMode !== "HTML",
+      }),
+    );
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "html-fallback",
+      roomId: "!room",
+    });
+    setTestOutbound({
+      presentationCapabilities: { supported: true, tables: true },
+      resolvePresentationCapabilities,
+      renderPresentation,
+      sendMedia: vi.fn(),
+      sendText,
+    });
+
+    await deliverMatrix({
+      to: "!room",
+      formatting: { parseMode: "HTML" },
+      payloads: [
+        {
+          text: "authored fallback",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [{ type: "table", caption: "Totals", headers: ["A"], rows: [["1"]] }],
+          },
+        },
+      ],
+    });
+
+    expect(resolvePresentationCapabilities).toHaveBeenCalledWith(
+      expect.objectContaining({ formatting: expect.objectContaining({ parseMode: "HTML" }) }),
+    );
+    // The formatting-aware resolver disables tables for HTML-mode sends, so the
+    // authored fallback body ships verbatim instead of a degraded flatten.
+    expect(renderPresentation).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "authored fallback" }));
+  });
+
   it("adapts presentation buttons to channel limits before rendering", async () => {
     const renderPresentation = vi.fn(({ payload }) => ({
       ...payload,

@@ -431,9 +431,10 @@ const adapter: ChannelOutboundAdapter = {
 };
 ```
 
-When a capability depends on per-account configuration — for example Telegram
-only renders native tables on accounts with `richMessages` enabled — declare
-the optional `resolvePresentationCapabilities({ cfg, accountId })` hook next to
+When a capability depends on per-account configuration or the delivery's text
+funnel — for example Telegram only renders native tables on `richMessages`
+accounts and only on the markdown path — declare the optional
+`resolvePresentationCapabilities({ cfg, accountId, formatting })` hook next to
 the static object. Core resolves capabilities once per delivery and the hook
 takes precedence over the static declaration; keep the static object as the
 account-independent baseline.
@@ -441,9 +442,9 @@ account-independent baseline.
 ```ts
 const adapter: ChannelOutboundAdapter = {
   presentationCapabilities: BASE_CAPABILITIES,
-  resolvePresentationCapabilities: ({ cfg, accountId }) => ({
+  resolvePresentationCapabilities: ({ cfg, accountId, formatting }) => ({
     ...BASE_CAPABILITIES,
-    tables: isRichAccount(cfg, accountId),
+    tables: isRichAccount(cfg, accountId) && formatting?.parseMode !== "HTML",
   }),
   // ...
 };

@@ -458,9 +458,13 @@ export function createTelegramOutboundAdapter(
     normalizePayload: ({ payload }) => normalizeTelegramMetadataOnlyPayload(payload),
     normalizePayloadBatch: ({ payloads }) => normalizeTelegramFallbackPayloadBatch(payloads),
     presentationCapabilities: resolveTelegramPresentationCapabilities({ richMessages: false }),
-    resolvePresentationCapabilities: ({ cfg, accountId }) =>
+    resolvePresentationCapabilities: ({ cfg, accountId, formatting }) =>
       resolveTelegramPresentationCapabilities({
-        richMessages: telegramRichTablesEnabled({ cfg, accountId, htmlTextMode: false }),
+        richMessages: telegramRichTablesEnabled({
+          cfg,
+          accountId,
+          htmlTextMode: formatting?.parseMode === "HTML",
+        }),
       }),
     deliveryCapabilities: {
       pin: true,

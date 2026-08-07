@@ -330,7 +330,11 @@ function createPluginHandler(
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
     presentationCapabilities: outbound?.resolvePresentationCapabilities
-      ? outbound.resolvePresentationCapabilities({ cfg: params.cfg, accountId: params.accountId })
+      ? outbound.resolvePresentationCapabilities({
+          cfg: params.cfg,
+          accountId: params.accountId,
+          formatting: params.formatting,
+        })
       : outbound?.presentationCapabilities,
     renderPresentation: outbound?.renderPresentation
       ? async (payload) => {
