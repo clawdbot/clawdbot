@@ -6,8 +6,6 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
 
-export { rejectConfigNonFiniteNumbers };
-
 export type PathSegment = string;
 
 export type JsonSchemaRecord = {
