@@ -49,6 +49,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
         apiKey: string;
         body: Record<string, unknown>;
         extraHeaders?: Record<string, string>;
+        signal?: AbortSignal;
       },
       parseResponse: (response: Response) => Promise<unknown>,
     ) => {
@@ -61,6 +62,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(params.body),
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       if (!response.ok) {
         const detail =
@@ -776,7 +778,81 @@ describe("xai web search config resolution", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).name).toBe("Error");
       expect((error as Error).cause).toBe(abort);
+      expect((error as Error & { code?: string }).code).toBe("ETIMEDOUT");
     }
+  });
+
+  it("bounds remote xAI web-search answer text without truncating shared code execution", async () => {
+    const mockFetch = vi.fn(async () =>
+      jsonResponse({ output_text: "x".repeat(25_000), citations: [] }),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-bounded-key" } }),
+    });
+
+    const result = await tool.execute({ query: "bounded canonical xAI answer" });
+
+    expect(result.truncated).toBe(true);
+    expect(String(result.content).length).toBeLessThan(22_000);
+  });
+
+  it("bounds actual generic xAI provider content after special-token expansion", async () => {
+    const mockFetch = vi.fn(async () =>
+      jsonResponse({ output_text: "<s>".repeat(6_666), citations: [] }),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-sanitized-key" } }),
+    });
+
+    const result = await tool.execute({ query: "bounded sanitized xAI answer" });
+
+    expect(result.truncated).toBe(true);
+    expect(String(result.content).length).toBeLessThan(20_200);
+    expect(String(result.content)).not.toContain("<s>");
+  });
+
+  it("preserves caller abort identity through the registered generic xAI provider", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("operator cancelled generic search", "AbortError");
+    let transportSignal: AbortSignal | undefined;
+    const mockFetch = vi.fn(
+      async (_url: unknown, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          transportSignal = init?.signal ?? undefined;
+          transportSignal?.addEventListener("abort", () => reject(reason), {
+            once: true,
+          });
+          queueMicrotask(() => controller.abort(reason));
+        }),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cancel-key" } }),
+    });
+
+    await expect(
+      tool.execute({ query: "generic xAI provider cancellation" }, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(transportSignal?.reason).toBe(reason);
+  });
+
+  it("does not contact the generic xAI provider when the caller is already cancelled", async () => {
+    const mockFetch = installXaiWebSearchFetch();
+    const controller = new AbortController();
+    const reason = new Error("generic xAI request cancelled before billing");
+    controller.abort(reason);
+    const tool = requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cancel-key" } }),
+    });
+
+    await expect(
+      tool.execute({ query: "cancelled generic request" }, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

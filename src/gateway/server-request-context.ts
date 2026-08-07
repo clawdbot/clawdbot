@@ -43,6 +43,8 @@ type GatewayRequestContextParams = {
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
   readPreparedGatewayModelCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalog"];
+  readChatMetadata: GatewayRequestContext["readChatMetadata"];
+  readChatStartupProjection?: GatewayRequestContext["readChatStartupProjection"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   logHealth: GatewayRequestContext["logHealth"];
@@ -187,6 +189,10 @@ export function createGatewayRequestContext(
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
     ...(params.readPreparedGatewayModelCatalog
       ? { readPreparedGatewayModelCatalog: params.readPreparedGatewayModelCatalog }
+      : {}),
+    readChatMetadata: params.readChatMetadata,
+    ...(params.readChatStartupProjection
+      ? { readChatStartupProjection: params.readChatStartupProjection }
       : {}),
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshHealthSnapshot,

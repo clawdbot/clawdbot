@@ -8,7 +8,7 @@ import type { WizardStep } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import { custodianWizardSubmission, initialCustodianWizardValue } from "./custodian-wizard-step.ts";
@@ -392,7 +392,7 @@ export class CustodianSessionStore {
     const snapshot = context.gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
-      client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true;
+      client !== null && canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin");
     const configuredInferenceState = this.resolveConfiguredInferenceState();
     const inferenceStateChanged = configuredInferenceState !== this.configuredInferenceState;
     this.configuredInferenceState = configuredInferenceState;
@@ -579,6 +579,13 @@ export class CustodianSessionStore {
   ): Promise<eventNudgeState.CustodianSendOutcome> {
     const context = this.context;
     if (!context) {
+      return "rejected";
+    }
+    const snapshot = context.gateway.snapshot;
+    if (
+      snapshot.client !== client ||
+      !canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")
+    ) {
       return "rejected";
     }
     const epoch = ++this.requestEpoch;

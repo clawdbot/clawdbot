@@ -180,11 +180,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       "minimax/hailuo-02",
       "kwaivgI/kling-2.1-master",
     ],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "together",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "together", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

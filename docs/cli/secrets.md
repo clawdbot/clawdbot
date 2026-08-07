@@ -117,7 +117,7 @@ Notes:
 
 ### Exec provider safety
 
-Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`. Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, paired with `trustedDirs` (for example `["/opt/homebrew"]`). On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed; for trusted paths only, set `allowInsecurePath: true` on that provider to bypass the path security check.
+Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path; use `trustedDirs` to restrict executables to approved directories. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
 
 ## Apply a saved plan
 

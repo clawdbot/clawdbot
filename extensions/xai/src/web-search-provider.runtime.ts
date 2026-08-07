@@ -131,7 +131,9 @@ function runXaiWebSearch(params: {
   timeoutSeconds: number;
   inlineCitations: boolean;
   cacheTtlMs: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
+  params.signal?.throwIfAborted();
   const cacheKey = normalizeCacheKey(
     `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
@@ -149,6 +151,7 @@ function runXaiWebSearch(params: {
       endpoint: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.inlineCitations,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     const payload = buildXaiWebSearchPayload({
       query: params.query,
@@ -158,6 +161,7 @@ function runXaiWebSearch(params: {
       content: result.content,
       citations: result.citations,
       inlineCitations: result.inlineCitations,
+      truncated: result.truncated,
     });
 
     writeCache(XAI_WEB_SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
@@ -354,7 +358,9 @@ export async function executeXaiWebSearchProviderTool(
     agentDir?: string;
   },
   args: Record<string, unknown>,
+  executionContext?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
+  executionContext?.signal?.throwIfAborted();
   const searchConfig = resolveXaiToolSearchConfig(ctx);
   const auth = await resolveXaiWebSearchAuth(ctx, searchConfig);
 
@@ -380,6 +386,7 @@ export async function executeXaiWebSearchProviderTool(
     timeoutSeconds: resolveXaiWebSearchTimeoutSeconds(searchConfig),
     inlineCitations: resolveXaiInlineCitations(searchConfig),
     cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+    ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
   };
   try {
     return await runXaiWebSearch({

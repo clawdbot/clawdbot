@@ -109,6 +109,8 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     sourceConfigValid: configResult.sourceConfigValid ?? true,
     configPath: configResult.path ?? CONFIG_PATH,
     stateDirExistedAtStart,
+    runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
+    invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
   };
   const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
   await runDoctorHealthContributions(ctx);

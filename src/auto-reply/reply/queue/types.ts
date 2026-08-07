@@ -56,6 +56,8 @@ export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
 };
 
+export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
+
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
     super(message);
@@ -89,6 +91,8 @@ export type FollowupRun = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
+  onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

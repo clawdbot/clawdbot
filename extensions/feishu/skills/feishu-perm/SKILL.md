@@ -1,119 +1,19 @@
 ---
 name: feishu-perm
 description: |
-  Feishu permission management for documents and files. Activate when user mentions sharing, permissions, collaborators.
+  Feishu collaborator and permission workflows. Activate when the user explicitly asks to inspect or change sharing, permissions, or collaborators.
 ---
 
-# Feishu Permission Tool
+# Feishu permissions
 
-Single tool `feishu_perm` for managing file/document permissions.
+Use the single `feishu_perm` tool and its current action schema. This tool is disabled by default because it changes access to user data; if it is unavailable, explain that `channels.feishu.tools.perm` must be enabled.
 
-## Actions
+## Workflow
 
-### List Collaborators
+1. Resolve the exact file token and type.
+2. Use `list` to inspect current collaborators before changing access.
+3. For `add`, resolve the collaborator's exact identifier and choose the least permission that satisfies the request.
+4. For `remove`, confirm the exact collaborator and file when the request is ambiguous or broad.
+5. Report the resulting permission change without exposing unrelated collaborator data.
 
-```json
-{ "action": "list", "token": "ABC123", "type": "docx" }
-```
-
-Returns: members with member_type, member_id, perm, name.
-
-### Add Collaborator
-
-```json
-{
-  "action": "add",
-  "token": "ABC123",
-  "type": "docx",
-  "member_type": "email",
-  "member_id": "user@example.com",
-  "perm": "edit"
-}
-```
-
-### Remove Collaborator
-
-```json
-{
-  "action": "remove",
-  "token": "ABC123",
-  "type": "docx",
-  "member_type": "email",
-  "member_id": "user@example.com"
-}
-```
-
-## Token Types
-
-| Type       | Description             |
-| ---------- | ----------------------- |
-| `doc`      | Old format document     |
-| `docx`     | New format document     |
-| `sheet`    | Spreadsheet             |
-| `bitable`  | Multi-dimensional table |
-| `folder`   | Folder                  |
-| `file`     | Uploaded file           |
-| `wiki`     | Wiki node               |
-| `mindnote` | Mind map                |
-
-## Member Types
-
-| Type               | Description        |
-| ------------------ | ------------------ |
-| `email`            | Email address      |
-| `openid`           | User open_id       |
-| `userid`           | User user_id       |
-| `unionid`          | User union_id      |
-| `openchat`         | Group chat open_id |
-| `opendepartmentid` | Department open_id |
-
-## Permission Levels
-
-| Perm          | Description                          |
-| ------------- | ------------------------------------ |
-| `view`        | View only                            |
-| `edit`        | Can edit                             |
-| `full_access` | Full access (can manage permissions) |
-
-## Examples
-
-Share document with email:
-
-```json
-{
-  "action": "add",
-  "token": "doxcnXXX",
-  "type": "docx",
-  "member_type": "email",
-  "member_id": "alice@company.com",
-  "perm": "edit"
-}
-```
-
-Share folder with group:
-
-```json
-{
-  "action": "add",
-  "token": "fldcnXXX",
-  "type": "folder",
-  "member_type": "openchat",
-  "member_id": "oc_xxx",
-  "perm": "view"
-}
-```
-
-## Configuration
-
-```yaml
-channels:
-  feishu:
-    tools:
-      perm: true # default: false (disabled)
-```
-
-**Note:** This tool is disabled by default because permission management is a sensitive operation. Enable explicitly if needed.
-
-## Permissions
-
-Required: `drive:permission`
+Never infer an email, user ID, department, or chat from a display name alone. Follow the current schema for supported member types, token types, and permission levels.

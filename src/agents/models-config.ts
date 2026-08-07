@@ -51,9 +51,14 @@ type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
   workspaceDir?: string;
 };
 
+type ModelsConfigPluginMetadataSnapshot = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "owners" | "pluginIds"
+>;
+
 type EnsureOpenClawModelsJsonOptions = {
   env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  pluginMetadataSnapshot?: ModelsConfigPluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   workspaceDir?: string;
   providerDiscoveryProviderIds?: readonly string[];
@@ -92,7 +97,7 @@ async function buildModelsJsonFingerprint(params: {
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
   workspaceDir?: string;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "pluginIds">;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
@@ -120,6 +125,10 @@ async function buildModelsJsonFingerprint(params: {
     pluginCatalogFingerprint,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
+    pluginMetadataSnapshotPluginIds:
+      params.pluginMetadataSnapshot?.pluginIds === undefined
+        ? null
+        : params.pluginMetadataSnapshot.pluginIds.toSorted(),
     providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
     providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs,
     providerDiscoveryEntriesOnly: params.providerDiscoveryEntriesOnly === true,
@@ -287,7 +296,7 @@ async function buildModelsJsonSourceFingerprint(
   agentDirOverride?: string,
   options: {
     env?: NodeJS.ProcessEnv;
-    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    pluginMetadataSnapshot?: ModelsConfigPluginMetadataSnapshot;
     workspaceDir?: string;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;

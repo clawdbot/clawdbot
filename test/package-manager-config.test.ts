@@ -20,7 +20,9 @@ type RootPackageJson = {
   pnpm?: PnpmBuildConfig;
 };
 
-type WorkspaceConfig = PnpmBuildConfig;
+type WorkspaceConfig = PnpmBuildConfig & {
+  verifyDepsBeforeRun?: boolean;
+};
 
 function readJson(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
@@ -53,6 +55,7 @@ describe("package manager build policy", () => {
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
     expect(workspace.allowBuilds?.["node-llama-cpp"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
+    expect(workspace.verifyDepsBeforeRun).toBe(false);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 

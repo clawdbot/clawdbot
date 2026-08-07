@@ -66,7 +66,7 @@ import {
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
 vi.mock("../config.js", async () => ({
@@ -2091,12 +2091,14 @@ describe("sqlite session normalization", () => {
         message: { content: "post-two" },
       },
     ]);
-    await upsertSqliteSessionEntry(sourceEntryScope, {
+    const sourceEntry: InternalSessionEntry = {
       label: "Source",
+      lifecycleRunId: "source-run",
       sessionId: "source-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
-    });
+    };
+    await upsertSqliteSessionEntry(sourceEntryScope, sourceEntry);
 
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
@@ -2134,6 +2136,7 @@ describe("sqlite session normalization", () => {
         totalTokensFresh: true,
       }),
     );
+    expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
     await expect(loadSqliteTranscriptEvents(branchScope)).resolves.toEqual([
       expect.objectContaining({ type: "session", id: result.entry.sessionId }),
       expect.objectContaining({ id: "pre-msg", type: "message" }),

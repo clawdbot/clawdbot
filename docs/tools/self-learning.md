@@ -17,30 +17,14 @@ skill authoring.
 The default mode is `auto`. OpenClaw captures strong learning signals and applies
 them through the normal scanner-gated Workshop service without asking for
 approval. Choose `propose` to review every capture before it becomes active, or
-`off` to keep only the suggestion nudge.
+`off` to disable autonomous capture.
 
-## Capture paths
+## Experience review
 
-OpenClaw uses two complementary capture paths.
-
-### Deterministic correction capture
-
-When an interactive turn ends, OpenClaw looks for durable instructions such as
-"from now on," "next time," and direct corrections to a failed approach. This
-path is deterministic and does not start another model run. It can:
-
-- group related instructions into up to three focused skills;
-- route a correction to a matching writable workspace skill;
-- revise its own related pending proposal; and
-- capture after a failed turn because the user instruction remains useful even
-  when the work did not complete.
-
-Detection is intentionally heuristic. A durable phrase can occasionally produce
-an overly broad or low-value capture. That is an accepted tradeoff because
-miscaptures are cheap to inspect and remove, while Workshop governance keeps the
-write bounded and recoverable.
-
-### Experience review
+Every autonomous capture is authored by a model reviewing real evidence. There
+is no template or pattern-matching path: content that reaches a proposal was
+written by the reviewer against the Workshop authoring standards, never copied
+from conversation text.
 
 After substantial work, OpenClaw can run one isolated background review to find
 a reusable recovery technique or a stable procedure that would remove at least
@@ -55,7 +39,9 @@ Experience review starts only when all of these conditions hold:
 
 - the foreground turn completed or was interrupted, but did not end in a
   provider or prompt error;
-- the current turn used at least 10 model iterations;
+- the current turn used at least 10 model iterations, or same-sender shallow
+  turns in the session accumulated that much unreviewed work (the accumulated
+  review covers the bounded message window of those turns);
 - the run was an eligible foreground conversation, not cron, heartbeat, memory,
   overflow, hook, subagent, or review work;
 - the runtime reported the resolved provider, model, and actual availability of
@@ -66,14 +52,27 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 Only one experience review runs at a time. The foreground answer is never delayed.
 
-The reviewer is isolated and conservative. It can list or inspect proposals and
-create or revise at most one pending proposal. Its one-mutation budget is shared
-across retries. It cannot apply, reject, quarantine, message, update a live skill,
-or use general agent tools. The reviewed trajectory is evidence, not instructions.
+The reviewer is isolated and biased toward small, well-evidenced captures. It
+sees a bounded workspace skill list, can list or inspect proposals, and can read
+a bounded excerpt of a writable skill for context. It drafts at most one pending
+proposal: preferring to revise a matching pending proposal, then to patch the
+existing skill governing the work, and creating a new skill only when nothing
+covers the class. A patch proposal quotes the exact live text to change (or
+appends a new section) and the tool composes the full body inside the same read
+that hash-binds the proposal, so untouched content survives by construction and
+patches auto-apply in `auto` mode. A patch requires a full-skill read receipt:
+skills beyond the bounded read budget cannot be patched autonomously. A full-body update rewrite always stays
+pending for operator review. Its one-mutation budget is shared across retries. Every
+mutation is a pending proposal — it never writes a live skill directly and
+cannot apply, reject, quarantine, message, or use general agent tools. The
+reviewed trajectory is evidence, not instructions.
 
 Good candidates include:
 
 - a reliable recovery after repeated tool or model failures;
+- a durable user correction or standing instruction ("from now on," "always,"
+  "never," "stop doing X"), embedded as a procedure step in the skill governing
+  that work;
 - a non-obvious ordering constraint that prevented a recurring error;
 - a stable multi-step workflow that required repeated discovery; or
 - a reusable preflight that would avoid several future calls.
@@ -89,11 +88,11 @@ The reviewer should abstain for:
 
 ## Mode policy
 
-| Mode      | Capture behavior                                                                                          | Suggestion nudge                                                    |
-| --------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `off`     | Does not create deterministic or experience-review captures.                                              | Enabled. OpenClaw can offer to save a detected durable instruction. |
-| `propose` | Creates or revises pending proposals through both capture paths. Nothing applies automatically.           | Suppressed.                                                         |
-| `auto`    | Creates or revises proposals, then immediately calls the normal Workshop apply path. This is the default. | Suppressed.                                                         |
+| Mode      | Capture behavior                                                                                                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`     | Does not create experience-review captures.                                                                                                                                      |
+| `propose` | Creates or revises pending proposals. Nothing applies automatically.                                                                                                             |
+| `auto`    | Creates or revises proposals, then applies new-skill and patch proposals through the normal Workshop apply path. Full-body updates stay pending for review. This is the default. |
 
 Set the mode with the CLI:
 
@@ -167,23 +166,23 @@ Delayed experience review requires the runtime to report its resolved model and
 actual `skill_workshop` availability. The embedded runner and Codex app-server
 harness report those facts; Codex also reports its exact model-iteration count.
 Other CLI-backed runtimes fail closed until they provide the same runtime facts.
-
-Deterministic correction capture and `/learn` do not depend on delayed review and
-continue to work on those runtimes. In `auto` mode, a runtime that does not report
-actual Workshop availability leaves deterministic captures pending instead of
-applying them.
+`/learn` does not depend on delayed review and continues to work on those
+runtimes.
 
 ## Cost and privacy
 
-Deterministic correction capture does not make an extra model call. Experience
-review adds one bounded model run on the configured provider only after a
-substantial turn, not after every message. The review can make more
+Experience review adds one bounded model run on the configured provider only
+after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
-The reviewer receives only the current turn beginning with its most recent user
-message. The rendered trajectory is limited to 60,000 characters. When the
-bundle is too large, OpenClaw keeps the first message and newest evidence and
-marks the omitted middle.
+A deep-turn review receives only the current turn beginning with its most
+recent user message. A review triggered by accumulated shallow turns instead
+receives the bounded message window of those same-sender turns (at most 40
+messages); accumulation restarts whenever the sender, provider, model, or auth
+profile changes, so no turn is disclosed to a provider identity other than its
+own. Either way the rendered trajectory is limited to 60,000 characters; when
+the bundle is too large, OpenClaw keeps the first message and newest evidence
+and marks the omitted middle.
 
 The reviewer reuses the foreground provider, model, and available auth identity,
 with model fallbacks disabled. Provider pricing and data-handling terms apply to
@@ -262,14 +261,13 @@ Check the following:
 
 1. `skills.workshop.autonomous.mode` is `propose` or `auto` in the active Gateway
    config.
-2. The correction uses durable language, or the turn reached at least 10 model
-   iterations without ending in a provider or prompt error.
+2. The turn reached at least 10 model iterations without ending in a provider or
+   prompt error.
 3. The conversation is eligible foreground work.
 4. The runtime reported the resolved model and actual `skill_workshop`
    availability.
 5. The run was not sandboxed and tool policy still permits `skill_workshop`.
-6. For experience review, the Gateway stayed running and idle through the
-   30-second quiet period.
+6. The Gateway stayed running and idle through the 30-second quiet period.
 
 An eligible experience review can still abstain. No proposal is the expected
 result when the evidence does not clear the reusable-procedure bar.
@@ -294,8 +292,8 @@ build a retry loop around automatic capture.
 
 ### Too many low-value captures appear
 
-Switch to `propose` to review every capture, or `off` to keep only the suggestion
-nudge:
+Switch to `propose` to review every capture, or `off` to disable autonomous
+capture:
 
 ```bash
 openclaw config set skills.workshop.autonomous.mode propose

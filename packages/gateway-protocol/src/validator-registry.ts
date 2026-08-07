@@ -2,6 +2,7 @@ import { lazyCompile as compile } from "./protocol-validator.js";
 import * as S from "./schema-modules.js";
 import type {
   AuditActivityListParams,
+  AuditRunInspectParams,
   WebPushSubscribeParams,
   WebPushTestParams,
   WebPushUnsubscribeParams,
@@ -84,6 +85,10 @@ export const validateAgentParams = compile(S.AgentParamsSchema);
 export const validateAuditActivityListParams = compile<AuditActivityListParams>(
   S.AuditActivityListParamsSchema,
 );
+export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
+  S.AuditRunInspectParamsSchema,
+);
+export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersSelfParams = compile(S.UsersSelfParamsSchema);
@@ -135,6 +140,9 @@ export const validateNodeRenameParams = compile(S.NodeRenameParamsSchema);
 export const validateNodeListParams = compile(S.NodeListParamsSchema);
 export const validateNodePluginToolsUpdateParams = compile(S.NodePluginToolsUpdateParamsSchema);
 export const validateNodeSkillsUpdateParams = compile(S.NodeSkillsUpdateParamsSchema);
+export const validateNodeProtocolFeaturesUpdateParams = compile(
+  S.NodeProtocolFeaturesUpdateParamsSchema,
+);
 export const validateEnvironmentsCreateParams = compile(S.EnvironmentsCreateParamsSchema);
 export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);
 export const validateEnvironmentsListParams = compile(S.EnvironmentsListParamsSchema);

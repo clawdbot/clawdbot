@@ -139,6 +139,40 @@ describe("session accessor seam", () => {
     expect(deleteSessionEntryLifecycle).toBe(deleteSqliteSessionEntryLifecycle);
   });
 
+  it("returns typed sync event append outcomes for missing, rebound, and duplicate rows", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "expected-session",
+      sessionKey: "agent:main:typed-append",
+      storePath,
+    };
+    const event = { type: "custom", id: "typed-event", timestamp: 1 };
+
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({
+      ok: false,
+      error: {
+        code: "session-entry-missing",
+        expectedSessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      },
+    });
+
+    await upsertSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 1 });
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({
+      ok: false,
+      error: {
+        actualSessionId: "replacement-session",
+        code: "session-rebound",
+        expectedSessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      },
+    });
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({ ok: true, value: true });
+    expect(appendSqliteTranscriptEventSync(scope, event)).toEqual({ ok: true, value: false });
+  });
+
   it("loads, lists, and patches session entries without exposing the file store shape", async () => {
     const scope = {
       sessionKey: "agent:main:main",

@@ -8,6 +8,7 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
@@ -42,7 +43,9 @@ import {
 } from "./shared-client.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 
-const warnedIgnoredCompactionOverrides = new Set<string>();
+// ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
+// previously suppressed warning can intentionally emit again.
+const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
 const codexNativeCompactionQueue = new KeyedAsyncQueue();
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
 type CodexAppServerCompactOptions = {
@@ -350,10 +353,9 @@ function warnIfIgnoringOpenClawCompactionOverrides(
     return;
   }
   const warningKey = ignoredConfig.join("\0");
-  if (warnedIgnoredCompactionOverrides.has(warningKey)) {
+  if (warnedIgnoredCompactionOverrides.check(warningKey)) {
     return;
   }
-  warnedIgnoredCompactionOverrides.add(warningKey);
   embeddedAgentLog.warn(
     "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
     {

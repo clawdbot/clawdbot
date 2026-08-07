@@ -15,6 +15,7 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
@@ -46,6 +47,11 @@ type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParam
     config: OpenClawConfig;
     prompter: Pick<DoctorPrompter, "shouldRepair">;
   };
+
+type PluginRegistryDoctorRepairResult = {
+  config: OpenClawConfig;
+  pluginInventoryChanged?: true;
+};
 
 type StaleManagedNpmBundledPlugin = {
   pluginId: string;
@@ -577,7 +583,7 @@ function assertNeverPluginRegistryIssue(issue: never): never {
  */
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
-): Promise<OpenClawConfig> {
+): Promise<PluginRegistryDoctorRepairResult> {
   const preflight = preflightPluginRegistryInstallMigration(params);
 
   const migrationParams = {
@@ -611,7 +617,7 @@ export async function maybeRepairPluginRegistryState(
         "Plugin registry",
       );
     }
-    return params.config;
+    return { config: params.config };
   }
 
   if (preflight.action === "migrate") {
@@ -634,7 +640,10 @@ export async function maybeRepairPluginRegistryState(
         "Plugin registry",
       );
     }
-    return params.config;
+    return {
+      config: params.config,
+      ...(result.migrated ? { pluginInventoryChanged: true as const } : {}),
+    };
   }
 
   if (
@@ -662,7 +671,16 @@ export async function maybeRepairPluginRegistryState(
       `Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`,
       "Plugin registry",
     );
+    const indexChanged =
+      resolveInstalledManifestRegistryIndexFingerprint(preflight.current) !==
+      resolveInstalledManifestRegistryIndexFingerprint(index);
+    return {
+      config: params.config,
+      ...(indexChanged || repairedPluginOpenClawHostLinks
+        ? { pluginInventoryChanged: true as const }
+        : {}),
+    };
   }
 
-  return params.config;
+  return { config: params.config };
 }

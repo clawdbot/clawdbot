@@ -110,45 +110,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
         return;
       }
-
-      if (hadProgressDraft) {
-        // Best-effort settle of the working draft; a flush failure must never
-        // suppress the fresh final send below.
-        try {
-          await draftStream?.flush();
-        } catch (err) {
-          logVerbose(`slack: progress draft flush before final failed (${formatSlackError(err)})`);
-        }
-      }
-      const receiptChannelId = hadProgressDraft ? draftStream?.channelId() : undefined;
-      const receiptMessageId = hadProgressDraft ? draftStream?.messageId() : undefined;
-      // The draft already selected the reply thread; re-planning here could
-      // route the fresh final elsewhere under stateful replyToMode values.
-      const draftThreadTs = hadProgressDraft
-        ? (delivery.usedReplyThreadTs ?? statusThreadTs)
-        : undefined;
-      await delivery.deliverNormally({
-        payload,
-        kind: info.kind,
-        ...(draftThreadTs ? { forcedThreadTs: draftThreadTs } : {}),
-      });
-      progress.progressDraft.markFinalReplyDelivered();
-      if (
-        !payload.isError &&
-        receiptChannelId &&
-        receiptMessageId &&
-        !progress.progressReceiptCollapsed
-      ) {
-        // Collapse only after the fresh final lands; a failed send leaves the
-        // working draft untouched as the turn record.
-        await progress.collapseProgressReceipt({
-          channelId: receiptChannelId,
-          messageId: receiptMessageId,
-          text: progress.progressReceipt.buildSummaryLine(),
-          threadTs: delivery.usedReplyThreadTs ?? statusThreadTs,
-        });
-      }
-      return;
     }
     if (progress.useNativeProgressStreaming) {
       await delivery.deliverNormally({
@@ -205,23 +166,28 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       previewFinalTextFitsEdit &&
       trimmedFinalText.length > 0
     ) {
+      await draftStream.flush();
       const channelId = draftStream.channelId();
       const messageId = draftStream.messageId();
       if (channelId && messageId) {
         const finalThreadTs = delivery.usedReplyThreadTs ?? statusThreadTs;
-        await draftStream.flush();
         await draftStream.seal();
         try {
-          await finalizeSlackPreviewEdit({
-            client: slackClient,
-            token: ctx.botToken,
-            accountId: account.accountId,
-            channelId,
-            messageId,
-            text: previewFinalText,
-            ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-            threadTs: finalThreadTs,
+          const finalized = await draftStream.finalizeMessage(messageId, async () => {
+            await finalizeSlackPreviewEdit({
+              client: slackClient,
+              token: ctx.botToken,
+              accountId: account.accountId,
+              channelId,
+              messageId,
+              text: previewFinalText,
+              ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+              threadTs: finalThreadTs,
+            });
           });
+          if (!finalized) {
+            throw new Error("Slack preview moved below a newer conversation message");
+          }
         } catch (err) {
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
@@ -259,6 +225,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           forcedThreadTs: finalThreadTs,
         });
         delivery.markPreviewPayloadDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
+        progress.progressDraft.markFinalReplyDelivered();
         return;
       }
     }
@@ -303,16 +270,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (delivery.hasDelivered({ kind: info.kind, payload, threadTs: edit.threadTs })) {
             return;
           }
-          await finalizeSlackPreviewEdit({
-            client: slackClient,
-            token: ctx.botToken,
-            accountId: account.accountId,
-            channelId: preview.channelId,
-            messageId: preview.messageId,
-            text: edit.text,
-            ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
-            threadTs: edit.threadTs,
+          const finalized = await draftStream?.finalizeMessage(preview.messageId, async () => {
+            await finalizeSlackPreviewEdit({
+              client: slackClient,
+              token: ctx.botToken,
+              accountId: account.accountId,
+              channelId: preview.channelId,
+              messageId: preview.messageId,
+              text: edit.text,
+              ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
+              threadTs: edit.threadTs,
+            });
           });
+          if (!finalized) {
+            throw new Error("Slack preview moved below a newer conversation message");
+          }
           if (!ttsSupplement) {
             emitSlackMessageSentHooks({
               ...messageSentHookContext,
@@ -377,6 +349,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
       },
     });
+    if (info.kind === "final") {
+      progress.progressDraft.markFinalReplyDelivered();
+    }
   };
   let dispatchError: unknown;
   let queuedFinal = false;

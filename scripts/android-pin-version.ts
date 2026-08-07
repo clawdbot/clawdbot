@@ -9,6 +9,7 @@ import {
   syncAndroidVersioning,
   writeAndroidVersionManifest,
 } from "./lib/android-version.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 type CliOptions = {
   explicitVersion: string | null;
@@ -194,7 +195,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const exitCode = await main(process.argv.slice(2));
   if (exitCode !== 0) {
     process.exit(exitCode);

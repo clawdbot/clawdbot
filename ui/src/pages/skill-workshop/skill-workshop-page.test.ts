@@ -77,6 +77,7 @@ function createContext(
   };
   const subscribe = () => () => undefined;
   return {
+    basePath: "",
     gateway: {
       snapshot,
       subscribe: options?.gatewaySubscribe ?? subscribe,
@@ -84,6 +85,9 @@ function createContext(
     config: {
       current: { assistantIdentity: { name: "OpenClaw" } },
       subscribe,
+    },
+    agents: {
+      state: { agentsList: null },
     },
     agentSelection: {
       state: { selectedId: "research" },
@@ -371,6 +375,76 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(oldContext.navigate).not.toHaveBeenCalled();
     expect(newContext.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
     expect(newContext.navigate).not.toHaveBeenCalled();
+  });
+
+  it("binds a prepared revision handoff to the initiating gateway client", async () => {
+    const sessions = {
+      state: {
+        agentId: "research",
+        result: {
+          sessions: [
+            {
+              key: "agent:research:revision",
+              archived: false,
+              hasActiveRun: false,
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+      },
+      list: vi.fn(),
+      create: vi.fn(),
+    } as unknown as ApplicationContext["sessions"];
+    const context = createContext(
+      vi.fn(async () => ({})),
+      { sessions },
+    );
+    context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 4,
+    } as ApplicationGatewaySnapshot["hello"];
+    const loadedState = createSkillWorkshopState();
+    loadedState.skillWorkshopAgentId = "research";
+    loadedState.skillWorkshopLoaded = true;
+    const proposal = {
+      key: "proposal-owner",
+      slug: "proposal-owner",
+      name: "Proposal",
+      oneLine: "",
+      body: "",
+      status: "pending",
+      version: 1,
+      revisionHash: null,
+      createdAt: 0,
+      updatedAt: 0,
+      recencyGroup: "today",
+      ageLabel: "now",
+      supportFiles: [],
+      isNew: false,
+      origin: {
+        agentId: "research",
+        sessionKey: "agent:research:revision",
+      },
+    } satisfies SkillWorkshopProposal;
+    loadedState.skillWorkshopProposals = [proposal];
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.data = skillWorkshopRouteData(loadedState);
+    page.context = context;
+    document.body.append(page);
+    await page.updateComplete;
+
+    await page.handleRevisionRequest("revise it", proposal, "research");
+
+    expect(context.skillWorkshopRevision.prepare).toHaveBeenCalledWith({
+      sessionKey: "agent:research:revision",
+      instructions: "revise it",
+      owner: context.gateway.snapshot.hello,
+      proposalId: "proposal-owner",
+      proposalAgentId: "research",
+    });
   });
 
   it("does not create a fallback revision session after a same-context reconnect", async () => {
@@ -733,7 +807,12 @@ describe("SkillWorkshopPage lifecycle", () => {
 });
 
 describe("SkillWorkshopPage self-learning toggle", () => {
-  function createLoadedPage(runtimeConfig: ReturnType<typeof createRuntimeConfigStub>) {
+  function createLoadedPage(
+    runtimeConfig: ReturnType<typeof createRuntimeConfigStub>,
+    options?: {
+      gatewaySubscribe?: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
+    },
+  ) {
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -743,7 +822,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     page.data = skillWorkshopRouteData(loadedState);
     page.context = createContext(
       vi.fn(async () => ({})),
-      { runtimeConfig },
+      { runtimeConfig, gatewaySubscribe: options?.gatewaySubscribe },
     );
     document.body.append(page);
     return page;
@@ -831,6 +910,37 @@ describe("SkillWorkshopPage self-learning toggle", () => {
         ".sw-header-controls input[aria-label='Toggle autonomous self-learning']",
       )?.checked,
     ).toBe(true);
+  });
+
+  it("does not retry a conflicted self-learning write after gateway replacement", async () => {
+    const refresh = deferred<undefined>();
+    let gatewayListener: ((snapshot: ApplicationGatewaySnapshot) => void) | undefined;
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { skills: { workshop: { autonomous: { mode: "off" } } } },
+    });
+    runtimeConfig.patch = vi.fn(async () => {
+      runtimeConfig.state.lastError =
+        "GatewayRequestError: config changed since last load; re-run config.get and retry";
+      return false;
+    });
+    runtimeConfig.refresh = vi.fn(() => refresh.promise);
+    const page = createLoadedPage(runtimeConfig, {
+      gatewaySubscribe: (listener) => {
+        gatewayListener = listener;
+        return () => undefined;
+      },
+    });
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
+    await waitForSkillWorkshop(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
+    gatewayListener?.({
+      ...page.context.gateway.snapshot,
+      client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
+    });
+    refresh.resolve(undefined);
+
+    await waitForSkillWorkshop(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(1));
   });
 
   it("surfaces a patch failure and keeps the toggle off", async () => {

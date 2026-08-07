@@ -182,6 +182,52 @@ describe("brave web search provider", () => {
     });
   });
 
+  it.each(["web", "llm-context"] as const)(
+    "does not start an already canceled %s search",
+    async (mode) => {
+      const fetchMock = vi.fn(async () => emptyWebSearchResponse());
+      global.fetch = fetchMock as typeof global.fetch;
+      const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key", mode } });
+      const controller = new AbortController();
+      controller.abort(new Error("Brave caller canceled"));
+
+      await expect(
+        tool.execute({ query: `brave pre-canceled ${mode}` }, { signal: controller.signal }),
+      ).rejects.toThrow("Brave caller canceled");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["web", "llm-context"] as const)(
+    "aborts an in-flight %s request with the caller's reason",
+    async (mode) => {
+      const fetchMock = vi.fn(
+        async (_url: string, init?: RequestInit) =>
+          await new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              reject(new Error("Brave request lost caller cancellation"));
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+          }),
+      );
+      global.fetch = fetchMock as typeof global.fetch;
+      const tool = createBraveTool({ webSearch: { apiKey: "brave-test-key", mode } });
+      const controller = new AbortController();
+      const result = tool.execute(
+        { query: `brave in-flight cancellation ${mode}` },
+        { signal: controller.signal },
+      );
+
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error("Brave request canceled in flight"));
+
+      await expect(result).rejects.toThrow("Brave request canceled in flight");
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    },
+  );
+
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
       testing.normalizeBraveLanguageParams({

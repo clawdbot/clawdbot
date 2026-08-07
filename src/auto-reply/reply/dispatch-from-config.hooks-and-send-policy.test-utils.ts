@@ -6,7 +6,10 @@ import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subag
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { NO_VISIBLE_REPLY_FALLBACK_TEXT } from "./dispatch-from-config.payloads.js";
+import {
+  NO_VISIBLE_REPLY_FALLBACK_TEXT,
+  QUEUE_CAP_REJECTION_TEXT,
+} from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -512,6 +515,72 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(deliveredTexts).not.toContain("visible reply");
     expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+  });
+
+  it("reports queue-cap rejection instead of a temporary model failure", async () => {
+    setNoAbort();
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      }),
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const runState = resolveReplyOperationRunState(opts);
+      if (!runState) {
+        throw new Error("expected reply operation state");
+      }
+      runState.admission = { status: "skipped", reason: "queue-cap" };
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:queue-cap" }),
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
+    expect(deliveredTexts).not.toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "skipped",
+        reason: "queue-cap",
+        sessionKey: "test:queue-cap",
+      }),
+    );
+  });
+
+  it("does not report a pending continuation as an empty terminal reply", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: InternalGetReplyOptions) => {
+      opts?.onPendingContinuation?.();
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Surface: "telegram",
+        Provider: "telegram",
+        SessionKey: "agent:main:telegram:direct:test",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
   });
 
   it("delivers core no-visible-reply fallback for disallowed empty mentioned group turns", async () => {

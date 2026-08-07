@@ -64,9 +64,11 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     const status = statusCallAt(setStatus, 0);
     expect(status?.connected).toBe(true);
+    expect(status?.running).toBe(true);
     expect(status?.lastConnectedAt).toBe(1_711_406_400_000);
     expect(status?.lifecycle).toBe("ready");
     expect(status?.lastError).toBeNull();
+    expect(status?.terminalDisconnect).toBeUndefined();
     expect(status).not.toHaveProperty("lastEventAt");
   });
 
@@ -83,7 +85,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: 1_711_406_400_500,
-      terminalDisconnect: undefined,
+      terminalDisconnect: true,
       lifecycle: "blocked",
       lastError: "auth.test returned no user_id",
     });

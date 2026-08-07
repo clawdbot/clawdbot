@@ -262,6 +262,7 @@ export async function runPreparedEmbeddedLoop(
     getLastProfileId: () => preparedRuntime.snapshot().lastProfileId,
     getSessionId: () => sessionPromptState.sessionId,
     harnessOwnsTransport: () => preparedRuntime.snapshot().pluginHarnessOwnsTransport,
+    getApiKeyInfo,
   });
   // Resolve the context engine once and reuse across retries to avoid
   // repeated initialization/connection overhead per attempt.

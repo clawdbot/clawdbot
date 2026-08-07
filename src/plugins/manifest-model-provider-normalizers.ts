@@ -358,7 +358,6 @@ export function normalizeManifestSecretProviderIntegrations(
         : {}),
       ...(env ? { env } : {}),
       ...(passEnv ? { passEnv } : {}),
-      ...(rawIntegration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;

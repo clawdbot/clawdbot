@@ -74,6 +74,9 @@ and `openclaw memory status --deep`.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status
   prints a hint to run `openclaw update` (see [Updating](/install/updating)).
+- `status --all` includes a **Telemetry exporters** diagnosis with the latest
+  trusted per-signal exporter state and transport. Endpoint values, headers,
+  certificates, payloads, and raw errors are not shown.
 
 ## Secrets
 
