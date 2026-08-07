@@ -316,17 +316,19 @@ function isGateProvenInProgressRun(run, ciGateJobs, nowMs) {
 function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
-  const latestCompletedScheduledRun = latestRun(
-    scheduledRuns.filter((run) => run.status === "completed"),
+  const latestDecisiveScheduledRun = latestRun(
+    scheduledRuns.filter(
+      (run) => run.status === "completed" && !["cancelled", "skipped"].includes(run.conclusion),
+    ),
   );
   const latestManualRun = latestRun(runs.filter((run) => run.event === "workflow_dispatch"));
 
   // Manual proof may replace stale scheduled success or a pending run,
   // never an unresolved terminal non-success.
-  if (latestCompletedScheduledRun && latestCompletedScheduledRun.conclusion !== "success") {
-    return latestCompletedScheduledRun;
+  if (latestDecisiveScheduledRun && latestDecisiveScheduledRun.conclusion !== "success") {
+    return latestDecisiveScheduledRun;
   }
-  if (latestScheduledRun?.status === "completed" && isRecentRun(latestScheduledRun, nowMs)) {
+  if (isSuccessfulRecentRun(latestScheduledRun, nowMs)) {
     return latestScheduledRun;
   }
   return latestManualRun ?? latestScheduledRun;
