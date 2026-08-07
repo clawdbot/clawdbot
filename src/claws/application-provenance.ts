@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { clawProfileExtensionPackages } from "./application-plan.js";
+import type { ClawPackageStatus } from "./lifecycle-status.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type {
   ClawAddPlanAction,
@@ -27,6 +28,7 @@ export function recordingClawPackagePreflight(
   preflight: ClawPackagePreflight | undefined,
   workspace: string,
   results: Map<string, ClawPackagePreflightResult>,
+  currentPackages: ReadonlyMap<string, ClawPackageStatus>,
 ): ClawPackagePreflight {
   return async (pkg) => {
     const result = preflight
@@ -36,8 +38,20 @@ export function recordingClawPackagePreflight(
           code: "package_install_unavailable",
           message: "Package preflight is unavailable.",
         };
-    results.set(clawPackageKey(pkg), result);
-    return result;
+    const current = currentPackages.get(clawPackageKey(pkg));
+    const normalized =
+      !result.ok &&
+      pkg.kind === "plugin" &&
+      result.code === "plugin_version_conflict" &&
+      current?.state === "present" &&
+      current.origin === "claw-introduced" &&
+      !current.independentOwner &&
+      current.version !== pkg.version &&
+      result.installedVersion === current.version
+        ? { ...result, ok: true as const, action: "install" as const }
+        : result;
+    results.set(clawPackageKey(pkg), normalized);
+    return normalized;
   };
 }
 

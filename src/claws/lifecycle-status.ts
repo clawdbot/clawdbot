@@ -108,7 +108,7 @@ async function inspectClawPackageCompatibility(params: {
             capabilities: [...recorded.mapped, ...recorded.unavailable],
           });
     current = {
-      detectedFormat: artifact.format,
+      detectedFormat: recorded.detectedFormat,
       mapped: artifact.mapped,
       unavailable: artifact.unavailable,
       adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,

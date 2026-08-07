@@ -107,6 +107,7 @@ function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
     },
     actions,
     capabilityChanges: [],
+    readiness: { ready: true, requirements: [] },
     blockers: [],
     diagnostics: [],
   };
@@ -172,6 +173,37 @@ describe("applyClawUpdatePlan", () => {
       ),
     ).rejects.toMatchObject({ code: "update_changed" });
     expect(readInstall).not.toHaveBeenCalled();
+  });
+
+  it("rejects setup requirements that changed after consent", async () => {
+    const updatePlan = plan([]);
+    const changed = {
+      ...updatePlan,
+      readiness: {
+        ready: false,
+        requirements: [
+          {
+            kind: "plugin-setup" as const,
+            plugin: "market-data",
+            provider: "market-data",
+            envVars: ["MARKET_DATA_TOKEN"],
+            authMethods: ["token"],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      applyClawUpdatePlan(
+        updatePlan,
+        { targetManifest: manifest, targetSource: source },
+        {
+          config: {},
+          ...consent(updatePlan),
+          rebuildPlan: async () => changed,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "update_changed" });
   });
 
   it("compare-writes the owned agent and advances root provenance", async () => {
@@ -295,6 +327,7 @@ describe("applyClawUpdatePlan", () => {
           integrity: packageDetails.integrity,
           installId: packageDetails.installId,
           riskWarning: undefined,
+          prerequisites: undefined,
           extension: undefined,
         }),
       )
@@ -459,6 +492,7 @@ describe("applyClawUpdatePlan", () => {
           integrity: packageDetails.integrity,
           installId: undefined,
           riskWarning: undefined,
+          prerequisites: undefined,
           extension: undefined,
         }),
       )
@@ -536,6 +570,7 @@ describe("applyClawUpdatePlan", () => {
           integrity: resolved.integrity,
           installId: resolved.installId,
           riskWarning: resolved.warning,
+          prerequisites: undefined,
           extension: undefined,
         }),
       )
@@ -636,6 +671,7 @@ describe("applyClawUpdatePlan", () => {
           integrity: packageDetails.integrity,
           installId: packageDetails.installId,
           riskWarning: undefined,
+          prerequisites: undefined,
           extension: extensionProvenance,
         }),
       )

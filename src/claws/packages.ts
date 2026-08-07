@@ -7,14 +7,12 @@ import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
-import type { PluginManifestSetup } from "../plugins/manifest.js";
 import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
 } from "../plugins/plugin-install-preflight.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
   acquireClawPackageLifecycleLease,
@@ -23,6 +21,7 @@ import {
 } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { findResumableIntroducedPluginRequirement } from "./package-resume.js";
+import { resolveClawPluginSetupRequirements } from "./package-setup-requirements.js";
 import {
   persistClawPackageRef,
   readClawPackageRefs,
@@ -32,7 +31,6 @@ import {
 import type {
   ClawAddPlan,
   ClawAddPlanAction,
-  ClawLocalPrerequisite,
   ClawPackage,
   ClawPackagePreflightResult,
   ResolvedClawPackage,
@@ -131,42 +129,6 @@ function ownerInstallIsNewerThanRefs(
   );
 }
 
-function resolveClawPluginSetupRequirements(params: {
-  pluginId: string;
-  setup?: PluginManifestSetup;
-  env: NodeJS.ProcessEnv;
-}): ClawLocalPrerequisite[] {
-  const providers = params.setup?.providers ?? [];
-  // Providers are alternative setup routes for one plugin. Any configured
-  // route satisfies readiness; otherwise expose every route to the operator.
-  const hasConfiguredProvider = providers.some(
-    (provider) =>
-      (provider.envVars ?? []).some((name) => Boolean(params.env[name]?.trim())) ||
-      resolveLocalProviderAuthEvidence(provider.authEvidence, params.env),
-  );
-  if (hasConfiguredProvider) {
-    return [];
-  }
-  return providers.flatMap((provider) => {
-    const envVars = provider.envVars ?? [];
-    const authEvidence = provider.authEvidence ?? [];
-    // Dry-run has no persisted setup state, so only gate on credential evidence
-    // it can actually observe. Auth methods remain descriptive metadata.
-    if (envVars.length === 0 && authEvidence.length === 0) {
-      return [];
-    }
-    return [
-      {
-        kind: "plugin-setup" as const,
-        plugin: params.pluginId,
-        provider: provider.id,
-        envVars,
-        authMethods: provider.authMethods ?? [],
-      },
-    ];
-  });
-}
-
 type ClawPluginProbeDeps = {
   probePlugin?: typeof installPluginFromClawHub;
   createProbeExtensionsDir?: () => Promise<string>;
@@ -247,6 +209,13 @@ export async function preflightClawPackage(
       ok: false,
       code: "plugin_artifact_inspection_unavailable",
       message: `Plugin ${pkg.ref}@${pkg.version} did not return canonical artifact inspection.`,
+    };
+  }
+  if (probe.artifactInspection.format === "agent") {
+    return {
+      ok: false,
+      code: "plugin_artifact_format_unsupported",
+      message: `Plugin ${pkg.ref}@${pkg.version} uses unsupported Claw extension format agent.`,
     };
   }
   const integrity = probe.clawhub.integrity

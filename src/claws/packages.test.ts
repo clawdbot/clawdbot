@@ -255,6 +255,45 @@ describe("preflightClawPackage plugin setup requirements", () => {
 });
 
 describe("preflightClawPackage isolated plugin inspection", () => {
+  it("rejects generic agent bundles outside the Claw schema-v1 format contract", async () => {
+    const probeAgentBundle = vi.fn(async () => ({
+      ok: true as const,
+      pluginId: "audit",
+      packageName: "@owner/audit",
+      targetDir: "/tmp/extensions/audit",
+      extensions: [],
+      artifactInspection: {
+        format: "agent" as const,
+        mapped: ["skills"],
+        unavailable: [],
+      },
+      clawhub: {
+        source: "clawhub" as const,
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@owner/audit",
+        clawhubFamily: "code-plugin" as const,
+        integrity,
+      },
+    }));
+
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        deps: {
+          preflightPlugin: vi.fn(async () => ({
+            ok: true as const,
+            action: "install" as const,
+            request: {} as never,
+          })),
+          probePlugin: probeAgentBundle,
+        },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "plugin_artifact_format_unsupported",
+      message: "Plugin @owner/audit@2.0.1 uses unsupported Claw extension format agent.",
+    });
+  });
+
   it("preserves live extension-directory conflict checks for a new plugin install", async () => {
     const createProbeExtensionsDir = vi.fn();
     const liveProbe = vi.fn(async () => ({

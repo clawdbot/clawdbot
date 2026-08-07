@@ -81,6 +81,7 @@ function comparablePlan(plan: ClawUpdatePlan): unknown {
     targetClaw: plan.targetClaw,
     actions: plan.actions,
     capabilityChanges: plan.capabilityChanges,
+    readiness: plan.readiness,
     blockers: plan.blockers,
   };
 }
@@ -248,6 +249,7 @@ export async function applyClawUpdatePlan(
           integrity: details?.integrity,
           installId: details?.installId,
           riskWarning: details?.riskWarning,
+          prerequisites: details?.prerequisites,
           extension: details?.extension,
         })
     ) {

@@ -189,6 +189,9 @@ export async function buildClawUpdatePlan(params: {
     }
 
     const packagePreflights = new Map<string, ClawPackagePreflightResult>();
+    const currentPackages = new Map(
+      record.packages.map((pkg) => [clawPackageKey(pkg), pkg] as const),
+    );
     const targetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
       clawMarkdownBody: params.targetClawMarkdownBody,
@@ -203,6 +206,7 @@ export async function buildClawUpdatePlan(params: {
           params.packagePreflight,
           record.install.workspace,
           packagePreflights,
+          currentPackages,
         ),
       },
     });
@@ -353,9 +357,6 @@ export async function buildClawUpdatePlan(params: {
     }
 
     const allPackages = readClawPackageRefs(readOnlyStateOptions);
-    const currentPackages = new Map(
-      record.packages.map((pkg) => [clawPackageKey(pkg), pkg] as const),
-    );
     const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
     const targetPackageActions = clawPackageActionsById(targetPlan.actions);
     for (const [key, target] of targetPackages) {
@@ -368,16 +369,7 @@ export async function buildClawUpdatePlan(params: {
         (current.origin === "claw-introduced" &&
           !current.independentOwner &&
           (current.state === "missing" || current.version !== target.version));
-      const expectedOwnedPluginUpgradeConflict =
-        target.kind === "plugin" &&
-        current?.state === "present" &&
-        current.origin === "claw-introduced" &&
-        !current.independentOwner &&
-        current.version !== target.version &&
-        preflight?.code === "plugin_version_conflict" &&
-        preflight.installedVersion === current.version;
-      const failedPackageMutationPreflight =
-        requiresPackageMutation && !preflight?.ok && !expectedOwnedPluginUpgradeConflict;
+      const failedPackageMutationPreflight = requiresPackageMutation && !preflight?.ok;
       const conflictingPluginPin =
         target.kind === "plugin" &&
         allPackages.some(
@@ -435,6 +427,7 @@ export async function buildClawUpdatePlan(params: {
           integrity: preflight?.integrity,
           installId: preflight?.installId,
           riskWarning: preflight?.warning,
+          prerequisites: preflight?.requirements,
           extension: targetAction?.details?.extension,
         }),
       });
@@ -682,6 +675,7 @@ export async function buildClawUpdatePlan(params: {
       summary: summarizeClawUpdatePlan(actions, capabilityChanges),
       actions,
       capabilityChanges,
+      readiness: targetPlan.readiness,
       blockers,
       diagnostics: params.diagnostics ?? [],
     };
