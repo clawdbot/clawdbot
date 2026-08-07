@@ -158,6 +158,9 @@ describe("Doctor plugin index persistence built CLI proof", () => {
 
     // The built gateway derives and persists an index with all three managed
     // plugins before it serves requests.
+    expect(await instance.entrypoint()).toEqual([
+      expect.stringMatching(/^dist\/index\.(?:js|mjs)$/u),
+    ]);
     await instance.startGateway();
     const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8")) as OpenClawConfig;
     const startup = loadPluginMetadataSnapshot({
