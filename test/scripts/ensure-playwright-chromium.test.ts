@@ -155,7 +155,7 @@ describe("ensurePlaywrightChromium", () => {
       env: {
         INIT_CWD: callerDirectory,
         OPENCLAW_TESTBOX: "1",
-        PATH: "/bin",
+        PATH: noPnpmPath,
         PLAYWRIGHT_BROWSERS_PATH: ".artifacts/playwright-browsers",
       },
       executablePath,
@@ -180,7 +180,7 @@ describe("ensurePlaywrightChromium", () => {
     { configuredPath: "/shared/playwright", label: "an absolute cache path" },
     { configuredPath: "0", label: "Playwright's package-local cache sentinel" },
   ])("preserves $label for sibling browser dependency installs", ({ configuredPath }) => {
-    const env: NodeJS.ProcessEnv = { INIT_CWD: "/repo", PATH: "/bin" };
+    const env: NodeJS.ProcessEnv = { INIT_CWD: "/repo", PATH: noPnpmPath };
     if (configuredPath !== undefined) {
       env.PLAYWRIGHT_BROWSERS_PATH = configuredPath;
     }
