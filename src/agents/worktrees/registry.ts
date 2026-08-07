@@ -170,6 +170,37 @@ export function discardLegacyRegistryWorktrees(env: NodeJS.ProcessEnv): number {
   );
 }
 
+export function rewriteRegistryWorktreePathsForMigration(
+  env: NodeJS.ProcessEnv,
+  rewrites: readonly { id: string; fromPath: string; toPath: string }[],
+): number {
+  if (rewrites.length === 0) {
+    return 0;
+  }
+  const db = dbFor(env);
+  // Only the state-migration owner may rewrite persisted worktree identity paths.
+  // Runtime updates deliberately keep `path` outside their patch surface.
+  return runOpenClawStateWriteTransaction(
+    () =>
+      rewrites.reduce(
+        (count, rewrite) =>
+          count +
+          Number(
+            executeSqliteQuerySync(
+              db,
+              kyselyFor(db)
+                .updateTable("worktrees")
+                .set({ path: rewrite.toPath })
+                .where("id", "=", rewrite.id)
+                .where("path", "=", rewrite.fromPath),
+            ).numAffectedRows ?? 0n,
+          ),
+        0,
+      ),
+    { env },
+  );
+}
+
 export function getRegistryWorktreeProvisionedState(
   env: NodeJS.ProcessEnv,
   id: string,

@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ManagedWorktreeService } from "./service.js";
+import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -14,22 +15,6 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
     encoding: "utf8",
   });
   return stdout.trim();
-}
-
-async function initializeRepository(root: string): Promise<string> {
-  const repo = path.join(root, "repo");
-  const remote = path.join(root, "remote.git");
-  await fs.mkdir(repo, { recursive: true });
-  await git(repo, "init", "-b", "main");
-  await git(repo, "config", "user.name", "OpenClaw Test");
-  await git(repo, "config", "user.email", "openclaw-test@example.invalid");
-  await fs.writeFile(path.join(repo, "README.md"), "base\n");
-  await git(repo, "add", "README.md");
-  await git(repo, "commit", "-m", "initial");
-  await git(root, "init", "--bare", remote);
-  await git(repo, "remote", "add", "origin", remote);
-  await git(repo, "push", "-u", "origin", "main");
-  return await fs.realpath(repo);
 }
 
 describe("ManagedWorktreeService canonical paths", () => {
@@ -42,7 +27,7 @@ describe("ManagedWorktreeService canonical paths", () => {
     root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-canonical-paths-"),
     );
-    repo = await initializeRepository(root);
+    repo = await initializeManagedWorktreeTestRepository(root);
     stateDir = path.join(root, "state");
     await fs.mkdir(stateDir, { recursive: true });
     service = new ManagedWorktreeService({
