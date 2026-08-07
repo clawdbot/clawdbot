@@ -3,7 +3,10 @@ import {
   parseCanonicalIpAddress,
   type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
-export { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+// This module feeds gateway error/log formatting, not user-visible URLs, so it
+// takes net-policy's diagnostic superset: over-redacting a log line is safe,
+// under-redacting one leaks a credential.
+export { isSensitiveUrlQueryParamNameForDiagnostics as isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 
 export function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
