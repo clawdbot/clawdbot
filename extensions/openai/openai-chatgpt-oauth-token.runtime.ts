@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { throwIfOAuthLoginAborted } from "./openai-chatgpt-oauth-abort.runtime.js";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -133,6 +134,15 @@ export async function exchangeOpenAIAuthorizationCode(
     };
   }
   const json = (await response.json()) as TokenResponseJson;
+  // JSON.parse returns null for body "null" and arrays for body "[]" — both
+  // are valid JSON that TypeScript's `as` cast silently accepts. Reject them
+  // before any property access to avoid a TypeError crash (cf. #111638).
+  if (!isRecord(json)) {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token exchange failed: expected JSON object response`,
+    };
+  }
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   if (!json.access_token || !json.refresh_token || expires === undefined) {
     return {
@@ -171,6 +181,13 @@ export async function refreshOpenAIAccessToken(
       };
     }
     const json = (await response.json()) as TokenResponseJson;
+    // Reject null/array JSON bodies before property access (cf. #111638).
+    if (!isRecord(json)) {
+      return {
+        type: "failed",
+        message: `OpenAI Codex token refresh failed: expected JSON object response`,
+      };
+    }
     const expires = resolveOAuthTokenExpiresAt(json.expires_in);
     if (!json.access_token || !json.refresh_token || expires === undefined) {
       return {
