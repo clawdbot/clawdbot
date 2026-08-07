@@ -322,7 +322,9 @@ export function createMatrixIngressMonitor(options: {
   // retried on later drain polls until it lands. While any admission stays
   // parked the sync-token store refuses to advance the durable cursor past
   // it, so the event is never skipped — and the cursor unfreezes as soon as
-  // the journal append succeeds again instead of needing a restart.
+  // the journal append succeeds again instead of needing a restart. Later
+  // accepts queue behind the parked tail without touching the journal, so
+  // queue rows always land in accept order.
   const parkedAdmissions: Array<{
     roomId: string;
     event: MatrixRawEvent;
@@ -399,6 +401,16 @@ export function createMatrixIngressMonitor(options: {
     // retries rather than dispatching live around the drain's dedupe and
     // lane serialization.
     const admission = { roomId, event, facts, receivedAt: Date.now() };
+    // A still-parked predecessor must enter the journal first. Appending
+    // this newer event now could succeed while the older one is parked, and
+    // the drain would dispatch the room out of accept order — the queue can
+    // only order persisted rows. Queue behind the parked tail; the
+    // poll-driven retry lands both in order.
+    if (parkedAdmissions.length > 0) {
+      parkedAdmissions.push(admission);
+      scheduleAdmissionRetry();
+      return;
+    }
     let lastError: unknown;
     for (const delayMs of [0, 100, 300]) {
       if (delayMs > 0) {
@@ -424,8 +436,9 @@ export function createMatrixIngressMonitor(options: {
 
   return {
     accept: (roomId, event) => {
-      // Parked retries run first so a recovered queue cannot append a later
-      // event ahead of an earlier parked one.
+      // Parked retries run first, and admitOnce itself queues behind any
+      // still-parked predecessor, so journal order always matches accept
+      // order even while the queue keeps failing.
       const admission = admissionTail
         .then(() => retryParkedAdmissions())
         .then(() => admitOnce(roomId, event));

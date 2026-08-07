@@ -169,6 +169,50 @@ describe("Matrix durable ingress", () => {
     });
   });
 
+  it("queues a later same-room event behind a still-failing parked predecessor", async () => {
+    await withQueue(async (queue) => {
+      const dispatched: string[] = [];
+      const dispatch = vi.fn(async (_roomId: string, event: MatrixRawEvent) => {
+        dispatched.push(event.event_id ?? "");
+      });
+      const monitor = createMonitor({ queue, dispatch, pollIntervalMs: 10 });
+      try {
+        // Keep every journal append failing until the test flips the flag:
+        // armed parked retries fire between accepts, so a fixed rejection
+        // count would let a retry recover the queue mid-assertion.
+        let queueHealthy = false;
+        const originalEnqueue = queue.enqueue.bind(queue);
+        const enqueueSpy = vi.spyOn(queue, "enqueue").mockImplementation((...args) => {
+          if (!queueHealthy) {
+            return Promise.reject(new Error("sqlite busy"));
+          }
+          return originalEnqueue(...args);
+        });
+        await monitor.accept("!room:example.org", createRawEvent("$evt-older"));
+        expect(monitor.getAdmissionFailure()).toBeInstanceOf(Error);
+
+        // The newer event must not reach the journal while the predecessor
+        // is still parked: every attempt so far belongs to the older event.
+        await monitor.accept("!room:example.org", createRawEvent("$evt-newer"));
+        expect(enqueueSpy.mock.calls.map((call) => call[0])).not.toContain("$evt-newer");
+        expect(enqueueSpy.mock.calls.length).toBeGreaterThan(0);
+        expect(await queue.listPending({ limit: 10 })).toEqual([]);
+        expect(monitor.getAdmissionFailure()).toBeInstanceOf(Error);
+
+        // Recovery keeps accept order: the poll retry lands both parked
+        // events and the drain dispatches older before newer.
+        queueHealthy = true;
+        monitor.start();
+        await vi.waitFor(() => {
+          expect(dispatched).toEqual(["$evt-older", "$evt-newer"]);
+        });
+        expect(monitor.getAdmissionFailure()).toBe(null);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("commits the journal row before the sync token persist can fire", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async () => {});
