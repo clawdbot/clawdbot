@@ -123,16 +123,16 @@ function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   };
 }
 
-async function makeSessionFixture(
+async function makeSessionFixture<SessionKey extends string = "main">(
   overrides: Partial<SessionEntry> = {},
-  sessionKey = "main",
+  sessionKey: SessionKey = "main" as SessionKey,
 ): Promise<{
   sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore: Record<SessionKey, SessionEntry>;
   storePath: string;
 }> {
   const sessionEntry = makeSessionEntry(overrides);
-  const sessionStore = { [sessionKey]: sessionEntry };
+  const sessionStore = { [sessionKey]: sessionEntry } as Record<SessionKey, SessionEntry>;
   const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
   return { sessionEntry, sessionStore, storePath };
 }
