@@ -242,6 +242,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         throw new Error("goal already exists");
       }
       const tokenBudget = normalizeTokenBudget(options.tokenBudget);
+      const freshTokenStart = resolveEntryFreshTotalTokens(entry);
       created = {
         schemaVersion: 1,
         id: crypto.randomUUID(),
@@ -249,10 +250,9 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         status: "active",
         createdAt: now,
         updatedAt: now,
-        tokenStart: resolveEntryGoalStartTokens(entry),
-        // Freshness alone does not prove the next snapshot uses the same accounting epoch.
-        // Synchronize conservatively on the first persisted post-creation observation.
-        tokenStartFresh: false,
+        tokenStart: freshTokenStart ?? resolveEntryGoalStartTokens(entry),
+        tokenStartFresh: freshTokenStart !== undefined,
+        ...(freshTokenStart !== undefined ? { tokenCursor: freshTokenStart } : {}),
         tokensUsed: 0,
         ...(tokenBudget ? { tokenBudget } : {}),
         continuationTurns: 0,

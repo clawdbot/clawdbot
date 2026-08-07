@@ -78,7 +78,8 @@ describe("session goals", () => {
     expect(goal.objective).toBe("land the PR");
     expect(goal.status).toBe("active");
     expect(goal.tokenStart).toBe(100);
-    expect(goal.tokenStartFresh).toBe(false);
+    expect(goal.tokenStartFresh).toBe(true);
+    expect(goal.tokenCursor).toBe(100);
     expect(goal.tokenBudget).toBe(50);
     expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.id).toBe(goal.id);
   });
@@ -119,8 +120,8 @@ describe("session goals", () => {
     );
   });
 
-  it("synchronizes the first post-creation snapshot before charging goal-relative growth", async () => {
-    await writeSession(10_000);
+  it("charges the first finalization from a fresh creation-time cursor", async () => {
+    await writeSession(33_110);
     const created = await createSessionGoal({
       storePath: fixture.storePath(),
       sessionKey,
@@ -129,6 +130,7 @@ describe("session goals", () => {
       now: 10,
     });
 
+    expect(created.tokenCursor).toBe(33_110);
     expect(created.tokensUsed).toBe(0);
     expect(created.status).toBe("active");
 
@@ -137,34 +139,19 @@ describe("session goals", () => {
       sessionKey,
       entry: {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 56_200,
+        totalTokens: 33_133,
+        totalTokensFresh: true,
       },
     });
-    const synchronized = await getSessionGoal({
+    const finalized = await getSessionGoal({
       storePath: fixture.storePath(),
       sessionKey,
       now: 20,
     });
 
-    expect(synchronized.goal?.tokensUsed).toBe(0);
-    expect(synchronized.goal?.status).toBe("active");
-
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 56_450,
-      },
-    });
-    const afterGrowth = await getSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      now: 30,
-    });
-
-    expect(afterGrowth.goal?.tokensUsed).toBe(250);
-    expect(afterGrowth.goal?.status).toBe("active");
+    expect(finalized.goal?.tokenCursor).toBe(33_133);
+    expect(finalized.goal?.tokensUsed).toBe(23);
+    expect(finalized.goal?.status).toBe("active");
   });
 
   it("accounts each comparable snapshot once and rebases without losing usage after a reset", async () => {
@@ -381,7 +368,7 @@ describe("session goals", () => {
     expect(snapshot.goal?.status).toBe("active");
   });
 
-  it("still synchronizes snapshots whose freshness is implicit", async () => {
+  it("charges growth when creation-time freshness is implicit", async () => {
     await upsertSessionEntry({
       storePath: fixture.storePath(),
       sessionKey,
@@ -412,9 +399,10 @@ describe("session goals", () => {
 
     const snapshot = await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 20 });
 
-    expect(snapshot.goal?.tokenStart).toBe(125);
+    expect(snapshot.goal?.tokenStart).toBe(100);
     expect(snapshot.goal?.tokenStartFresh).toBe(true);
-    expect(snapshot.goal?.tokensUsed).toBe(0);
+    expect(snapshot.goal?.tokenCursor).toBe(125);
+    expect(snapshot.goal?.tokensUsed).toBe(25);
   });
 
   it("lets model tools complete or block but keeps existing terminal state", async () => {
