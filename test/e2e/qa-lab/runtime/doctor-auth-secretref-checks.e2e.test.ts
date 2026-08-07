@@ -1,7 +1,9 @@
 // QA Lab product proof for doctor gateway auth and SecretRef behavior.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
@@ -14,6 +16,7 @@ import {
 
 let instance: OpenClawTestInstance | undefined;
 type GatewayToken = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>["token"];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await instance?.cleanup();
@@ -45,6 +48,24 @@ function localGatewayConfig(token?: GatewayToken): OpenClawConfig {
       controlUi: { enabled: false },
     },
   };
+}
+
+async function expectAclFixturePreservesExecFileContract(preloadUrl: string): Promise<void> {
+  const probe = [
+    'import { execFile } from "node:child_process";',
+    'import { promisify } from "node:util";',
+    'const promise = promisify(execFile)(process.execPath, ["--version"], { encoding: "utf8" });',
+    'if (!promise.child || typeof promise.child.kill !== "function") process.exit(2);',
+    "const result = await promise;",
+    'if (!result || typeof result.stdout !== "string" || typeof result.stderr !== "string") process.exit(3);',
+    'process.stdout.write("ok");',
+  ].join("");
+  const result = await execFileAsync(
+    process.execPath,
+    [`--import=${preloadUrl}`, "--input-type=module", "--eval", probe],
+    { encoding: "utf8" },
+  );
+  expect(result).toEqual({ stdout: "ok", stderr: "" });
 }
 
 describe("doctor auth and SecretRef product proof", () => {
@@ -105,11 +126,12 @@ describe("doctor auth and SecretRef product proof", () => {
       };
       expect(unresolvedConfig.gateway?.auth?.token).toEqual(unresolvedRef);
 
+      const aclFixtureUrl = pathToFileURL(
+        path.resolve("test/fixtures/windows-acl-tools-unavailable.mjs"),
+      ).href;
+      await expectAclFixturePreservesExecFileContract(aclFixtureUrl);
       if (process.platform === "win32") {
-        forceNativeWindowsAclToolsUnavailable(
-          instance.env,
-          pathToFileURL(path.resolve("test/fixtures/windows-acl-tools-unavailable.mjs")).href,
-        );
+        forceNativeWindowsAclToolsUnavailable(instance.env, aclFixtureUrl);
       }
 
       const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
