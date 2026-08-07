@@ -61,11 +61,13 @@ describe("cron edit trigger-once CLI→gateway", () => {
   let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
   let tempRoot = "";
   let previousCronEnabled: boolean | undefined;
+  let previousSkipCron: string | undefined;
   const token = "proof-trigger-once-token";
 
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trigger-once-proof-"));
     previousCronEnabled = testState.cronEnabled;
+    previousSkipCron = process.env.OPENCLAW_SKIP_CRON;
     process.env.OPENCLAW_SKIP_CRON = "0";
     testState.cronEnabled = true;
     const configPath = path.join(testConfigRoot.value, "openclaw.json");
@@ -95,6 +97,11 @@ describe("cron edit trigger-once CLI→gateway", () => {
       started.envSnapshot.restore();
     }
     testState.cronEnabled = previousCronEnabled;
+    if (previousSkipCron === undefined) {
+      delete process.env.OPENCLAW_SKIP_CRON;
+    } else {
+      process.env.OPENCLAW_SKIP_CRON = previousSkipCron;
+    }
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
