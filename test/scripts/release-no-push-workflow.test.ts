@@ -319,9 +319,17 @@ describe("release validation no-push transport", () => {
       ["performance", "Dispatch and monitor OpenClaw Performance"],
     ] as const) {
       const dispatch = step(job(full, jobName), stepName);
+      const dispatchRun = dispatch.run ?? "";
       expect(dispatch.env?.PARENT_WORKFLOW_SHA, jobName).toBe("${{ github.sha }}");
-      expect(dispatch.run, jobName).toContain('"$child_head_sha" != "$PARENT_WORKFLOW_SHA"');
-      expect(dispatch.run, jobName).toContain("expected parent workflow SHA");
+      expect(dispatchRun, jobName).toContain('--arg head_sha "$PARENT_WORKFLOW_SHA"');
+      expect(dispatchRun, jobName).toContain("and (.head_sha == $head_sha)");
+      expect(dispatchRun, jobName).not.toContain('"$child_head_sha" != "$PARENT_WORKFLOW_SHA"');
+      expect(dispatchRun.indexOf('validate_child_run "$run_id"'), jobName).toBeLessThan(
+        dispatchRun.indexOf('active_child_run_id="$run_id"'),
+      );
+      expect(dispatchRun.indexOf('active_child_run_id="$run_id"'), jobName).toBeLessThan(
+        dispatchRun.indexOf("trap cancel_child EXIT INT TERM"),
+      );
     }
 
     const verify = step(job(full, "summary"), "Verify child workflow results");
