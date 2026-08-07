@@ -323,7 +323,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               buildTelegramThreadParams(context.threadSpec),
             );
           } catch (sendError: unknown) {
-            logVerbose(`telegram: error fallback send failed: ${String(sendError)}`);
+            runtime.error?.(danger(`telegram: error fallback send failed: ${String(sendError)}`));
           }
         }
         const result: TelegramMessageProcessingResult = {

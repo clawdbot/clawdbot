@@ -1,6 +1,5 @@
 // Telegram tests cover bot message plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
@@ -877,7 +876,7 @@ describe("telegram bot message processor", () => {
     expect(runtimeError).toHaveBeenCalledWith(
       "telegram message processing failed: Error: dispatch exploded",
     );
-    expect(logVerbose).toHaveBeenCalledWith(
+    expect(runtimeError).toHaveBeenCalledWith(
       "telegram: error fallback send failed: Error: blocked by user",
     );
   });
