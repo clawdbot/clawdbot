@@ -1143,36 +1143,43 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
 
   // One fact per line: chat clients wrap long lines mid-fact, so joining
   // several facts with separators reads as a wall rather than a summary.
+  // Grouped sections with blank lines between them: a flat list of ~15 facts
+  // reads as a wall, and chat clients give no other visual grouping.
   const text = [
-    versionLine,
-    timeLine,
-    uptimeLine,
-    ...modelLines,
-    selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
-    configuredFallbacksLine,
-    fallbackLine,
-    usagePair,
-    costLine,
-    cacheLine,
-    `📚 Context: ${contextUsageLabel}`,
-    compactionCount > 0 ? `🧹 Compactions: ${compactionCount}` : null,
-    mediaLine,
-    args.usageLine,
-    `🧵 Session: ${sessionValue}`,
-    args.subagentsLine,
-    args.taskLine,
-    args.channelFeatureLine,
-    `⚙️ Execution: ${execution.label}`,
-    `🤖 Runtime: ${agentRuntimeLabel}`,
-    modesValue ? `🎛️ Modes: ${modesValue}` : null,
-    args.pluginHealthLine,
-    pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
-    voiceLine,
-    groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
-    `🪢 Queue: ${queueMode}${queueHasSignal ? queueDetails : ""}`,
+    [versionLine, timeLine, uptimeLine],
+    [
+      ...modelLines,
+      selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
+      configuredFallbacksLine,
+      fallbackLine,
+    ],
+    [
+      usagePair,
+      costLine,
+      cacheLine,
+      `📚 Context: ${contextUsageLabel}`,
+      compactionCount > 0 ? `🧹 Compactions: ${compactionCount}` : null,
+      mediaLine,
+      args.usageLine,
+    ],
+    [`🧵 Session: ${sessionValue}`, args.subagentsLine, args.taskLine],
+    [
+      `⚙️ Execution: ${execution.label}`,
+      `🤖 Runtime: ${agentRuntimeLabel}`,
+      modesValue ? `🎛️ Modes: ${modesValue}` : null,
+      groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
+      `🪢 Queue: ${queueMode}${queueHasSignal ? queueDetails : ""}`,
+    ],
+    [
+      args.channelFeatureLine,
+      args.pluginHealthLine,
+      pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
+      voiceLine,
+    ],
   ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
+    .map((section) => section.filter((line): line is string => Boolean(line)).join("\n"))
+    .filter(Boolean)
+    .join("\n\n");
 
   const statusRows: MessagePresentationTableCell[][] = [];
   const pushStatusRow = (label: string, value: string | number | null | undefined) => {
