@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 // Diagnostics Prometheus tests cover service plugin behavior.
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -894,5 +895,33 @@ describe("diagnostics-prometheus service", () => {
       status: "dropped",
     });
     expect(exporter.render()).toBe("");
+  });
+});
+
+describe("metrics HTTP handler", () => {
+  it("sends Content-Length on HEAD responses matching the GET body", async () => {
+    const exporter = createDiagnosticsPrometheusExporter();
+    const server = createServer((req, res) => {
+      void exporter.handler(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP server address");
+    }
+    try {
+      const base = `http://127.0.0.1:${address.port}/api/diagnostics/prometheus`;
+      const get = await fetch(base);
+      const getBody = await get.text();
+      const head = await fetch(base, { method: "HEAD" });
+      await head.arrayBuffer();
+      expect(get.status).toBe(200);
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-length")).toBe(String(Buffer.byteLength(getBody)));
+    } finally {
+      server.close();
+    }
   });
 });
