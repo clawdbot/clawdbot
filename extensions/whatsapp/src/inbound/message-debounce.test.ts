@@ -106,7 +106,9 @@ describe("whatsapp inbound debouncer batching", () => {
   // Order matters for the model reading it, so the batch has to concatenate
   // rather than pick one entry.
   it("concatenates the structured context of several entries in receive order", async () => {
-    const second = [{ ...CONTACT_CONTEXT[0], payload: { kind: "contact", total: 1, contacts: [] } }];
+    const second = [
+      { ...CONTACT_CONTEXT[0], payload: { kind: "contact", total: 1, contacts: [] } },
+    ];
     const delivered = await flushBatch([
       queuedMessage("<contact>", CONTACT_CONTEXT),
       queuedMessage("<contact>", second),
@@ -123,10 +125,7 @@ describe("whatsapp inbound debouncer batching", () => {
   // Negative case: a text-only batch must not grow an empty array where the
   // field used to be absent, because downstream code distinguishes the two.
   it("leaves the field absent when no entry carried structured context", async () => {
-    const delivered = await flushBatch([
-      queuedMessage("first line"),
-      queuedMessage("second line"),
-    ]);
+    const delivered = await flushBatch([queuedMessage("first line"), queuedMessage("second line")]);
 
     expect(delivered).toHaveLength(1);
     expect(delivered[0]!.payload?.body).toBe("first line\nsecond line");
