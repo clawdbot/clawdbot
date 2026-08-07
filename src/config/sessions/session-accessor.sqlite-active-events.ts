@@ -15,8 +15,10 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   readVisibleMessageRange,
+  resolveSessionTranscriptGuardState,
   resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
+  type SessionTranscriptGuardState,
 } from "./session-accessor.sqlite-reset-window.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
@@ -43,19 +45,25 @@ export type SessionTranscriptMessageEvent = {
   seq: number;
 };
 
-export type SessionTranscriptMessageEventPage = {
-  activeLeafEntryId?: string | null;
+type SessionTranscriptMessageEvents = {
   events: SessionTranscriptMessageEvent[];
   totalMessages: number;
 };
 
-export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPage & {
+export type SessionTranscriptMessageEventPage = SessionTranscriptMessageEvents & {
+  guardKind: SessionTranscriptGuardState["kind"];
+  guardLeafEntryId: string | null;
+  hasTranscriptEvents: boolean;
+};
+
+export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEvents & {
   found: boolean;
+  guardKind: SessionTranscriptGuardState["kind"];
   hasOverreadContext: boolean;
   offset: number;
 };
 
-export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
+export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEvents & {
   scannedMessages: number;
   serializedBytes: number;
 };
@@ -75,14 +83,28 @@ function parseMessageEventRow(row: {
   };
 }
 
+/** Reads every message event and its canonical guard on one active-path snapshot. */
+export function readSessionTranscriptMessageEventSnapshot(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptMessageEventPage {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const visible = resolveVisibleMessagePositions(projection);
+    const guard = resolveSessionTranscriptGuardState(projection);
+    return {
+      events: readVisibleMessageRange(projection, 0, visible.total),
+      guardKind: guard.kind,
+      guardLeafEntryId: guard.guardLeafEntryId,
+      hasTranscriptEvents: guard.hasTranscriptEvents,
+      totalMessages: visible.total,
+    };
+  });
+}
+
 /** Reads every message event on the active path. Full callers remain intentionally O(output). */
 export function readSessionTranscriptMessageEvents(
   scope: SessionTranscriptReadScope,
 ): SessionTranscriptMessageEvent[] {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const visible = resolveVisibleMessagePositions(projection);
-    return readVisibleMessageRange(projection, 0, visible.total);
-  });
+  return readSessionTranscriptMessageEventSnapshot(scope).events;
 }
 
 /** Reads the projected active leaf without materializing the transcript. */
@@ -368,6 +390,7 @@ export function readRecentSessionTranscriptMessageEvents(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
+    const guard = resolveSessionTranscriptGuardState(projection);
     const maxMessages = Math.min(
       MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
       Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
@@ -378,8 +401,10 @@ export function readRecentSessionTranscriptMessageEvents(
     );
     if (maxMessages === 0 || maxLines === 0) {
       return {
-        activeLeafEntryId: projection.state.leafEventId,
         events: [],
+        guardKind: guard.kind,
+        guardLeafEntryId: guard.guardLeafEntryId,
+        hasTranscriptEvents: guard.hasTranscriptEvents,
         totalMessages: visible.total,
       };
     }
@@ -406,8 +431,10 @@ export function readRecentSessionTranscriptMessageEvents(
       bytes += eventBytes;
     }
     return {
-      activeLeafEntryId: projection.state.leafEventId,
       events: selected.toReversed(),
+      guardKind: guard.kind,
+      guardLeafEntryId: guard.guardLeafEntryId,
+      hasTranscriptEvents: guard.hasTranscriptEvents,
       totalMessages: visible.total,
     };
   });
@@ -420,6 +447,7 @@ export function readSessionTranscriptMessageEventPage(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
+    const guard = resolveSessionTranscriptGuardState(projection);
     const totalMessages = visible.total;
     const offset = Math.min(
       Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
@@ -432,8 +460,10 @@ export function readSessionTranscriptMessageEventPage(
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
     return {
-      activeLeafEntryId: projection.state.leafEventId,
       events: readVisibleMessageRange(projection, start, endExclusive),
+      guardKind: guard.kind,
+      guardLeafEntryId: guard.guardLeafEntryId,
+      hasTranscriptEvents: guard.hasTranscriptEvents,
       totalMessages,
     };
   });
@@ -464,7 +494,6 @@ export function readSessionTranscriptBoundedMessageTailPage(
     const positions = resolveVisibleMessagePositionRange(projection, start, endExclusive);
     if (positions.length === 0 || maxBytes === 0) {
       return {
-        activeLeafEntryId: projection.state.leafEventId,
         events: [],
         scannedMessages: positions.length,
         serializedBytes: 0,
@@ -517,7 +546,6 @@ export function readSessionTranscriptBoundedMessageTailPage(
               .orderBy("active.message_position", "asc"),
           ).rows.map(parseMessageEventRow);
     return {
-      activeLeafEntryId: projection.state.leafEventId,
       events,
       scannedMessages: positions.length,
       serializedBytes,
@@ -576,6 +604,7 @@ export function readSessionTranscriptMessageAnchorPage(
 ): SessionTranscriptMessageAnchorPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const db = getActiveTranscriptKysely(projection.database);
+    const guard = resolveSessionTranscriptGuardState(projection);
     const anchor = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
@@ -596,6 +625,7 @@ export function readSessionTranscriptMessageAnchorPage(
       return {
         events: [],
         found: false,
+        guardKind: guard.kind,
         hasOverreadContext: false,
         offset: 0,
         totalMessages,
@@ -609,6 +639,7 @@ export function readSessionTranscriptMessageAnchorPage(
       return {
         events: [],
         found: false,
+        guardKind: guard.kind,
         hasOverreadContext: false,
         offset: 0,
         totalMessages,
@@ -627,6 +658,7 @@ export function readSessionTranscriptMessageAnchorPage(
     return {
       events: readVisibleMessageRange(projection, readStart, endExclusive),
       found: true,
+      guardKind: guard.kind,
       hasOverreadContext: readStart < start,
       offset: totalMessages - endExclusive,
       totalMessages,

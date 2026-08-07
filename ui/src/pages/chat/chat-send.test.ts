@@ -7365,7 +7365,7 @@ describe("handleSendChat", () => {
     });
   });
 
-  it("rebinds a failed pre-clear retry to the authoritative empty transcript", async () => {
+  it("rebinds a failed pre-clear retry to the authoritative reset boundary", async () => {
     let historyRequests = 0;
     let sendAttempts = 0;
     const host = makeChatHost({
@@ -7388,7 +7388,7 @@ describe("handleSendChat", () => {
           return {
             messages: [],
             sessionInfo: row("agent:main", {
-              activeLeafEntryId: cleared ? null : "leaf-before-clear",
+              activeLeafEntryId: cleared ? "reset-after-clear" : "leaf-before-clear",
               sessionId: cleared ? "session-after-clear" : "session-before-clear",
             }),
           };
@@ -7418,7 +7418,7 @@ describe("handleSendChat", () => {
     await handleSendChat(host);
 
     expect(historyRequests).toBe(2);
-    expect(host.chatDisplayedLeafEntryId).toBeNull();
+    expect(host.chatDisplayedLeafEntryId).toBe("reset-after-clear");
     expect(host.chatQueue).toEqual([
       expect.objectContaining({ id: failedId, sendState: "failed" }),
     ]);
@@ -7436,7 +7436,7 @@ describe("handleSendChat", () => {
       .map(([, params]) => requireRecord(params, "post-clear send payload"));
     expect(sends).toHaveLength(2);
     expect(sends[1]).toMatchObject({
-      expectedLeafEntryId: null,
+      expectedLeafEntryId: "reset-after-clear",
       sessionId: "session-after-clear",
     });
     expect(sends[1]).not.toMatchObject({
@@ -7446,7 +7446,7 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
       id: failedId,
       transcriptRevision: {
-        expectedLeafEntryId: null,
+        expectedLeafEntryId: "reset-after-clear",
         sessionId: "session-after-clear",
       },
     });
@@ -7459,7 +7459,10 @@ describe("handleSendChat", () => {
         "chat.history": {
           messages: [],
           thinkingLevel: null,
-          sessionInfo: { activeLeafEntryId: null, sessionId: "session-after-clear" },
+          sessionInfo: {
+            activeLeafEntryId: "reset-after-clear",
+            sessionId: "session-after-clear",
+          },
         },
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "post-clear send payload");
@@ -7480,7 +7483,7 @@ describe("handleSendChat", () => {
     expect(host.chatRunError).toBeNull();
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
-    expect(host.chatDisplayedLeafEntryId).toBeNull();
+    expect(host.chatDisplayedLeafEntryId).toBe("reset-after-clear");
 
     host.chatMessage = "after clear";
     await handleSendChat(host);
@@ -7488,7 +7491,7 @@ describe("handleSendChat", () => {
     expect(
       findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "post-clear send"),
     ).toMatchObject({
-      expectedLeafEntryId: null,
+      expectedLeafEntryId: "reset-after-clear",
       sessionId: "session-after-clear",
     });
   });

@@ -212,11 +212,25 @@ async function writeMainSessionTranscript(
   }
   // These fixtures always seed a complete fresh transcript. Replace it in one
   // transaction so large history cases do not pay one SQLite commit per event.
+  // Give message rows stable identities so history fixtures expose a valid branch token;
+  // identity-gap coverage deletes the indexed identity explicitly.
   const transcriptEvents = events
     .filter((event) => typeof event !== "string" || event.trim())
-    .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
-    typeof replaceTranscriptEvents
-  >[1];
+    .map((event, index) => {
+      const parsed = typeof event === "string" ? JSON.parse(event) : event;
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        Object.hasOwn(parsed, "message")
+      ) {
+        const record = parsed as Record<string, unknown>;
+        if (!(typeof record.id === "string" && record.id.trim())) {
+          return { ...record, id: `gateway-chat-fixture-${index}` };
+        }
+      }
+      return parsed;
+    }) as Parameters<typeof replaceTranscriptEvents>[1];
   await replaceTranscriptEvents(
     {
       agentId: opts?.agentId ?? "main",
@@ -5545,6 +5559,63 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.message.get keeps archive visibility checks on the anchored source", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionId = "sess-archive-source-stable";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionStartedAt = Date.now() - 1_000;
+      await writeSessionStore({
+        entries: {
+          main: { sessionId, updatedAt: Date.now(), sessionStartedAt },
+        },
+      });
+      await writeMainSessionTranscript(
+        [
+          createTextTranscriptEvent("user", "pre-reset", {
+            id: "pre-reset-active",
+            parentId: null,
+          }),
+          JSON.stringify({
+            type: "reset",
+            id: "active-reset-only",
+            parentId: "pre-reset-active",
+            timestamp: new Date(sessionStartedAt).toISOString(),
+            reason: "new",
+          }),
+        ],
+        sessionId,
+      );
+      await fs.writeFile(
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
+        [
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
+          JSON.stringify(
+            createTextTranscriptEvent("assistant", "archive source-stable", {
+              id: "msg-archive-source-stable",
+              timestamp: sessionStartedAt + 500,
+            }),
+          ),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const history = await rpcReq<{
+        messages?: unknown[];
+        sessionInfo?: { activeLeafEntryId?: string | null };
+      }>(ws, "chat.history", { sessionKey: "main", limit: 100 });
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages).toEqual([]);
+      expect(history.payload?.sessionInfo?.activeLeafEntryId).toBe("active-reset-only");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-archive-source-stable",
+      });
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).toContain("archive source-stable");
+    });
+  });
+
   test("chat.message.get accepts the selected agent for global sessions", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
@@ -5757,6 +5828,49 @@ describe("gateway server chat", () => {
       );
       expect(ready.ok).toBe(true);
       expect(JSON.stringify(ready.payload?.messages)).toContain("ready after rebuild");
+    });
+  });
+
+  test("chat.history returns retryable unavailable when the branch token cannot be identified", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript([
+        createTextTranscriptEvent("user", "identified", {
+          id: "history-identified",
+          parentId: null,
+        }),
+        createTextTranscriptEvent("assistant", "unidentified tail", {
+          id: "history-unidentified-tail",
+          parentId: "history-identified",
+        }),
+      ]);
+      openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      })
+        .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
+        .run("sess-main", "history-unidentified-tail");
+
+      for (const request of [
+        { limit: 1 },
+        { messageId: "history-identified" },
+        { messageId: "history-unidentified-tail" },
+        { messageId: "history-missing" },
+      ]) {
+        const unavailable = await rpcReq(ws, "chat.history", {
+          sessionKey: "main",
+          ...request,
+        });
+
+        expect(unavailable.ok).toBe(false);
+        expect(unavailable.error).toMatchObject({
+          code: "UNAVAILABLE",
+          message:
+            "session branch token is unavailable; retry shortly, then reset the session if it persists",
+          details: { method: "chat.history", reason: "active-leaf-unavailable" },
+          retryable: true,
+        });
+      }
     });
   });
 

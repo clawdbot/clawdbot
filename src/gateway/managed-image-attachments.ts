@@ -22,7 +22,6 @@ import {
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
@@ -64,11 +63,11 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
-  loadSessionEntryReadOnly,
-  resolveSessionHistoryTranscriptPathAsync,
-} from "./session-utils.js";
+  readSessionMessageByIdAsync,
+  readSessionMessagesWithSourceAsync,
+} from "./session-transcript-readers.js";
+import { loadSessionEntryReadOnly } from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
@@ -135,13 +134,6 @@ type SessionStoreAvailabilityRead = ReturnType<
   typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
 >;
 
-type SessionManagedOutgoingAttachmentIndexCacheEntry = {
-  transcriptPath: string;
-  mtimeMs: number;
-  size: number;
-  index: SessionManagedOutgoingAttachmentIndex;
-};
-
 type ManagedOutgoingImageTicketPayload = {
   scope: typeof MANAGED_OUTGOING_IMAGE_TICKET_SCOPE;
   sessionKey: string;
@@ -160,17 +152,6 @@ export type ManagedOutgoingMediaArtifactDownload = {
   url: string;
   expiresAt: string;
 };
-type SessionManagedOutgoingAttachmentTranscriptStat = Omit<
-  SessionManagedOutgoingAttachmentIndexCacheEntry,
-  "index"
->;
-
-const sessionManagedOutgoingAttachmentIndexCache = new Map<
-  string,
-  SessionManagedOutgoingAttachmentIndexCacheEntry
->();
-const MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES = 500;
-
 function buildSessionManagedOutgoingAttachmentIndexCacheKey(
   sessionKey: string,
   agentId?: string,
@@ -828,63 +809,9 @@ function collectManagedOutgoingAttachmentRefs(
   return [...refs.values()];
 }
 
-function getCachedSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
-  agentId: string | undefined,
-  stat: { transcriptPath: string; mtimeMs: number; size: number },
-) {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
-  const cached = sessionManagedOutgoingAttachmentIndexCache.get(cacheKey);
-  if (!cached) {
-    return null;
-  }
-  if (
-    cached.transcriptPath !== stat.transcriptPath ||
-    cached.mtimeMs !== stat.mtimeMs ||
-    cached.size !== stat.size
-  ) {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-    return null;
-  }
-  sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-  sessionManagedOutgoingAttachmentIndexCache.set(cacheKey, cached);
-  return cached.index;
-}
-
-function setCachedSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
-  agentId: string | undefined,
-  stat: SessionManagedOutgoingAttachmentTranscriptStat,
-  index: SessionManagedOutgoingAttachmentIndex,
-) {
-  sessionManagedOutgoingAttachmentIndexCache.set(
-    buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId),
-    {
-      transcriptPath: stat.transcriptPath,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      index,
-    },
-  );
-  pruneMapToMaxSize(
-    sessionManagedOutgoingAttachmentIndexCache,
-    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES,
-  );
-}
-
-function sameManagedOutgoingAttachmentTranscriptStat(
-  left: SessionManagedOutgoingAttachmentTranscriptStat | null,
-  right: SessionManagedOutgoingAttachmentTranscriptStat | null,
-): boolean {
-  return (
-    left?.transcriptPath === right?.transcriptPath &&
-    left?.mtimeMs === right?.mtimeMs &&
-    left?.size === right?.size
-  );
-}
-
 async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
+  messageId: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
   agentId?: string,
   storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
@@ -969,95 +896,46 @@ async function getSessionManagedOutgoingAttachmentIndex(
     return { kind: "available", index: null };
   }
 
-  let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
-  // This path is only a cache/reset-archive hint. Canonical active messages are
-  // read from the structured SQLite identity below even when no artifact exists.
-  const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
+  const readScope = {
+    agentId: ownerAgentId,
+    sessionEntry: entry,
     sessionId,
+    sessionKey,
     storePath,
-    undefined,
-    { allowResetArchiveFallback: true },
-  );
-  if (resolvedTranscriptPath) {
-    try {
-      const stat = await fs.stat(resolvedTranscriptPath);
-      transcriptStat = {
-        transcriptPath: resolvedTranscriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
-        sessionKey,
-        agentId,
-        transcriptStat,
-      );
-      if (cachedIndex) {
-        cache?.set(cacheKey, cachedIndex);
-        return { kind: "available", index: cachedIndex };
-      }
-    } catch {
-      sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-    }
-  } else {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-  }
-
-  const readResult = await readSessionMessagesWithSourceAsync(
-    {
-      agentId,
-      sessionEntry: entry,
-      sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
+  };
+  const indexedMessages: Array<{ message: unknown; messageId: string }> = [];
+  if (cache) {
+    const readResult = await readSessionMessagesWithSourceAsync(readScope, {
       mode: "full",
       reason: "managed outgoing attachment index",
-      allowResetArchiveFallback: true,
-    },
-  );
-  const messages = readResult.messages;
-  const preReadTranscriptStat = transcriptStat;
-  if (readResult.transcriptPath) {
-    try {
-      const stat = await fs.stat(readResult.transcriptPath);
-      const postReadTranscriptStat = {
-        transcriptPath: readResult.transcriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      transcriptStat = sameManagedOutgoingAttachmentTranscriptStat(
-        preReadTranscriptStat,
-        postReadTranscriptStat,
-      )
-        ? postReadTranscriptStat
-        : null;
-    } catch {
-      transcriptStat = null;
+      transcriptSource: "all",
+    });
+    for (const message of readResult.messages) {
+      const id = (message as { __openclaw?: { id?: unknown } } | null)?.__openclaw?.id;
+      if (typeof id === "string" && id) {
+        indexedMessages.push({ message, messageId: id });
+      }
     }
   } else {
-    transcriptStat = null;
+    const anchored = await readSessionMessageByIdAsync(readScope, messageId, {
+      allowResetArchiveFallback: true,
+    });
+    if (anchored.found && !anchored.oversized && anchored.message !== undefined) {
+      indexedMessages.push({ message: anchored.message, messageId });
+    }
   }
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
-  for (const message of messages) {
-    const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
-    const messageId = meta?.id;
-    if (typeof messageId !== "string" || !messageId) {
-      continue;
-    }
+  for (const { message, messageId: indexedMessageId } of indexedMessages) {
     for (const ref of collectManagedOutgoingAttachmentRefs(
       Array.isArray((message as { content?: unknown[] } | null)?.content)
         ? ((message as { content: unknown[] }).content as Record<string, unknown>[])
         : [],
       sessionKey,
     )) {
-      index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+      index.add(buildManagedOutgoingAttachmentRefKey(indexedMessageId, ref.attachmentId));
     }
   }
 
-  if (transcriptStat) {
-    setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
-  }
   cache?.set(cacheKey, index);
   return { kind: "available", index };
 }
@@ -1074,6 +952,7 @@ async function recordMatchesTranscriptMessage(
   }
   const read = await getSessionManagedOutgoingAttachmentIndex(
     record.sessionKey,
+    record.messageId,
     cache,
     record.agentId,
     storeAvailabilityCache,

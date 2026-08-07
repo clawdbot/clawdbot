@@ -31,15 +31,17 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
   const page = readSessionTranscriptMessageAnchorPage(toTranscriptReadScope(target), opts);
   if (!page.found) {
     if (opts.allowResetArchiveFallback === true) {
-      return await new ArchivedTranscriptReader({
+      const archived = await new ArchivedTranscriptReader({
         agentId: target.agentId,
         sessionFile,
         sessionId: target.sessionId,
         storePath: target.storePath,
       }).readAroundId({ ...opts, resetArchiveOnly: true });
+      return { ...archived, guardKind: page.guardKind };
     }
     return {
       found: false,
+      guardKind: page.guardKind,
       hasOverreadContext: false,
       messages: [],
       offset: 0,
@@ -49,6 +51,7 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
   }
   return {
     found: true,
+    guardKind: page.guardKind,
     hasOverreadContext: page.hasOverreadContext,
     messages: page.events.flatMap((entry) => {
       const message = sqliteMessageEventWithSeq(entry);

@@ -8,11 +8,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
-import {
-  readSessionTranscriptActivePathEntryState,
-  readSessionTranscriptActiveLeafEvents,
-  resolveSessionTranscriptActiveLeafEntryId,
-} from "../../config/sessions/session-accessor.js";
+import { readSessionTranscriptGuardState } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -233,41 +229,33 @@ export async function admitChatSend(params: {
       if (!resolvedInjectionTarget) {
         // Runtime session identity resolves through the canonical SQLite accessor;
         // legacy/reset-archive files are read-only history fallbacks, never send targets.
-        const activePathState =
-          requestedSessionMatchesLatest && latestSessionId && expectedLeafEntryId !== null
-            ? readSessionTranscriptActivePathEntryState(
-                {
-                  agentId,
-                  sessionId: latestSessionId,
-                  sessionKey: latestSession.canonicalKey,
-                  sessionEntry: latestEntry,
-                  storePath: latestSession.storePath,
-                },
-                expectedLeafEntryId,
-              )
-            : undefined;
-        const currentLeafEntryId = activePathState
-          ? activePathState.activeLeafEntryId
-          : latestSessionId
-            ? resolveSessionTranscriptActiveLeafEntryId(
-                readSessionTranscriptActiveLeafEvents({
-                  agentId,
-                  sessionId: latestSessionId,
-                  sessionKey: latestSession.canonicalKey,
-                  sessionEntry: latestEntry,
-                  storePath: latestSession.storePath,
-                }),
-              )
-            : undefined;
+        const guardState = latestSessionId
+          ? readSessionTranscriptGuardState(
+              {
+                agentId,
+                sessionId: latestSessionId,
+                sessionKey: latestSession.canonicalKey,
+                sessionEntry: latestEntry,
+                storePath: latestSession.storePath,
+              },
+              expectedLeafEntryId ?? undefined,
+            )
+          : undefined;
         // The lifecycle admission fence also blocks branch switching. Check the canonical
         // transcript under that fence so a stale pane cannot dispatch onto another branch.
-        // A same-generation ancestor only proves linear progress on the selected path;
+        // A same-reset-epoch ancestor only proves linear progress on the selected path;
         // callers without a rendered session generation retain exact-leaf semantics.
         const acceptsSameBranchAdvance =
           expectedLeafEntryId !== null &&
           requestedSessionMatchesLatest &&
-          activePathState?.entryOnActivePath === true;
-        if ((currentLeafEntryId ?? null) !== expectedLeafEntryId && !acceptsSameBranchAdvance) {
+          guardState?.expectedEntryOnGuardPath === true;
+        const matchesExpectedLeaf =
+          guardState?.kind === "identified"
+            ? guardState.guardLeafEntryId === expectedLeafEntryId
+            : guardState?.kind === "empty" || guardState === undefined
+              ? expectedLeafEntryId === null
+              : false;
+        if (!matchesExpectedLeaf && !acceptsSameBranchAdvance) {
           throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
         }
       }

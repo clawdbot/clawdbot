@@ -49,29 +49,6 @@ function getIndexKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<TranscriptIndexDatabase>(db);
 }
 
-/** Checks one event id against the materialized active path. */
-export function isSessionTranscriptEventOnActivePath(
-  db: DatabaseSync,
-  sessionId: string,
-  eventId: string,
-): boolean {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getIndexKysely(db)
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .select("active.event_seq")
-      .where("identity.session_id", "=", sessionId)
-      .where("identity.event_id", "=", eventId)
-      .limit(1),
-  );
-  return row !== undefined;
-}
-
 function readSessionTranscriptProjectionState(
   db: DatabaseSync,
   sessionId: string,

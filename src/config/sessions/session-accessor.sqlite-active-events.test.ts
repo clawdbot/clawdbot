@@ -18,9 +18,10 @@ import {
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
+  readSessionTranscriptMessageEventSnapshot,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
-import { readSessionTranscriptActivePathEntryState } from "./session-accessor.sqlite-active-path.js";
+import { readSessionTranscriptGuardState } from "./session-accessor.sqlite-active-path.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
@@ -117,21 +118,29 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
       expect.objectContaining({ id: "active" }),
     ]);
-    expect(readSessionTranscriptActivePathEntryState(scope, "root")).toEqual({
-      activeLeafEntryId: "active",
-      entryOnActivePath: true,
+    expect(readSessionTranscriptGuardState(scope, "root")).toEqual({
+      kind: "identified",
+      expectedEntryOnGuardPath: true,
+      guardLeafEntryId: "active",
+      hasTranscriptEvents: true,
     });
-    expect(readSessionTranscriptActivePathEntryState(scope, "active")).toEqual({
-      activeLeafEntryId: "active",
-      entryOnActivePath: true,
+    expect(readSessionTranscriptGuardState(scope, "active")).toEqual({
+      kind: "identified",
+      expectedEntryOnGuardPath: true,
+      guardLeafEntryId: "active",
+      hasTranscriptEvents: true,
     });
-    expect(readSessionTranscriptActivePathEntryState(scope, "inactive")).toEqual({
-      activeLeafEntryId: "active",
-      entryOnActivePath: false,
+    expect(readSessionTranscriptGuardState(scope, "inactive")).toEqual({
+      kind: "identified",
+      expectedEntryOnGuardPath: false,
+      guardLeafEntryId: "active",
+      hasTranscriptEvents: true,
     });
-    expect(readSessionTranscriptActivePathEntryState(scope, "missing")).toEqual({
-      activeLeafEntryId: "active",
-      entryOnActivePath: false,
+    expect(readSessionTranscriptGuardState(scope, "missing")).toEqual({
+      kind: "identified",
+      expectedEntryOnGuardPath: false,
+      guardLeafEntryId: "active",
+      hasTranscriptEvents: true,
     });
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
@@ -358,13 +367,196 @@ describe("SQLite active transcript event projection", () => {
         maxBytes: 1_024,
         maxLines: 1,
         maxMessages: 1,
-      }).activeLeafEntryId,
+      }).guardLeafEntryId,
     ).toBe("newer-compaction");
+    expect(
+      readSessionTranscriptGuardState(scope, "newer-compaction").expectedEntryOnGuardPath,
+    ).toBe(true);
+    expect(readSessionTranscriptGuardState(scope, "post-reset").expectedEntryOnGuardPath).toBe(
+      true,
+    );
     expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
       expect.objectContaining({ id: "newer-compaction" }),
     ]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
+  });
+
+  it("uses the logical active leaf while reset fences stale tokens", async () => {
+    expect(readSessionTranscriptMessageEventSnapshot(scope)).toMatchObject({
+      events: [],
+      guardKind: "empty",
+      guardLeafEntryId: null,
+      hasTranscriptEvents: false,
+      totalMessages: 0,
+    });
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "hidden-old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "retained",
+          parentId: "hidden-old",
+          message: { role: "assistant", content: "retained" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "retained-reset",
+      parentId: "retained",
+      timestamp: "2026-07-22T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "retained",
+    });
+
+    for (const page of [
+      readSessionTranscriptMessageEventSnapshot(scope),
+      readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes: 1_024,
+        maxLines: 10,
+        maxMessages: 10,
+      }),
+      readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 }),
+    ]) {
+      expect(page).toMatchObject({
+        guardKind: "identified",
+        guardLeafEntryId: "retained-reset",
+        hasTranscriptEvents: true,
+        totalMessages: 1,
+      });
+    }
+    expect(readSessionTranscriptGuardState(scope, "retained").expectedEntryOnGuardPath).toBe(false);
+    expect(readSessionTranscriptGuardState(scope, "retained-reset").expectedEntryOnGuardPath).toBe(
+      true,
+    );
+    expect(readSessionTranscriptGuardState(scope, "hidden-old").expectedEntryOnGuardPath).toBe(
+      false,
+    );
+
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "empty-reset",
+      parentId: "retained-reset",
+      timestamp: "2026-07-22T00:01:00.000Z",
+      reason: "new",
+    });
+    expect(readSessionTranscriptGuardState(scope, "retained-reset")).toEqual({
+      kind: "identified",
+      expectedEntryOnGuardPath: false,
+      guardLeafEntryId: "empty-reset",
+      hasTranscriptEvents: true,
+    });
+    expect(readSessionTranscriptGuardState(scope, "empty-reset").expectedEntryOnGuardPath).toBe(
+      true,
+    );
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "first-post-reset",
+          parentId: "empty-reset",
+          message: { role: "user", content: "new" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "custom",
+      id: "background-append",
+      parentId: "first-post-reset",
+      timestamp: "2026-07-22T00:02:00.000Z",
+    });
+    expect(readSessionTranscriptGuardState(scope, "first-post-reset")).toEqual({
+      kind: "identified",
+      expectedEntryOnGuardPath: true,
+      guardLeafEntryId: "background-append",
+      hasTranscriptEvents: true,
+    });
+    expect(
+      readSessionTranscriptGuardState(scope, "background-append").expectedEntryOnGuardPath,
+    ).toBe(true);
+    expect(readSessionTranscriptGuardState(scope, "hidden-old").expectedEntryOnGuardPath).toBe(
+      false,
+    );
+  });
+
+  it("does not fall back behind an unidentified logical leaf", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "identified-old", message: { role: "user", content: "old" } },
+        {
+          eventId: "unidentified-tail",
+          parentId: "identified-old",
+          message: { role: "assistant", content: "tail" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env })
+      .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
+      .run(scope.sessionId, "unidentified-tail");
+
+    expect(readSessionTranscriptMessageEventSnapshot(scope)).toMatchObject({
+      guardKind: "unavailable",
+      guardLeafEntryId: null,
+    });
+    expect(readSessionTranscriptGuardState(scope)).toEqual({
+      kind: "unavailable",
+      expectedEntryOnGuardPath: false,
+      guardLeafEntryId: null,
+      hasTranscriptEvents: true,
+    });
+    for (const expectedEntryId of ["identified-old", "unidentified-tail"]) {
+      expect(readSessionTranscriptGuardState(scope, expectedEntryId)).toEqual({
+        kind: "unavailable",
+        expectedEntryOnGuardPath: false,
+        guardLeafEntryId: null,
+        hasTranscriptEvents: true,
+      });
+    }
+  });
+
+  it("rejects structural append tokens when an explicit leaf clears visible messages", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "old-append-parent",
+          parentId: null,
+          message: { role: "user", content: "old" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "empty-leaf-control",
+      parentId: "old-append-parent",
+      targetId: null,
+      appendParentId: "old-append-parent",
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+
+    expect(readSessionTranscriptMessageEventSnapshot(scope)).toMatchObject({
+      events: [],
+      guardKind: "empty",
+      guardLeafEntryId: null,
+      hasTranscriptEvents: true,
+      totalMessages: 0,
+    });
+    expect(
+      readSessionTranscriptGuardState(scope, "old-append-parent").expectedEntryOnGuardPath,
+    ).toBe(false);
+    expect(
+      readSessionTranscriptGuardState(scope, "empty-leaf-control").expectedEntryOnGuardPath,
+    ).toBe(false);
+    expect(readSessionTranscriptGuardState(scope)).toEqual({
+      kind: "empty",
+      expectedEntryOnGuardPath: false,
+      guardLeafEntryId: null,
+      hasTranscriptEvents: true,
+    });
   });
 
   it("recomputes a cached reset window after a branch-changing message", async () => {
@@ -617,6 +809,10 @@ describe("SQLite active transcript event projection", () => {
       expect(concurrentRead.events.map((entry) => (entry.event as { id?: string }).id)).toEqual([
         "seed",
       ]);
+      expect(concurrentRead).toMatchObject({
+        guardLeafEntryId: "seed",
+        hasTranscriptEvents: true,
+      });
 
       const afterCommit = readRecentSessionTranscriptMessageEvents(scope, {
         maxBytes: 1024 * 1024,
@@ -628,6 +824,10 @@ describe("SQLite active transcript event projection", () => {
         "seed",
         "concurrent",
       ]);
+      expect(afterCommit).toMatchObject({
+        guardLeafEntryId: "concurrent",
+        hasTranscriptEvents: true,
+      });
     } finally {
       writer.close();
     }

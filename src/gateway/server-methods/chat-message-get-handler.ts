@@ -13,10 +13,8 @@ import {
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import {
-  readSessionMessageByIdAsync,
-  readSessionMessagesAsync,
-} from "../session-transcript-readers.js";
+import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
+import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { loadSessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryMessageId } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
@@ -32,12 +30,11 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   agentId?: string;
   messageId: string;
   sessionStartedAt?: number;
-  allowResetArchiveFallback?: boolean;
 }): Promise<boolean> {
   if (params.sessionStartedAt === undefined) {
     return true;
   }
-  const messages = await readSessionMessagesAsync(
+  const anchored = await readSessionMessagesAroundIdWithStatsAsync(
     {
       agentId: params.agentId,
       sessionEntry: params.sessionEntry,
@@ -46,12 +43,12 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
       storePath: params.storePath,
     },
     {
-      mode: "full",
-      reason: "chat.message.get visibility",
-      ...(params.allowResetArchiveFallback === true ? { allowResetArchiveFallback: true } : {}),
+      allowResetArchiveFallback: true,
+      maxMessages: 1,
+      messageId: params.messageId,
     },
   );
-  return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
+  return dropPreSessionStartAnnouncePairs(anchored.messages, params.sessionStartedAt).some(
     (message) => readChatHistoryMessageId(message) === params.messageId,
   );
 }
@@ -119,7 +116,6 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       messageId,
       sessionStartedAt:
         typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-      allowResetArchiveFallback: true,
     });
     if (!visible) {
       respond(true, { ok: false, unavailableReason: "not_found" });

@@ -312,14 +312,21 @@ async function handleChatHistoryRequest({
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
     }
+    const guardUnavailable = error.reason === "active-leaf-identity";
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "session history is rebuilding; retry shortly", {
-        details: { method },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        guardUnavailable
+          ? "session branch token is unavailable; retry shortly, then reset the session if it persists"
+          : "session history is rebuilding; retry shortly",
+        {
+          details: guardUnavailable ? { method, reason: "active-leaf-unavailable" } : { method },
+          retryable: true,
+          retryAfterMs: guardUnavailable ? 1_000 : 250,
+        },
+      ),
     );
     return;
   }

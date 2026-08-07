@@ -209,6 +209,24 @@ describe("sqlite hot query plans", () => {
     );
     expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 
+    const latestActiveBoundaryPlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT active.active_position, identity.event_type, identity.seq
+          FROM transcript_event_identities AS identity
+          JOIN session_transcript_active_events AS active
+            ON active.session_id = identity.session_id AND active.event_seq = identity.seq
+         WHERE identity.session_id = ?
+           AND identity.event_type = 'reset'
+         ORDER BY identity.seq DESC
+         LIMIT 1
+      `,
+      ["session-1"],
+    );
+    expect(latestActiveBoundaryPlan).toContain("idx_agent_transcript_event_sequence");
+    expect(latestActiveBoundaryPlan).toContain("idx_agent_transcript_active_event_seq");
+    expect(latestActiveBoundaryPlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+
     const mirrorIdentityPlan = explainQueryPlan(
       database.db,
       `

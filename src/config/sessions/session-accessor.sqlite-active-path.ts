@@ -1,21 +1,16 @@
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
-import { isSessionTranscriptEventOnActivePath } from "./session-transcript-index.js";
+import {
+  resolveSessionTranscriptGuardState,
+  type SessionTranscriptGuardState,
+} from "./session-accessor.sqlite-reset-window.js";
 
-/** Checks one entry against the current active path without materializing that path. */
-export function readSessionTranscriptActivePathEntryState(
+/** Reads the canonical logical leaf and optional same-reset-epoch ancestry in one snapshot. */
+export function readSessionTranscriptGuardState(
   scope: SessionTranscriptReadScope,
-  entryId: string,
-): {
-  activeLeafEntryId: string | null;
-  entryOnActivePath: boolean;
-} {
-  return withCurrentProjectionSnapshot(scope, ({ database, resolved, state }) => ({
-    activeLeafEntryId: state.leafEventId,
-    entryOnActivePath: isSessionTranscriptEventOnActivePath(
-      database.db,
-      resolved.sessionId,
-      entryId,
-    ),
-  }));
+  expectedEntryId?: string,
+): SessionTranscriptGuardState {
+  return withCurrentProjectionSnapshot(scope, (projection) =>
+    resolveSessionTranscriptGuardState(projection, expectedEntryId),
+  );
 }
