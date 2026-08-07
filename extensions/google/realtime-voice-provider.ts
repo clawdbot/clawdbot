@@ -419,19 +419,19 @@ function buildBrowserInitialSetup(model: string) {
   };
 }
 
-// Google Live declares PCM16 output at 24 kHz. The provider-controlled MIME
-// `rate` parameter drives `resamplePcm`'s output buffer size (`outputSamples =
-// inputSamples / (inputRate / outputRate)`), so any value other than 24 kHz
-// either inflates the allocation (low rates like `rate=1` → ~24000x) or
-// silently drops audio (very high rates). Normalize every non-24 kHz value to
-// the declared 24 kHz provider output rate so malformed metadata never reaches
-// the resampler.
+// Google Live PCM16 output uses standard voice/audio sample rates
+// (8–48 kHz). Out-of-range MIME `rate` values (e.g., `rate=1` → ~24000x
+// OOM in resamplePcm, `rate=999999999` → silent drop) collapse to 24 kHz.
 const GOOGLE_REALTIME_PCM_OUTPUT_SAMPLE_RATE_HZ = 24_000;
+const GOOGLE_REALTIME_PCM_INPUT_RATE_MIN_HZ = 8_000;
+const GOOGLE_REALTIME_PCM_INPUT_RATE_MAX_HZ = 48_000;
 
 function parsePcmSampleRate(mimeType: string | undefined): number {
   const match = mimeType?.match(/(?:^|[;,\s])rate=(\d+)/i);
   const parsed = match ? Number.parseInt(match[1] ?? "", 10) : Number.NaN;
-  return parsed === GOOGLE_REALTIME_PCM_OUTPUT_SAMPLE_RATE_HZ
+  return Number.isFinite(parsed) &&
+    parsed >= GOOGLE_REALTIME_PCM_INPUT_RATE_MIN_HZ &&
+    parsed <= GOOGLE_REALTIME_PCM_INPUT_RATE_MAX_HZ
     ? parsed
     : GOOGLE_REALTIME_PCM_OUTPUT_SAMPLE_RATE_HZ;
 }

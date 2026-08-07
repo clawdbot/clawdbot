@@ -1793,7 +1793,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     ["below telephony floor", "audio/L16;codec=pcm;rate=1"],
     ["above capture ceiling", "audio/pcm;rate=999999999"],
     ["non-numeric rate", "audio/pcm;rate=wideband"],
-    ["in-range unsupported", "audio/pcm;rate=4000"],
+    ["below range minimum", "audio/pcm;rate=4000"],
     ["zero rate", "audio/pcm;rate=0"],
     ["negative rate", "audio/pcm;rate=-16000"],
     ["rate with whitespace", "audio/pcm; rate= 24000 "],
@@ -1820,14 +1820,55 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
 
-    // Every non-24 kHz value normalizes to the declared 24 kHz provider
-    // output rate, so input and output sample rates match and resamplePcm
-    // returns the buffer unchanged instead of allocating inputSamples *
-    // (24000 / rate) samples (gigabyte-scale OOM for rate=1, sixfold
-    // expansion for rate=4000).
+    // Out-of-range values collapse to the declared 24 kHz provider output
+    // rate, so input and output sample rates match and resamplePcm returns
+    // the buffer unchanged instead of allocating inputSamples * (24000 /
+    // rate) samples (gigabyte-scale OOM for rate=1, sixfold expansion for
+    // rate=4000). Legitimate non-24 kHz rates (8/16/48 kHz) are preserved
+    // and covered by a separate test below.
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
   });
+
+  it.each([
+    ["8 kHz telephony", "audio/pcm;rate=8000"],
+    ["16 kHz wideband", "audio/pcm;rate=16000"],
+    ["48 kHz full band", "audio/pcm;rate=48000"],
+  ])(
+    "preserves legitimate %s MIME rate on PCM16 output instead of coercing to 24 kHz",
+    async (_label, mimeType) => {
+      const provider = buildGoogleRealtimeVoiceProvider();
+      const onAudio = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "gemini-key" },
+        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        onAudio,
+        onClearAudio: vi.fn(),
+      });
+      // 480 bytes = 240 samples @ 24 kHz. A legitimate non-24 kHz in-range
+      // rate reaches the resampler and produces a different sample count
+      // (upsample for 8/16 kHz, downsample for 48 kHz) instead of the 24 kHz
+      // passthrough. The prior coerce-to-24 kHz fix returned the input
+      // unchanged (480 bytes) for all three rates.
+      const pcm = Buffer.alloc(480);
+
+      await bridge.connect();
+      lastConnectParams().callbacks.onmessage({
+        setupComplete: { sessionId: "session-1" },
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { mimeType, data: pcm.toString("base64") } }],
+          },
+        },
+      });
+
+      expect(onAudio).toHaveBeenCalledTimes(1);
+      const output = requireFirstAudio(onAudio);
+      // Output length differs from the 480-byte passthrough, proving the
+      // legitimate rate reached the resampler instead of being coerced to 24 kHz.
+      expect(output.length).not.toBe(pcm.length);
+    },
+  );
 
   it.each([
     ["rate=1 (24000x expansion on main)", "audio/pcm;rate=1"],
