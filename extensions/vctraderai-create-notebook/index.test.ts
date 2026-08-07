@@ -147,8 +147,12 @@ describe("vctraderai-create-notebook", () => {
     expect(called).toBe(false);
   });
   it("accepts run_id, without which the notebook is authored with no data", async () => {
-    // The executor runs in a LOCKED SANDBOX with no database or network access, so a
-    // run's equity/trades/metrics must be embedded AT AUTHORING TIME. The BFF has
+    // The executor has NO database reachability -- absolute and test-enforced -- so a
+    // run's equity/trades/metrics must be embedded AT AUTHORING TIME or read back
+    // through the governed vctrader seam. (It is NOT a locked sandbox in the NETWORK
+    // sense: the executor and the interactive kernel both carry outbound internet via
+    // NAT, verified against live AWS 2026-08-07. Only the DB boundary is absolute.)
+    // The BFF has
     // always been ready for this — templates.py:56 reads run_id plus the aliases
     // source_run_id / backtest_run_id / dispatch_job_id — but this plugin had no such
     // field, so the model could not supply one and EVERY agent-authored notebook shipped

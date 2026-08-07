@@ -105,6 +105,68 @@ export async function runCreateNotebook(
   };
 }
 
+/**
+ * The `notebook` field description. Kept as a named constant because it is the
+ * executable spec the model authors against: it must teach a DATA LANDSCAPE and a
+ * METHOD (discover -> branch -> read -> compute + plot -> state the window), never
+ * a named store. Models copy the worked example below verbatim, so the example is
+ * part of the contract, not decoration.
+ */
+const NOTEBOOK_FIELD_DESCRIPTION = [
+  'The FULL nbformat 4 document when you author the analysis yourself. REQUIRED whenever the user asked for a NAMED analysis (e.g. "the opening range of GBP_USD"): without it the backend instantiates a generic run-metrics template that analyses nothing. Shape: {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [...]} where each cell is {"id": "<unique>", "cell_type": "markdown"|"code", "source": "<text>", "metadata": {}}.',
+  "DATA IS DISCOVERED, NEVER ASSUMED. Code cells run in a kernel where `import vctrader` exposes governed workspace reads under the notebook owner's identity. A cell has NO database connection; every platform read goes through that seam. Do not name a store or a provider in your cells - find out what is actually there, then read it, and echo what you found.",
+  'DISCOVERY. vctrader.get_coverage(instrument, provider=None) is the first call of any market-data notebook. Found: {instrument, provider, timeframes: {"1h": {files, date_start, date_end}, ...}, sources, filters}. Not found: {instrument, provider, error: "Instrument not found", available_providers, available_instruments} - which names the alternatives, so print it. vctrader.list_tree(root="ohlcv") browses the store tree when the symbol or its spelling is unknown; the DEFAULT root is "raw" and contains NO market data, so root="ohlcv" is required. vctrader.list_instruments() is the DATABASE catalogue and happily lists symbols with zero stored bars, so never author a read off it alone - confirm with get_coverage.',
+  "READING BARS. vctrader.ohlcv_tail(instrument, timeframe, n=5, provider=None, days=None) returns {path, rows: [{timestamp, open, high, low, close, volume_ticks, volume_quote, vwap}], schema, source, filters}. days=None reads ONLY the newest stored partition; pass days=<int> for a bounded window back from the newest available bar whenever the analysis needs more than that (multi-session statistics always do). Pass the provider you got back from get_coverage rather than a literal, so the notebook keeps working whichever store holds the symbol.",
+  'OTHER GOVERNED READS. Run-scoped series: vctrader.list_run_trades(run_id), vctrader.get_run_equity_curve(run_id), vctrader.list_experiment_runs - owner-scoped, no account needed. ACCOUNT-SCOPED perception: get_multi_timeframe_candles, get_atr, classify_regime and detect_support_resistance all require a linked broker account_id and, in a workspace with none, return an in-band error dict such as {"error": "get_multi_timeframe_candles requires an account_id."}. They are the wrong tool for a plain market-data question.',
+  'NEVER SWALLOW AN ERROR DICT. Any seam call can return a dict carrying an "error" key instead of data. Check for that key and print it before you use the result. Writing raw.get("1H", []) against an error dict converts a precise message into an empty list and a meaningless ValueError three cells later - that is how notebooks die silently.',
+  "WHERE ELSE TO LOOK - reason about it, do not obey a fixed order. Prefer the workspace stores, because they are governed and reproducible. If they do not hold what the question needs, consider any other governed read you have access to. If the platform genuinely has nothing, the kernel HAS outbound internet and requests, httpx and yfinance are installed, so a public source is permitted - provided a markdown cell discloses which source, why the workspace could not answer, and that the numbers are therefore not platform data.",
+  "HONEST FAILURE CONTRACT. If discovery shows no usable data anywhere for the question asked, SAY SO IN CHAT and do NOT stage a notebook. A notebook that raises on an empty frame is strictly worse than no notebook, and the human cannot see the discovery output you already have.",
+  "Cells must COMPUTE and PLOT the analysis that was asked for - pandas and matplotlib are installed - and must PRINT the covered window with a plain statement of how stale the newest bar is. Loading a DataFrame and stopping is not an analysis. If this field and notebook_json are both absent, the backend generates the template selected by template_kind.",
+].join(" ");
+
+const NOTEBOOK_WORKED_EXAMPLE = {
+  nbformat: 4,
+  nbformat_minor: 5,
+  metadata: {},
+  cells: [
+    {
+      id: "intro",
+      cell_type: "markdown",
+      source:
+        "# GBP_USD opening range\n\nMethod: discover what data exists, branch on what discovery returned, read the window the question needs, compute and plot, then state how stale the data is.\n\nNo store and no provider is assumed anywhere below - both are read from get_coverage and echoed in the output. If discovery had come back empty, this notebook would not have been created at all; the finding would have been reported in chat.\n",
+      metadata: {},
+    },
+    {
+      id: "discover",
+      cell_type: "code",
+      source:
+        "import vctrader as vc\n\nINSTRUMENT = 'GBP_USD'\nTIMEFRAME = '1h'\n\ncov = vc.get_coverage(INSTRUMENT)\nPROVIDER = cov.get('provider')  # take the provider from discovery, never from a literal\nCOVERAGE_OK = 'error' not in cov\n\nif not COVERAGE_OK:\n    print('coverage:', cov['error'])\n    print('providers available:', cov.get('available_providers'))\n    print('instruments available:', cov.get('available_instruments'))\n    # default root is 'raw', which holds no market data - browse the ohlcv tree instead\n    print('ohlcv tree:', vc.list_tree(root='ohlcv'))\nelse:\n    timeframes = cov.get('timeframes', {})\n    print('provider:', PROVIDER, '| timeframes:', sorted(timeframes))\n    print(TIMEFRAME, 'coverage:', timeframes.get(TIMEFRAME))\n    print('sources:', cov.get('sources'))\n",
+      metadata: {},
+    },
+    {
+      id: "read",
+      cell_type: "code",
+      source:
+        "import pandas as pd\n\ndf = pd.DataFrame()\nif COVERAGE_OK:\n    # days= widens the read; days=None would return only the newest stored partition,\n    # which is far too little for a per-session statistic.\n    tail = vc.ohlcv_tail(instrument=INSTRUMENT, timeframe=TIMEFRAME, n=2000, days=45, provider=PROVIDER)\n    if 'error' in tail:\n        print('read failed:', tail['error'])  # surface it - an error dict is not data\n    else:\n        df = pd.DataFrame(tail.get('rows', []))\n        print('source:', tail.get('source'), '| rows:', len(df))\n\nif df.empty:\n    print('No usable bars for', INSTRUMENT, TIMEFRAME, '- nothing is computed below.')\n",
+      metadata: {},
+    },
+    {
+      id: "analyse",
+      cell_type: "code",
+      source:
+        "import matplotlib.pyplot as plt\n\nOPEN_BARS = 3  # opening range = the first 3 hourly bars of each UTC session\n\nif not df.empty:\n    d = df.copy()\n    d['timestamp'] = pd.to_datetime(d['timestamp'], utc=True)\n    d = d.sort_values('timestamp').set_index('timestamp')\n    d['session'] = d.index.date\n\n    opening = d.groupby('session').head(OPEN_BARS)\n    stats = opening.groupby('session').agg(or_high=('high', 'max'), or_low=('low', 'min'))\n    stats['or_width'] = stats['or_high'] - stats['or_low']\n    day = d.groupby('session').agg(day_high=('high', 'max'), day_low=('low', 'min'))\n    stats = stats.join(day)\n    stats['broke_up'] = stats['day_high'] > stats['or_high']\n    stats['broke_down'] = stats['day_low'] < stats['or_low']\n\n    print(stats.tail(10))\n    print('sessions:', len(stats),\n          '| median width:', round(float(stats['or_width'].median()), 5),\n          '| broke up:', round(float(stats['broke_up'].mean()), 3),\n          '| broke down:', round(float(stats['broke_down'].mean()), 3))\n\n    fig, ax = plt.subplots(figsize=(11, 4))\n    ax.plot(stats.index, stats['or_width'], marker='o', linewidth=1)\n    ax.axhline(float(stats['or_width'].median()), linestyle='--', linewidth=1)\n    ax.set_title(f'{INSTRUMENT} {TIMEFRAME} opening-range width, first {OPEN_BARS} bars (provider: {PROVIDER})')\n    ax.set_ylabel('high - low')\n    ax.grid(alpha=0.3)\n    fig.autofmt_xdate()\n    plt.show()\n",
+      metadata: {},
+    },
+    {
+      id: "window",
+      cell_type: "code",
+      source:
+        "if not df.empty:\n    start, end = d.index.min(), d.index.max()\n    age = pd.Timestamp.now(tz='UTC') - end\n    hours = int(age.total_seconds() // 3600)\n    print(f'Covered window: {start} to {end} UTC - {len(d)} {TIMEFRAME} bars of {INSTRUMENT} from {PROVIDER}.')\n    print(f'The newest bar is {hours} hours old, so every figure above describes that window and not today.')\n",
+      metadata: {},
+    },
+  ],
+};
+
 export default defineToolPlugin({
   id: "vctraderai-create-notebook",
   name: "VC Trader AI Create Notebook (Propose)",
@@ -139,30 +201,8 @@ export default defineToolPlugin({
           ),
           notebook: Type.Optional(
             Type.Record(Type.String(), Type.Unknown(), {
-              description:
-                'The FULL nbformat 4 document when you author the analysis yourself. REQUIRED whenever the user asked for a NAMED analysis (e.g. "the opening range of XAU_USD"): without it the backend instantiates a generic run-metrics template that analyses nothing. Shape: {"nbformat": 4, "nbformat_minor": 5, "metadata": {}, "cells": [...]} where each cell is {"id": "<unique>", "cell_type": "markdown"|"code", "source": "<text>", "metadata": {}}. Code cells run in a kernel where `import vctrader` exposes governed workspace reads under the notebook owner\'s identity. MARKET DATA comes from the Dukascopy store via vctrader.ohlcv_tail(instrument, timeframe, n) and vctrader.get_coverage(instrument) - NO account needed (the tail returns the most recent file, roughly 74 hourly bars; state the covered window in the notebook). The perception family (get_multi_timeframe_candles, get_atr, classify_regime, detect_support_resistance) REQUIRES a linked broker account_id and must not be used for plain market-data analyses. Run-scoped reads: list_run_trades, get_run_equity_curve, list_experiment_runs. pandas and matplotlib are installed. Author cells that CALL those reads and compute/plot the requested analysis from the returned rows. If this field and notebook_json are both absent, the backend generates the template selected by template_kind.',
-              examples: [
-                {
-                  nbformat: 4,
-                  nbformat_minor: 5,
-                  metadata: {},
-                  cells: [
-                    {
-                      id: "intro",
-                      cell_type: "markdown",
-                      source: "# XAU_USD opening range\nWhat this notebook computes and why.",
-                      metadata: {},
-                    },
-                    {
-                      id: "load",
-                      cell_type: "code",
-                      source:
-                        "import vctrader as vc\nimport pandas as pd\n# Market data reads the DUKASCOPY STORE - no account needed.\ntail = vc.ohlcv_tail(instrument='XAU_USD', timeframe='1H', n=500)\ndf = pd.DataFrame(tail.get('rows', []))\n# ohlcv_tail returns the most recent file (~74 hourly bars) - say so.\n",
-                      metadata: {},
-                    },
-                  ],
-                },
-              ],
+              description: NOTEBOOK_FIELD_DESCRIPTION,
+              examples: [NOTEBOOK_WORKED_EXAMPLE],
             }),
           ),
           notebook_json: Type.Optional(
