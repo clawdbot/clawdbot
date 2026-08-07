@@ -268,6 +268,31 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     });
     const abortSessionKey =
       canonicalKey === "global" && requestedGlobalAgentId ? "global" : resolvedAbortSessionKey;
+    // A runId can redirect the abort target to a session that differs from
+    // the requested key (resolveAbortSessionKey prefers the active run's
+    // session key). The requested-key guard above only authorizes the key
+    // the caller submitted; a plugin could pair its own key with a foreign
+    // active runId and cancel another plugin's run under synthetic admin
+    // dispatch. Authorize the run-resolved target as well.
+    const pluginRuntimeOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
+    if (pluginRuntimeOwnerId && abortSessionKey !== canonicalKey) {
+      const resolvedAbortCanonicalKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: abortSessionKey,
+        ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
+      });
+      if (resolvedAbortCanonicalKey !== canonicalKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Plugin "${pluginRuntimeOwnerId}" cannot abort session "${abortSessionKey}" because it did not create it.`,
+          ),
+        );
+        return;
+      }
+    }
     const abortAgentId =
       abortSessionKey === "global" ? (requestedGlobalAgentId ?? activeRunAgentId) : undefined;
     // Capture run kinds before the abort because abortChatRunById deletes entries

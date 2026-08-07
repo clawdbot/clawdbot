@@ -5,6 +5,10 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  createActiveRun,
+  createChatAbortContext,
+} from "./server-methods/chat.abort.test-helpers.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -337,4 +341,77 @@ test("sessions.abort allows a plugin to abort its own session", async () => {
     pluginOwnerId: "memory-core",
     sessionId: "owned-plugin-session",
   });
+});
+
+test("sessions.abort rejects a plugin aborting a foreign active run via its own key + foreign runId", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const ownedKey = "agent:main:dreaming-narrative-owned";
+  const foreignKey = "agent:main:dreaming-narrative-foreign";
+  const runId = "run-foreign-active";
+  await writeSessionStore({
+    entries: {
+      [ownedKey]: sessionStoreEntry("owned-plugin-session", { pluginOwnerId: "memory-core" }),
+      [foreignKey]: sessionStoreEntry("foreign-plugin-session", { pluginOwnerId: "other-plugin" }),
+    },
+  });
+  const activeRun = createActiveRun(foreignKey, {
+    agentId: "main",
+    sessionId: "foreign-plugin-session",
+  });
+  const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
+    chatAbortControllers: new Map([[runId, activeRun]]),
+  });
+  const pluginClient = {
+    connect: { scopes: ["operator.admin"] },
+    internal: { pluginRuntimeOwnerId: "memory-core" },
+  } as never;
+
+  const abort = await directSessionReq(
+    "sessions.abort",
+    { key: ownedKey, runId },
+    { context: abortContext, client: pluginClient },
+  );
+
+  expect(abort.ok).toBe(false);
+  expect(abort.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: `Plugin "memory-core" cannot abort session "${foreignKey}" because it did not create it.`,
+  });
+  expect(activeRun.controller.signal.aborted).toBe(false);
+});
+
+test("sessions.abort allows a plugin to abort its own active run by runId", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dreaming-narrative-owned";
+  const runId = "run-own-active";
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("owned-plugin-session", { pluginOwnerId: "memory-core" }),
+    },
+  });
+  const activeRun = createActiveRun(sessionKey, {
+    agentId: "main",
+    sessionId: "owned-plugin-session",
+  });
+  const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
+    chatAbortControllers: new Map([[runId, activeRun]]),
+  });
+  const pluginClient = {
+    connect: { scopes: ["operator.admin"] },
+    internal: { pluginRuntimeOwnerId: "memory-core" },
+  } as never;
+
+  const abort = await directSessionReq(
+    "sessions.abort",
+    { key: sessionKey, runId },
+    { context: abortContext, client: pluginClient },
+  );
+
+  expect(abort.ok, JSON.stringify(abort.error)).toBe(true);
+  expect(abort.payload).toMatchObject({
+    ok: true,
+    abortedRunId: runId,
+    status: "aborted",
+  });
+  expect(activeRun.controller.signal.aborted).toBe(true);
 });
