@@ -596,10 +596,10 @@ export async function tryDispatchAcpReply(params: {
   let auditResultStatus: "completed" | "cancelled" | undefined;
   let runtimeTurnWasCancelled = false;
   const claimAuditContext = () => {
-    auditLifecycleGeneration ??= captureAgentRunLifecycleGeneration(auditRunId);
     if (!auditOnly || auditContextOwnerToken) {
       return;
     }
+    auditLifecycleGeneration ??= captureAgentRunLifecycleGeneration(auditRunId);
     const attribution = admitAutoReplyExecutionAttribution({
       config: params.cfg,
       lifecycleGeneration: auditLifecycleGeneration,
