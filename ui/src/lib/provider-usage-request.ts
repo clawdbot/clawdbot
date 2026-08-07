@@ -4,7 +4,7 @@
 import type { UsageSummary } from "../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 
-export type ProviderUsageFetch = {
+type ProviderUsageFetch = {
   summary: UsageSummary | null;
   failed: boolean;
 };
