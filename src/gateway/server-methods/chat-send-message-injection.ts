@@ -3,9 +3,13 @@ import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
+import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import {
   abortReplyMessageInjectionTarget,
+  beginReplyMessageInjectionTarget,
   recordAcceptedReplyMessageInjectionTarget,
+  type ReplyBackendQueueMessageOptions,
+  type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionOutcome,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -16,8 +20,39 @@ import { logMessageProcessed, logMessageReceived } from "../../logging/diagnosti
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { broadcastChatFinal } from "./chat-broadcast.js";
+import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestContext } from "./types.js";
+
+/** Starts injection with the exact admission-captured target and prepared turn data. */
+export function beginChatSendMessageInjection(params: {
+  target: ReplyMessageInjectionTarget;
+  text: string;
+  replyContext?: Parameters<typeof buildChatSendReplyInjectionText>[0];
+  images: ReplyBackendQueueMessageOptions["images"];
+  imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
+  media: ReplyBackendQueueMessageOptions["media"];
+  queueSettings: Parameters<typeof resolveQueueSettings>[0];
+  taskSuggestionDeliveryMode: ReplyBackendQueueMessageOptions["taskSuggestionDeliveryMode"];
+  userTurnTranscriptRecorder: ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"];
+}): ReplyMessageInjectionAttempt {
+  const { debounceMs } = resolveQueueSettings(params.queueSettings);
+  return beginReplyMessageInjectionTarget(
+    params.target,
+    params.replyContext ? buildChatSendReplyInjectionText(params.replyContext) : params.text,
+    {
+      steeringMode: "all",
+      isInboundUserMessage: true,
+      ...(params.images?.length ? { images: params.images } : {}),
+      ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
+      ...(params.media?.length ? { media: params.media } : {}),
+      waitForTranscriptCommit: true,
+      ...(debounceMs !== undefined ? { debounceMs } : {}),
+      taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    },
+  );
+}
 
 /** Finish an irrevocably accepted steer without entering reply dispatch. */
 export async function finalizeAcceptedChatSendMessageInjection(params: {

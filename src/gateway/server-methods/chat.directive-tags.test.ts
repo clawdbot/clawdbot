@@ -136,6 +136,13 @@ const mockState = vi.hoisted(() => ({
   saveMediaWait: null as Promise<void> | null,
   activeSaveMediaCalls: 0,
   maxActiveSaveMediaCalls: 0,
+  replyContextCalls: 0,
+  replyContextResult: null as {
+    ReplyToId?: string;
+    ReplyToBody?: string;
+    ReplyToSender?: string;
+  } | null,
+  replyContextWait: null as Promise<void> | null,
   sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
   stageSandboxMediaError: null as Error | null,
   stagedRelativePaths: null as string[] | null,
@@ -452,6 +459,22 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
       ...actual.getSessionBindingService(),
       resolveByConversation: (ref: unknown) => bindingMocks.resolveByConversation(ref),
     }),
+  };
+});
+
+vi.mock("./chat-send-reply-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-send-reply-context.js")>();
+  return {
+    ...actual,
+    resolveChatSendReplyContext: async (
+      ...args: Parameters<typeof actual.resolveChatSendReplyContext>
+    ) => {
+      mockState.replyContextCalls += 1;
+      if (mockState.replyContextWait) {
+        await mockState.replyContextWait;
+      }
+      return mockState.replyContextResult ?? actual.resolveChatSendReplyContext(...args);
+    },
   };
 });
 
@@ -1249,6 +1272,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.saveMediaWait = null;
     mockState.activeSaveMediaCalls = 0;
     mockState.maxActiveSaveMediaCalls = 0;
+    mockState.replyContextCalls = 0;
+    mockState.replyContextResult = null;
+    mockState.replyContextWait = null;
     bindingMocks.resolveByConversation.mockReset();
     bindingMocks.resolveByConversation.mockReturnValue(null);
     mockState.sandboxWorkspace = null;
@@ -1756,6 +1782,148 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
     expect(context.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates reply context before injecting into the captured exact run", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-");
+    mockState.hasMessageReceivedHooks = true;
+    mockState.replyContextResult = {
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    };
+    const auditEvents: Array<{ reasonCode?: unknown }> = [];
+    const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+    const { context, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-reply-steer",
+        requestParams: {
+          expectedRunId: "run-a",
+          queueMode: "steer",
+          replyToId: "prior-message",
+        },
+      });
+    } finally {
+      operation.complete();
+      disposeAudit();
+    }
+
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(queueMessage.mock.calls[0]?.[0]).toContain("Reply target of current user message:");
+    expect(queueMessage.mock.calls[0]?.[0]).toContain("quoted deployment status");
+    expect(queueMessage.mock.calls[0]?.[0]).toContain("hello");
+    expect(mockState.messageReceivedCalls).toHaveLength(1);
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(auditEvents.filter((event) => event.reasonCode === "active_run_injected")).toHaveLength(
+      1,
+    );
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(context.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it("rejects reply steering when hydration outlives its captured run", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-race-");
+    const hydration = createDeferred();
+    mockState.replyContextWait = hydration.promise;
+    mockState.replyContextResult = {
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    };
+    const { context, send } = createChatRequestFixture();
+    const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
+    const originalQueue = vi.fn(async () => {});
+    const successorQueue = vi.fn(async () => {});
+    const successorCancel = vi.fn();
+    const original = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    original.setPhase("running");
+    original.attachBackend({
+      kind: "embedded",
+      runId: "run-a",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage: originalQueue },
+    });
+    let successor: ReturnType<typeof replyRunRegistry.begin> | undefined;
+
+    try {
+      await send({
+        idempotencyKey: "idem-reply-steer-race",
+        requestParams: {
+          expectedRunId: "run-a",
+          queueMode: "steer",
+          replyToId: "prior-message",
+        },
+        waitFor: "none",
+      });
+      await waitForAssertion(() => expect(mockState.replyContextCalls).toBe(1));
+      original.complete();
+      successor = replyRunRegistry.begin({
+        sessionKey: "main",
+        sessionId: mockState.sessionId,
+        resetTriggered: false,
+        originatingLeafEntryId: "current-leaf",
+      });
+      successor.setPhase("running");
+      successor.attachBackend({
+        kind: "embedded",
+        runId: "run-b",
+        cancel: successorCancel,
+        messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+      });
+      hydration.resolve();
+      await waitForAssertion(() => {
+        expect(context.dedupe.get("chat:idem-reply-steer-race")?.payload).toMatchObject({
+          status: "error",
+          summary: "active run changed; review and retry",
+        });
+      });
+    } finally {
+      hydration.resolve();
+      original.complete();
+      successor?.complete();
+    }
+
+    expect(context.dedupe.get("chat:idem-reply-steer-race")?.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: { reason: "active-run-changed" },
+    });
+    expect(originalQueue).not.toHaveBeenCalled();
+    expect(successorQueue).not.toHaveBeenCalled();
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(successorCancel).not.toHaveBeenCalled();
+    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, payload]) => payload as Record<string, unknown>,
+    );
+    expect(broadcasts).toContainEqual(
+      expect.objectContaining({
+        state: "error",
+        errorMessage: "active run changed; review and retry",
+      }),
+    );
   });
 
   it("falls back to one normal dispatch when exact-run injection rejects after ACK", async () => {

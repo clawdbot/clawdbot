@@ -9,8 +9,6 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
-import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
-import { beginReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   emitDiagnosticsTimelineEvent,
@@ -38,8 +36,12 @@ import {
   createChatSendDispatchErrorLifecycle,
   handleChatSendSetupError,
 } from "./chat-send-dispatch-errors.js";
-import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
+import {
+  beginChatSendMessageInjection,
+  finalizeAcceptedChatSendMessageInjection,
+} from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
+import { ACTIVE_RUN_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 import {
   applyChatSendReplyContextFields,
   resolveChatSendReplyContext,
@@ -228,39 +230,35 @@ export async function handleChatSend(
       logGateway: context.logGateway,
       userTurn,
     });
-    const queueSettings = resolveQueueSettings({
-      cfg,
-      channel: ctx.Provider,
-      sessionEntry: entry,
-      inlineMode: p.queueMode,
-    });
-    const messageInjectionAttempt =
-      messageInjectionTarget && !isInternalTextSlashCommandTurn && !p.replyToId
-        ? beginReplyMessageInjectionTarget(
-            messageInjectionTarget,
-            ctx.BodyForAgent ?? ctx.Body ?? rawMessage,
-            {
-              steeringMode: "all",
-              isInboundUserMessage: true,
-              ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
-              ...(imageOrder.length > 0 ? { imageOrder } : {}),
-              ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
-              waitForTranscriptCommit: true,
-              ...(queueSettings.debounceMs !== undefined
-                ? { debounceMs: queueSettings.debounceMs }
-                : {}),
-              taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
-              userTurnTranscriptRecorder: userTurnRecorder,
+    const beginCapturedMessageInjection = () =>
+      messageInjectionTarget && !isInternalTextSlashCommandTurn
+        ? beginChatSendMessageInjection({
+            target: messageInjectionTarget,
+            text: ctx.BodyForAgent ?? ctx.Body ?? rawMessage,
+            replyContext: p.replyToId
+              ? { body: ctx.BodyForAgent ?? ctx.Body ?? rawMessage, cfg, ctx, sessionEntry: entry }
+              : undefined,
+            images: replyOptionImages,
+            imageOrder,
+            media: replyOptionMedia,
+            queueSettings: {
+              cfg,
+              channel: ctx.Provider,
+              sessionEntry: entry,
+              inlineMode: p.queueMode,
             },
-          )
+            taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
+            userTurnTranscriptRecorder: userTurnRecorder,
+          })
         : undefined;
-    if (messageInjectionAttempt) {
+    let messageInjectionAttempt = p.replyToId ? undefined : beginCapturedMessageInjection();
+    if (messageInjectionTarget && !isInternalTextSlashCommandTurn) {
       // Accepted injection never consumes plugin-bound media, but the shared
       // persistence promise still needs a rejection observer.
       void pluginBoundMediaPromise.catch(() => undefined);
-      if (messageInjectionAttempt.rejectBeforeAck) {
-        return admitted.value.rejectActiveLeafChanged();
-      }
+    }
+    if (messageInjectionAttempt?.rejectBeforeAck) {
+      return admitted.value.rejectActiveLeafChanged();
     }
 
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
@@ -393,6 +391,10 @@ export async function handleChatSend(
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
+            if (replyContextFieldsPromise) {
+              applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
+              messageInjectionAttempt = beginCapturedMessageInjection();
+            }
             if (messageInjectionAttempt) {
               const outcome = await messageInjectionAttempt.outcome;
               if (outcome.status === "accepted") {
@@ -412,11 +414,11 @@ export async function handleChatSend(
                   counts: { tool: 0, block: 0, final: 0 },
                 };
               }
+              if (p.replyToId) {
+                throw new Error(ACTIVE_RUN_CHANGED_ERROR_REASON);
+              }
             }
             applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
-            if (replyContextFieldsPromise) {
-              applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
-            }
             const dispatchResult = await dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
@@ -517,7 +519,9 @@ export async function handleChatSend(
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,
                 userTurnTranscriptRecorder: userTurnRecorder,
-                ...(messageInjectionAttempt ? { messageInjectionAttempted: true as const } : {}),
+                ...(messageInjectionTarget && !isInternalTextSlashCommandTurn
+                  ? { messageInjectionAttempted: true as const }
+                  : {}),
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId) => {

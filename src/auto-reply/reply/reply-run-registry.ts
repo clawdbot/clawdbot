@@ -116,7 +116,7 @@ export type ReplyMessageInjectionOutcome =
   | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
-type ReplyMessageInjectionAttempt = {
+export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque operation target. */
   targetRunId: string | undefined;
   /** Leaf-bound compatibility must reject before ACK instead of falling through. */

@@ -10,6 +10,7 @@ import { setGatewayDedupeEntry } from "./agent-job.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
+import { ACTIVE_RUN_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -115,6 +116,11 @@ export function createChatSendDispatchErrorLifecycle(params: {
 
   const handleError = async (err: unknown) => {
     const errorMessage = String(err);
+    const activeRunChanged =
+      err instanceof Error && err.message === ACTIVE_RUN_CHANGED_ERROR_REASON;
+    const visibleErrorMessage = activeRunChanged
+      ? "active run changed; review and retry"
+      : errorMessage;
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -239,7 +245,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     ) {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
-        error: errorMessage,
+        error: visibleErrorMessage,
         sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
         startedAt: activeRunAbort.entry?.startedAtMs ?? now,
       };
@@ -247,7 +253,11 @@ export function createChatSendDispatchErrorLifecycle(params: {
     if (!agentTerminalPersistenceOwnedAtDispatchReject) {
       // The lifecycle owner may have already cached its authoritative
       // terminal; a late dispatch error must not replace that replay result.
-      const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
+      const error = activeRunChanged
+        ? errorShape(ErrorCodes.INVALID_REQUEST, visibleErrorMessage, {
+            details: { reason: ACTIVE_RUN_CHANGED_ERROR_REASON },
+          })
+        : errorShape(ErrorCodes.UNAVAILABLE, visibleErrorMessage);
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
         key: `chat:${clientRunId}`,
@@ -257,7 +267,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
           payload: {
             runId: clientRunId,
             status: "error" as const,
-            summary: errorMessage,
+            summary: visibleErrorMessage,
           },
           error,
         },
@@ -267,7 +277,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         runId: clientRunId,
         sessionKey,
         agentId,
-        errorMessage,
+        errorMessage: visibleErrorMessage,
       });
     }
   };

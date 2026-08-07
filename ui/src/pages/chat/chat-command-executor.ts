@@ -820,13 +820,8 @@ async function resolveSteerTarget(
 
 function isActiveSteerSession(
   session: GatewaySessionRow | undefined,
-): session is GatewaySessionRow & { activeRunIds: [string]; activeLeafEntryId: string | null } {
-  return Boolean(
-    session &&
-    isSessionRunActive(session) &&
-    session.activeRunIds?.length === 1 &&
-    session.activeLeafEntryId !== undefined,
-  );
+): session is GatewaySessionRow & { activeRunIds: [string] } {
+  return Boolean(session && isSessionRunActive(session) && session.activeRunIds?.length === 1);
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -893,7 +888,9 @@ async function executeSteer(
         deliver: false,
         queueMode: "steer",
         expectedRunId: targetSession.activeRunIds[0],
-        expectedLeafEntryId: targetSession.activeLeafEntryId,
+        ...(targetSession.activeLeafEntryId !== undefined
+          ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
+          : {}),
         idempotencyKey: generateUUID(),
       }),
     );
