@@ -1731,6 +1731,73 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
+  it("disables Codex native tool surfaces for swarm collectors even without toolsAllow", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.toolsAllow = undefined;
+    params.swarmCollector = true;
+    params.swarmOutputSchema = {
+      type: "object",
+      required: ["sentinel"],
+      properties: { sentinel: { type: "string" } },
+      additionalProperties: false,
+    };
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("passes swarm collector context into OpenClaw coding tools and keeps structured_output", async () => {
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [createRuntimeDynamicTool("structured_output"), createRuntimeDynamicTool("message")];
+    });
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["structured_output"];
+    params.swarmCollector = true;
+    params.swarmOutputSchema = {
+      type: "object",
+      required: ["sentinel"],
+      properties: { sentinel: { type: "string" } },
+      additionalProperties: false,
+    };
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: false,
+    });
+
+    expect(factoryOptions).toHaveLength(1);
+    expect(factoryOptions[0]).toMatchObject({
+      swarmCollector: true,
+      swarmOutputSchema: params.swarmOutputSchema,
+      disableMessageTool: true,
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["structured_output"]);
+  });
+
+  it("fails closed when a swarm collector omits structured_output from dynamic tools", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.swarmCollector = true;
+    params.swarmOutputSchema = {
+      type: "object",
+      required: ["sentinel"],
+      properties: { sentinel: { type: "string" } },
+      additionalProperties: false,
+    };
+
+    await expect(
+      buildDynamicToolsForTest(params, workspaceDir, { nativeToolSurfaceEnabled: false }),
+    ).rejects.toThrow(/omitted structured_output/);
+  });
+
   it("disables Codex native tool surfaces when all tools are disabled", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

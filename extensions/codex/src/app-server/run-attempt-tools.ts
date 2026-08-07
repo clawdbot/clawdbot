@@ -87,5 +87,10 @@ export function resolveCodexDynamicToolDirectNames(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     names.push("message");
   }
+  // Swarm collectors must always see structured_output even when Codex tool
+  // search is the default loading mode or the private table is empty.
+  if (params.swarmCollector === true && params.swarmOutputSchema !== undefined) {
+    names.push("structured_output");
+  }
   return names;
 }

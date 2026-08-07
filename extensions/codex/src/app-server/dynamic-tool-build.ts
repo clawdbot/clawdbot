@@ -320,7 +320,11 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
+    disableMessageTool: input.ignoreDisableMessageTool
+      ? false
+      : params.disableMessageTool || params.swarmCollector === true,
+    swarmCollector: params.swarmCollector,
+    swarmOutputSchema: params.swarmOutputSchema,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
     forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
@@ -445,6 +449,10 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const exposedTools = webSearchPlan.suppressManagedWebSearch
     ? normalizedTools.filter((tool) => tool.name !== "web_search")
     : normalizedTools;
+  assertSwarmCollectorStructuredOutputToolLoaded({
+    params,
+    tools: exposedTools,
+  });
   if (preNormalizationDiagnostics.length > 0) {
     embeddedAgentLog.warn(
       `codex app-server quarantined ${preNormalizationDiagnostics.length} unsupported runtime tool schema${preNormalizationDiagnostics.length === 1 ? "" : "s"} before dynamic tool registration`,
@@ -484,6 +492,30 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   }
   return exposedTools;
 }
+/** True when this attempt is a Swarm collector that must expose structured_output. */
+function isSwarmCollectorStructuredOutputAttempt(params: EmbeddedRunAttemptParams): boolean {
+  return params.swarmCollector === true && params.swarmOutputSchema !== undefined;
+}
+
+/** Fails closed when a collector child never received its required structured_output tool. */
+function assertSwarmCollectorStructuredOutputToolLoaded(params: {
+  params: EmbeddedRunAttemptParams;
+  tools: ReadonlyArray<{ name: string }>;
+}): void {
+  if (!isSwarmCollectorStructuredOutputAttempt(params.params)) {
+    return;
+  }
+  const loaded = params.tools.some(
+    (tool) => normalizeCodexDynamicToolName(tool.name) === "structured_output",
+  );
+  if (loaded) {
+    return;
+  }
+  throw new Error(
+    "Codex swarm collector dynamic tools omitted structured_output; refusing to start a collector turn without the required result tool",
+  );
+}
+
 /** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
 function includeForcedCodexDynamicToolAllow(
   toolsAllow: string[] | undefined,
@@ -492,7 +524,10 @@ function includeForcedCodexDynamicToolAllow(
   if (toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow)) {
     return toolsAllow;
   }
-  const forcedToolNames = shouldForceMessageTool(params) ? ["message"] : [];
+  const forcedToolNames = [
+    ...(shouldForceMessageTool(params) ? ["message"] : []),
+    ...(isSwarmCollectorStructuredOutputAttempt(params) ? ["structured_output"] : []),
+  ];
   if (forcedToolNames.length === 0) {
     return toolsAllow;
   }
@@ -519,6 +554,11 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     return false;
   }
   if (params.disableTools) {
+    return false;
+  }
+  // Collector children must not inherit Codex-native Bash/shell/file tools.
+  // OpenClaw config allow/deny alone is not a native-harness authority boundary.
+  if (isSwarmCollectorStructuredOutputAttempt(params)) {
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
