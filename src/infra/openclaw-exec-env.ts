@@ -16,9 +16,7 @@ function listAiAgentEnvKeys(
   platform: NodeJS.Platform,
 ): string[] {
   return platform === "win32"
-    ? Object.keys(env)
-        .filter((key) => key.toUpperCase() === AI_AGENT_ENV_VAR)
-        .toSorted()
+    ? Object.keys(env).filter((key) => key.toUpperCase() === AI_AGENT_ENV_VAR)
     : [AI_AGENT_ENV_VAR];
 }
 
@@ -31,7 +29,7 @@ function normalizeAiAgentEnv(
   if (!defaultWhenMissing && !agentKeys.some((key) => Object.hasOwn(env, key))) {
     return;
   }
-  const explicitAgent = env[agentKeys[0] ?? AI_AGENT_ENV_VAR];
+  const explicitAgent = env[agentKeys.at(-1) ?? AI_AGENT_ENV_VAR];
   for (const key of platform === "win32" ? agentKeys : []) {
     delete env[key];
   }

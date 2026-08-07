@@ -396,7 +396,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(registryUpdate?.configHash).toBe(newHash);
   });
 
-  it("recreates a cold container when the shared Docker create-args epoch changes", async () => {
+  it("recreates a cold container from the pre-agent-marker create-args epoch", async () => {
     const workspaceDir = makeTempDir();
     // Keep the create-args epoch as the only hash delta in this scenario.
     const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`], "rw", {});
@@ -411,7 +411,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     };
     const oldHash = computeSandboxConfigHash({
       ...hashInput,
-      createArgsEpoch: "pre-init",
+      createArgsEpoch: "2026-07-10-init",
     });
     const newHash = computeSandboxConfigHash({
       ...hashInput,

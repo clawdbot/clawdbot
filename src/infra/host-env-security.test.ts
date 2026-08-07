@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostInheritedEnvVarName,
@@ -719,6 +719,23 @@ REDIS_URL MONGODB_URI AMQP_URL SSH_AUTH_SOCK`);
 });
 
 describe("sanitizeHostExecEnvWithDiagnostics", () => {
+  it("lets a differently cased Windows override replace an inherited AI agent marker", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const result = sanitizeHostExecEnvWithDiagnostics({
+        baseEnv: { AI_AGENT: "inherited-agent" },
+        overrides: { ai_agent: "wrapper-agent" },
+      });
+
+      expect(result.env.AI_AGENT).toBe("wrapper-agent");
+      expect(Object.keys(result.env).filter((key) => key.toUpperCase() === "AI_AGENT")).toEqual([
+        "AI_AGENT",
+      ]);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("reports blocked and invalid requested overrides", () => {
     const overrides = envRecord(`PATH=/tmp/evil | CPP=/tmp/evil-cpp | CXX=/tmp/evil-cxx
 CARGO_BUILD_RUSTC_WRAPPER=/tmp/evil-rustc-wrapper
