@@ -97,6 +97,102 @@ describe("ApiClient", () => {
     });
   });
 
+  it("adds network and whitelist guidance to DNS failures without suggesting credentials", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      new Error("getaddrinfo ENOTFOUND api.sgroup.qq.com"),
+    );
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "GET", "/v2/users/@me");
+    } catch (caught) {
+      error = caught;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("Network error [/v2/users/@me]");
+    expect(message).toContain("network connectivity and DNS");
+    expect(message).toContain("server IP whitelist");
+    expect(message).not.toContain("appId");
+    expect(message).not.toContain("clientSecret");
+  });
+
+  it("adds credential guidance to structured HTTP 401 errors", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"code":11241,"message":"invalid credentials"}', {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "POST", "/v2/messages", { content: "hi" });
+    } catch (caught) {
+      error = caught;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("API Error [/v2/messages]: invalid credentials");
+    expect(message).toContain("QQBot account appId and clientSecret");
+    expect(message).toContain("https://q.qq.com/");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds credential guidance when QQ reports an expired token as HTTP 500", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"code":11244,"message":"token not exist or expire"}', {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "GET", "/gateway");
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ httpStatus: 500, bizCode: 11244 });
+    expect((error as Error).message).toContain("QQBot account appId and clientSecret");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps non-auth structured API guidance generic", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"code":40034025,"message":"invalid event id"}', {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test" });
+    let error: unknown;
+    try {
+      await client.request("token-1", "POST", "/v2/messages", { content: "hi" });
+    } catch (caught) {
+      error = caught;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("API Error [/v2/messages]: invalid event id");
+    expect(message).toContain("QQBot API troubleshooting");
+    expect(message).not.toContain("appId");
+    expect(message).not.toContain("clientSecret");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("bounds successful response bodies without using response.text()", async () => {
     const release = vi.fn(async () => {});
     const streamed = createStreamingResponse({

@@ -4,21 +4,12 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar, renderChatAvatar } from "./chat-avatar.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 
 function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   const container = document.createElement("div");
   render(renderChatAvatar(...params), container);
   return container.querySelector<HTMLElement>(".chat-avatar");
-}
-
-function createHost(): Parameters<typeof refreshChatAvatar>[0] {
-  return {
-    basePath: "",
-    chatAvatarUrl: null,
-    connected: true,
-    hello: null,
-    sessionKey: "agent:main",
-  };
 }
 
 function pendingUntilAbort<T>(signal: AbortSignal | null | undefined): Promise<T> {
@@ -112,7 +103,7 @@ describe("refreshChatAvatar", () => {
     );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const host = createHost();
+    const host = makeChatHost();
     const refresh = refreshChatAvatar(host);
     const signal = fetchMock.mock.calls[0]?.[1]?.signal;
     expect(signal?.aborted).toBe(false);
@@ -143,7 +134,7 @@ describe("refreshChatAvatar", () => {
       );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const host = createHost();
+    const host = makeChatHost();
     const refresh = refreshChatAvatar(host);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -175,7 +166,7 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:main-avatar");
 
-    const host = createHost();
+    const host = makeChatHost();
     host.sessionKey = "agent:main:first";
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBe("blob:main-avatar");
@@ -208,7 +199,7 @@ describe("refreshChatAvatar", () => {
       .mockReturnValueOnce("blob:first-avatar")
       .mockReturnValueOnce("blob:second-avatar");
 
-    const host = createHost();
+    const host = makeChatHost();
     host.sessionKey = "agent:main:first";
     await refreshChatAvatar(host);
     now.mockReturnValue(61_001);
@@ -235,7 +226,7 @@ describe("refreshChatAvatar", () => {
     vi.spyOn(URL, "createObjectURL")
       .mockReturnValueOnce("blob:first-avatar")
       .mockReturnValueOnce("blob:second-avatar");
-    const host = createHost();
+    const host = makeChatHost();
 
     await refreshChatAvatar(host);
     now.mockReturnValue(61_001);
@@ -259,7 +250,7 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-avatar");
     const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
-    const host = createHost();
+    const host = makeChatHost();
     host.sessionKey = "agent:main:first";
 
     const first = refreshChatAvatar(host);
@@ -282,7 +273,7 @@ describe("refreshChatAvatar", () => {
       .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:retried-avatar");
-    const host = createHost();
+    const host = makeChatHost();
 
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBeNull();
@@ -303,7 +294,7 @@ describe("refreshChatAvatar", () => {
     vi.spyOn(URL, "createObjectURL")
       .mockReturnValueOnce("blob:first-avatar")
       .mockReturnValueOnce("blob:second-avatar");
-    const host = createHost();
+    const host = makeChatHost();
 
     await refreshChatAvatar(host);
     invalidateChatAvatarCache(host);

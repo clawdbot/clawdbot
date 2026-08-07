@@ -53,6 +53,12 @@ export type ReplyBackendQueueMessageOptions = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
+export type ReplyBackendQueueMessageResult = {
+  /** Acceptance was irreversible, but the harness could not prove transcript commitment. */
+  transcriptCommit: "unconfirmed";
+  errorMessage: string;
+};
+
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -63,7 +69,10 @@ export type ReplyBackendHandle = {
   isStreaming(): boolean;
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
-  queueMessage?: (text: string, options?: ReplyBackendQueueMessageOptions) => Promise<void>;
+  queueMessage?: (
+    text: string,
+    options?: ReplyBackendQueueMessageOptions,
+  ) => Promise<void | ReplyBackendQueueMessageResult>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -137,6 +146,8 @@ export type ReplyOperation = {
   /** Gateway lifecycle that admitted this process-local owner. */
   readonly lifecycleGeneration?: string;
   readonly routeThreadId?: string | number;
+  /** Transcript branch leaf from which this operation was admitted. */
+  readonly originatingLeafEntryId?: string | null;
   readonly abortSignal: AbortSignal;
   readonly resetTriggered: boolean;
   /**
@@ -223,11 +234,16 @@ type ReplyRunRegistry = {
     sessionId: string;
     resetTriggered: boolean;
     routeThreadId?: string | number;
+    originatingLeafEntryId?: string | null;
     upstreamAbortSignal?: AbortSignal;
   }): ReplyOperation;
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
   isStreaming(sessionKey: string): boolean;
+  isMessageInjectableFromOriginatingLeaf(
+    sessionKey: string,
+    originatingLeafEntryId: string | null,
+  ): boolean;
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,
@@ -413,6 +429,15 @@ function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
   }
 }
 
+function isReplyOperationMessageInjectable(
+  operation: ReplyOperation,
+  backend: ReplyBackendHandle,
+): boolean {
+  // Admission and delivery must share freshness or a stale owner can waive the
+  // transcript-leaf fence and then reject the same steer during injection.
+  return !isReplyRunEvidenceStale(operation) && isReplyBackendMessageInjectable(backend);
+}
+
 /** Run work after an operation no longer owns its session lane. */
 export function runAfterReplyOperationClear(
   operation: ReplyOperation,
@@ -559,6 +584,7 @@ export function createReplyOperation(params: {
   sessionId: string;
   resetTriggered: boolean;
   routeThreadId?: string | number;
+  originatingLeafEntryId?: string | null;
   upstreamAbortSignal?: AbortSignal;
   respectFollowupAdmissionBarrier?: boolean;
 }): ReplyOperation {
@@ -692,6 +718,9 @@ export function createReplyOperation(params: {
     lifecycleGeneration,
     get routeThreadId() {
       return params.routeThreadId;
+    },
+    get originatingLeafEntryId() {
+      return params.originatingLeafEntryId;
     },
     get abortSignal() {
       return controller.signal;
@@ -1156,6 +1185,18 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return getAttachedBackend(operation)?.isStreaming() ?? false;
   },
+  isMessageInjectableFromOriginatingLeaf(sessionKey, originatingLeafEntryId) {
+    const operation = this.get(sessionKey);
+    if (
+      !operation ||
+      operation.phase !== "running" ||
+      operation.originatingLeafEntryId !== originatingLeafEntryId
+    ) {
+      return false;
+    }
+    const backend = getAttachedBackend(operation);
+    return backend ? isReplyOperationMessageInjectable(operation, backend) : false;
+  },
   abort(sessionKey) {
     const operation = this.get(sessionKey);
     if (!operation) {
@@ -1263,12 +1304,7 @@ export function queueReplyRunMessage(
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  // Steering into an evidence-dead run swallows the human message that would
-  // otherwise trigger stale takeover through normal reply admission.
-  if (isReplyRunEvidenceStale(operation)) {
-    return false;
-  }
-  if (!isReplyBackendMessageInjectable(backend)) {
+  if (!isReplyOperationMessageInjectable(operation, backend)) {
     return false;
   }
   if (resolveReplyBackendQueueMessageMismatch(backend, options)) {

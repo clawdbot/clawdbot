@@ -158,6 +158,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       rawText: " final answer ",
       sessionId: "external-cli-session-1",
       usage: { input: 11, output: 7, total: 18 },
+      diagnosticUsage: { input: 21, output: 9, total: 30 },
       finalPromptText: "prompt sent to cli",
     });
     loadCliSessionContextEngineMessagesMock.mockReset();
@@ -236,6 +237,11 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const result = await runPreparedCliAgent(context);
 
     expect(result.meta.agentMeta?.sessionId).toBe("external-cli-session-1");
+    expect(result.meta.agentMeta).toMatchObject({
+      usage: { input: 11, output: 7, total: 18 },
+      lastCallUsage: { input: 11, output: 7, total: 18 },
+      diagnosticUsage: { input: 21, output: 9, total: 30 },
+    });
     expect(loadCliSessionContextEngineMessagesMock).toHaveBeenCalledWith({
       sessionId: "openclaw-session-1",
       sessionFile: "session.jsonl",

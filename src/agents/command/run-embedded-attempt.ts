@@ -14,6 +14,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { AgentExecutionAttribution } from "../agent-execution-attribution.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -66,7 +67,10 @@ export async function runEmbeddedAgentAttempt(params: {
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
   lifecycleGeneration: string;
-  onLifecycleGenerationChanged: (lifecycleGeneration: string) => void;
+  onLifecycleGenerationChanged: (
+    lifecycleGeneration: string,
+    attribution?: AgentExecutionAttribution,
+  ) => void;
   suppressVisibleSessionEffects: boolean;
   preserveUserFacingSessionModelState: boolean;
   modelSelection: EmbeddedModelSelection;
@@ -94,6 +98,7 @@ export async function runEmbeddedAgentAttempt(params: {
     timeoutMs,
     runTimeoutOverrideMs,
   } = params.prepared;
+  let executionAttribution = params.opts.executionAttribution;
   const { runContext, skillsSnapshot, resolvedVerboseLevel } = params.embeddedSessionState;
   const {
     defaultProvider,
@@ -469,7 +474,10 @@ export async function runEmbeddedAgentAttempt(params: {
             runTimeoutOverrideMs,
             runId,
             lifecycleGeneration,
-            opts: params.opts,
+            opts:
+              executionAttribution === params.opts.executionAttribution
+                ? params.opts
+                : { ...params.opts, executionAttribution },
             runContext,
             spawnedBy,
             messageChannel,
@@ -493,10 +501,11 @@ export async function runEmbeddedAgentAttempt(params: {
               (runOptions.isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
             userTurnTranscriptRecorder,
             onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
-            onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
+            onLifecycleGenerationChanged: (nextLifecycleGeneration, nextAttribution) => {
               lifecycleGeneration = nextLifecycleGeneration;
+              executionAttribution = nextAttribution ?? executionAttribution;
               // Outer cleanup owns the run context, so publish before the attempt can reject.
-              params.onLifecycleGenerationChanged(nextLifecycleGeneration);
+              params.onLifecycleGenerationChanged(nextLifecycleGeneration, nextAttribution);
             },
             onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
             deferTerminalLifecycle: true,

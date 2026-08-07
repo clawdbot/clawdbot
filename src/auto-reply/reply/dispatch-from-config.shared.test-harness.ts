@@ -1,6 +1,7 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import type {
@@ -213,6 +214,17 @@ const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
     synthesizeToolAudio: false,
+    statusSnapshot: {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    } as {
+      autoMode: TtsAutoMode;
+      provider: string;
+      maxLength: number;
+      summarize: boolean;
+    },
   };
   return {
     state,
@@ -652,12 +664,7 @@ vi.mock("./conversation-binding-input.js", () => ({
     conversationBindingMocks.resolveConversationBindingThreadIdFromMessage,
 }));
 vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  }),
+  resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
 }));
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
@@ -731,6 +738,12 @@ export function resetPluginTtsAndThreadMocks() {
   pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
   ttsMocks.state.synthesizeFinalAudio = false;
   ttsMocks.state.synthesizeToolAudio = false;
+  ttsMocks.state.statusSnapshot = {
+    autoMode: "always",
+    provider: "auto",
+    maxLength: 1500,
+    summarize: true,
+  };
   ttsMocks.maybeApplyTtsToPayload.mockReset().mockImplementation(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
       payload: ReplyPayload;

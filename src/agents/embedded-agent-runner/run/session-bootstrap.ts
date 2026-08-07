@@ -71,9 +71,9 @@ export function buildContextEngineCompactionSessionTarget(params: {
       ? candidateSessionKey
       : candidateSessionKey && !suppliedEntry
         ? candidateSessionKey
-        : (preferredMarkerSessionKey ?? (markerMatches.length === 0 ? marker.sessionId : undefined))
+        : preferredMarkerSessionKey
     : undefined;
-  if (marker && !markerSessionKey) {
+  if (marker && markerMatches.length > 0 && !markerSessionKey) {
     throw new Error("Legacy compaction transcript identity is ambiguous");
   }
   if (
@@ -90,7 +90,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
     ? targetSessionKey
     : marker
       ? markerSessionKey
-      : (targetSessionKey ?? suppliedSessionKey ?? targetSessionId ?? params.sessionId);
+      : (targetSessionKey ?? suppliedSessionKey);
   const agentId =
     targetAgentId ??
     marker?.agentId ??

@@ -7,15 +7,18 @@ afterEach(() => {
 });
 
 describe("context runtime state", () => {
-  it("normalizes the singleton shape held by a released gateway", () => {
+  it("invalidates a released load marker when the process-global cache is introduced", () => {
     const moduleUrl = new URL("./context-runtime-state.ts", import.meta.url).href;
     const output = execNodeEvalSync(
       `
-        const key = Symbol.for("openclaw.contextWindowRuntimeState");
+        const runtimeKey = Symbol.for("openclaw.contextWindowRuntimeState");
+        delete globalThis[Symbol.for("openclaw.contextWindowCacheState")];
         const legacyLoadPromise = Promise.resolve();
-        globalThis[key] = {
+        globalThis[runtimeKey] = {
+          generation: 7,
+          loadGeneration: 7,
           loadPromise: legacyLoadPromise,
-          configuredConfig: undefined,
+          configuredConfig: { models: {} },
           configLoadFailures: 0,
           nextConfigLoadAttemptAtMs: 0,
           modelsConfigRuntimeLoader: { clear() {} },
@@ -24,12 +27,13 @@ describe("context runtime state", () => {
         process.stdout.write([
           state.generation,
           state.loadGeneration === null,
-          state.loadPromise === legacyLoadPromise,
+          state.loadPromise === null,
+          state.configuredConfig?.models !== undefined,
         ].join(":"));
       `,
       { imports: ["tsx"] },
     );
 
-    expect(output).toBe("0:true:true");
+    expect(output).toBe("7:true:true:true");
   });
 });

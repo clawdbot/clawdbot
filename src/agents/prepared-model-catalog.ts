@@ -37,6 +37,11 @@ export type LoadPreparedModelCatalogParams = {
   allowGatewaySubagentBinding?: boolean;
 };
 
+export type GetPublishedPreparedModelCatalogOwnerParams = Omit<
+  LoadPreparedModelCatalogParams,
+  "readOnly"
+>;
+
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
 
 async function materializeRequestedModelCatalog(
@@ -140,6 +145,24 @@ export function getPreparedModelCatalogOwnerSnapshot(
   return activatedExact && preparedModelRuntimeConfigsMatch(activatedExact.config, exact.config)
     ? activatedExact
     : undefined;
+}
+
+/**
+ * Returns the currently published lifecycle owner and its configured/static turn facts without
+ * config hashing, fallback construction, or full control-plane catalog materialization.
+ */
+export function getPublishedPreparedModelCatalogOwnerSnapshot(
+  params: GetPublishedPreparedModelCatalogOwnerParams = {},
+): PreparedModelRuntimeSnapshot | undefined {
+  const { activationFull, full } = resolveInputs(params);
+  const published = getPreparedModelRuntimeSnapshot(full);
+  if (published) {
+    return published;
+  }
+  if (activationFull.workspaceDir === full.workspaceDir) {
+    return undefined;
+  }
+  return getPreparedModelRuntimeSnapshot(activationFull);
 }
 
 /** Returns the configured catalog for the current generation without starting discovery. */

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -272,6 +273,34 @@ describe("waitForGatewayReady", () => {
       }
     },
   );
+
+  it("bounds a stalled readiness probe by the remaining deadline", async () => {
+    let probeSignal: AbortSignal | undefined;
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ init }: { init?: RequestInit }) =>
+        await new Promise((_, reject) => {
+          probeSignal = init?.signal ?? undefined;
+          probeSignal?.addEventListener(
+            "abort",
+            () => reject(toErrorObject(probeSignal?.reason, "QA readiness probe aborted")),
+            { once: true },
+          );
+        }),
+    );
+    const startedAt = Date.now();
+
+    await expect(
+      testing.waitForGatewayReady({
+        baseUrl: "http://127.0.0.1:43124",
+        logs: () => "near-expiry logs",
+        child: { exitCode: null, signalCode: null },
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow("gateway failed to become healthy");
+
+    expect(probeSignal?.aborted).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
 });
 
 describe("Gateway child fixture helpers", () => {
@@ -850,6 +879,56 @@ describe("buildQaRuntimeEnv", () => {
     expect(testing.isRetryableGatewayCallError("gateway closed (1012 service restart)")).toBe(true);
     expect(testing.isRetryableGatewayCallError("service restart in progress")).toBe(true);
     expect(testing.isRetryableGatewayCallError("permission denied")).toBe(false);
+  });
+
+  it("preserves relative gateway retry timeouts without an absolute deadline", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway closed (1012 service restart)"))
+      .mockResolvedValueOnce({ ok: true });
+    const waitForReady = vi.fn(async () => {});
+
+    await expect(
+      testing.callQaGatewayWithRetry({
+        logs: () => "qa logs",
+        request,
+        throwChildFailure: vi.fn(),
+        timeoutMs: 2_000,
+        waitForReady,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(request).toHaveBeenNthCalledWith(1, { timeoutMs: 2_000 });
+    expect(request).toHaveBeenNthCalledWith(2, { timeoutMs: 2_000 });
+    expect(waitForReady).toHaveBeenCalledWith(10_000);
+  });
+
+  it("bounds near-expiry restart recovery by the absolute deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const request = vi.fn(async () => {
+      vi.setSystemTime(9_995);
+      throw new Error("gateway closed (1012 service restart)");
+    });
+    const waitForReady = vi.fn(async (timeoutMs: number) => {
+      vi.setSystemTime(Date.now() + timeoutMs);
+    });
+
+    await expect(
+      testing.callQaGatewayWithRetry({
+        deadlineMs: 10_000,
+        logs: () => "qa logs",
+        request,
+        throwChildFailure: vi.fn(),
+        timeoutMs: 20_000,
+        waitForReady,
+      }),
+    ).rejects.toThrow("gateway call deadline exceeded");
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith({ deadlineMs: 10_000, timeoutMs: 10_000 });
+    expect(waitForReady).toHaveBeenCalledWith(5);
+    expect(Date.now()).toBe(10_000);
   });
 
   it("waits for a fresh in-process restart boundary after the current log offset", async () => {
@@ -1653,18 +1732,85 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it("treats bind collisions as retryable gateway startup errors", () => {
+  it("classifies bind collisions separately from migration convergence restarts", () => {
     expect(
-      testing.isRetryableGatewayStartupError(
+      testing.classifyQaGatewayStartupRetry(
         "another gateway instance is already listening on ws://127.0.0.1:43124",
       ),
-    ).toBe(true);
+    ).toBe("bind-collision");
     expect(
-      testing.isRetryableGatewayStartupError(
+      testing.classifyQaGatewayStartupRetry(
         "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
       ),
-    ).toBe(true);
-    expect(testing.isRetryableGatewayStartupError("gateway failed to become healthy")).toBe(false);
+    ).toBe("bind-collision");
+    expect(
+      testing.classifyQaGatewayStartupRetry(
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
+      ),
+    ).toBe("migration-convergence-restart");
+  });
+
+  it.each([
+    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+    "OpenClaw plugin migration inputs changed during startup convergence",
+    "Restart OpenClaw so state migrations can continue.",
+    "gateway failed to become healthy",
+  ])("does not retry unrelated startup failure: %s", (details) => {
+    expect(testing.classifyQaGatewayStartupRetry(details)).toBeNull();
+  });
+
+  it("restarts migration convergence once with the same launch state", () => {
+    const first = testing.resolveQaGatewayStartupRetry({
+      attempt: 1,
+      details:
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
+      migrationConvergenceRestartUsed: false,
+    });
+
+    expect(first).toEqual({
+      kind: "migration-convergence-restart",
+      reuseLaunchState: true,
+      migrationConvergenceRestartUsed: true,
+    });
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 2,
+        details:
+          "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
+        migrationConvergenceRestartUsed: first?.migrationConvergenceRestartUsed ?? false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rotates launch state only for a bind collision", () => {
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 1,
+        details: "listen EADDRINUSE: address already in use",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toEqual({
+      kind: "bind-collision",
+      reuseLaunchState: false,
+      migrationConvergenceRestartUsed: false,
+    });
+  });
+
+  it("fails immediately for generic exits and after the startup attempt budget", () => {
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 1,
+        details: "gateway exited with code 1",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toBeNull();
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 5,
+        details: "listen EADDRINUSE",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toBeNull();
   });
 
   it("treats startup token mismatches as retryable rpc startup errors", () => {

@@ -1,22 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const available = canRunPlaywrightChromium(executablePath);
-const allowMissing = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const suite = available || !allowMissing ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Claude native session catalog",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 type VisibleVirtualRow = {
   key: string;
@@ -222,7 +215,7 @@ async function expandCodingSection(page: Page) {
 }
 
 async function openClaudeCatalogTerminal(page: Page) {
-  await page.goto(`${server.baseUrl}chat`);
+  await page.goto(`${suite.server.baseUrl}chat`);
   await expandCodingSection(page);
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
@@ -231,29 +224,16 @@ async function openClaudeCatalogTerminal(page: Page) {
   await page.locator('wa-dropdown-item[value="terminal"]').click();
 }
 
-suite("Claude native session catalog", () => {
-  beforeAll(async () => {
-    if (!available) {
-      throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("groups Claude and Codex sessions by Gateway and paired-node host", async () => {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await expandCodingSection(page);
       for (const catalogId of ["claude", "codex"]) {
         const catalogLabel = catalogId === "claude" ? "Claude Code" : "Codex";
@@ -286,30 +266,28 @@ suite("Claude native session catalog", () => {
   });
 
   it("shows catalog connection progress until the first terminal output", async () => {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["terminal.open"],
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.catalog.list",
-        "sessions.catalog.read",
-        "terminal.open",
-      ],
-      methodResponses: {
-        "sessions.catalog.list": resumableClaudeCatalog(),
-        "sessions.catalog.read": {
-          hostId: "gateway:local",
-          threadId: "claude-terminal-session",
-          items: [{ type: "userMessage", text: "Continue the native session" }],
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["terminal.open"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.catalog.list",
+          "sessions.catalog.read",
+          "terminal.open",
+        ],
+        methodResponses: {
+          "sessions.catalog.list": resumableClaudeCatalog(),
+          "sessions.catalog.read": {
+            hostId: "gateway:local",
+            threadId: "claude-terminal-session",
+            items: [{ type: "userMessage", text: "Continue the native session" }],
+          },
+          "terminal.list": { sessions: [] },
         },
-        "terminal.list": { sessions: [] },
-      },
-      terminalEnabled: true,
-    });
+        terminalEnabled: true,
+      });
 
-    try {
       await openClaudeCatalogTerminal(page);
       const open = await gateway.waitForRequest("terminal.open");
       expect(open.params).toMatchObject({
@@ -345,43 +323,39 @@ suite("Claude native session catalog", () => {
       });
       await expect.poll(() => connecting.count()).toBe(0);
       expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("closes a catalog terminal that produces no output before the deadline", async () => {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.catalog.list",
-        "sessions.catalog.read",
-        "terminal.open",
-      ],
-      methodResponses: {
-        "sessions.catalog.list": resumableClaudeCatalog(),
-        "sessions.catalog.read": {
-          hostId: "gateway:local",
-          threadId: "claude-terminal-session",
-          items: [],
+    await suite.withPage(undefined, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.catalog.list",
+          "sessions.catalog.read",
+          "terminal.open",
+        ],
+        methodResponses: {
+          "sessions.catalog.list": resumableClaudeCatalog(),
+          "sessions.catalog.read": {
+            hostId: "gateway:local",
+            threadId: "claude-terminal-session",
+            items: [],
+          },
+          "terminal.list": { sessions: [] },
+          "terminal.open": {
+            agentId: "main",
+            confined: false,
+            cwd: "/workspace",
+            sessionId: "claude-terminal-timeout",
+            shell: "/bin/zsh",
+            title: "claude --resume claude-termi…",
+          },
         },
-        "terminal.list": { sessions: [] },
-        "terminal.open": {
-          agentId: "main",
-          confined: false,
-          cwd: "/workspace",
-          sessionId: "claude-terminal-timeout",
-          shell: "/bin/zsh",
-          title: "claude --resume claude-termi…",
-        },
-      },
-      terminalEnabled: true,
-    });
+        terminalEnabled: true,
+      });
 
-    try {
       await page.clock.install();
       await openClaudeCatalogTerminal(page);
       await gateway.waitForRequest("terminal.open");
@@ -392,13 +366,11 @@ suite("Claude native session catalog", () => {
       const close = await gateway.waitForRequest("terminal.close");
       expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
       expect(await page.locator(".tabstrip-tab").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
-    const page = await browser.newPage();
+    const page = await suite.browser.newPage();
     await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
@@ -483,7 +455,7 @@ suite("Claude native session catalog", () => {
         },
       },
     });
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await expandCodingSection(page);
     await page.locator('[data-session-catalog-load-more="claude"]').click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
@@ -582,7 +554,7 @@ suite("Claude native session catalog", () => {
   });
 
   it("auto-loads older native history with a spinner and stable viewport", async () => {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     await page.clock.install();
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
@@ -629,7 +601,7 @@ suite("Claude native session catalog", () => {
       },
     });
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(/^recent native message 140\n/).waitFor();
     const thread = page.locator(".chat-thread");
     await expect
@@ -681,7 +653,7 @@ suite("Claude native session catalog", () => {
   });
 
   it("keeps a focused message action mounted while its row scrolls out of view", async () => {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const messages = Array.from({ length: 200 }, (_, index) => ({
       __openclaw: { seq: index + 1 },
       content: [
@@ -706,7 +678,7 @@ suite("Claude native session catalog", () => {
       },
     });
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(/^focus retention message 200\n/).waitFor();
     const thread = page.locator(".chat-thread");
     const action = thread.locator("button.chat-group-delete").last();

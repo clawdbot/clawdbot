@@ -204,7 +204,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           const candidate = await runCliFallbackCandidate({
             ...common,
             cliExecutionProvider: runtime.cliExecutionProvider,
-            lifecycleGeneration: params.state.lifecycleGeneration,
+            getLifecycleGeneration: () => params.state.lifecycleGeneration,
+            onLifecycleGeneration: (generation) => {
+              params.state.lifecycleGeneration = generation;
+            },
             runLane,
           });
           params.state.bootstrapPromptWarningSignaturesSeen =

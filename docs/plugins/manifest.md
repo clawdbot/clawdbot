@@ -499,6 +499,11 @@ accepted through 2026-10-01 while authors migrate. An
 optional `adapterFactory` exposes the transport to shared QA scenarios without
 changing the registered command's runner.
 
+Module-backed flow scenarios are an adapter-owned execution form. Set
+`adapterFactory.supportsModuleFlows` to `true` only when every adapter created
+by that factory implements `prepareFlow`; QA planning excludes module flows
+from implementations that do not declare support.
+
 ```json
 {
   "qaRunners": [

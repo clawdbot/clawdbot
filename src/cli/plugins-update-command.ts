@@ -226,6 +226,10 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     pluginInstallRecords,
   );
   const configuredUpdateChannel = normalizeUpdateChannel(cfg.update?.channel) ?? undefined;
+  const officialPluginUpdateChannel = resolveRegistryUpdateChannel({
+    configChannel: configuredUpdateChannel,
+    currentVersion: VERSION,
+  });
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
@@ -350,12 +354,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           specOverrides: pluginSelection.specOverrides,
           dryRun: params.opts.dryRun,
           updateChannel: params.opts.all ? undefined : configuredUpdateChannel,
-          officialPluginUpdateChannel: params.opts.all
-            ? resolveRegistryUpdateChannel({
-                configChannel: normalizeUpdateChannel(cfg.update?.channel),
-                currentVersion: VERSION,
-              })
-            : undefined,
+          officialPluginUpdateChannel,
           syncOfficialPluginInstalls: params.opts.all ? true : undefined,
           coreVersion: VERSION,
           dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,

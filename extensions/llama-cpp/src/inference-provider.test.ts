@@ -54,19 +54,17 @@ vi.mock("node-llama-cpp", () => ({
   },
 }));
 
-import { createLlamaCppStreamFn } from "./inference-provider.js";
+import { createLlamaCppInferenceRuntime } from "./inference-provider.js";
 
-const {
-  clearLlamaCppInferenceCacheForTests,
-  mapContextToLlamaChatHistory,
-  mapToolsToLlamaFunctions,
-} = (globalThis as Record<PropertyKey, unknown>)[
+type LlamaCppInferenceRuntime = ReturnType<typeof createLlamaCppInferenceRuntime>;
+let inferenceRuntime: LlamaCppInferenceRuntime;
+const testApi = (globalThis as Record<PropertyKey, unknown>)[
   Symbol.for("openclaw.llamaCppInferenceTestApi")
 ] as {
-  clearLlamaCppInferenceCacheForTests: () => Promise<void>;
-  mapContextToLlamaChatHistory: (context: Context) => unknown[];
-  mapToolsToLlamaFunctions: (context: Context) => Record<string, unknown> | undefined;
+  resetInferenceRuntimeCoordinator: () => void;
 };
+const NATIVE_CLEANUP_RECOVERY_MESSAGE =
+  "llama.cpp runtime stopped after native cleanup failed. Fully stop the managed Gateway service or foreground Gateway process, then start it again. An in-process restart cannot recover native resources.";
 
 const model: Model = {
   id: "test.gguf",
@@ -113,11 +111,11 @@ type TestStreamParams = {
   selectedModel?: Model;
   prompt?: string;
   tools?: Context["tools"];
-  options?: Parameters<ReturnType<typeof createLlamaCppStreamFn>>[2];
+  options?: Parameters<ReturnType<LlamaCppInferenceRuntime["createStreamFn"]>>[2];
 };
 
 async function createTestStream(params: TestStreamParams = {}) {
-  return await createLlamaCppStreamFn({})(
+  return await inferenceRuntime.createStreamFn({})(
     params.selectedModel ?? model,
     {
       messages: [{ role: "user", content: params.prompt ?? "Hi", timestamp: 1 }],
@@ -131,8 +129,31 @@ async function collectTestEvents(params: TestStreamParams = {}) {
   return await collectEvents(await createTestStream(params));
 }
 
-beforeEach(async () => {
-  await clearLlamaCppInferenceCacheForTests();
+function deferGeneration() {
+  let finishGeneration: (() => void) | undefined;
+  mocks.generateResponse.mockImplementationOnce(
+    async () =>
+      await new Promise((resolve) => {
+        finishGeneration = () =>
+          resolve({
+            response: "",
+            functionCalls: undefined,
+            metadata: { stopReason: "eogToken" },
+          });
+      }),
+  );
+  return () => finishGeneration?.();
+}
+
+function expectDisposeCalls(contextCount: number, modelCount: number, llamaCount: number) {
+  expect(mocks.contextDispose).toHaveBeenCalledTimes(contextCount);
+  expect(mocks.modelDispose).toHaveBeenCalledTimes(modelCount);
+  expect(mocks.llamaDispose).toHaveBeenCalledTimes(llamaCount);
+}
+
+beforeEach(() => {
+  testApi.resetInferenceRuntimeCoordinator();
+  inferenceRuntime = createLlamaCppInferenceRuntime();
   vi.clearAllMocks();
   mocks.generateResponse.mockResolvedValue({
     response: "",
@@ -142,99 +163,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await clearLlamaCppInferenceCacheForTests();
+  await inferenceRuntime.dispose().catch(() => undefined);
 });
 
 describe("llama.cpp inference provider", () => {
-  it("maps OpenClaw history and tool results into the model chat template history", () => {
-    const context = {
-      systemPrompt: "Be concise.",
-      messages: [
-        { role: "user" as const, content: "weather?", timestamp: 1 },
-        {
-          role: "assistant" as const,
-          api: "openai-completions",
-          provider: "test",
-          model: "test",
-          stopReason: "toolUse" as const,
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          timestamp: 2,
-          content: [
-            { type: "text" as const, text: "Checking." },
-            {
-              type: "toolCall" as const,
-              id: "call-1",
-              name: "weather",
-              arguments: { city: "Berlin" },
-            },
-          ],
-        },
-        {
-          role: "toolResult" as const,
-          toolCallId: "call-1",
-          toolName: "weather",
-          content: [{ type: "text" as const, text: "Sunny" }],
-          isError: false,
-          timestamp: 3,
-        },
-        { role: "user" as const, content: "thanks", timestamp: 4 },
-      ],
-    };
-
-    expect(mapContextToLlamaChatHistory(context)).toEqual([
-      { type: "system", text: "Be concise." },
-      { type: "user", text: "weather?" },
-      {
-        type: "model",
-        response: [
-          "Checking.",
-          {
-            type: "functionCall",
-            name: "weather",
-            params: { city: "Berlin" },
-            result: "Sunny",
-          },
-        ],
-      },
-      { type: "user", text: "thanks" },
-    ]);
-  });
-
-  it("maps JSON-schema tools to native node-llama-cpp function definitions", () => {
-    expect(
-      mapToolsToLlamaFunctions({
-        messages: [],
-        tools: [
-          {
-            name: "weather",
-            description: "Get weather",
-            parameters: {
-              type: "object",
-              properties: { city: { type: "string" } },
-              required: ["city"],
-            },
-          },
-        ],
-      }),
-    ).toEqual({
-      weather: {
-        description: "Get weather",
-        params: {
-          type: "object",
-          properties: { city: { type: "string" } },
-          required: ["city"],
-        },
-      },
-    });
-  });
-
   it("streams text deltas and reports native token-meter usage", async () => {
     mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
       options.onTextChunk("Hel");
@@ -835,34 +767,199 @@ describe("llama.cpp inference provider", () => {
     expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("grammar");
   });
 
-  it("disposes the previous model and context when the model changes", async () => {
-    const streamFn = createLlamaCppStreamFn({});
-    await collectEvents(
-      await streamFn(model, { messages: [{ role: "user", content: "one", timestamp: 1 }] }),
-    );
-    await collectEvents(
-      await streamFn(
-        { ...model, id: "other.gguf", params: { modelPath: "other.gguf" } },
-        { messages: [{ role: "user", content: "two", timestamp: 2 }] },
-      ),
-    );
-
-    expect(mocks.contextDispose).toHaveBeenCalledTimes(1);
-    expect(mocks.modelDispose).toHaveBeenCalledTimes(1);
+  it("makes failed changed-model cleanup terminal", async () => {
+    const otherModel = { ...model, id: "other.gguf", params: { modelPath: "other.gguf" } };
+    await collectTestEvents({ prompt: "one" });
+    await collectTestEvents({ selectedModel: otherModel, prompt: "two" });
+    let rejectCleanup!: (error: Error) => void;
+    const cleanup = new Promise<void>((_resolve, reject) => {
+      rejectCleanup = reject;
+    });
+    mocks.contextDispose.mockImplementationOnce(async () => await cleanup);
+    const failedSwitch = await createTestStream({ prompt: "three" });
+    await vi.waitFor(() => expect(mocks.contextDispose).toHaveBeenCalledTimes(2));
+    const unavailable = await createTestStream({ selectedModel: otherModel, prompt: "four" });
+    const disposing = inferenceRuntime.dispose();
+    rejectCleanup(new Error("context cleanup failed"));
+    await expect(failedSwitch.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    await expect(unavailable.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    await expect(disposing).rejects.toThrow("context cleanup failed");
+    expectDisposeCalls(2, 1, 0);
     expect(mocks.llama.loadModel).toHaveBeenCalledTimes(2);
   });
 
+  it("records cleanup failure during partial model initialization", async () => {
+    mocks.model.createContext.mockRejectedValueOnce(new Error("context creation failed"));
+    mocks.modelDispose.mockRejectedValueOnce(new Error("model cleanup failed"));
+    const failedInitialization = await createTestStream();
+    await expect(failedInitialization.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    await expect(inferenceRuntime.dispose()).rejects.toThrow("model cleanup failed");
+    expectDisposeCalls(0, 1, 0);
+  });
+
   it("reuses one context sequence across serialized requests for the same model", async () => {
-    const streamFn = createLlamaCppStreamFn({});
-    await collectEvents(
-      await streamFn(model, { messages: [{ role: "user", content: "one", timestamp: 1 }] }),
-    );
-    await collectEvents(
-      await streamFn(model, { messages: [{ role: "user", content: "two", timestamp: 2 }] }),
-    );
+    await collectTestEvents({ prompt: "one" });
+    await collectTestEvents({ prompt: "two" });
 
     expect(mocks.context.getSequence).toHaveBeenCalledTimes(1);
     expect(mocks.llama.loadModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes the context, model, and native runtime in ownership order", async () => {
+    await collectTestEvents();
+
+    await inferenceRuntime.dispose();
+
+    expectDisposeCalls(1, 1, 1);
+    expect(mocks.contextDispose.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.modelDispose.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(mocks.modelDispose.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.llamaDispose.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("blocks a published replacement until predecessor service stop finishes", async () => {
+    const retiringRuntime = inferenceRuntime;
+    await collectTestEvents();
+    let finishCleanup!: () => void;
+    mocks.contextDispose.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishCleanup = resolve;
+        }),
+    );
+    // Gateway publishes the replacement registry before stopping old services.
+    const disposing = retiringRuntime.dispose();
+    await vi.waitFor(() => expect(mocks.contextDispose).toHaveBeenCalledOnce());
+
+    const replacementRuntime = createLlamaCppInferenceRuntime();
+    const replacementEvents = collectEvents(
+      await replacementRuntime.createStreamFn({})(model, {
+        messages: [{ role: "user", content: "after reload", timestamp: 2 }],
+      }),
+    );
+    await Promise.resolve();
+    expect(mocks.llama.loadModel).toHaveBeenCalledOnce();
+
+    finishCleanup();
+    await disposing;
+    await expect(replacementEvents).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "done", reason: "stop" })]),
+    );
+    expect(mocks.llama.loadModel).toHaveBeenCalledTimes(2);
+    inferenceRuntime = replacementRuntime;
+  });
+
+  it("keeps a published replacement blocked when predecessor service stop fails", async () => {
+    const retiringRuntime = inferenceRuntime;
+    await collectTestEvents();
+    mocks.contextDispose.mockRejectedValueOnce(new Error("retiring cleanup failed"));
+
+    const replacementRuntime = createLlamaCppInferenceRuntime();
+    // Match reload ordering: replacement is reachable before old service stop settles.
+    const disposing = retiringRuntime.dispose();
+    const replacementEvents = collectEvents(
+      await replacementRuntime.createStreamFn({})(model, {
+        messages: [{ role: "user", content: "after failed reload", timestamp: 2 }],
+      }),
+    );
+
+    await expect(disposing).rejects.toThrow("retiring cleanup failed");
+    await expect(replacementEvents).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "error",
+          error: expect.objectContaining({
+            errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+          }),
+        }),
+      ]),
+    );
+    expect(mocks.llama.loadModel).toHaveBeenCalledOnce();
+    await expect(replacementRuntime.dispose()).resolves.toBeUndefined();
+    inferenceRuntime = replacementRuntime;
+  });
+
+  it("lets a superseded waiting replacement stop before its predecessor retires", async () => {
+    await collectTestEvents();
+    const waitingRuntime = createLlamaCppInferenceRuntime();
+    const waitingStream = await waitingRuntime.createStreamFn({})(model, {
+      messages: [{ role: "user", content: "superseded reload", timestamp: 2 }],
+    });
+    await Promise.resolve();
+
+    const disposingWaitingRuntime = waitingRuntime.dispose();
+
+    await expect(waitingStream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "llama.cpp runtime is stopping",
+    });
+    await expect(disposingWaitingRuntime).resolves.toBeUndefined();
+    expect(mocks.llama.loadModel).toHaveBeenCalledOnce();
+  });
+
+  it("waits for admitted inference before disposing the runtime", async () => {
+    const finishGeneration = deferGeneration();
+    const stream = await createTestStream();
+    await vi.waitFor(() => expect(mocks.generateResponse).toHaveBeenCalledOnce());
+
+    const disposing = inferenceRuntime.dispose();
+    await Promise.resolve();
+    expect(mocks.contextDispose).not.toHaveBeenCalled();
+
+    finishGeneration();
+    await stream.result();
+    await disposing;
+
+    expectDisposeCalls(1, 1, 1);
+  });
+
+  it("rejects new inference once runtime disposal begins", async () => {
+    const finishGeneration = deferGeneration();
+    const activeStream = await createTestStream();
+    await vi.waitFor(() => expect(mocks.generateResponse).toHaveBeenCalledOnce());
+
+    const disposing = inferenceRuntime.dispose();
+    const rejectedStream = await createTestStream({ prompt: "too late" });
+
+    await expect(rejectedStream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "llama.cpp runtime is stopping",
+    });
+    expect(mocks.generateResponse).toHaveBeenCalledOnce();
+
+    finishGeneration();
+    await activeStream.result();
+    await disposing;
+  });
+
+  it("shares concurrent runtime disposal and performs cleanup once", async () => {
+    await collectTestEvents();
+
+    const disposals = [inferenceRuntime.dispose(), inferenceRuntime.dispose()];
+    expect(disposals[1]).toBe(disposals[0]);
+    await Promise.all(disposals);
+    expectDisposeCalls(1, 1, 1);
+  });
+
+  it("keeps a failed native runtime cleanup terminal", async () => {
+    await collectTestEvents();
+    mocks.llamaDispose.mockRejectedValueOnce(new Error("llama cleanup failed"));
+    const firstDisposal = inferenceRuntime.dispose();
+    await expect(firstDisposal).rejects.toThrow("llama cleanup failed");
+    expectDisposeCalls(1, 1, 1);
+    const unavailable = await createTestStream({ prompt: "after failed stop" });
+    await expect(unavailable.result()).resolves.toMatchObject({
+      errorMessage: NATIVE_CLEANUP_RECOVERY_MESSAGE,
+    });
+    expect(inferenceRuntime.dispose()).toBe(firstDisposal);
   });
 
   it.each([
@@ -964,7 +1061,7 @@ describe("llama.cpp inference provider", () => {
           resolveFirst = resolve;
         }),
     );
-    const streamFn = createLlamaCppStreamFn({});
+    const streamFn = inferenceRuntime.createStreamFn({});
     const firstStream = await streamFn(model, {
       messages: [{ role: "user", content: "first", timestamp: 1 }],
     });

@@ -1,18 +1,26 @@
+import { fetchExactClawHubSkillSecurityVerdicts } from "../../infra/clawhub-skill-security.js";
 // ClawHub verdict helpers normalize skill security verdicts from registry metadata.
 import {
-  fetchClawHubSkillSecurityVerdicts,
   resolveClawHubBaseUrl,
   type ClawHubSkillSecurityVerdictItem,
 } from "../../infra/clawhub.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
 
 /** ClawHub verdict item shape projected into local security scan verdicts. */
+type ClawHubVerdictTarget = {
+  registry: string;
+  slug: string;
+  ownerHandle?: string;
+  version: string;
+};
+
 type OpenClawSkillSecurityVerdictItem = Omit<
   ClawHubSkillSecurityVerdictItem,
   "decision" | "error" | "security"
 > & {
   registry: string;
   decision: string;
+  requestedOwnerHandle?: string;
   securityStatus?: string | null;
   securityPassed?: boolean | null;
   error?: {
@@ -39,15 +47,16 @@ function readSecurityPassed(security: unknown): boolean | null | undefined {
 
 function projectClawHubVerdictItem(
   item: ClawHubSkillSecurityVerdictItem,
-  registry: string,
+  target: ClawHubVerdictTarget,
 ): OpenClawSkillSecurityVerdictItem {
   const projected: OpenClawSkillSecurityVerdictItem = {
-    registry,
+    registry: target.registry,
     ok: item.ok,
     decision: item.decision,
     reasons: item.reasons,
-    requestedSlug: item.requestedSlug,
-    requestedVersion: item.requestedVersion,
+    requestedSlug: target.slug,
+    requestedVersion: target.version,
+    ...(target.ownerHandle ? { requestedOwnerHandle: target.ownerHandle } : {}),
   };
   if (item.slug !== undefined) {
     projected.slug = item.slug;
@@ -117,8 +126,8 @@ function canAutoFetchVerdictRegistry(registry: string): boolean {
 
 export function collectClawHubVerdictTargets(
   report: ReturnType<typeof buildWorkspaceSkillStatus>,
-): Array<{ registry: string; slug: string; version: string }> {
-  const targets = new Map<string, { registry: string; slug: string; version: string }>();
+): ClawHubVerdictTarget[] {
+  const targets = new Map<string, ClawHubVerdictTarget>();
   for (const skill of report.skills) {
     const link = skill.clawhub;
     if (!link || link.status !== "linked" || !link.valid) {
@@ -127,10 +136,11 @@ export function collectClawHubVerdictTargets(
     if (!canAutoFetchVerdictRegistry(link.registry)) {
       continue;
     }
-    const key = `${link.registry}\0${link.slug}\0${link.installedVersion}`;
+    const key = `${link.registry}\0${link.ownerHandle ?? ""}\0${link.slug}\0${link.installedVersion}`;
     targets.set(key, {
       registry: link.registry,
       slug: link.slug,
+      ...(link.ownerHandle ? { ownerHandle: link.ownerHandle } : {}),
       version: link.installedVersion,
     });
   }
@@ -138,24 +148,28 @@ export function collectClawHubVerdictTargets(
 }
 
 export async function fetchOpenClawSkillSecurityVerdicts(
-  targets: Array<{ registry: string; slug: string; version: string }>,
+  targets: ClawHubVerdictTarget[],
 ): Promise<OpenClawSkillSecurityVerdictItem[]> {
-  const byRegistry = new Map<string, Array<{ slug: string; version: string }>>();
+  const byRegistry = new Map<string, ClawHubVerdictTarget[]>();
   for (const target of targets) {
     const registryTargets = byRegistry.get(target.registry) ?? [];
-    registryTargets.push({ slug: target.slug, version: target.version });
+    registryTargets.push(target);
     byRegistry.set(target.registry, registryTargets);
   }
 
   const items: OpenClawSkillSecurityVerdictItem[] = [];
   for (const [registry, registryTargets] of byRegistry) {
-    const response = await fetchClawHubSkillSecurityVerdicts({
+    const verdicts = await fetchExactClawHubSkillSecurityVerdicts({
       baseUrl: registry,
-      items: registryTargets,
+      items: registryTargets.map(({ slug, ownerHandle, version }) => ({
+        slug,
+        ...(ownerHandle ? { ownerHandle } : {}),
+        version,
+      })),
       skipAuth: true,
     });
-    for (const item of response.items) {
-      items.push(projectClawHubVerdictItem(item, registry));
+    for (const [index, item] of verdicts.entries()) {
+      items.push(projectClawHubVerdictItem(item, registryTargets[index]!));
     }
   }
   return items;

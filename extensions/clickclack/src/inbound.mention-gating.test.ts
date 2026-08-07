@@ -3,7 +3,10 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
-import { getClickClackDiscussionBindingStore } from "./discussions/binding-store.js";
+import {
+  getClickClackDiscussionBindingStore,
+  type ClickClackDiscussionBinding,
+} from "./discussions/binding-store.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
@@ -150,6 +153,72 @@ function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMe
 }
 
 describe("ClickClack inbound mention gating", () => {
+  it("records attachment persistence failures before dropping inbound delivery", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const mainSessionKey = "agent:research:main";
+    const bindingStore = getClickClackDiscussionBindingStore(runtime);
+    bindingStore.set(mainSessionKey, {
+      accountId: "default",
+      agentId: "research",
+      sessionId: "old-session-id",
+      serverBaseUrl: "http://127.0.0.1:8080",
+      externalRef: "openclaw:test:research",
+      externalUrl: "",
+      workspaceRef: "wsp_1",
+      workspaceId: "wsp_1",
+      channelId: "chn_1",
+      channelRouteId: "discussion-route",
+      workspaceRouteId: "workspace-route",
+      section: "Sessions",
+      archived: false,
+      label: "Research",
+    });
+    const persisted = runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>({
+      namespace: "discussion-bindings",
+      maxEntries: 10_000,
+      overflowPolicy: "reject-new",
+    });
+    persisted.register = vi.fn(() => {
+      throw new Error("SQLITE_FULL");
+    });
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        replyMode: "model",
+        discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
+      }),
+      config: {
+        channels: {
+          clickclack: {
+            enabled: true,
+            baseUrl: "http://127.0.0.1:8080",
+            token: "test-token-placeholder",
+            workspace: "wsp_1",
+            discussions: { enabled: true, workspace: "wsp_1" },
+          },
+        },
+      } satisfies CoreConfig,
+      message: createMessage({ channel_id: "chn_1", body: "Old discussion" }),
+    });
+
+    expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(bindingStore.get(mainSessionKey)).toMatchObject({ sessionId: "old-session-id" });
+    expect(runtime.logging.getChildLogger).toHaveBeenCalledWith({
+      plugin: "clickclack",
+      feature: "discussions",
+    });
+    const loggerCall = vi
+      .mocked(runtime.logging.getChildLogger)
+      .mock.calls.findIndex(
+        ([context]) => context?.plugin === "clickclack" && context.feature === "discussions",
+      );
+    const logger = vi.mocked(runtime.logging.getChildLogger).mock.results[loggerCall]?.value;
+    expect(logger?.warn).toHaveBeenCalledWith(
+      "discussion attachment refresh failed for channel chn_1: Error: SQLITE_FULL",
+    );
+  });
+
   it("rejects an unmentioned group message when mention gating is enabled", async () => {
     const runtime = createRuntime();
     setClickClackRuntime(runtime);

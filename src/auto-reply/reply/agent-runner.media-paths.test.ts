@@ -119,6 +119,10 @@ vi.mock("../../agents/embedded-agent.js", () => ({
   waitForEmbeddedAgentRunEnd: waitForEmbeddedAgentRunEndMock,
 }));
 
+vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
+  runEmbeddedAgentInternal: runEmbeddedAgentMock,
+}));
+
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
     outcome.reason && outcome.sessionId

@@ -205,29 +205,53 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("handles leading/trailing whitespace in model string", async () => {
+    it.each([
+      {
+        title: "handles leading/trailing whitespace in model string",
+        model: "  openai/gpt-4.1-mini  ",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+      {
+        title: "handles openrouter nested provider paths",
+        model: "openrouter/meta-llama/llama-3.3-70b:free",
+        expectedProvider: "openrouter",
+        expectedModel: "meta-llama/llama-3.3-70b:free",
+      },
+      {
+        title: "normalizes provider casing",
+        model: "OpenAI/gpt-4.1-mini",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+      {
+        title: "normalizes anthropic model aliases",
+        model: "anthropic/opus-4.5",
+        expectedProvider: "anthropic",
+        expectedModel: "claude-opus-4-5",
+      },
+      {
+        title: "normalizes bedrock provider alias",
+        model: "bedrock/claude-sonnet-4-6",
+        expectedProvider: "amazon-bedrock",
+        expectedModel: "claude-sonnet-4-6",
+      },
+      {
+        title: "job payload model overrides default (anthropic -> openai)",
+        model: "openai/gpt-4.1-mini",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+    ])("$title", async ({ model, expectedProvider, expectedModel }) => {
       await expectSelectedModel(
         {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "  openai/gpt-4.1-mini  ",
+            model,
           },
         },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
-    it("handles openrouter nested provider paths", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "openrouter/meta-llama/llama-3.3-70b:free",
-          },
-        },
-        { provider: "openrouter", model: "meta-llama/llama-3.3-70b:free" },
+        { provider: expectedProvider, model: expectedModel },
       );
     });
 
@@ -384,61 +408,9 @@ describe("cron model formatting and precedence edge cases", () => {
         },
       });
     });
-
-    it("normalizes provider casing", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "OpenAI/gpt-4.1-mini",
-          },
-        },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
-    it("normalizes anthropic model aliases", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "anthropic/opus-4.5",
-          },
-        },
-        { provider: "anthropic", model: "claude-opus-4-5" },
-      );
-    });
-
-    it("normalizes bedrock provider alias", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "bedrock/claude-sonnet-4-6",
-          },
-        },
-        { provider: "amazon-bedrock", model: "claude-sonnet-4-6" },
-      );
-    });
   });
 
   describe("model precedence isolation", () => {
-    it("job payload model overrides default (anthropic -> openai)", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "openai/gpt-4.1-mini",
-          },
-        },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
     it("session override applies when no job payload model is present", async () => {
       await expectSelectedModel(
         {
