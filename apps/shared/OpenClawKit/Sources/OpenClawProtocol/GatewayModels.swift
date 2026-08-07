@@ -13833,23 +13833,25 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let workspace: String?
     public let modelvalue: AnyCodable?
     public var model: String? { modelvalue?.value as? String }
-    public let emoji: AnyCodable?
-    public let avatar: AnyCodable?
+    public let emojivalue: AnyCodable?
+    public var emoji: String? { emojivalue?.value as? String }
+    public let avatarvalue: AnyCodable?
+    public var avatar: String? { avatarvalue?.value as? String }
 
     public init(
         agentid: String,
         name: String? = nil,
         workspace: String? = nil,
-        modelvalue: AnyCodable?,
-        emoji: AnyCodable? = nil,
-        avatar: AnyCodable? = nil)
+        modelvalue: AnyCodable? = nil,
+        emojivalue: AnyCodable? = nil,
+        avatarvalue: AnyCodable? = nil)
     {
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
         self.modelvalue = modelvalue
-        self.emoji = emoji
-        self.avatar = avatar
+        self.emojivalue = emojivalue
+        self.avatarvalue = avatarvalue
     }
 
     public init(
@@ -13857,16 +13859,16 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String? = nil,
         workspace: String? = nil,
         model: String? = nil,
-        emoji: AnyCodable? = nil,
-        avatar: AnyCodable? = nil)
+        emoji: String? = nil,
+        avatar: String? = nil)
     {
         self.init(
             agentid: agentid,
             name: name,
             workspace: workspace,
             modelvalue: model.map { AnyCodable($0) },
-            emoji: emoji,
-            avatar: avatar)
+            emojivalue: emoji.map { AnyCodable($0) },
+            avatarvalue: avatar.map { AnyCodable($0) })
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13874,8 +13876,8 @@ public struct AgentsUpdateParams: Codable, Sendable {
         case name
         case workspace
         case modelvalue = "model"
-        case emoji
-        case avatar
+        case emojivalue = "emoji"
+        case avatarvalue = "avatar"
     }
 
     public init(from decoder: Decoder) throws {
@@ -13886,8 +13888,12 @@ public struct AgentsUpdateParams: Codable, Sendable {
         self.modelvalue = container.contains(.modelvalue)
             ? try container.decode(AnyCodable.self, forKey: .modelvalue)
             : nil
-        self.emoji = try container.decodeIfPresent(AnyCodable.self, forKey: .emoji)
-        self.avatar = try container.decodeIfPresent(AnyCodable.self, forKey: .avatar)
+        self.emojivalue = container.contains(.emojivalue)
+            ? try container.decode(AnyCodable.self, forKey: .emojivalue)
+            : nil
+        self.avatarvalue = container.contains(.avatarvalue)
+            ? try container.decode(AnyCodable.self, forKey: .avatarvalue)
+            : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -13896,8 +13902,8 @@ public struct AgentsUpdateParams: Codable, Sendable {
         try container.encodeIfPresent(name, forKey: .name)
         try container.encodeIfPresent(workspace, forKey: .workspace)
         try container.encodeIfPresent(modelvalue, forKey: .modelvalue)
-        try container.encodeIfPresent(emoji, forKey: .emoji)
-        try container.encodeIfPresent(avatar, forKey: .avatar)
+        try container.encodeIfPresent(emojivalue, forKey: .emojivalue)
+        try container.encodeIfPresent(avatarvalue, forKey: .avatarvalue)
     }
 }
 

@@ -72,6 +72,12 @@ describe("agents.update clear identity gateway", () => {
       avatar: null,
     });
     expect(cleared.ok).toBe(true);
+    console.log(
+      [
+        "----- rpc-agents-update-clear -----",
+        JSON.stringify({ ok: cleared.ok, agentId, emoji: null, avatar: null }, null, 2),
+      ].join("\n"),
+    );
 
     const listed = await rpcReq<{
       agents: Array<{ id: string; identity?: { emoji?: string; avatar?: string; name?: string } }>;
@@ -80,10 +86,28 @@ describe("agents.update clear identity gateway", () => {
     const agent = listed.payload?.agents.find((entry) => entry.id === agentId);
     expect(agent?.identity?.emoji).toBeUndefined();
     expect(agent?.identity?.avatar).toBeUndefined();
+    console.log(
+      [
+        "----- rpc-agents-list-readback -----",
+        JSON.stringify(
+          {
+            agentId,
+            identity: agent?.identity ?? null,
+            emoji: agent?.identity?.emoji ?? null,
+            avatar: agent?.identity?.avatar ?? null,
+          },
+          null,
+          2,
+        ),
+      ].join("\n"),
+    );
 
     const identityAfter = await fs.readFile(path.join(agentWorkspace, "IDENTITY.md"), "utf8");
     expect(identityAfter).toContain("Creature: Familiar");
     expect(identityAfter).not.toMatch(/Emoji\s*:/);
     expect(identityAfter).not.toMatch(/Avatar\s*:/);
+    console.log(
+      ["----- identity-md-readback -----", identityAfter.trim(), "----- end -----"].join("\n"),
+    );
   }, 120_000);
 });
