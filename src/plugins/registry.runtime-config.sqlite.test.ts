@@ -25,12 +25,14 @@ describe("embedded-run session ownership resolves through the real SQLite sessio
   it("scopes the key-only ownership listing to the derived agent (#120178)", async () => {
     await withTempHome(async (home) => {
       const env = { OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      const { storeEnv, storePath } = {
-        storeEnv: { ...process.env, ...env },
-        storePath: path.join(home, "shared.sqlite"),
-      };
+      const storeEnv = { ...process.env, ...env };
+      const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
       try {
-        // Seed a real shared SQLite session store with one entry for agent main.
+        // Seed agent main's default SQLite session store (resolved from
+        // OPENCLAW_STATE_DIR) with one entry. No custom storePath on either the
+        // seed or the run: the ownership listing must resolve the same default
+        // store purely from the session key's derived agent + env.
         const sessionId = "main-real-session";
         await replaceSqliteSessionEntry(
           {
@@ -38,7 +40,6 @@ describe("embedded-run session ownership resolves through the real SQLite sessio
             defaultAgentId: "main",
             env: storeEnv,
             sessionKey: "agent:main:skill-workshop-review:incognito-1",
-            storePath,
           },
           { sessionId, updatedAt: Date.now() },
         );
@@ -65,13 +66,13 @@ describe("embedded-run session ownership resolves through the real SQLite sessio
         });
         const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
-        // Key-only embedded run: no agentId. Ownership must derive agent "main"
-        // from the key and resolve the real store, not throw.
+        // Key-only embedded run: no agentId, no storePath. The ownership
+        // listing must derive agent "main" from the key and resolve the same
+        // default store the seed wrote (env-based), not throw.
         await expect(
           api.runtime.agent.runEmbeddedAgent({
             sessionId,
             sessionKey: "agent:main:skill-workshop-review:incognito-1",
-            storePath,
             workspaceDir: path.join(home, "ws"),
             prompt: "continue",
             timeoutMs: 1,
@@ -80,6 +81,11 @@ describe("embedded-run session ownership resolves through the real SQLite sessio
         ).resolves.toEqual({ ok: true });
         expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
       } finally {
+        if (originalStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = originalStateDir;
+        }
         closeOpenClawAgentDatabasesForTest();
       }
     });
