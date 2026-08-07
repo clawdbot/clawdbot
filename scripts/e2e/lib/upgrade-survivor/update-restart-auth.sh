@@ -55,8 +55,8 @@ stop_gateway() {
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && kill -0 "$pid" >/dev/null 2>&1; then
     kill "$pid" >/dev/null 2>&1 || true
-    # The supervisor gives its child 3s, so keep this outer deadline comfortably longer.
-    for _ in $(seq 1 100); do
+    # The supervisor gives its child 30s, so keep this outer deadline comfortably longer.
+    for _ in $(seq 1 350); do
       is_running || break
       sleep 0.1
     done
@@ -128,6 +128,7 @@ delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;
 const restartDelayMs = 5_000;
 const restartWindowMs = 60_000;
 const restartBurst = 5;
+const stopTimeoutMs = 30_000;
 const starts = [];
 let child;
 let stopping = false;
@@ -144,7 +145,7 @@ const stop = () => {
   stopping = true;
   if (!child) return finish();
   child.kill("SIGTERM");
-  setTimeout(() => child?.kill("SIGKILL"), 3_000).unref();
+  setTimeout(() => child?.kill("SIGKILL"), stopTimeoutMs).unref();
 };
 
 const start = () => {

@@ -1,5 +1,5 @@
 // Docker Build Helper tests cover docker build helper script behavior.
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -182,6 +182,22 @@ function extractUpgradeSurvivorSupervisor(script: string): string {
     throw new Error("upgrade survivor supervisor source not found");
   }
   return source;
+}
+
+async function waitForProcessExit(child: ChildProcess, timeoutMs = 5_000): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return child.exitCode;
+  }
+  return await new Promise<number | null>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("process did not exit before its test deadline"));
+    }, timeoutMs);
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
 }
 
 function cleanupSmokeLogTailHelpers(): string {
@@ -2634,13 +2650,15 @@ fi
         'if (key.startsWith("OPENCLAW_UPDATE_")) {',
         "delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;",
         'process.on("SIGTERM", stop);',
-        'setTimeout(() => child?.kill("SIGKILL"), 3_000).unref();',
+        "const stopTimeoutMs = 30_000;",
+        'setTimeout(() => child?.kill("SIGKILL"), stopTimeoutMs).unref();',
         "if (code === 78) return finish();",
         "const restartDelayMs = 5_000;",
         "const restartWindowMs = 60_000;",
         "const restartBurst = 5;",
         "if (starts.length >= restartBurst) {",
         "setTimeout(start, restartDelayMs);",
+        "for _ in $(seq 1 350)",
       ]);
     }
     for (const script of [runner, publishedRunner]) {
@@ -2676,22 +2694,59 @@ fi
         },
         stdio: "ignore",
       });
-      const exitCode = await new Promise<number | null>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          supervisor.kill("SIGKILL");
-          reject(new Error("supervisor did not exhaust its restart budget"));
-        }, 5_000);
-        supervisor.once("exit", (code) => {
-          clearTimeout(timeout);
-          resolve(code);
-        });
-      });
+      const exitCode = await waitForProcessExit(supervisor);
 
       expect(exitCode).toBe(0);
       expect(readFileSync(countPath, "utf8")).toBe("xxxxx");
       expect(readFileSync(logPath, "utf8")).toContain(
         "[systemctl-shim] gateway restart limit reached",
       );
+    }
+  });
+
+  it("allows a supervised gateway to drain within the systemd stop timeout", async () => {
+    const workDir = tempDirs.make("openclaw-update-restart-graceful-stop-");
+    const scripts = [
+      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+    ];
+
+    for (const [index, script] of scripts.entries()) {
+      const supervisorPath = join(workDir, `graceful-supervisor-${index}.mjs`);
+      const statePath = join(workDir, `graceful-state-${index}`);
+      const logPath = join(workDir, `graceful-daemon-${index}.log`);
+      const source = extractUpgradeSurvivorSupervisor(script).replace(
+        "const stopTimeoutMs = 30_000;",
+        "const stopTimeoutMs = 200;",
+      );
+      writeFileSync(supervisorPath, source);
+
+      const command =
+        'node -e \'const fs=require("node:fs"); process.on("SIGTERM",()=>setTimeout(()=>{fs.appendFileSync(process.env.STATE_FILE, "-graceful"); process.exit(0)},50)); fs.writeFileSync(process.env.STATE_FILE, "ready"); setInterval(()=>{},1000)\'';
+      const supervisor = spawn(process.execPath, [supervisorPath], {
+        env: {
+          ...process.env,
+          OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
+          STATE_FILE: statePath,
+        },
+        stdio: "ignore",
+      });
+      try {
+        for (let attempt = 0; attempt < 100 && !existsSync(statePath); attempt += 1) {
+          await delay(10);
+        }
+        expect(existsSync(statePath)).toBe(true);
+
+        supervisor.kill("SIGTERM");
+        expect(await waitForProcessExit(supervisor)).toBe(0);
+        expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
+      } finally {
+        if (supervisor.exitCode === null && supervisor.signalCode === null) {
+          supervisor.kill("SIGTERM");
+          await waitForProcessExit(supervisor).catch(() => undefined);
+        }
+      }
     }
   });
 
