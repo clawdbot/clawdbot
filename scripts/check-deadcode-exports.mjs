@@ -99,7 +99,7 @@ export function checkUnusedExports(output) {
 export function checkExportScan(scanName, output) {
   const resolutionErrors = output
     .split(/\r?\n/u)
-    .filter((line) => /^ERROR: Error loading /u.test(line));
+    .filter((line) => line.startsWith("ERROR: Error loading "));
   if (resolutionErrors.length > 0) {
     return {
       ok: false,

@@ -468,7 +468,10 @@ function expectHydratedWindowsShell(run: ParsedWrapperRun, command: string): voi
 const remotePosixHydratedModulesBootstrap =
   'if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ] && [ -d "$PNPM_CONFIG_MODULES_DIR" ] && [ ! -e node_modules ]; then ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules; fi;';
 
-function expectHydratedPosixShell(run: ParsedWrapperRun, command: string): void {
+function expectHydratedPosixShell(
+  run: Pick<ParsedWrapperRun, "output" | "remoteCommand">,
+  command: string,
+): void {
   expect(run.output.args).toContain("--shell");
   expect(run.remoteCommand).toContain(remotePosixHydratedModulesBootstrap);
   expect(run.remoteCommand).toContain(command);
