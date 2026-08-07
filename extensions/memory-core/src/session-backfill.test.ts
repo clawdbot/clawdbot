@@ -425,6 +425,42 @@ describe("runSessionBackfill", () => {
     expect(result.days).toEqual([]);
   });
 
+  it("applies the shared process-chatter filter to session backfill", async () => {
+    const workspaceDir = await createIsolatedWorkspace("process-chatter-");
+    await seedCanonicalTranscript("process-chatter", [
+      {
+        role: "user",
+        content: "Owner confirmed this release workflow.",
+        timestamp: "2026-02-01T10:00:00.000Z",
+        owner: true,
+      },
+      {
+        role: "assistant",
+        content: "Need commit PR.",
+        timestamp: "2026-02-01T10:01:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "The migration is complete and all focused tests passed.",
+        timestamp: "2026-02-01T10:02:00.000Z",
+      },
+    ]);
+
+    const result = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      timezone: "UTC",
+    });
+
+    expect(result.candidateCount).toBe(2);
+    expect(result.days[0]?.topCandidates).toEqual([
+      "User: Owner confirmed this release workflow.",
+      "Assistant: The migration is complete and all focused tests passed.",
+    ]);
+    const state = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(Object.values(state.files)[0]?.lastContentLine).toBe(3);
+  });
+
   it("keeps canonical assistant replies tainted until an owner turn begins", async () => {
     const workspaceDir = await createIsolatedWorkspace("canonical-provenance-");
     await seedCanonicalTranscript("provenance", [

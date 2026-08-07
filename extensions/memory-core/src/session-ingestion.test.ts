@@ -2,17 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   foreignSessionIngestionSource,
   scanSessionIngestionSource,
   sessionIngestionSourceFromCorpus,
 } from "./session-ingestion.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("session ingestion", () => {
   it("preserves file-backed scope identity when a session id ends in .jsonl", () => {
@@ -27,9 +24,54 @@ describe("session ingestion", () => {
     expect(source?.scope).toBe("main:foo.jsonl");
   });
 
+  it("filters assistant process chatter while preserving durable lines and scan progress", async () => {
+    const dir = tempDirs.make("openclaw-session-ingestion-");
+    const archiveFile = path.join(dir, "archive.jsonl");
+    const messages = [
+      { role: "assistant", content: "Need commit PR.", timestamp: "2026-04-05T18:00:00.000Z" },
+      { role: "assistant", content: "Now inspect.", timestamp: "2026-04-05T18:01:00.000Z" },
+      {
+        role: "assistant",
+        content: "The migration is complete and all focused tests passed.",
+        timestamp: "2026-04-05T18:02:00.000Z",
+      },
+      {
+        role: "user",
+        content: "Need commit PR before the release.",
+        timestamp: "2026-04-05T18:03:00.000Z",
+      },
+    ];
+    await fs.writeFile(
+      archiveFile,
+      `${messages
+        .map((message, index) =>
+          JSON.stringify({
+            type: "message",
+            id: `message-${index}`,
+            timestamp: message.timestamp,
+            message,
+          }),
+        )
+        .join("\n")}\n`,
+    );
+
+    const result = await scanSessionIngestionSource({
+      source: foreignSessionIngestionSource("main", archiveFile),
+      seenMessages: {},
+      verifyContent: true,
+      classifyDay: () => "include",
+    });
+
+    expect(result.candidates.map((candidate) => candidate.snippet)).toEqual([
+      "Assistant: The migration is complete and all focused tests passed.",
+      "User: Need commit PR before the release.",
+    ]);
+    expect(result.fileState?.lastContentLine).toBe(4);
+    expect(result.scannedEndIndex).toBe(4);
+  });
+
   it("verifies backfill content despite an unchanged size and mtime", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
-    tempDirs.push(dir);
+    const dir = tempDirs.make("openclaw-session-ingestion-");
     const archiveFile = path.join(dir, "archive.jsonl");
     const record = (content: string) =>
       `${JSON.stringify({
