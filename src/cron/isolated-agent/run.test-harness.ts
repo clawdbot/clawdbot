@@ -534,9 +534,9 @@ function resetRunConfigMocks(): void {
     }
     const selectedConfig = [
       agentConfig?.subagents?.model,
-      agentConfig?.model,
       (cfg as { agents?: { defaults?: { subagents?: { model?: unknown } } } })?.agents?.defaults
         ?.subagents?.model,
+      agentConfig?.model,
     ].find((raw) => normalizeModelSelectionForTest(raw));
     return resolveOverride(selectedConfig);
   });
