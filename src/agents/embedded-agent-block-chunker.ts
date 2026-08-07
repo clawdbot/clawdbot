@@ -422,7 +422,18 @@ export class EmbeddedBlockChunker {
       return { index: -1 };
     }
 
+    const firstVisibleIndex = buffer.search(/\S/);
+    const firstVisibleInFence =
+      firstVisibleIndex >= 0 &&
+      firstVisibleIndex < window.length &&
+      fenceSpans.some((fence) => {
+        const absoluteIndex = offset + firstVisibleIndex;
+        return absoluteIndex >= fence.start && absoluteIndex < fence.end;
+      });
     for (let i = window.length - 1; i >= minChars; i--) {
+      if (firstVisibleInFence && window.slice(0, i).trim().length === 0) {
+        continue;
+      }
       if (/\s/.test(window.charAt(i)) && isSafeFenceBreak(fenceSpans, offset + i)) {
         return { index: i };
       }
