@@ -27,10 +27,8 @@ providers.
 ## Getting started
 
 Vertex AI uses ADC, which needs a credentials **file** on disk plus a project and
-location. Choose the authentication source that matches your environment:
-
-- **gcloud CLI**: uses your own Google account. Simplest to set up.
-- **Service account key**: uses a dedicated service identity. Best for an always-on gateway host.
+location. Follow the steps below to authenticate with Google Cloud, configure your
+project and model, and confirm Gemini responds through Vertex AI.
 
 <Steps>
   <Step title="Select your Google Cloud project">
@@ -43,6 +41,10 @@ location. Choose the authentication source that matches your environment:
 
   </Step>
   <Step title="Authenticate with ADC">
+    Choose the authentication source for your environment: **gcloud CLI** (your own
+    Google account, simplest to set up) or a **service account key** (a dedicated
+    identity, best for an always-on gateway host).
+
     <Tabs>
       <Tab title="gcloud CLI">
         Log in with Application Default Credentials:
