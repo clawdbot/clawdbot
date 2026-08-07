@@ -109,7 +109,7 @@ export function registerWebhooksCli(program: Command) {
     });
 }
 
-function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
+export function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
   const accountRaw = raw.account;
   const account = normalizeOptionalString(accountRaw) ?? "";
   if (!account) {
@@ -127,7 +127,7 @@ function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions
   };
 }
 
-function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
+export function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
   const common = parseGmailCommonOptions(raw);
   return {
     account: normalizeOptionalString(raw.account),
@@ -136,6 +136,15 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
 }
 
 function parseGmailCommonOptions(raw: Record<string, unknown>) {
+  const tailscaleRaw = normalizeOptionalString(raw.tailscale);
+  if (
+    tailscaleRaw !== undefined &&
+    tailscaleRaw !== "funnel" &&
+    tailscaleRaw !== "serve" &&
+    tailscaleRaw !== "off"
+  ) {
+    throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
+  }
   return {
     topic: normalizeOptionalString(raw.topic),
     subscription: normalizeOptionalString(raw.subscription),
@@ -149,7 +158,7 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     includeBody: booleanOption(raw.includeBody),
     maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
     renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
-    tailscaleRaw: normalizeOptionalString(raw.tailscale),
+    tailscaleRaw,
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
   };

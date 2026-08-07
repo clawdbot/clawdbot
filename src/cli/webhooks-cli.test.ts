@@ -61,4 +61,40 @@ describe("webhooks cli", () => {
     expect(mocks.runGmailSetup).not.toHaveBeenCalled();
     expect(mocks.runGmailService).not.toHaveBeenCalled();
   });
+
+  it.each([["setup"], ["run"]])("rejects invalid gmail %s --tailscale mode", async (command) => {
+    const program = createProgram();
+    const args =
+      command === "setup"
+        ? ["webhooks", "gmail", command, "--account", "default", "--tailscale", "offf"]
+        : ["webhooks", "gmail", command, "--tailscale", "offf"];
+
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors().join("\n")).toContain(
+      "Invalid --tailscale (must be funnel, serve, or off).",
+    );
+    expect(mocks.runGmailSetup).not.toHaveBeenCalled();
+    expect(mocks.runGmailService).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["setup", "funnel"],
+    ["setup", "serve"],
+    ["setup", "off"],
+    ["run", "funnel"],
+    ["run", "serve"],
+    ["run", "off"],
+  ])("accepts valid gmail %s --tailscale %s", async (command, mode) => {
+    const program = createProgram();
+    const args =
+      command === "setup"
+        ? ["webhooks", "gmail", command, "--account", "default", "--tailscale", mode]
+        : ["webhooks", "gmail", command, "--tailscale", mode];
+
+    await program.parseAsync(args, { from: "user" });
+
+    const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
+    expect(runner).toHaveBeenCalledWith(expect.objectContaining({ tailscale: mode }));
+  });
 });
