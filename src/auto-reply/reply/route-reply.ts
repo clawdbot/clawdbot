@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { getLogger } from "../../logging/logger.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -39,6 +40,54 @@ const messageRuntimeLoader = createLazyImportLoader(
 
 function loadDeliverRuntime() {
   return messageRuntimeLoader.load();
+}
+
+/**
+ * Short-term outbound content dedup cache.
+ *
+ * Prevents duplicate reply delivery when concurrent agent turns (e.g. compact
+ * continuation + new user message) produce identical reply text for the same
+ * route within a few seconds.
+ */
+const recentDeliveryCache = new Map<string, { text: string; mediaKey: string; ts: number }>();
+const DEDUP_WINDOW_MS = 15_000;
+const DEDUP_TTL_MS = 30_000;
+
+function buildDeliveryDedupKey(channel: string, to: string, accountId?: string): string {
+  return `${channel}:${to}:${accountId ?? ""}`;
+}
+
+function buildMediaKey(mediaUrls: string[]): string {
+  return mediaUrls.slice().sort().join(",");
+}
+
+/** Returns true if an identical reply was delivered to the same route recently. */
+function isDuplicateDelivery(routeKey: string, text: string, mediaKey: string): boolean {
+  const now = Date.now();
+  // TTL cleanup: sweep expired entries.
+  if (recentDeliveryCache.size > 0) {
+    for (const [key, entry] of recentDeliveryCache) {
+      if (now - entry.ts > DEDUP_TTL_MS) {
+        recentDeliveryCache.delete(key);
+      }
+    }
+  }
+  const existing = recentDeliveryCache.get(routeKey);
+  if (!existing) {
+    return false;
+  }
+  return (
+    now - existing.ts < DEDUP_WINDOW_MS && existing.text === text && existing.mediaKey === mediaKey
+  );
+}
+
+/** Clears the outbound content dedup cache. Intended for tests. */
+export function _resetDeliveryDedupCacheForTests(): void {
+  recentDeliveryCache.clear();
+}
+
+function recordDelivery(routeKey: string, text: string, mediaKey: string): void {
+  recentDeliveryCache.set(routeKey, { text, mediaKey, ts: Date.now() });
 }
 
 function replyDeliverySourceMatchesRoute(params: {
@@ -307,6 +356,23 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     replyToId: resolvedReplyToId,
   };
 
+  // Outbound content dedup: skip if an identical reply was already delivered
+  // to the same route within the dedup window. This catches concurrent agent
+  // turns (compact continuation + new user message) that produce identical text.
+  const dedupRouteKey = buildDeliveryDedupKey(channelId, to, accountId);
+  const dedupText = text;
+  const dedupMediaKey = buildMediaKey(mediaUrls);
+  if (dedupText && isDuplicateDelivery(dedupRouteKey, dedupText, dedupMediaKey)) {
+    getLogger().warn(
+      {
+        routeKey: dedupRouteKey,
+        textPreview: dedupText.slice(0, 80),
+      },
+      "reply-delivery-dedup: suppressed duplicate reply within dedup window",
+    );
+    return { ok: true, delivered: true, suppressed: true };
+  }
+
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
@@ -398,6 +464,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     }
     const results = send.status === "sent" ? send.results : [];
     const delivery = summarizeVisibleRouteReplyDelivery(results);
+    // Record successful delivery for content dedup.
+    if (delivery.delivered && dedupText) {
+      recordDelivery(dedupRouteKey, dedupText, dedupMediaKey);
+    }
     return {
       ok: true,
       delivered: delivery.delivered,

@@ -13,6 +13,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { _resetDeliveryDedupCacheForTests } from "./route-reply.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
@@ -219,6 +220,7 @@ describe("routeReply", () => {
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
+    _resetDeliveryDedupCacheForTests();
   });
 
   it("skips sends when abort signal is already aborted", async () => {
