@@ -1,5 +1,4 @@
 // Determines which manifest contracts are eligible for plugin activation.
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   hasMeaningfulChannelConfigShallow,
   resolveChannelConfigRecord,
@@ -110,20 +109,6 @@ export function listAvailableManifestContractPlugins(params: {
         config: params.config,
       }),
   );
-}
-
-export function listAvailableManifestContractValues(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
-  contract: PluginManifestContractListKey;
-  config?: OpenClawConfig;
-}): string[] {
-  const values = new Set<string>();
-  for (const plugin of listAvailableManifestContractPlugins(params)) {
-    for (const value of plugin.contracts?.[params.contract] ?? []) {
-      values.add(value);
-    }
-  }
-  return sortUniqueStrings(values);
 }
 
 export function loadManifestContractSnapshot(params: {

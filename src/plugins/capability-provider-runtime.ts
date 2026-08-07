@@ -81,7 +81,7 @@ function shouldSkipCapabilityResolution(params: {
 }
 
 /** Loads the manifest snapshot used to resolve capability-provider ownership. */
-export function loadCapabilityManifestSnapshot(params: {
+function loadCapabilityManifestSnapshot(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;

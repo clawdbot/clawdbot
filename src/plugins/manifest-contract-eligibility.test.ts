@@ -17,7 +17,7 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
 }));
 
 let isManifestPluginAvailableForControlPlane: typeof import("./manifest-contract-eligibility.js").isManifestPluginAvailableForControlPlane;
-let listAvailableManifestContractValues: typeof import("./manifest-contract-eligibility.js").listAvailableManifestContractValues;
+let listAvailableManifestContractPlugins: typeof import("./manifest-contract-eligibility.js").listAvailableManifestContractPlugins;
 let loadManifestContractSnapshot: typeof import("./manifest-contract-eligibility.js").loadManifestContractSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 
@@ -27,7 +27,7 @@ beforeAll(async () => {
   vi.resetModules();
   ({
     isManifestPluginAvailableForControlPlane,
-    listAvailableManifestContractValues,
+    listAvailableManifestContractPlugins,
     loadManifestContractSnapshot,
   } = await import("./manifest-contract-eligibility.js"));
   ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
@@ -66,7 +66,7 @@ describe("bundled manifest contract availability", () => {
   ])("does not expose $name", ({ config }) => {
     expect(isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })).toBe(false);
     expect(
-      listAvailableManifestContractValues({
+      listAvailableManifestContractPlugins({
         snapshot,
         contract: "imageGenerationProviders",
         config,
@@ -167,7 +167,7 @@ describe("bundled manifest contract availability", () => {
     } as never;
 
     expect(
-      listAvailableManifestContractValues({
+      listAvailableManifestContractPlugins({
         snapshot: restrictedSnapshot,
         contract: "imageGenerationProviders",
         config,

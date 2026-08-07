@@ -4,7 +4,6 @@
  * Combines plugin contracts, availability, config signals, auth profiles, env candidates, and base URL guards.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import {
@@ -156,18 +155,6 @@ function hasConfiguredCapabilityProviderSignal(params: {
     }
   }
   return false;
-}
-
-/** Returns the active capability metadata snapshot when one is already loaded. */
-export function getCurrentCapabilityMetadataSnapshot(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): PluginMetadataSnapshot | undefined {
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  return getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    ...(workspaceDir ? { workspaceDir } : {}),
-  });
 }
 
 /** Loads capability metadata from current config/workspace plugin state. */
