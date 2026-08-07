@@ -83,7 +83,6 @@ function preserveRingZeroSystemAgentTool<T extends { name: string; catalogMode?:
 }
 /** Runtime inputs needed to derive the exact Codex dynamic tool surface for a turn. */
 type DynamicToolBuildParams = {
-  attributionAttempt: EmbeddedRunAttemptParams;
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
   effectiveWorkspace: string;
@@ -232,15 +231,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   let agentHarnessModule: typeof import("openclaw/plugin-sdk/agent-harness") | undefined;
   const loadAgentHarnessModule = async () =>
     (agentHarnessModule ??= await import("openclaw/plugin-sdk/agent-harness"));
-  const agentHarnessCodingToolsFactory = injectedOpenClawCodingToolsFactory
-    ? undefined
-    : (dynamicToolBuildState.agentHarnessCodingToolsFactory ??
-      (await import("openclaw/plugin-sdk/agent-harness-tool-runtime"))
-        .createOpenClawCodingToolsForAgentHarness);
   const createOpenClawCodingTools =
     injectedOpenClawCodingToolsFactory ??
-    ((options: OpenClawCodingToolsOptions) =>
-      agentHarnessCodingToolsFactory!(input.attributionAttempt, options));
+    (await loadAgentHarnessModule()).createOpenClawCodingTools;
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);

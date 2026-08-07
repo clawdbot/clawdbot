@@ -272,9 +272,7 @@ export async function runCopilotExecution(context: {
           sandbox,
           spawnWorkspaceDir: sandboxAwareSpawnWorkspaceDir,
           abortSignal: params.abortSignal,
-          admittedAttempt: input,
-          attemptParams: input,
-          observeToolTerminal,
+          attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
           computerContextEpoch,
           sessionRef,
           onYieldDetected: () => {

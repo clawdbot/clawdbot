@@ -508,14 +508,14 @@ describe("runCopilotAttempt", () => {
         };
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
-      input.observeToolTerminal?.({
+      input.attemptParams?.observeToolTerminal?.({
         toolCallId: "send-1",
         toolName: "message",
         arguments: { action: "send", message: "hello", target: "room-1" },
         outcome: "failure",
         failure: { error: "delivery failed" },
       });
-      input.observeToolTerminal?.({
+      input.attemptParams?.observeToolTerminal?.({
         toolCallId: "heartbeat-1",
         toolName: "heartbeat_respond",
         arguments: { summary: "ok" },
@@ -597,14 +597,14 @@ describe("runCopilotAttempt", () => {
       });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
       const args = { action: "send", message: "hello", target: "room-1" };
-      input.observeToolTerminal?.({
+      input.attemptParams?.observeToolTerminal?.({
         toolCallId: "send-1",
         toolName: "message",
         arguments: args,
         outcome: "failure",
         failure: { error: "delivery failed" },
       });
-      input.observeToolTerminal?.({
+      input.attemptParams?.observeToolTerminal?.({
         toolCallId: "send-2",
         toolName: "message",
         arguments: args,
@@ -1677,11 +1677,9 @@ describe("runCopilotAttempt", () => {
     // bridge can build PI-parity tool context and wire onYield to the
     // live SDK session once it exists. See tool-bridge.ts.
     const bridgeCall = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
-      admittedAttempt?: unknown;
       attemptParams?: unknown;
       sessionRef?: { current?: unknown };
     };
-    expect(bridgeCall.admittedAttempt).toBeDefined();
     expect(bridgeCall.attemptParams).toBeDefined();
     expect(bridgeCall.sessionRef).toBeDefined();
     expect(
@@ -1795,13 +1793,11 @@ describe("runCopilotAttempt", () => {
   it("F6: attemptParams carries the full input so the bridge can derive PI-parity tool context", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    let capturedInput: { admittedAttempt?: unknown; attemptParams?: unknown } | undefined;
-    const createToolBridge = vi.fn(
-      async (input: { admittedAttempt?: unknown; attemptParams?: unknown }) => {
-        capturedInput = input;
-        return { sdkTools: [], sourceTools: [] };
-      },
-    );
+    let capturedParams: unknown;
+    const createToolBridge = vi.fn(async (input: { attemptParams?: unknown }) => {
+      capturedParams = input.attemptParams;
+      return { sdkTools: [], sourceTools: [] };
+    });
 
     const params = makeParams({
       senderIsOwner: true,
@@ -1812,8 +1808,7 @@ describe("runCopilotAttempt", () => {
 
     // The bridge receives the same params object so it can read every
     // identity/policy/channel field the wrapped-tool layer needs.
-    expect(capturedInput?.attemptParams).toBe(params);
-    expect(capturedInput?.admittedAttempt).toBe(params);
+    expect(capturedParams).toBe(params);
   });
 
   it("F7: result.yieldDetected is true when the tool bridge fires onYieldDetected during the attempt", async () => {

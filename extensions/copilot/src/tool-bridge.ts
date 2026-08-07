@@ -22,10 +22,7 @@ import {
   resolveModelAuthMode,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createAgentHarnessToolSurfaceRuntime,
-  createOpenClawCodingToolsForAgentHarness,
-} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
@@ -107,8 +104,6 @@ interface CopilotToolBridgeInput {
    */
   spawnWorkspaceDir?: string;
   abortSignal?: AbortSignal;
-  /** Exact core-admitted attempt object used only as a private identity capability. */
-  admittedAttempt?: EmbeddedRunAttemptParams;
   /**
    * Full PI-parity attempt parameters. When set, the bridge forwards
    * identity, channel, owner/policy, auth-profile, message-routing,
@@ -138,7 +133,6 @@ interface CopilotToolBridgeInput {
    */
   onYieldDetected?: (message?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
-  observeToolTerminal?: CopilotToolTerminalObserver;
   createOpenClawCodingTools?: (opts: unknown) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
   beforeExecute?: (ctx: {
     toolName: string;
@@ -200,13 +194,9 @@ export async function createCopilotToolBridge(
     return { codeModeEngaged: false, sdkTools: [], sourceTools: [] };
   }
 
-  const admittedAttempt = input.admittedAttempt;
   const createOpenClawCodingTools =
     input.createOpenClawCodingTools ??
-    (admittedAttempt
-      ? (options: OpenClawCodingToolsOptions) =>
-          createOpenClawCodingToolsForAgentHarness(admittedAttempt, options)
-      : (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools);
+    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: input.abortSignal,
@@ -294,7 +284,7 @@ export async function createCopilotToolBridge(
         beforeExecute: input.beforeExecute,
         onAgentToolResult: input.attemptParams?.onAgentToolResult,
         onToolCompleted: input.onToolCompleted,
-        observeToolTerminal: input.observeToolTerminal ?? input.attemptParams?.observeToolTerminal,
+        observeToolTerminal: input.attemptParams?.observeToolTerminal,
       }),
     ),
     sourceTools: filteredTools,
@@ -713,7 +703,7 @@ async function executeCatalogTool(
       ? (extractToolErrorMessage(sanitizedResult) ?? "tool returned an error")
       : undefined;
     terminalObserved = true;
-    (input.observeToolTerminal ?? input.attemptParams?.observeToolTerminal)?.({
+    input.attemptParams?.observeToolTerminal?.({
       toolCallId: params.toolCallId,
       toolName: params.toolName,
       arguments: preparedArgs,
@@ -740,7 +730,7 @@ async function executeCatalogTool(
     // Completion hooks can throw after the tool terminal outcome. Do not
     // rewrite that recorded outcome as a second, contradictory tool failure.
     if (!terminalObserved) {
-      (input.observeToolTerminal ?? input.attemptParams?.observeToolTerminal)?.({
+      input.attemptParams?.observeToolTerminal?.({
         toolCallId: params.toolCallId,
         toolName: params.toolName,
         arguments: preparedArgs,

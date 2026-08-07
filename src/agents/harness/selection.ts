@@ -20,7 +20,6 @@ import {
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { transferEmbeddedAttemptExecutionAttribution } from "../embedded-agent-runner/run/attempt-execution-attribution.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -658,7 +657,7 @@ function withoutInternalHarnessAuthority(
     systemAgentTool: _systemAgentTool,
     ...pluginParams
   } = params;
-  return transferEmbeddedAttemptExecutionAttribution(params, pluginParams);
+  return pluginParams;
 }
 
 function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {
@@ -670,13 +669,11 @@ function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedR
   if (model === params.model && resolvedApiKey === params.resolvedApiKey) {
     return applyPluginHarnessDenyAllToolPolicy(params);
   }
-  return applyPluginHarnessDenyAllToolPolicy(
-    transferEmbeddedAttemptExecutionAttribution(params, {
-      ...params,
-      model,
-      resolvedApiKey,
-    }),
-  );
+  return applyPluginHarnessDenyAllToolPolicy({
+    ...params,
+    model,
+    resolvedApiKey,
+  });
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
@@ -693,11 +690,11 @@ function applyPluginHarnessDenyAllToolPolicy(
   if (!prompt) {
     return params;
   }
-  return transferEmbeddedAttemptExecutionAttribution(params, {
+  return {
     ...params,
     toolsAllow: [],
     extraSystemPrompt: appendPluginHarnessToolPolicyPrompt(params.extraSystemPrompt, prompt),
-  });
+  };
 }
 
 export function resolvePluginHarnessPolicyToolsAllow(

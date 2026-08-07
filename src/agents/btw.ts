@@ -45,7 +45,6 @@ import {
   selectAgentHarnessForPreparedModelProviders,
   type AgentHarnessPreparedModelProvider,
 } from "./harness/selection.js";
-import { bindAgentHarnessSideQuestionExecutionAttribution } from "./harness/side-question-execution-attribution.js";
 import {
   resolveAgentHarnessPreparedAuthSupport,
   resolveAgentHarnessPreparedRouteSupport,
@@ -971,46 +970,42 @@ export async function runBtwSideQuestion(
         ? resolvedAttempt.auth.apiKey?.trim()
         : undefined;
     const { attribution: _attribution, ...publicParams } = params;
-    const sideQuestionParams = bindAgentHarnessSideQuestionExecutionAttribution(
-      {
-        ...publicParams,
-        provider: runtimeModel.provider,
-        model: runtimeModel.id,
-        runtimeModel,
-        preparedRuntimeAuth: {
-          plan: runtimeAuthPlan,
-          authProfileStore: scopeAuthProfileStoreToPreparedPlan(
-            selectedAuthProfileStore,
-            runtimeAuthPlan,
-          ),
-          authStorage: runtime.authStorage,
-          modelRegistry: runtime.modelRegistry,
-          ...(resolvedApiKey
-            ? {
-                resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
-                  resolvedApiKey,
-                  "BTW harness handoff",
-                ),
-              }
-            : {}),
-        },
-        sessionId,
-        sessionFile,
-        agentId: sessionAgentId,
-        workspaceDir,
-        ...(toolsAllow ? { toolsAllow } : {}),
-        authProfileId:
-          runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
-            ? undefined
-            : runtimeAuthPlan.forwardedAuthProfileId,
-        authProfileIdSource:
-          runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
-            ? undefined
-            : runtimeAuthPlan.forwardedAuthProfileSource,
+    const result = await selectedHarness.runSideQuestion({
+      ...publicParams,
+      provider: runtimeModel.provider,
+      model: runtimeModel.id,
+      runtimeModel,
+      preparedRuntimeAuth: {
+        plan: runtimeAuthPlan,
+        authProfileStore: scopeAuthProfileStoreToPreparedPlan(
+          selectedAuthProfileStore,
+          runtimeAuthPlan,
+        ),
+        authStorage: runtime.authStorage,
+        modelRegistry: runtime.modelRegistry,
+        ...(resolvedApiKey
+          ? {
+              resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
+                resolvedApiKey,
+                "BTW harness handoff",
+              ),
+            }
+          : {}),
       },
-      params.attribution,
-    );
-    const result = await selectedHarness.runSideQuestion(sideQuestionParams);
+      sessionId,
+      sessionFile,
+      agentId: sessionAgentId,
+      workspaceDir,
+      ...(toolsAllow ? { toolsAllow } : {}),
+      authProfileId:
+        runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
+          ? undefined
+          : runtimeAuthPlan.forwardedAuthProfileId,
+      authProfileIdSource:
+        runtimeAuthPlan.modelRoute?.authRequirement === "api-key"
+          ? undefined
+          : runtimeAuthPlan.forwardedAuthProfileSource,
+    });
     return { kind: "handled", payload: { text: result.text } };
   };
   if (harness.runSideQuestion) {

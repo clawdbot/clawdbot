@@ -109,9 +109,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameImageIdentity?: string;
   } = { value: 0 };
   const commonToolParams = {
-    // Private attribution is bound to the exact host-admitted object. Codex
-    // runtime/tool clones carry behavior only and must not replace this owner.
-    attributionAttempt: params,
     params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,

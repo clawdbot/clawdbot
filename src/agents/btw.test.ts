@@ -10,7 +10,6 @@ import {
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
 import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
-import { resolveAgentHarnessSideQuestionExecutionAttribution } from "./harness/side-question-execution-attribution.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 
@@ -856,13 +855,7 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Codex side answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
-    const sideQuestionParams = mockArg(codexSideQuestionMock, 0, 0) as Parameters<
-      typeof resolveAgentHarnessSideQuestionExecutionAttribution
-    >[0];
-    expect(sideQuestionParams).not.toHaveProperty("attribution");
-    expect(resolveAgentHarnessSideQuestionExecutionAttribution(sideQuestionParams)).toBe(
-      attribution,
-    );
+    expect(mockArg(codexSideQuestionMock, 0, 0)).not.toHaveProperty("attribution");
     expect(codexSideQuestionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
