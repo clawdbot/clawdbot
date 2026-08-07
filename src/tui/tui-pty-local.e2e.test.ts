@@ -746,7 +746,6 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
     controlClient = new GatewayChatClient({
       url: gateway.url,
       token: gateway.gatewayToken,
-      allowInsecureLocalOperatorUi: false,
     });
     controlClient.onConnected = () => {
       controlClientConnected = true;
@@ -860,7 +859,6 @@ async function startGatewayModeTui(
   const controlClient = new GatewayChatClient({
     url: shared.gateway.url,
     token: shared.gateway.gatewayToken,
-    allowInsecureLocalOperatorUi: false,
   });
   let controlClientConnected = false;
   controlClient.onConnected = () => {
@@ -1573,7 +1571,6 @@ export default {
             eventProbe = new GatewayChatClient({
               url: fixture.gateway.url,
               token: fixture.gateway.gatewayToken,
-              allowInsecureLocalOperatorUi: false,
             });
             eventProbe.onConnected = () => {
               probeConnected = true;
@@ -1725,7 +1722,6 @@ export default {
       const historyClient = new GatewayChatClient({
         url: shared.gateway.url,
         token: shared.gateway.gatewayToken,
-        allowInsecureLocalOperatorUi: false,
       });
       let historyClientConnected = false;
       historyClient.onConnected = () => {
@@ -1809,7 +1805,6 @@ export default {
       const controlClient = new GatewayChatClient({
         url: shared.gateway.url,
         token: shared.gateway.gatewayToken,
-        allowInsecureLocalOperatorUi: false,
       });
       let controlClientConnected = false;
       controlClient.onConnected = () => {
@@ -2267,7 +2262,6 @@ export default {
       const queueClient = new GatewayChatClient({
         url: fixture.gateway.url,
         token: fixture.gateway.gatewayToken,
-        allowInsecureLocalOperatorUi: false,
       });
       try {
         let queueClientConnected = false;

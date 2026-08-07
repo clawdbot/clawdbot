@@ -116,7 +116,10 @@ describe("docs-sync-publish", () => {
       navigation: {
         languages: Array<{
           language: string;
-          tabs: Array<{ tab: string; groups?: Array<{ group: string }> }>;
+          tabs: Array<{
+            tab: string;
+            groups?: Array<{ group: string; pages?: unknown }>;
+          }>;
         }>;
       };
     };
@@ -129,6 +132,28 @@ describe("docs-sync-publish", () => {
     expect(english).toBeDefined();
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
+    expect(english!.tabs.slice(-4).map((tab) => tab.tab)).toEqual([
+      "Gateway & Ops",
+      "Reference",
+      "Release & CI",
+      "Help",
+    ]);
+
+    const releaseRoutes = [
+      "releases/index",
+      "releases/2026.7.1",
+      "releases/2026.6.11",
+      "maturity/scorecard",
+      "maturity/taxonomy",
+      "reference/RELEASING",
+      "reference/full-release-validation",
+      "reference/release-performance-sweep",
+      "reference/test",
+      "ci",
+      "help/scripts",
+    ];
+    const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
+    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
 
     const englishWithoutClawHub = {
       ...english,
@@ -140,6 +165,13 @@ describe("docs-sync-publish", () => {
     expect(collectPages(simplifiedChinese).toSorted()).toEqual(expectedZhPages);
     expect(simplifiedChinese!.tabs[0]?.tab).toBe("快速开始");
     expect(simplifiedChinese!.tabs[0]?.groups?.[0]?.group).toBe("首页");
+    const simplifiedChineseReleaseTab = simplifiedChinese!.tabs.find(
+      (tab) => tab.tab === "发布与 CI",
+    );
+    expect(simplifiedChineseReleaseTab?.groups?.[0]?.group).toBe("发布策略");
+    expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
+      releaseRoutes.map((page) => `zh-CN/${page}`),
+    );
 
     expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
