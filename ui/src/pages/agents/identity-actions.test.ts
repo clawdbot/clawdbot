@@ -56,9 +56,9 @@ describe("agent identity actions", () => {
     expect(state.identityDraft.name).toBe("  ");
   });
 
-  it("sends null emoji tombstone when the emoji draft is cleared", async () => {
+  it("sends null emoji tombstone when the emoji draft is explicitly emptied", async () => {
     const state = host();
-    state.identityDraft.emoji = "  ";
+    state.identityDraft.emoji = "";
     const request = vi.fn(async () => ({}));
     const expectedClient = { request } as unknown as GatewayBrowserClient;
     const runtimeConfig = {
@@ -92,6 +92,43 @@ describe("agent identity actions", () => {
       agentId: "main",
       emoji: null,
     });
+  });
+
+  it("omits whitespace-only emoji drafts so stored emoji is preserved", async () => {
+    const state = host();
+    state.identityDraft.emoji = "  ";
+    const request = vi.fn(async () => ({}));
+    const expectedClient = { request } as unknown as GatewayBrowserClient;
+    const runExternalMutation = vi.fn(async (task) => ({
+      ok: true as const,
+      value: await task(expectedClient),
+      refresh: { ok: true as const },
+    }));
+    const runtimeConfig = {
+      runExternalMutation,
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const agents = {
+      refreshList: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agents"];
+    const agentIdentity = {
+      invalidate: vi.fn(),
+      ensure: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agentIdentity"];
+
+    await saveIdentityDraft({
+      host: state,
+      expectedClient,
+      agentId: "main",
+      agents,
+      agentIdentity,
+      runtimeConfig,
+      canDispatch: () => true,
+      isCurrent: () => true,
+      onSaved: vi.fn(),
+    });
+
+    expect(runExternalMutation).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("sends null avatar tombstone after clearIdentityAvatar", async () => {

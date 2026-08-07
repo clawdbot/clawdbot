@@ -1049,6 +1049,36 @@ describe("agents.update", () => {
     expect(agent.identity).not.toHaveProperty("emoji");
   });
 
+  it("preserves an existing emoji when agents.update receives whitespace-only input", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+            identity: { name: "Current Agent", theme: "steady", emoji: "🦞" },
+          },
+        ],
+      },
+    };
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: "   ",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const update = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
+    expect(update).not.toHaveProperty("identity");
+    if (mocks.writeConfigFile.mock.calls.length > 0) {
+      const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+      const agents = expectRecordFields(persisted.agents, {});
+      const [agent] = agents.list as MockAgentEntry[];
+      expect(agent.identity).toMatchObject({ emoji: "🦞" });
+    }
+  });
+
   it("clears an existing avatar with null", async () => {
     mocks.loadConfigReturn = {
       agents: {

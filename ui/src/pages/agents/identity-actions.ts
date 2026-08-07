@@ -75,16 +75,29 @@ export async function saveIdentityDraft(params: {
   const { host, expectedClient, agentId, agents, agentIdentity, runtimeConfig } = params;
   const draft = host.identityDraft;
   // Name stays set-only (blank name edits stay local). Emoji/avatar are
-  // tri-state like model: omit preserves, null clears. A blank emoji draft or
-  // an explicit empty avatar draft sends the null tombstone.
+  // tri-state like model: omit preserves, null clears. Literal empty drafts
+  // (including Remove-avatar's "") send the null tombstone; whitespace-only
+  // drafts omit so Gateway keeps the stored value.
   const name = draft.name?.trim();
   if (draft.name !== null && !name) {
     return;
   }
   const emojiUpdate =
-    draft.emoji === null ? undefined : draft.emoji.trim() ? draft.emoji.trim() : null;
+    draft.emoji === null
+      ? undefined
+      : draft.emoji.trim()
+        ? draft.emoji.trim()
+        : draft.emoji === ""
+          ? null
+          : undefined;
   const avatarUpdate =
-    draft.avatar === null ? undefined : draft.avatar.trim() ? draft.avatar : null;
+    draft.avatar === null
+      ? undefined
+      : draft.avatar.trim()
+        ? draft.avatar
+        : draft.avatar === ""
+          ? null
+          : undefined;
   if (!name && emojiUpdate === undefined && avatarUpdate === undefined) {
     resetIdentityDraft(host);
     return;

@@ -983,21 +983,28 @@ export const agentsHandlers: GatewayRequestHandlers = {
       identityPatch.name = safeName;
     }
     if ("emoji" in params) {
-      const emoji = resolveOptionalStringParam(params.emoji);
-      if (params.emoji === null || !emoji) {
+      // Clear contract: null or literal "" tombstones. Whitespace-only must not
+      // destroy stored identity (resolveOptionalStringParam would otherwise
+      // treat it as absent and fall into the clear branch).
+      if (params.emoji === null || params.emoji === "") {
         identityPatch.emoji = null;
         clearedIdentityFields.push("emoji");
-      } else {
-        identityPatch.emoji = sanitizeAgentIdentityLine(emoji);
+      } else if (typeof params.emoji === "string") {
+        const emoji = resolveOptionalStringParam(params.emoji);
+        if (emoji) {
+          identityPatch.emoji = sanitizeAgentIdentityLine(emoji);
+        }
       }
     }
     if ("avatar" in params) {
-      const avatar = resolveOptionalStringParam(params.avatar);
-      if (params.avatar === null || !avatar) {
+      if (params.avatar === null || params.avatar === "") {
         identityPatch.avatar = null;
         clearedIdentityFields.push("avatar");
-      } else {
-        identityPatch.avatar = sanitizeAgentIdentityLine(avatar);
+      } else if (typeof params.avatar === "string") {
+        const avatar = resolveOptionalStringParam(params.avatar);
+        if (avatar) {
+          identityPatch.avatar = sanitizeAgentIdentityLine(avatar);
+        }
       }
     }
     const hasIdentityFields = Object.keys(identityPatch).length > 0;

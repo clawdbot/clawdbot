@@ -122,8 +122,8 @@ export function renderAgentOverview(params: {
     identityDraft.avatar === null ? hasStoredAvatar : Boolean(identityDraft.avatar.trim());
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
-  // Blank emoji/avatar drafts are clear intents (null tombstone). Only blank
-  // name edits stay invalid / unsaved.
+  // Literal-empty emoji/avatar drafts are clear intents (null tombstone).
+  // Whitespace-only drafts omit on save. Only blank name edits stay invalid.
   const identityInvalid = identityDraft.name !== null && !identityDraft.name.trim();
   const identityBusy = params.identitySaving || !params.canUpdateIdentity;
 
