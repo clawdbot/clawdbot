@@ -89,6 +89,8 @@ export type FollowupRun = {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** Best-effort cleanup that runs when this source leaves the follow-up queue lifecycle. */
+  onQueueSettled?: () => void;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
@@ -231,14 +233,18 @@ export function resolveFollowupAbortSignal(
   return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
 }
 
+type FollowupLifecycleRun = Pick<
+  FollowupRun,
+  "onQueueSettled" | "steerPending" | "turnAdoptionLifecycle"
+>;
+
 const enqueuedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const admittedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const admittingTurnAdoptionLifecycles = new WeakMap<TurnAdoptionLifecycle, Promise<void>>();
 const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
-
-type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
+const completedQueueSettlementCallbacks = new WeakSet<FollowupLifecycleRun>();
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -294,22 +300,28 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
   const lifecycle = run.turnAdoptionLifecycle;
 
   const finish = () => {
-    if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
-      return;
-    }
-    completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
-    // Async onAbandoned work must contain its own rejections; core guarantees a
-    // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
-      if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
-        // The queue is relinquishing an un-admitted message: free its dedupe
-        // identity so the abandonment-triggered ingress retry can re-enqueue
-        // instead of being rejected as a recent duplicate and falsely completed.
-        releaseRecentQueueMessageId(run);
-        lifecycle.onAbandoned?.();
+      if (lifecycle && !completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
+        completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
+        // Async onAbandoned work must contain its own rejections; core guarantees a
+        // non-rejecting promise. onSettled must still run after a synchronous throw.
+        try {
+          if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+            // The queue is relinquishing an un-admitted message: free its dedupe
+            // identity so the abandonment-triggered ingress retry can re-enqueue
+            // instead of being rejected as a recent duplicate and falsely completed.
+            releaseRecentQueueMessageId(run);
+            lifecycle.onAbandoned?.();
+          }
+        } finally {
+          lifecycle.onSettled?.();
+        }
       }
     } finally {
-      lifecycle.onSettled?.();
+      if (!completedQueueSettlementCallbacks.has(run)) {
+        completedQueueSettlementCallbacks.add(run);
+        run.onQueueSettled?.();
+      }
     }
   };
 

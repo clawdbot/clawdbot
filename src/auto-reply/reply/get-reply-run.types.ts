@@ -87,6 +87,8 @@ export type RunPreparedReplyParams = {
   };
   typing: TypingController;
   opts?: InternalGetReplyOptions;
+  /** Retries host staging cleanup after a queued consumer leaves the queue lifecycle. */
+  onQueuedFollowupSettled?: () => void;
   defaultModel: string;
   timeoutMs: number;
   isNewSession: boolean;

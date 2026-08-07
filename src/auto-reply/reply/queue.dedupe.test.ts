@@ -1,4 +1,7 @@
 // Tests follow-up queue message-id dedupe and drain scheduling behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -15,6 +18,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
+import { cleanupEmptyHostWorkspaceStagingDir } from "./stage-sandbox-media.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -546,6 +550,47 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
+  });
+
+  it("runs queue settlement cleanup once when a source lifecycle completes", () => {
+    const onQueueSettled = vi.fn();
+    const run = createRun({ prompt: "cleanup after consumer" });
+    run.onQueueSettled = onQueueSettled;
+
+    completeFollowupRunLifecycle(run);
+    completeFollowupRunLifecycle(run);
+
+    expect(onQueueSettled).toHaveBeenCalledOnce();
+  });
+
+  it("removes host staging after the queued consumer releases its media", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-queue-staging-"));
+    const stagingDir = path.join(root, "media", "inbound", "queued-run");
+    const stagedFile = path.join(stagingDir, "voice.ogg");
+    const cleanupDone = createDeferred<void>();
+    try {
+      await fs.mkdir(stagingDir, { recursive: true });
+      await fs.writeFile(stagedFile, "queued media");
+
+      await cleanupEmptyHostWorkspaceStagingDir(stagingDir);
+      await expect(fs.lstat(stagingDir)).resolves.toBeDefined();
+
+      await fs.rm(stagedFile);
+      const run = createRun({ prompt: "consume staged media" });
+      run.onQueueSettled = () => {
+        void cleanupEmptyHostWorkspaceStagingDir(stagingDir).then(
+          () => cleanupDone.resolve(),
+          (error: unknown) => cleanupDone.reject(error),
+        );
+      };
+
+      completeFollowupRunLifecycle(run);
+      await cleanupDone.promise;
+
+      await expect(fs.lstat(stagingDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(root, { force: true, recursive: true });
+    }
   });
 
   it("can opt-in to prompt-based dedupe when message id is absent", () => {

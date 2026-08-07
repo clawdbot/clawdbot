@@ -715,6 +715,7 @@ describe("getReplyFromConfig message hooks", () => {
   it("cleans an empty host staging directory after the prepared reply settles", async () => {
     const hostWorkspaceStagingDir = "/tmp/openclaw-staged-media";
     const order: string[] = [];
+    let onQueuedFollowupSettled: (() => void) | undefined;
     mocks.resolveReplyDirectives.mockResolvedValueOnce(
       createGetReplyContinueDirectivesResult({
         body: "voice transcript",
@@ -734,11 +735,12 @@ describe("getReplyFromConfig message hooks", () => {
         hostWorkspaceStagingDir,
       };
     });
-    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async () => {
+    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async (params) => {
       order.push("run");
+      onQueuedFollowupSettled = params.onQueuedFollowupSettled;
       return { text: "ok" };
     });
-    vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockImplementationOnce(async (dir) => {
+    vi.mocked(cleanupEmptyHostWorkspaceStagingDirMock).mockImplementation(async (dir) => {
       order.push(`cleanup:${dir}`);
     });
 
@@ -749,6 +751,18 @@ describe("getReplyFromConfig message hooks", () => {
     });
 
     expect(order).toEqual(["stage", "run", `cleanup:${hostWorkspaceStagingDir}`]);
+    expect(onQueuedFollowupSettled).toBeTypeOf("function");
+
+    onQueuedFollowupSettled?.();
+    await vi.waitFor(() => {
+      expect(cleanupEmptyHostWorkspaceStagingDirMock).toHaveBeenCalledTimes(2);
+    });
+    expect(order).toEqual([
+      "stage",
+      "run",
+      `cleanup:${hostWorkspaceStagingDir}`,
+      `cleanup:${hostWorkspaceStagingDir}`,
+    ]);
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {

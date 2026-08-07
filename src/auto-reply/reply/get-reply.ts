@@ -1144,6 +1144,13 @@ export async function getReplyFromConfig(
         perMessageQueueOptions,
         typing,
         opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+        ...(hostWorkspaceStagingDir && cleanupEmptyHostWorkspaceStagingDir
+          ? {
+              onQueuedFollowupSettled: () => {
+                void cleanupEmptyHostWorkspaceStagingDir(hostWorkspaceStagingDir);
+              },
+            }
+          : {}),
         defaultModel,
         timeoutMs,
         isNewSession,
