@@ -1,5 +1,5 @@
 import { request as httpRequest } from "node:http";
-import { toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { readNativeHookRelayClientBridgeRecord } from "./native-hook-relay-client-store.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
 import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";

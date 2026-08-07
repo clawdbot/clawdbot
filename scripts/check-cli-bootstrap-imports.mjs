@@ -8,6 +8,15 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
+const DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT = "dist/native-hook-relay/entry.js";
+const DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES = 512 * 1024;
+const NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS = [
+  "MAX_NATIVE_HOOK_RELAY_INVOCATIONS",
+  "getActivePluginSessionExtensionRegistry",
+  "requestDeferredPluginToolApproval",
+  "runBeforeToolCallHook",
+];
+const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS = new Set(["kysely"]);
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
   ["const GATEWAY_AUTH_MODES", "function addGatewayRunCommand"],
   ["const GATEWAY_RUN_VALUE_KEYS", "function addGatewayRunCommand"],
@@ -86,6 +95,7 @@ function walkStaticImportGraph(params) {
       );
       continue;
     }
+    params.onSource?.({ filePath, source, errors });
     for (const specifier of listStaticImportSpecifiers(source)) {
       if (!specifier || isBuiltinSpecifier(specifier)) {
         continue;
@@ -112,6 +122,68 @@ function walkStaticImportGraph(params) {
   }
 
   return errors;
+}
+
+/**
+ * Collects isolation and static-graph budget errors for the native hook relay executable.
+ */
+export function collectNativeHookRelayBundleErrors(params = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const entrypoint = params.nativeHookRelayEntrypoint ?? DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT;
+  const entrypointPath = path.resolve(rootDir, entrypoint);
+  const bundleDir = path.dirname(entrypointPath);
+  const maxBytes =
+    params.nativeHookRelayStaticMaxBytes ?? DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES;
+  let staticBytes = 0;
+  const errors = walkStaticImportGraph({
+    fsImpl,
+    rootDir,
+    roots: [entrypoint],
+    onExternalSpecifier: ({ filePath, specifier, errors: graphErrors }) => {
+      if (NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS.has(specifier)) {
+        return;
+      }
+      graphErrors.push(
+        `Native hook relay static graph imports unexpected package "${specifier}" from ${
+          path.relative(rootDir, filePath) || filePath
+        }.`,
+      );
+    },
+    onSource: ({ filePath, source, errors: graphErrors }) => {
+      try {
+        staticBytes += fsImpl.statSync(filePath).size;
+      } catch {
+        staticBytes += Buffer.byteLength(source, "utf8");
+      }
+      for (const marker of NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS) {
+        if (source.includes(marker)) {
+          graphErrors.push(
+            `Native hook relay static graph contains server marker "${marker}" in ${
+              path.relative(rootDir, filePath) || filePath
+            }.`,
+          );
+        }
+      }
+    },
+    onRelativeSpecifier: ({ filePath, resolved, specifier, errors: graphErrors }) => {
+      const relativeToBundle = path.relative(bundleDir, resolved);
+      if (!relativeToBundle.startsWith("..") && !path.isAbsolute(relativeToBundle)) {
+        return;
+      }
+      graphErrors.push(
+        `Native hook relay static graph escapes its isolated bundle via "${specifier}" from ${
+          path.relative(rootDir, filePath) || filePath
+        }.`,
+      );
+    },
+  });
+  if (staticBytes > maxBytes) {
+    errors.push(
+      `Native hook relay static graph is ${staticBytes} bytes, above budget ${maxBytes} bytes.`,
+    );
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
 /**
@@ -244,6 +316,7 @@ export function checkCliBootstrapExternalImports(params = {}) {
   const errors = [
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
+    ...collectNativeHookRelayBundleErrors(params),
   ];
   if (errors.length === 0) {
     return;
@@ -253,7 +326,7 @@ export function checkCliBootstrapExternalImports(params = {}) {
   for (const error of errors) {
     logger.error(`  - ${error}`);
   }
-  throw new Error("CLI bootstrap static graph imports external packages.");
+  throw new Error("CLI bootstrap import guard failed.");
 }
 
 if (isMainModule()) {

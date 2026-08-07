@@ -17,6 +17,8 @@ describe("native hook relay CLI import boundary", () => {
     expect(cli).not.toContain('from "../agents/harness/native-hook-relay.js"');
     expect(cli).not.toMatch(/import\s+\{\s*callGateway\s*\}\s+from\s+"..\/gateway\/call\.js"/u);
     expect(cli).toContain('import("../gateway/call.js")');
+    expect(cli).toContain('from "../gateway/operator-scopes.js"');
+    expect(cli).not.toContain('from "../gateway/method-scopes.js"');
   });
 
   it("dispatches the hidden relay before loading the general CLI", () => {
@@ -26,6 +28,17 @@ describe("native hook relay CLI import boundary", () => {
 
     expect(relayDispatch).toBeGreaterThan(-1);
     expect(generalCli).toBeGreaterThan(relayDispatch);
+  });
+
+  it("routes generated commands through the dedicated cold relay entry", () => {
+    const entry = readSource("src/cli/native-hook-relay-entry.ts");
+    const command = readSource("src/agents/harness/native-hook-relay-command.ts");
+
+    expect(entry).toContain('from "./native-hook-relay-cli.js"');
+    expect(entry).not.toContain('from "../entry.js"');
+    expect(command.indexOf('"native-hook-relay", "entry.js"')).toBeLessThan(
+      command.indexOf('"openclaw.mjs"'),
+    );
   });
 
   it("keeps server, event, permission, and writable state owners out of the client", () => {

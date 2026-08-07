@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectCliBootstrapExternalImportErrors,
   collectGatewayRunChunkBudgetErrors,
+  collectNativeHookRelayBundleErrors,
   listStaticImportSpecifiers,
 } from "../../scripts/check-cli-bootstrap-imports.mjs";
 
@@ -125,6 +126,47 @@ describe("check-cli-bootstrap-imports", () => {
       collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
     ).toEqual([
       `Gateway run chunk dist/run-gateway.js is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+    ]);
+  });
+
+  it("accepts a bounded native hook relay graph isolated from the unified dist", () => {
+    const root = makeTempRoot();
+    writeFixture(
+      root,
+      "dist/native-hook-relay/entry.js",
+      'import "./client.js";\nvoid import("../gateway-call.js");\n',
+    );
+    writeFixture(root, "dist/native-hook-relay/client.js", 'import "kysely";\n');
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it("reports server owners and static imports that escape the isolated relay graph", () => {
+    const root = makeTempRoot();
+    writeFixture(root, "dist/native-hook-relay/entry.js", 'import "../unified.js";\n');
+    writeFixture(root, "dist/unified.js", "const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;\n");
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([
+      'Native hook relay static graph contains server marker "MAX_NATIVE_HOOK_RELAY_INVOCATIONS" in dist/unified.js.',
+      'Native hook relay static graph escapes its isolated bundle via "../unified.js" from dist/native-hook-relay/entry.js.',
+    ]);
+  });
+
+  it("reports an oversized native hook relay static graph", () => {
+    const root = makeTempRoot();
+    writeFixture(root, "dist/native-hook-relay/entry.js", "x".repeat(100));
+
+    expect(
+      collectNativeHookRelayBundleErrors({ rootDir: root, nativeHookRelayStaticMaxBytes: 50 }),
+    ).toEqual(["Native hook relay static graph is 100 bytes, above budget 50 bytes."]);
+  });
+
+  it("reports unexpected external packages in the native hook relay static graph", () => {
+    const root = makeTempRoot();
+    writeFixture(root, "dist/native-hook-relay/entry.js", 'import "commander";\n');
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([
+      'Native hook relay static graph imports unexpected package "commander" from dist/native-hook-relay/entry.js.',
     ]);
   });
 });

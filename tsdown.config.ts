@@ -675,6 +675,15 @@ const configs = [
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,
+      entry: { entry: "src/cli/native-hook-relay-entry.ts" },
+      outDir: "dist/native-hook-relay",
+      deps: unifiedDeps,
+    },
+    false,
+  ),
+  nodeBuildConfig(
+    {
+      name: TSDOWN_UNIFIED_CONFIG_GROUP,
       // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
