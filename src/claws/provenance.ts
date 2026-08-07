@@ -7,6 +7,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  clawBootstrapProvenanceFromRow,
+  selectClawBootstrapProvenanceColumns,
+} from "./provenance-bootstrap.js";
 import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
 
 const CLAW_INSTALL_RECORD_SCHEMA_VERSION = "openclaw.clawInstallRecord.v1" as const;
@@ -34,6 +38,8 @@ type ClawInstallRow = {
   workspace: string;
   agent_config_digest: string;
   agent_owned_paths_json: string;
+  bootstrap_source_path: string | null;
+  bootstrap_content_digest: string | null;
   status: ClawInstallStatus;
   added_at_ms: number | bigint;
   updated_at_ms: number | bigint;
@@ -48,6 +54,7 @@ export type PersistedClawInstall = {
   workspace: string;
   agentConfigDigest: string;
   agentOwnedPaths: string[];
+  bootstrap?: { sourcePath: string; contentDigest: string };
   status: ClawInstallStatus;
   addedAtMs: number;
   updatedAtMs: number;
@@ -69,6 +76,8 @@ type InstallRow = {
   workspace: string;
   agent_config_digest: string;
   agent_owned_paths_json: string;
+  bootstrap_source_path: string | null;
+  bootstrap_content_digest: string | null;
   status: ClawInstallStatus;
   added_at_ms: number | bigint;
   updated_at_ms: number | bigint;
@@ -95,6 +104,7 @@ function rowToInstall(row: InstallRow): PersistedClawInstall {
     workspace: row.workspace,
     agentConfigDigest: row.agent_config_digest,
     agentOwnedPaths: JSON.parse(row.agent_owned_paths_json) as string[],
+    ...clawBootstrapProvenanceFromRow(row),
     status: row.status,
     addedAtMs: Number(row.added_at_ms),
     updatedAtMs: Number(row.updated_at_ms),
@@ -107,6 +117,14 @@ function digestAgentConfig(plan: ClawAddPlan): string {
 
 function agentOwnedPaths(plan: ClawAddPlan): string[] {
   return plan.actions.filter((action) => action.kind === "agent").map((action) => action.target);
+}
+
+function bootstrapProvenance(plan: ClawAddPlan) {
+  const action = plan.actions.find((candidate) => candidate.kind === "bootstrap");
+  const sourcePath = action?.details?.sourcePath;
+  return action && typeof sourcePath === "string" && action.digest
+    ? { sourcePath, contentDigest: action.digest }
+    : undefined;
 }
 
 function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
@@ -130,6 +148,7 @@ function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
     workspace: row.workspace,
     agentConfigDigest: row.agent_config_digest,
     agentOwnedPaths: JSON.parse(row.agent_owned_paths_json) as string[],
+    ...clawBootstrapProvenanceFromRow(row),
     status: row.status,
     addedAtMs: Number(row.added_at_ms),
     updatedAtMs: Number(row.updated_at_ms),
@@ -137,12 +156,14 @@ function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
 }
 
 function selectClawInstallRow(db: DatabaseSync, agentId: string): ClawInstallRow | undefined {
+  const bootstrapColumns = selectClawBootstrapProvenanceColumns(db);
   return db /* sqlite-allow-raw: this Claw prototype state-table read is scoped to one owned row. */
     .prepare(
       `SELECT agent_id, schema_version, source_kind, claw_name, claw_version,
               package_root, manifest_path, integrity_kind, integrity, source_byte_length,
               manifest_schema_version, plan_integrity, workspace, agent_config_digest,
-              agent_owned_paths_json, status, added_at_ms, updated_at_ms
+              agent_owned_paths_json, ${bootstrapColumns},
+              status, added_at_ms, updated_at_ms
          FROM claw_installs
         WHERE agent_id = ?`,
     )
@@ -170,6 +191,7 @@ function isSameInstallAttempt(
   agentConfigDigest: string,
   ownedPaths: string[],
 ): boolean {
+  const bootstrap = bootstrapProvenance(plan);
   return (
     row.schema_version === CLAW_INSTALL_RECORD_SCHEMA_VERSION &&
     row.source_kind === plan.claw.kind &&
@@ -184,7 +206,9 @@ function isSameInstallAttempt(
     row.plan_integrity === plan.planIntegrity &&
     row.workspace === plan.agent.workspace &&
     row.agent_config_digest === agentConfigDigest &&
-    row.agent_owned_paths_json === JSON.stringify(ownedPaths)
+    row.agent_owned_paths_json === JSON.stringify(ownedPaths) &&
+    row.bootstrap_source_path === (bootstrap?.sourcePath ?? null) &&
+    row.bootstrap_content_digest === (bootstrap?.contentDigest ?? null)
   );
 }
 
@@ -196,6 +220,7 @@ export function persistClawInstallRecord(
   const status = options.status ?? "complete";
   const agentConfigDigest = digestAgentConfig(plan);
   const ownedPaths = agentOwnedPaths(plan);
+  const bootstrap = bootstrapProvenance(plan);
   return runOpenClawStateWriteTransaction(({ db }) => {
     const existing = selectClawInstallRow(db, plan.agent.finalId);
     if (existing) {
@@ -217,13 +242,13 @@ export function persistClawInstallRecord(
          agent_id, schema_version, source_kind, claw_name, claw_version,
          package_root, manifest_path, integrity_kind, integrity, source_byte_length,
          manifest_schema_version, plan_integrity, workspace, agent_config_digest,
-         agent_owned_paths_json,
+         agent_owned_paths_json, bootstrap_source_path, bootstrap_content_digest,
          status, added_at_ms, updated_at_ms
        ) VALUES (
          @agent_id, @schema_version, @source_kind, @claw_name, @claw_version,
          @package_root, @manifest_path, @integrity_kind, @integrity, @source_byte_length,
          @manifest_schema_version, @plan_integrity, @workspace, @agent_config_digest,
-         @agent_owned_paths_json,
+         @agent_owned_paths_json, @bootstrap_source_path, @bootstrap_content_digest,
          @status, @added_at_ms, @updated_at_ms
        )`,
     ).run({
@@ -242,6 +267,8 @@ export function persistClawInstallRecord(
       workspace: plan.agent.workspace,
       agent_config_digest: agentConfigDigest,
       agent_owned_paths_json: JSON.stringify(ownedPaths),
+      bootstrap_source_path: bootstrap?.sourcePath ?? null,
+      bootstrap_content_digest: bootstrap?.contentDigest ?? null,
       status,
       added_at_ms: nowMs,
       updated_at_ms: nowMs,
@@ -255,6 +282,7 @@ export function persistClawInstallRecord(
       workspace: plan.agent.workspace,
       agentConfigDigest,
       agentOwnedPaths: ownedPaths,
+      ...(bootstrap ? { bootstrap } : {}),
       status,
       addedAtMs: nowMs,
       updatedAtMs: nowMs,
@@ -318,6 +346,7 @@ export function readClawInstallRecords(
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawInstall[] {
   const database = openOpenClawStateDatabase(options);
+  const bootstrapColumns = selectClawBootstrapProvenanceColumns(database.db);
   // sqlite-allow-raw: read-only Claw install inventory ordered by stable agent id.
   const rows =
     database.db /* sqlite-allow-raw: read-only Claw install inventory ordered by stable agent id. */
@@ -325,7 +354,8 @@ export function readClawInstallRecords(
         `SELECT schema_version, source_kind, claw_name, claw_version, package_root,
               manifest_path, integrity_kind, integrity, source_byte_length,
               manifest_schema_version, plan_integrity, agent_id, workspace,
-              agent_config_digest, agent_owned_paths_json, status, added_at_ms,
+              agent_config_digest, agent_owned_paths_json, ${bootstrapColumns},
+              status, added_at_ms,
               updated_at_ms
          FROM claw_installs
         ORDER BY agent_id`,
@@ -393,6 +423,7 @@ export function updateClawInstallRecord(
   const ownedAgentPaths = plan.actions
     .filter((action) => action.kind === "agent")
     .map((action) => action.target);
+  const bootstrap = bootstrapProvenance(plan) ?? current.bootstrap;
   runOpenClawStateWriteTransaction(({ db }) => {
     const result = db /* sqlite-allow-raw: Claw install provenance compare-and-swap write. */
       .prepare(
@@ -410,6 +441,8 @@ export function updateClawInstallRecord(
                 workspace = @workspace,
                 agent_config_digest = @agent_config_digest,
                 agent_owned_paths_json = @agent_owned_paths_json,
+                bootstrap_source_path = @bootstrap_source_path,
+                bootstrap_content_digest = @bootstrap_content_digest,
                 status = @status,
                 updated_at_ms = @updated_at_ms
           WHERE agent_id = @agent_id
@@ -431,6 +464,8 @@ export function updateClawInstallRecord(
         workspace: plan.agent.workspace,
         agent_config_digest: agentConfigDigest,
         agent_owned_paths_json: JSON.stringify(ownedAgentPaths),
+        bootstrap_source_path: bootstrap?.sourcePath ?? null,
+        bootstrap_content_digest: bootstrap?.contentDigest ?? null,
         status,
         updated_at_ms: updatedAtMs,
         expected_claw_version: options.expectedClaw?.version ?? current.claw.version,
@@ -451,6 +486,7 @@ export function updateClawInstallRecord(
     workspace: plan.agent.workspace,
     agentConfigDigest,
     agentOwnedPaths: ownedAgentPaths,
+    ...(bootstrap ? { bootstrap } : {}),
     status,
     addedAtMs: current.addedAtMs,
     updatedAtMs,

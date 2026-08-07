@@ -189,6 +189,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
 CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
   ON audit_events(direction, sequence DESC);
 
+CREATE TABLE IF NOT EXISTS audit_event_source_adoptions (
+  legacy_source_id TEXT NOT NULL PRIMARY KEY,
+  adopted_source_id TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS audit_identity_keys (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   key_id TEXT NOT NULL,
@@ -2118,6 +2123,8 @@ CREATE TABLE IF NOT EXISTS claw_installs (
   workspace TEXT NOT NULL UNIQUE,
   agent_config_digest TEXT NOT NULL,
   agent_owned_paths_json TEXT NOT NULL,
+  bootstrap_source_path TEXT,
+  bootstrap_content_digest TEXT,
   status TEXT NOT NULL CHECK (
     status IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial')
   ),

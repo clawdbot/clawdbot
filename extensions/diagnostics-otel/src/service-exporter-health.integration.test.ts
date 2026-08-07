@@ -20,6 +20,7 @@ const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
 const IMMEDIATE_RETRY_AFTER = "Thu, 01 Jan 1970 00:00:00 GMT";
 const OTEL_ENV_KEYS = [
   "OTEL_SDK_DISABLED",
+  "OTEL_PROPAGATORS",
   "OTEL_TRACES_EXPORTER",
   "OTEL_METRICS_EXPORTER",
   "OTEL_LOGS_EXPORTER",
@@ -204,7 +205,7 @@ function startTraceExporterHealthService(
   });
 }
 
-test("does not report disabled real NodeSDK trace or metric routes as started", async () => {
+test("reports no OpenClaw-owned routes when the SDK is disabled", async () => {
   process.env.OTEL_SDK_DISABLED = " TRUE ";
 
   const { ctx } = await startOtelService({
@@ -220,7 +221,8 @@ test("does not report disabled real NodeSDK trace or metric routes as started", 
       transport,
       status,
     })),
-  ).toEqual([{ signal: "logs", transport: "stdout", status: "started" }]);
+  ).toEqual([]);
+  expect(propagation.fields()).toEqual(["traceparent", "tracestate", "baggage"]);
 });
 
 test("retries a real OTLP 503 then succeeds without an intermediate failure fact", async () => {

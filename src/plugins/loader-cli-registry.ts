@@ -240,7 +240,13 @@ export async function loadOpenClawPluginCliRegistry(
       mod = withProfile(
         { pluginId: record.id, source: safeSource },
         "cli-metadata",
-        () => loadPluginModule(safeSource) as OpenClawPluginModule,
+        () =>
+          loadPluginModule(
+            safeSource,
+            manifestRecord.trustedOfficialInstall
+              ? { trustedInstalledPrivateSdkOwner: manifestRecord.id }
+              : undefined,
+          ) as OpenClawPluginModule,
       );
     } catch (error) {
       recordPluginError({

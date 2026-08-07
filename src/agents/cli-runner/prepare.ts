@@ -72,6 +72,7 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
@@ -102,6 +103,8 @@ import {
   mapSandboxSkillEntriesForPrompt,
   resolveSandboxSkillRuntimeInputs,
 } from "../embedded-agent-runner/sandbox-skills.js";
+import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
+import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
@@ -1665,20 +1668,37 @@ export async function prepareCliRunContext(
     // Context remains session-owned. Trusted helper runs may borrow a different
     // agentDir only for model/auth execution.
     const contextEngineAgentDir = resolveAgentDir(contextEngineConfig, contextEngineSessionAgentId);
-    const resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
-      agentDir: contextEngineAgentDir,
-      workspaceDir,
+    const contextEngineHostSupport = buildGenericCliContextEngineHostSupport({
+      backendId: backendResolved.id,
+      capabilities: backendResolved.contextEngineHostCapabilities,
     });
+    let resolvedContextEngine;
+    if (params.contextEngineLogicalTurnLease) {
+      selectContextEngineForTranscriptHost({
+        lease: params.contextEngineLogicalTurnLease,
+        host: contextEngineHostSupport,
+        operation: "agent-run",
+        recorder: params.userTurnTranscriptRecorder,
+      });
+      await drainPendingContextEngineTurnsBeforeRun({
+        admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+        isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
+        lease: params.contextEngineLogicalTurnLease,
+      });
+      resolvedContextEngine = params.contextEngineLogicalTurnLease.begin().engine;
+    } else {
+      resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
+        agentDir: contextEngineAgentDir,
+        workspaceDir,
+      });
+    }
     const contextEngine =
       resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
     if (contextEngine) {
       assertContextEngineHostSupport({
         contextEngine,
         operation: "agent-run",
-        host: buildGenericCliContextEngineHostSupport({
-          backendId: backendResolved.id,
-          capabilities: backendResolved.contextEngineHostCapabilities,
-        }),
+        host: contextEngineHostSupport,
       });
     }
     const hadSessionFile = await hasCliSessionTranscript({

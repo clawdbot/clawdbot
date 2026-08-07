@@ -159,6 +159,12 @@ export function runCodexAppServerAttempt(
   };
   const promise = runCodexAppServerAttemptImpl(trackedParams, {
     ...options,
+    agentHarnessCodingToolsFactory:
+      options.agentHarnessCodingToolsFactory ??
+      (async (_attempt, toolOptions) => {
+        const factory = dynamicToolBuildState.openClawCodingToolsFactory;
+        return factory ? factory(toolOptions) : [];
+      }),
     bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
     ...(clientFactory ? { clientFactory } : {}),
   }).finally(() => {

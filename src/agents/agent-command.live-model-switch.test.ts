@@ -1198,6 +1198,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "claude",
       configuredAuthProfileId: "anthropic:verified",
     });
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userLockedAuthProfileId: undefined }),
+    );
   });
 
   it("retries a same-model switch with the runtime carried by the error", async () => {
@@ -4164,6 +4167,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(capturedAuthProfileProvider).toBe("codex-cli");
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ userLockedAuthProfileId: "openai:work" }),
+    );
     expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
   });
 

@@ -17,12 +17,12 @@ const STATE_SCHEMA_MODULES = [
 ];
 
 /** Inline canonical schema bytes so bundled consumers need no SQL asset. */
-export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
+export function createStateSchemaInlinePlugin(rootDir = process.cwd(), options = {}) {
   const schemasByModulePath = new Map(
     STATE_SCHEMA_MODULES.map((schema) => [path.resolve(rootDir, schema.modulePath), schema]),
   );
 
-  return {
+  const plugin = {
     name: STATE_SCHEMA_INLINE_PLUGIN_NAME,
     load(id) {
       const schema = schemasByModulePath.get(path.resolve(id));
@@ -37,4 +37,15 @@ export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
       };
     },
   };
+  if (options.vitestFsModuleCache) {
+    plugin.configureVitest = ({ experimental_defineCacheKeyGenerator }) => {
+      experimental_defineCacheKeyGenerator(({ id }) => {
+        const schema = schemasByModulePath.get(path.resolve(id));
+        return schema
+          ? fs.readFileSync(path.resolve(rootDir, schema.schemaPath), "utf8")
+          : undefined;
+      });
+    };
+  }
+  return plugin;
 }
