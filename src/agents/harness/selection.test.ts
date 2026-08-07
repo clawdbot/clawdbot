@@ -2860,7 +2860,10 @@ describe("selectAgentHarness", () => {
       ok: false,
       compacted: false,
       reason: 'Agent harness "codex" does not support compaction.',
-      failure: { reason: "unsupported_harness_compaction" },
+      failure: {
+        disposition: "terminal",
+        reason: "unsupported_harness_compaction",
+      },
     });
   });
 

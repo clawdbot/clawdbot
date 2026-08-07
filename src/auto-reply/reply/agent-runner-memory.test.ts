@@ -1689,6 +1689,202 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
   });
 
+  it("continues only once after a byte-fuse retryable failure when safe headroom remains", async () => {
+    const sessionKey = "agent:main:main";
+    await writeTestSessionTranscript({
+      rootDir,
+      sessionKey,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(5_000) } }],
+    });
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 100,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 2_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedAgentSessionMock.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "provider rate limited",
+      failure: { disposition: "retryable", reason: "rate_limit", status: 429 },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 5_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await upsertSessionEntry(
+      {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey,
+        storePath: path.join(rootDir, "sessions.json"),
+      },
+      sessionEntry,
+    );
+    const replyOperation = createReplyOperation();
+    const onCompactionNotice = vi.fn();
+    const params = {
+      cfg: {
+        agents: {
+          defaults: { compaction: { memoryFlush: {}, maxActiveTranscriptBytes: "10b" } },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 10_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+      onCompactionNotice,
+    };
+
+    await expect(runPreflightCompactionIfNeeded(params)).resolves.toBe(sessionEntry);
+    await expect(runPreflightCompactionIfNeeded(params)).resolves.toBe(sessionEntry);
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "transient_failure");
+    expect(onCompactionNotice).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues after a retryable failure at the default token-trigger boundary", async () => {
+    const sessionKey = "agent:main:main";
+    await writeTestSessionTranscript({
+      rootDir,
+      sessionKey,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(5_000) } }],
+    });
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 2_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "provider rate limited",
+      failure: { disposition: "retryable", reason: "rate_limit", status: 429 },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 4_500,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await upsertSessionEntry(
+      {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey,
+        storePath: path.join(rootDir, "sessions.json"),
+      },
+      sessionEntry,
+    );
+    const onCompactionNotice = vi.fn();
+
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 10_000,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      }),
+    ).resolves.toBe(sessionEntry);
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "transient_failure");
+  });
+
+  it("fails closed after a retryable preflight failure inside the configured reserve", async () => {
+    const sessionKey = "agent:main:main";
+    await writeTestSessionTranscript({
+      rootDir,
+      sessionKey,
+      events: [{ type: "message", message: { role: "user", content: "x".repeat(5_000) } }],
+    });
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 100,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 5_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "provider timed out",
+      failure: { disposition: "retryable", reason: "timeout" },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 8_500,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await upsertSessionEntry(
+      {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey,
+        storePath: path.join(rootDir, "sessions.json"),
+      },
+      sessionEntry,
+    );
+    const onCompactionNotice = vi.fn();
+
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: { compaction: { memoryFlush: {}, maxActiveTranscriptBytes: "10b" } },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionKey,
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 10_000,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      }),
+    ).rejects.toThrow("Preflight compaction required but failed: provider timed out");
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+    expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");
+  });
+
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(

@@ -36,6 +36,7 @@ import {
 } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
 import { createCompactionDiagId } from "./compaction-diagnostics.js";
+import { compactionFailureFromFailoverReason } from "./compaction-failure.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
@@ -110,7 +111,7 @@ export async function prepareDirectCompactionAttempt(
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);
-    const failure = err ? describeFailoverError(err) : undefined;
+    const describedFailure = err ? describeFailoverError(err) : undefined;
     const detail =
       failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
     const detailSuffix = detail ? ` detail=${detail}` : "";
@@ -124,14 +125,10 @@ export async function prepareDirectCompactionAttempt(
       ok: false,
       compacted: false,
       reason,
-      failure: failure
-        ? {
-            reason: failure.reason,
-            status: failure.status,
-            code: failure.code,
-            rawError: failure.rawError ?? failure.message,
-          }
-        : undefined,
+      failure: compactionFailureFromFailoverReason(
+        describedFailure?.reason,
+        describedFailure?.status,
+      ),
     };
   };
   const preparedModelRuntime = params.preparedModelRuntime;

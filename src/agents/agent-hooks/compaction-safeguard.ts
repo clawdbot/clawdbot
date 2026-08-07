@@ -54,6 +54,7 @@ import {
 } from "./compaction-safeguard-quality.js";
 import {
   getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelError,
   setCompactionSafeguardCancelReason,
 } from "./compaction-safeguard-runtime.js";
 
@@ -878,6 +879,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
     }
     setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
+    setCompactionSafeguardCancelError(ctx.sessionManager, undefined);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
       // When there are no summarizable messages AND no real turn-prefix content,
       // cancelling compaction leaves context unchanged but the SDK re-triggers
@@ -1239,6 +1241,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         ctx.sessionManager,
         `Compaction safeguard could not summarize the session: ${message}`,
       );
+      setCompactionSafeguardCancelError(ctx.sessionManager, error);
       return { cancel: true };
     }
   });

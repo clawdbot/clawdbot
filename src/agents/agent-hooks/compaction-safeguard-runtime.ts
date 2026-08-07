@@ -33,6 +33,8 @@ type CompactionSafeguardRuntimeValue = {
    * "Compaction cancelled" message.
    */
   cancelReason?: string;
+  /** Original typed/provider error paired with cancelReason for downstream classification. */
+  cancelError?: unknown;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();
@@ -73,4 +75,35 @@ export function consumeCompactionSafeguardCancelReason(sessionManager: unknown):
   delete next.cancelReason;
   setCompactionSafeguardRuntime(sessionManager, Object.keys(next).length > 0 ? next : null);
   return reason;
+}
+
+/** Stores the original safeguard error so compaction preserves status/cause identity. */
+export function setCompactionSafeguardCancelError(
+  sessionManager: unknown,
+  error: unknown | undefined,
+): void {
+  const current = getCompactionSafeguardRuntime(sessionManager);
+  if (!current && error === undefined) {
+    return;
+  }
+  const next = { ...current };
+  if (error !== undefined) {
+    next.cancelError = error;
+  } else {
+    delete next.cancelError;
+  }
+  setCompactionSafeguardRuntime(sessionManager, Object.keys(next).length > 0 ? next : null);
+}
+
+/** Reads and clears the original safeguard error for one compaction attempt. */
+export function consumeCompactionSafeguardCancelError(sessionManager: unknown): unknown {
+  const current = getCompactionSafeguardRuntime(sessionManager);
+  if (!current || !("cancelError" in current)) {
+    return undefined;
+  }
+  const error = current.cancelError;
+  const next = { ...current };
+  delete next.cancelError;
+  setCompactionSafeguardRuntime(sessionManager, Object.keys(next).length > 0 ? next : null);
+  return error;
 }

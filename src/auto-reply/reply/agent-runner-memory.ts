@@ -12,7 +12,9 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { isStructuredCompactionFailure } from "../../agents/embedded-agent-runner/compaction-failure.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -93,6 +95,41 @@ type UpdateSessionEntryParams = {
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
 const MAX_FLUSH_ERROR_LENGTH = 200;
+const MIN_DEGRADED_COMPACTION_HEADROOM_TOKENS = 1_024;
+
+// A reply operation owns one pending user turn. Once it uses its degraded
+// allowance, re-entry must not spend on compaction or append that turn again.
+const degradedPreflightCompactionOperations = new WeakSet<ReplyOperation>();
+
+function shouldContinueAfterRetryablePreflightFailure(params: {
+  result: EmbeddedAgentCompactResult;
+  projectedTokenCount?: number;
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  abortSignal: AbortSignal;
+}): boolean {
+  if (
+    params.result.ok ||
+    params.result.compacted ||
+    params.result.result !== undefined ||
+    params.abortSignal.aborted ||
+    !isStructuredCompactionFailure(params.result.failure) ||
+    params.result.failure.disposition !== "retryable"
+  ) {
+    return false;
+  }
+  if (
+    typeof params.projectedTokenCount !== "number" ||
+    !Number.isFinite(params.projectedTokenCount)
+  ) {
+    return false;
+  }
+  // The recovery margin must stay independent from the threshold that caused
+  // preflight to run. Reusing the soft threshold here makes the ordinary
+  // token-triggered recovery window unreachable at its boundary.
+  const requiredHeadroom = params.reserveTokensFloor + MIN_DEGRADED_COMPACTION_HEADROOM_TOKENS;
+  return params.projectedTokenCount < params.contextWindowTokens - requiredHeadroom;
+}
 
 const embeddedAgentRuntimeLoader = createLazyImportLoader<EmbeddedAgentRuntime>(
   () => import("../../agents/embedded-agent.js"),
@@ -859,6 +896,13 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  if (degradedPreflightCompactionOperations.has(params.replyOperation)) {
+    logVerbose(
+      `preflightCompaction suppressed duplicate degraded attempt: sessionKey=${params.sessionKey}`,
+    );
+    return entry ?? params.sessionEntry;
+  }
+
   const compactionTrigger = shouldCompactByTranscriptBytes ? "transcript_bytes" : "tokens";
   logVerbose(
     `preflightCompaction triggered: sessionKey=${params.sessionKey} ` +
@@ -882,7 +926,9 @@ export async function runPreflightCompactionIfNeeded(params: {
     startedCompactionNotice = true;
     await notifyCompaction("start");
   };
-  const notifyTerminalCompaction = async (phase: "end" | "incomplete" | "skipped") => {
+  const notifyTerminalCompaction = async (
+    phase: "end" | "incomplete" | "skipped" | "transient_failure",
+  ) => {
     terminalCompactionNoticeSent = true;
     await notifyCompaction(phase);
   };
@@ -945,6 +991,25 @@ export async function runPreflightCompactionIfNeeded(params: {
       if (result && isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+        return entry ?? params.sessionEntry;
+      }
+      if (
+        result &&
+        shouldContinueAfterRetryablePreflightFailure({
+          result,
+          projectedTokenCount: tokenCountForCompaction,
+          contextWindowTokens,
+          reserveTokensFloor,
+          abortSignal: params.replyOperation.abortSignal,
+        })
+      ) {
+        degradedPreflightCompactionOperations.add(params.replyOperation);
+        await notifyTerminalCompaction("transient_failure");
+        logVerbose(
+          `preflightCompaction degraded once: sessionKey=${params.sessionKey} ` +
+            `failure=${result.failure?.reason ?? "unknown"} ` +
+            `tokenCount=${tokenCountForCompaction} contextWindow=${contextWindowTokens}`,
+        );
         return entry ?? params.sessionEntry;
       }
       await notifyTerminalCompaction("incomplete");

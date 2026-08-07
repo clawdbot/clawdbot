@@ -109,10 +109,60 @@ export type ContextEngineRuntimeSettings = {
   };
 };
 
+/** Failures that may heal on a different compaction model or a later turn. */
+export type RetryableCompactionFailureReason =
+  | "empty_response"
+  | "overloaded"
+  | "rate_limit"
+  | "server_error"
+  | "timeout";
+
+/** Failures that must not degrade into an un-compacted reply attempt. */
+export type TerminalCompactionFailureReason =
+  | "aborted"
+  | "active_run"
+  | "auth"
+  | "auth_permanent"
+  | "auth_profile_mismatch"
+  | "background_compaction_pending"
+  | "billing"
+  | "context_overflow"
+  | "deferred_compaction_not_scheduled"
+  | "format"
+  | "invalid_request"
+  | "missing_thread_binding"
+  | "model_not_found"
+  | "model_selection_locked"
+  | "no_error_details"
+  | "runtime_unavailable"
+  | "session_expired"
+  | "stale_thread_binding"
+  | "summary_rejected"
+  | "tls_certificate"
+  | "transcript_persistence_failed"
+  | "unclassified"
+  | "unknown"
+  | "unsupported_harness_compaction";
+
+/** Sanitized, authoritative compaction failure identity. */
+export type CompactionFailure =
+  | {
+      disposition: "retryable";
+      reason: RetryableCompactionFailureReason;
+      status?: number;
+    }
+  | {
+      disposition: "terminal";
+      reason: TerminalCompactionFailureReason;
+      status?: number;
+    };
+
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  /** Closed, sanitized failure identity for host recovery policy. */
+  failure?: CompactionFailure;
   result?: {
     summary?: string;
     firstKeptEntryId?: string;

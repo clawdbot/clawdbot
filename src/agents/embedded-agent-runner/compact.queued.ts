@@ -24,6 +24,7 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveDefaultAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { describeFailoverError } from "../failover-error.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -38,6 +39,10 @@ import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
+import {
+  compactionFailureFromFailoverReason,
+  terminalCompactionFailure,
+} from "./compaction-failure.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
@@ -80,7 +85,7 @@ function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactR
     reason: runtime
       ? `Model selection is locked to native agent harness "${runtime}", but native compaction is unavailable.`
       : "Model selection is locked but the persisted agent harness is unavailable.",
-    failure: { reason: "model_selection_locked" },
+    failure: terminalCompactionFailure("model_selection_locked"),
   };
 }
 
@@ -95,6 +100,7 @@ function createCompactionAbortedResult(): EmbeddedAgentCompactResult {
     ok: false,
     compacted: false,
     reason: COMPACTION_ABORTED_REASON,
+    failure: terminalCompactionFailure("aborted"),
   };
 }
 
@@ -195,7 +201,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       ok: false,
       compacted: false,
       reason: DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON,
-      failure: { reason: "deferred_compaction_not_scheduled" },
+      failure: terminalCompactionFailure("deferred_compaction_not_scheduled"),
     };
   }
 
@@ -261,7 +267,7 @@ export async function compactEmbeddedAgentSession(
       ok: false,
       compacted: false,
       reason: MANUAL_COMPACTION_ACTIVE_RUN_REASON,
-      failure: { reason: "active_run" },
+      failure: terminalCompactionFailure("active_run"),
     };
   }
 
@@ -700,6 +706,7 @@ async function compactResolvedContextEngine(
             params.abortSignal,
           );
         } catch (compactErr) {
+          const describedFailure = describeFailoverError(compactErr);
           log.warn("context-engine compaction failed", {
             errorMessage: formatErrorMessage(compactErr),
           });
@@ -707,6 +714,10 @@ async function compactResolvedContextEngine(
             ok: false,
             compacted: false,
             reason: formatErrorMessage(compactErr),
+            failure: compactionFailureFromFailoverReason(
+              describedFailure.reason,
+              describedFailure.status,
+            ),
           };
         }
         const successor = await resolveContextEngineCompactionSuccessor({
@@ -837,6 +848,7 @@ async function compactResolvedContextEngine(
           ok: result.ok,
           compacted: result.compacted,
           reason: result.reason,
+          failure: result.failure,
           result: result.result
             ? {
                 summary: result.result.summary ?? "",

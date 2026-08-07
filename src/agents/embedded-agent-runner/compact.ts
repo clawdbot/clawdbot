@@ -15,7 +15,7 @@ import {
 } from "../agent-scope.js";
 import { hasMeaningfulConversationContent } from "../compaction-real-conversation.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { coerceToFailoverError } from "../failover-error.js";
+import { describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
@@ -37,6 +37,12 @@ import {
   hasRealConversationContent,
   resolveCompactionProviderStream,
 } from "./compaction-diagnostics.js";
+import {
+  compactionFailureFromFailoverReason,
+  failoverReasonFromCompactionFailure,
+  isStructuredCompactionFailure,
+  terminalCompactionFailure,
+} from "./compaction-failure.js";
 import {
   buildBeforeCompactionHookMetrics,
   estimateTokensAfterCompaction,
@@ -83,32 +89,31 @@ function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessio
   return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
 
-function classifyCompactionFallbackResult(
-  result: EmbeddedAgentCompactResult,
-  provider: string,
-  model: string,
-) {
+function classifyCompactionFallbackResult(result: EmbeddedAgentCompactResult) {
   if (result.ok) {
     return null;
   }
-  const reason = result.reason?.trim();
-  if (!reason) {
-    return null;
-  }
-  const failureError = Object.assign(new Error(result.failure?.rawError ?? reason), {
-    status: result.failure?.status,
-    code: result.failure?.code,
-  });
-  const failoverError = coerceToFailoverError(failureError, { provider, model });
-  return failoverError ? { error: failoverError } : null;
+  const failure = isStructuredCompactionFailure(result.failure)
+    ? result.failure
+    : terminalCompactionFailure("unknown");
+  return {
+    message: `Compaction failed (${failure.reason})`,
+    reason: failoverReasonFromCompactionFailure(failure),
+    status: failure.status,
+    preserveResultOnExhaustion: true,
+    // Terminal identity wins over a later transient fallback failure.
+    preserveResultPriority: failure.disposition === "terminal" ? 1 : 0,
+  };
 }
 
 function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactResult {
   const reason = isFallbackSummaryError(err) ? err.message : formatErrorMessage(err);
+  const described = describeFailoverError(err);
   return {
     ok: false,
     compacted: false,
     reason,
+    failure: compactionFailureFromFailoverReason(described.reason, described.status),
   };
 }
 
@@ -128,7 +133,7 @@ export async function compactEmbeddedAgentSessionDirect(
       reason: lockedHarnessRuntime
         ? `Model selection is locked to native agent harness "${lockedHarnessRuntime}"; generic compaction is unavailable.`
         : "Model selection is locked but the persisted agent harness is unavailable.",
-      failure: { reason: "model_selection_locked" },
+      failure: terminalCompactionFailure("model_selection_locked"),
     };
   }
   const runSessionTarget = await resolveAgentRunSessionTarget({
@@ -312,8 +317,7 @@ export async function compactEmbeddedAgentSessionDirect(
           });
         },
         fallbacksOverride,
-        classifyResult: ({ result, provider, model }) =>
-          classifyCompactionFallbackResult(result, provider, model),
+        classifyResult: ({ result }) => classifyCompactionFallbackResult(result),
         run: async (provider, model) => {
           const isPrimaryCandidate =
             provider === resolvedPrimaryCandidate?.provider &&

@@ -196,11 +196,16 @@ export async function delegateCompactionToRuntime(
         sessionKey,
       })
     : undefined;
+  const structuredFailure =
+    result.failure?.disposition === "retryable" || result.failure?.disposition === "terminal"
+      ? result.failure
+      : undefined;
 
   return {
     ok: result.ok,
     compacted: result.compacted,
     reason: result.reason,
+    ...(structuredFailure ? { failure: structuredFailure } : {}),
     result: result.result
       ? {
           summary: result.result.summary,

@@ -18,8 +18,10 @@ import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import {
+  consumeCompactionSafeguardCancelError,
   consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelError,
   setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
@@ -747,6 +749,17 @@ describe("compaction-safeguard runtime registry", () => {
     expect(consumeCompactionSafeguardCancelReason(sm)).toBe("temporary reason");
     setCompactionSafeguardCancelReason(sm, undefined);
     expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+  });
+
+  it("consumes safeguard errors without dropping other runtime fields", () => {
+    const sm = {};
+    const error = Object.assign(new Error("rate limited"), { status: 429 });
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.6 });
+    setCompactionSafeguardCancelError(sm, error);
+
+    expect(consumeCompactionSafeguardCancelError(sm)).toBe(error);
+    expect(consumeCompactionSafeguardCancelError(sm)).toBeUndefined();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.6 });
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {

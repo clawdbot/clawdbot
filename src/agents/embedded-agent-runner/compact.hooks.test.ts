@@ -1813,7 +1813,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     }
   });
 
-  it("preserves compaction failure status and code metadata", async () => {
+  it("preserves compaction failure status while sanitizing provider metadata", async () => {
     sessionCompactImpl.mockRejectedValueOnce(
       Object.assign(new Error("primary compaction rate limited"), {
         status: 429,
@@ -1844,10 +1844,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       compacted: false,
     });
     expect(result.failure).toEqual({
+      disposition: "retryable",
       reason: "rate_limit",
       status: 429,
-      code: "rate_limit_exceeded",
-      rawError: "primary compaction rate limited",
     });
   });
 
