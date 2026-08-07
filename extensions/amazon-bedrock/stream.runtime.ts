@@ -78,6 +78,23 @@ import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 
+/**
+ * Above this many accumulated characters, stop re-parsing a tool call's full
+ * argument buffer on every streamed delta. `parseStreamingJson` re-derives the
+ * whole buffer from scratch each call, so re-running it on every delta makes
+ * the total streaming cost O(n^2) in the argument size instead of O(n): a
+ * single large argument (e.g. a multi-KB document body written via a
+ * `write_file`-style tool) can cost multiple seconds of synchronous CPU time
+ * spread across the stream. That synchronous work can starve the event loop
+ * long enough to look like network idleness to timeout/watchdog logic further
+ * up the stack, and has been observed to correlate with tool-call arguments
+ * silently resolving to `{}` on large payloads. Below this threshold the live
+ * "arguments so far" preview stays exact and updates on every delta; above it,
+ * the preview simply stops updating until `handleContentBlockStop` resolves
+ * the final value once from the complete buffer (see below).
+ */
+const MAX_TOOLCALL_STREAMING_PREVIEW_CHARS = 8_000;
+
 function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
   return resolveClaudeFable5ModelIdentity(model) !== undefined;
 }
@@ -563,7 +580,9 @@ function handleContentBlockDelta(
     }
   } else if (delta?.toolUse && block?.type === "toolCall") {
     block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
-    block.arguments = parseStreamingJson(block.partialJson);
+    if (block.partialJson.length <= MAX_TOOLCALL_STREAMING_PREVIEW_CHARS) {
+      block.arguments = parseStreamingJson(block.partialJson);
+    }
     stream.push({
       type: "toolcall_delta",
       contentIndex: index,
@@ -688,6 +707,11 @@ function handleContentBlockStop(
       });
       break;
     case "toolCall":
+      // Always resolve the final arguments from the complete buffer exactly
+      // once here, regardless of whether per-delta re-parsing above was
+      // skipped for size - this is what guarantees correctness for large
+      // arguments once the preview stops tracking every delta.
+      block.arguments = parseStreamingJson(block.partialJson);
       // Finalize in-place and strip the scratch buffer so replay only
       // carries parsed arguments.
       delete (block as Block).partialJson;

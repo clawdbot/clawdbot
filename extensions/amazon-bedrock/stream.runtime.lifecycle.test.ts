@@ -107,4 +107,59 @@ describe("Bedrock provider-owned stream lifecycle", () => {
       expect(output.content[0]).toMatchObject({ redacted: true, thinkingSignature: "AQID" });
     }
   });
+
+  it("resolves the full tool-call arguments even when the buffer exceeds the streaming preview threshold", async () => {
+    // Regression test: re-parsing the whole accumulated buffer on every single
+    // delta made large tool-call arguments (e.g. a multi-KB document body)
+    // O(n^2) in argument size. Once the preview threshold kicks in and stops
+    // re-deriving `arguments` on every chunk, `handleContentBlockStop` must
+    // still resolve the complete, correct value from the full buffer - not a
+    // stale/partial preview and not an empty `{}`.
+    const longContent = "lorem ipsum dolor sit amet ".repeat(2000); // ~54KB of content
+    const expectedArguments = { filename: "report.docx", content: longContent };
+    const fullArgsJson = JSON.stringify(expectedArguments);
+
+    // Split into many small deltas, well below any single-chunk size that
+    // would trip the threshold on its own, so the buffer only crosses it
+    // gradually across dozens of deltas - matching real provider streaming.
+    const chunkSize = 40;
+    const deltaEvents = [];
+    for (let i = 0; i < fullArgsJson.length; i += chunkSize) {
+      deltaEvents.push({
+        contentBlockDelta: {
+          contentBlockIndex: 0,
+          delta: { toolUse: { input: fullArgsJson.slice(i, i + chunkSize) } },
+        },
+      });
+    }
+
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: events([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockStart: {
+            contentBlockIndex: 0,
+            start: { toolUse: { toolUseId: "call_write", name: "write_file" } },
+          },
+        },
+        ...deltaEvents,
+        { messageStop: { stopReason: BedrockStopReason.TOOL_USE } },
+      ]),
+    } as never);
+
+    const stream = streamSimpleBedrock(model as never, {
+      messages: [{ role: "user", content: "Write the report", timestamp: 0 }],
+    });
+    for await (const _event of stream) {
+      // drain
+    }
+    const output = await stream.result();
+
+    expect(output.content[0]).toMatchObject({
+      type: "toolCall",
+      arguments: expectedArguments,
+    });
+    expect(output.content[0]).not.toHaveProperty("partialJson");
+  });
 });
