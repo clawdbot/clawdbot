@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 
+SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+
 export npm_config_loglevel=error
 export npm_config_fund=false
 export npm_config_audit=false
@@ -16,7 +18,9 @@ export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
-export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+if [ "$SCENARIO" = "feishu-channel" ]; then
+  export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+fi
 export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
 export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
@@ -43,7 +47,6 @@ PHASE_LOG="$ARTIFACT_ROOT/phases.jsonl"
 BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SURVIVOR_BASELINE}"
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
-SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
 COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
@@ -365,16 +368,49 @@ TS
   echo "Seeded source-only plugin shadow: $shadow_root"
 }
 
-configure_configured_plugin_install_fixture_registry() {
-  configured_plugin_installs_enabled || return 0
-
-  local fixture_root="$ARTIFACT_ROOT/configured-plugin-installs-npm-fixture"
+configure_plugin_registry() {
+  local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
   local tarball="$fixture_root/openclaw-brave-plugin-2026.5.2.tgz"
   local port_file="$fixture_root/npm-registry-port"
   local log_file="$fixture_root/npm-registry.log"
-  mkdir -p "$package_dir"
-  FIXTURE_PACKAGE_DIR="$package_dir" node <<'NODE'
+  local registry_args=()
+
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    local manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
+    local registry_rows
+    registry_rows="$(
+      PREPUBLISH_PLUGIN_REGISTRY_MANIFEST="$manifest" node <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const manifestPath = process.env.PREPUBLISH_PLUGIN_REGISTRY_MANIFEST;
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+if (!Array.isArray(manifest.packages) || manifest.packages.length === 0) {
+  throw new Error("prepublish plugin registry manifest must contain packages");
+}
+for (const entry of manifest.packages) {
+  if (
+    typeof entry.name !== "string" ||
+    typeof entry.version !== "string" ||
+    typeof entry.tarball !== "string" ||
+    path.basename(entry.tarball) !== entry.tarball
+  ) {
+    throw new Error("invalid prepublish plugin registry package entry");
+  }
+  process.stdout.write(
+    `${entry.name}\t${entry.version}\t${path.join(path.dirname(manifestPath), entry.tarball)}\n`,
+  );
+}
+NODE
+    )"
+    while IFS=$'\t' read -r package_name package_version package_tarball; do
+      registry_args+=("$package_name" "$package_version" "$package_tarball")
+    done <<<"$registry_rows"
+  fi
+
+  if configured_plugin_installs_enabled; then
+    mkdir -p "$package_dir"
+    FIXTURE_PACKAGE_DIR="$package_dir" node <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 const root = process.env.FIXTURE_PACKAGE_DIR;
@@ -424,13 +460,19 @@ fs.writeFileSync(
   `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
 );
 NODE
-  tar -czf "$tarball" -C "$fixture_root" package
+    tar -czf "$tarball" -C "$fixture_root" package
+    registry_args+=("@openclaw/brave-plugin" "2026.5.2" "$tarball")
+  fi
+
+  if [ "${#registry_args[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  mkdir -p "$fixture_root"
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
-    "@openclaw/brave-plugin" \
-    "2026.5.2" \
-    "$tarball" \
+    "${registry_args[@]}" \
     >"$log_file" 2>&1 &
   plugin_registry_pid="$!"
 
@@ -448,7 +490,7 @@ NODE
   done
 
   openclaw_e2e_print_log "$log_file" >&2
-  echo "Timed out waiting for configured plugin install npm fixture registry." >&2
+  echo "Timed out waiting for upgrade survivor npm registry." >&2
   return 1
 }
 
@@ -1270,10 +1312,10 @@ phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase prepare-update-restart-probe prepare_update_restart_probe
+phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
-phase configure-configured-plugin-install-fixture-registry configure_configured_plugin_install_fixture_registry
 phase doctor run_doctor
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired

@@ -406,6 +406,9 @@ vi.mock("../model-runtime-aliases.js", async () => {
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
+vi.mock("../embedded-agent-runner/run-orchestrator.js", () => ({
+  runEmbeddedAgentInternal: runEmbeddedAgentMock,
+}));
 
 vi.mock("../session-write-lock.js", async () => {
   const actual = await vi.importActual<typeof import("../session-write-lock.js")>(
@@ -3607,6 +3610,22 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("replaces a legacy marker-backed automatic profile with the configured model profile", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "configured-auth-replaces-legacy-auto",
+      configuredAuthProfileId: "openai:verified",
+      sessionEntry: {
+        authProfileOverride: "openai:legacy-auto",
+        authProfileOverrideCompactionCount: 0,
+      },
+    });
+
+    expectRecordFields(embeddedArg, {
+      authProfileId: "openai:verified",
+      authProfileIdSource: "user",
+    });
+  });
+
   it("preserves an explicit session profile over the configured model profile", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
       runId: "session-auth-over-configured",
@@ -3619,6 +3638,21 @@ describe("CLI attempt execution", () => {
 
     expectRecordFields(embeddedArg, {
       authProfileId: "openai:session-choice",
+      authProfileIdSource: "user",
+    });
+  });
+
+  it("preserves a legacy source-less user profile over the configured model profile", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "legacy-session-auth-over-configured",
+      configuredAuthProfileId: "openai:verified",
+      sessionEntry: {
+        authProfileOverride: "openai:legacy-user",
+      },
+    });
+
+    expectRecordFields(embeddedArg, {
+      authProfileId: "openai:legacy-user",
       authProfileIdSource: "user",
     });
   });

@@ -1,4 +1,5 @@
 // Copilot plugin entrypoint registers its OpenClaw integration.
+import { createOpenClawCodingToolsForAgentHarness } from "openclaw/plugin-sdk/agent-harness-tool-authority-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
@@ -42,6 +43,7 @@ export default definePluginEntry({
 
     api.registerAgentHarness(
       createCopilotAgentHarness({
+        agentHarnessCodingToolsFactory: createOpenClawCodingToolsForAgentHarness,
         ...(poolOptions ? { poolOptions } : {}),
         sessionStore,
       }),

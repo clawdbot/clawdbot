@@ -294,6 +294,7 @@ describe("gateway agent handler", () => {
     );
 
     const callArgs = await waitForAgentCommandCall<{
+      executionAttribution?: Record<string, unknown>;
       sessionEffects?: string;
       suppressPromptPersistence?: boolean;
     }>();
@@ -322,6 +323,7 @@ describe("gateway agent handler", () => {
       lifecycleGeneration: "test-generation",
     });
     expect(Object.isFrozen(runContext.attribution)).toBe(true);
+    expect(callArgs.executionAttribution).toBe(runContext.attribution);
   });
 
   it("preserves the admitted idempotency key exactly in execution attribution", async () => {

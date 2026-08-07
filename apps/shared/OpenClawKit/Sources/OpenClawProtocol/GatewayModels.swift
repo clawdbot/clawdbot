@@ -5071,6 +5071,12 @@ public struct SessionRow: Codable, Sendable {
     public let derivedtitle: String?
     public let lastmessagepreview: String?
     public let channel: String?
+    public let classification: String?
+    public let agentid: String?
+    public let accountid: String?
+    public let peerkind: String?
+    public let ismain: Bool?
+    public let isbackground: Bool?
     public let chattype: AnyCodable?
     public let updatedat: AnyCodable?
     public let archived: Bool?
@@ -5128,6 +5134,12 @@ public struct SessionRow: Codable, Sendable {
         derivedtitle: String? = nil,
         lastmessagepreview: String? = nil,
         channel: String? = nil,
+        classification: String? = nil,
+        agentid: String? = nil,
+        accountid: String? = nil,
+        peerkind: String? = nil,
+        ismain: Bool? = nil,
+        isbackground: Bool? = nil,
         chattype: AnyCodable? = nil,
         updatedat: AnyCodable? = nil,
         archived: Bool? = nil,
@@ -5184,6 +5196,12 @@ public struct SessionRow: Codable, Sendable {
         self.derivedtitle = derivedtitle
         self.lastmessagepreview = lastmessagepreview
         self.channel = channel
+        self.classification = classification
+        self.agentid = agentid
+        self.accountid = accountid
+        self.peerkind = peerkind
+        self.ismain = ismain
+        self.isbackground = isbackground
         self.chattype = chattype
         self.updatedat = updatedat
         self.archived = archived
@@ -5242,6 +5260,12 @@ public struct SessionRow: Codable, Sendable {
         case derivedtitle = "derivedTitle"
         case lastmessagepreview = "lastMessagePreview"
         case channel
+        case classification
+        case agentid = "agentId"
+        case accountid = "accountId"
+        case peerkind = "peerKind"
+        case ismain = "isMain"
+        case isbackground = "isBackground"
         case chattype = "chatType"
         case updatedat = "updatedAt"
         case archived

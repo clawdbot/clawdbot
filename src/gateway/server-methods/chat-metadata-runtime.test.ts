@@ -240,6 +240,47 @@ describe("gateway chat metadata runtime", () => {
     );
   });
 
+  test.each([
+    {
+      name: "legacy source-less user",
+      sessionEntry: { authProfileOverride: "test:legacy-user" },
+      locked: true,
+    },
+    {
+      name: "legacy source-less automatic",
+      sessionEntry: {
+        authProfileOverride: "test:legacy-auto",
+        authProfileOverrideCompactionCount: 0,
+      },
+      locked: false,
+    },
+  ])("projects $name provenance", async ({ sessionEntry, locked }) => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+
+    await harness.runtime.readStartup({
+      agentId: "main",
+      sessionEntry,
+      includeSystem: false,
+    });
+
+    const projectionParams = harness.buildProjection.mock.calls.at(-1)?.[0];
+    expect(projectionParams).toEqual(
+      expect.objectContaining({
+        preferredProfileId: sessionEntry.authProfileOverride,
+      }),
+    );
+    if (locked) {
+      expect(projectionParams).toEqual(
+        expect.objectContaining({
+          lockedProfileId: sessionEntry.authProfileOverride,
+        }),
+      );
+    } else {
+      expect(projectionParams).not.toHaveProperty("lockedProfileId");
+    }
+  });
+
   test("keeps disk-only roster rows without projecting them", async () => {
     await withOpenClawTestState(
       {

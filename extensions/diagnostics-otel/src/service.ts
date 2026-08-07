@@ -1,6 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
 import { metrics, trace, type SpanContext } from "@opentelemetry/api";
-import { getBooleanFromEnv } from "@opentelemetry/core";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
@@ -49,6 +48,7 @@ import {
 } from "./service-exporter.js";
 import { createDiagnosticsLogExporter } from "./service-logs.js";
 import { createDiagnosticsMetrics } from "./service-metrics.js";
+import { registerDisabledSdkRuntime } from "./service-propagation.js";
 import { createDiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import { createHarnessRecorders } from "./service-recorders-harness.js";
 import { createModelRecorders } from "./service-recorders-model.js";
@@ -71,6 +71,20 @@ const OTEL_SIGNAL_PROTOCOL_ENV = {
   metrics: OTEL_EXPORTER_OTLP_METRICS_PROTOCOL_ENV,
   logs: OTEL_EXPORTER_OTLP_LOGS_PROTOCOL_ENV,
 } satisfies Record<TelemetryExporterDiagnosticEvent["signal"], string>;
+
+function isOtelSdkDisabled(logger: { warn(message: string): void }): boolean {
+  const value = process.env.OTEL_SDK_DISABLED?.trim().toLowerCase();
+  if (!value || value === "false") {
+    return false;
+  }
+  if (value === "true") {
+    return true;
+  }
+  logger.warn(
+    "diagnostics-otel: invalid OTEL_SDK_DISABLED value; expected true or false, using false",
+  );
+  return false;
+}
 
 function readNonblankOtelEnv(name: string): string | undefined {
   const value = process.env[name];
@@ -136,6 +150,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let unsubscribe: (() => void) | null = null;
   let unregisterTracePropagationBridge: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
+  let unregisterDisabledSdkRuntime: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
   let retireExporterRoutes: ((preserveFailures?: boolean) => void) | null = null;
   let preserveExporterRoutesOnNextStop = false;
@@ -146,6 +161,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
+    const currentUnregisterDisabledSdkRuntime = unregisterDisabledSdkRuntime;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
     const currentRetireExporterRoutes = retireExporterRoutes;
 
@@ -154,6 +170,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     logProvider = null;
     sdk = null;
     stopActiveTrustedSpans = null;
+    unregisterDisabledSdkRuntime = null;
     unregisterUnhandledRejectionHandler = null;
     retireExporterRoutes = options?.preserveExporterRoutes ? currentRetireExporterRoutes : null;
 
@@ -166,6 +183,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       currentUnregisterTracePropagationBridge,
       currentUnsubscribe,
       currentStopActiveTrustedSpans,
+      currentUnregisterDisabledSdkRuntime,
     );
     const providerFailures = await settle(
       currentLogProvider ? () => currentLogProvider.shutdown() : null,
@@ -204,8 +222,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
+      const sdkDisabled = isOtelSdkDisabled(ctx.logger);
       const sdkPreloaded = hasPreloadedOtelSdk();
-      const ownedNodeSdkDisabled = !sdkPreloaded && getBooleanFromEnv("OTEL_SDK_DISABLED");
+      if (!sdkPreloaded && sdkDisabled) {
+        // sdk-node returns before installing context or propagation when disabled.
+        // Preserve both while admitting no OpenClaw telemetry lifecycle.
+        unregisterDisabledSdkRuntime = registerDisabledSdkRuntime((message) =>
+          ctx.logger.warn(message),
+        );
+        return;
+      }
       const exporterRoutes = new Map<string, ExporterRouteState>();
       const internalDiagnostics = ctx.internalDiagnostics;
       const exporterHealthReporter = internalDiagnostics as unknown as
@@ -226,13 +252,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
       });
       const emitExporterEvent = createExporterHealthEventEmitter((event) => {
-        if (
-          ownedNodeSdkDisabled &&
-          event.transport === "otlp-http-protobuf" &&
-          (event.signal === "traces" || event.signal === "metrics")
-        ) {
-          return;
-        }
         const key = `${event.signal}\u0000${event.transport}`;
         if (event.status === "dropped") {
           exporterRoutes.delete(key);
@@ -253,7 +272,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       });
       const tracesEnabled = otel.traces !== false;
       const metricsEnabled = otel.metrics !== false;
-      const logsEnabled = otel.logs === true;
+      const logsEnabled = otel.logs === true && !sdkDisabled;
       const logsExporter: OtelLogsExporter = otel.logsExporter ?? "otlp";
       const logsToOtlpRequested =
         logsEnabled && (logsExporter === "otlp" || logsExporter === "both");
@@ -319,8 +338,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      const sharedEnvEndpoint = process.env[OTEL_EXPORTER_OTLP_ENDPOINT_ENV];
-      const endpoint = normalizeEndpoint(otel.endpoint ?? sharedEnvEndpoint);
+      const hasOwnedOtlpSignal = ownedOtlpSignals.length > 0;
+      const sharedEnvEndpoint = hasOwnedOtlpSignal
+        ? process.env[OTEL_EXPORTER_OTLP_ENDPOINT_ENV]
+        : undefined;
+      const endpoint = hasOwnedOtlpSignal
+        ? normalizeEndpoint(otel.endpoint ?? sharedEnvEndpoint)
+        : undefined;
       const headers = otel.headers ?? undefined;
       const serviceName =
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
@@ -532,17 +556,20 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           }) ?? null;
       }
 
-      unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
-        const otlpError = findOtlpExporterError(reason);
-        if (!otlpError) {
-          return false;
-        }
-        const code = readErrorCode(otlpError) ?? "unknown";
-        ctx.logger.warn(
-          `diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=${String(code)})`,
-        );
-        return true;
-      });
+      // Preserve the shipped preloaded-SDK crash guard, but own no handler while disabled.
+      if (hasOwnedOtlpSignal || (sdkPreloaded && !sdkDisabled)) {
+        unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
+          const otlpError = findOtlpExporterError(reason);
+          if (!otlpError) {
+            return false;
+          }
+          const code = readErrorCode(otlpError) ?? "unknown";
+          ctx.logger.warn(
+            `diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=${String(code)})`,
+          );
+          return true;
+        });
+      }
 
       const emitStarted = (
         signal: TelemetryExporterDiagnosticEvent["signal"],

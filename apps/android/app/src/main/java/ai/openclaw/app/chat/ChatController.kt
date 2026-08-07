@@ -6227,6 +6227,17 @@ class ChatController internal constructor(
       key = key,
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      classification = obj["classification"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      accountId = obj["accountId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      peerKind = obj["peerKind"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      isMain = obj["isMain"].asBooleanOrNull(),
+      isBackground = obj["isBackground"].asBooleanOrNull(),
+      hasClassificationMetadata =
+        "classification" in obj ||
+          "accountId" in obj ||
+          "peerKind" in obj ||
+          "isMain" in obj ||
+          "isBackground" in obj,
       displayName = obj["displayName"].asStringOrNull()?.trim(),
       derivedTitle = obj["derivedTitle"].asStringOrNull()?.trim(),
       label = obj["label"].asStringOrNull()?.trim(),
@@ -7139,6 +7150,12 @@ internal fun mergeChatSessionEntry(
   return existing.copy(
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
+    classification = if (next.hasClassificationMetadata) next.classification else existing.classification,
+    accountId = if (next.hasClassificationMetadata) next.accountId else existing.accountId,
+    peerKind = if (next.hasClassificationMetadata) next.peerKind else existing.peerKind,
+    isMain = if (next.hasClassificationMetadata) next.isMain else existing.isMain,
+    isBackground = if (next.hasClassificationMetadata) next.isBackground else existing.isBackground,
+    hasClassificationMetadata = existing.hasClassificationMetadata || next.hasClassificationMetadata,
     displayName = next.displayName ?: existing.displayName,
     label = next.label ?: existing.label,
     category = next.category ?: existing.category,

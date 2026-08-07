@@ -2,6 +2,7 @@ import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
+  type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import {
@@ -18,7 +19,15 @@ import type {
   SessionEntry,
 } from "./session-manager-types.js";
 
-type PersistRecordResult = string | null | undefined | { adoptedMessageId: string };
+type PersistRecordResult =
+  | string
+  | null
+  | undefined
+  | {
+      anchor?: TranscriptEntryAnchor;
+      adoptedMessageId?: string;
+      effectiveParentId: string | null;
+    };
 
 function requireTranscriptEventAppend(
   result: ReturnType<typeof appendTranscriptEventSync>,
@@ -229,7 +238,14 @@ export class SessionManagerPersistence extends SessionManagerCore {
       if (idempotencyKey && options?.idempotencyLookup !== "caller-checked") {
         // Ingress can commit the keyed user after this manager loaded. The
         // caller reloads and adopts only when that canonical row is still active.
-        return { adoptedMessageId: result.messageId };
+        if (!result.anchor) {
+          throw new Error(`Session transcript anchor was not returned: ${result.messageId}`);
+        }
+        return {
+          adoptedMessageId: result.messageId,
+          anchor: result.anchor,
+          effectiveParentId: result.effectiveParentId ?? null,
+        };
       }
       throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
     }
@@ -242,7 +258,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
-    return result.effectiveParentId;
+    return {
+      ...(result.anchor ? { anchor: result.anchor } : {}),
+      effectiveParentId: result.effectiveParentId,
+    };
   }
 
   mergePromptReleasedSessionEntries(
