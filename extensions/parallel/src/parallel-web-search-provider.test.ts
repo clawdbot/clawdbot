@@ -460,6 +460,45 @@ describe("parallel web search provider", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
+  it("redacts reflected credentials from Parallel API error bodies", async () => {
+    // No dictionary words: the value must be masked even when only the
+    // header-shaped (x-api-key: <value>) redaction can catch it.
+    const apiKey = "par-live-4c9d2e7ab1f0c9d2e7ab1f0c9d2e7";
+    endpointMockState.responses.push(
+      new Response(`<html><body>edge failure for request with x-api-key: ${apiKey}</body></html>`, {
+        status: 502,
+        statusText: "Bad Gateway",
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+    const error = await paidTool({ parallel: { apiKey } })
+      .execute({
+        objective: `parallel-error-redact-${Date.now()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Parallel API error (502)");
+    expect((error as Error).message).not.toContain(apiKey);
+  });
+  it("redacts credentials reflected in the statusText fallback when the body is empty", async () => {
+    const apiKey = "par-live-4c9d2e7ab1f0c9d2e7ab1f0c9d2e7";
+    endpointMockState.responses.push(
+      new Response("", {
+        status: 502,
+        statusText: `Bad Gateway reflected x-api-key: ${apiKey}`,
+      }),
+    );
+    const error = await paidTool({ parallel: { apiKey } })
+      .execute({
+        objective: `parallel-error-redact-reason-${Date.now()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Parallel API error (502)");
+    expect((error as Error).message).not.toContain(apiKey);
+  });
   it("bounds successful Parallel JSON bodies instead of buffering the whole response", async () => {
     const streamed = createStreamingResponse({
       chunkCount: 200,
