@@ -41,7 +41,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
-import { sanitizeExportPromptSubmittedData } from "./provenance-sanitization.js";
+import { TrajectoryProvenanceSanitizer } from "./provenance-sanitization.js";
 import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
@@ -916,11 +916,7 @@ function redactEventForExport(
   event: TrajectoryEvent,
   redaction: TrajectoryExportRedaction,
 ): TrajectoryEvent {
-  const sanitizedEvent =
-    event.type === "prompt.submitted" && event.data
-      ? { ...event, data: sanitizeExportPromptSubmittedData(event.data) }
-      : event;
-  return redactTrajectoryExportValue(sanitizedEvent, redaction) as TrajectoryEvent;
+  return redactTrajectoryExportValue(event, redaction) as TrajectoryEvent;
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
@@ -1240,23 +1236,32 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   });
   const runtimeFile = runtimeParse.runtimeFile;
   const runtimeEvents = runtimeParse.events;
-  assertCanonicalTrajectoryInputs(branchEntries, runtimeEvents);
-  const projectedBranchEntries = branchEntries;
+  const provenanceSanitizer = new TrajectoryProvenanceSanitizer({ mode: "export" });
+  const {
+    runtimeEvents: sanitizedRuntimeEvents,
+    branchEntries: sanitizedBranchEntries,
+    header: sanitizedHeader,
+  } = provenanceSanitizer.sanitizeExportSnapshot({
+    runtimeEvents,
+    branchEntries,
+    header,
+  });
+  assertCanonicalTrajectoryInputs(sanitizedBranchEntries, sanitizedRuntimeEvents);
   const transcriptEvents = buildTranscriptEvents({
-    entries: projectedBranchEntries,
+    entries: sanitizedBranchEntries,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     traceId: params.sessionId,
   });
   const maxTotalEvents = params.maxTotalEvents ?? MAX_TRAJECTORY_TOTAL_EVENTS;
-  const totalEventCount = runtimeEvents.length + transcriptEvents.length;
+  const totalEventCount = sanitizedRuntimeEvents.length + transcriptEvents.length;
   if (totalEventCount > maxTotalEvents) {
     throw new Error(
       `Trajectory export has too many events (${totalEventCount}; limit ${maxTotalEvents})`,
     );
   }
-  const rawEvents = sortTrajectoryEvents([...runtimeEvents, ...transcriptEvents]);
+  const rawEvents = sortTrajectoryEvents([...sanitizedRuntimeEvents, ...transcriptEvents]);
   const events = rawEvents.map((event) => redactEventForExport(event, redaction));
   const manifest: TrajectoryBundleManifest = {
     traceSchema: "openclaw-trajectory",
@@ -1268,7 +1273,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     workspaceDir: maybeRedactPathString(params.workspaceDir, redaction),
     leafId,
     eventCount: events.length,
-    runtimeEventCount: runtimeEvents.length,
+    runtimeEventCount: sanitizedRuntimeEvents.length,
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
       session: maybeRedactPathString(
@@ -1286,21 +1291,21 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     manifest.warnings = warnings;
   }
 
-  const bundleRuntimeContext = resolveRuntimeContext(runtimeEvents);
+  const bundleRuntimeContext = resolveRuntimeContext(sanitizedRuntimeEvents);
   const files: DiagnosticSupportBundleFile[] = [];
   const supplementalFiles: string[] = [];
   const metadataCapture = buildMetadataCapture({
     manifest,
-    runtimeEvents,
+    runtimeEvents: sanitizedRuntimeEvents,
     events: rawEvents,
   });
   const artifactsCapture = buildArtifactsCapture({
     manifest,
-    runtimeEvents,
+    runtimeEvents: sanitizedRuntimeEvents,
   });
   const promptsCapture = buildPromptsCapture({
     manifest,
-    runtimeEvents,
+    runtimeEvents: sanitizedRuntimeEvents,
     runtimeContext: bundleRuntimeContext,
   });
   if (metadataCapture) {
@@ -1337,9 +1342,9 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
       "session-branch.json",
       redactTrajectoryExportValue(
         {
-          header,
+          header: sanitizedHeader,
           leafId,
-          entries: projectedBranchEntries,
+          entries: sanitizedBranchEntries,
         },
         redaction,
       ),
@@ -1382,7 +1387,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     manifest: redactedManifest,
     outputDir: params.outputDir,
     events,
-    header,
+    header: sanitizedHeader,
     runtimeFile:
       runtimeFile && (await isRegularNonSymlinkFile(runtimeFile)) ? runtimeFile : undefined,
     supplementalFiles,

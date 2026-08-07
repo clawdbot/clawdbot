@@ -7,11 +7,16 @@ import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
+  loadTranscriptEvents,
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import {
@@ -21,12 +26,14 @@ import {
   resolveTrajectoryPointerFilePath,
 } from "./paths.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
 let tempDirId = 0;
 const SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
 const ORIGIN_SESSION_HASH_DOMAIN = "openclaw:trajectory:origin-session-id:v1";
+const PROVENANCE_TEXT_HASH_DOMAIN = "openclaw:trajectory:provenance-text:v1";
 
 function expectedSessionHash(domain: string, value: string): string {
   return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
@@ -934,7 +941,15 @@ describe("exportTrajectoryBundle", () => {
     const spoofedHash = `sha256:v1:${"f".repeat(64)}`;
     const canonicalSourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "canonical-source");
     const canonicalOriginHash = expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, "canonical-origin");
-    writeSimpleSessionFile(sessionFile);
+    writeSimpleSessionFile(sessionFile, {
+      userMessage: {
+        ...userMessage(`transcript echo ${rawSessionKey}`),
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: rawSessionKey,
+        },
+      } as Message,
+    });
     const origins: unknown[] = [
       {
         kind: "inter_session",
@@ -963,25 +978,37 @@ describe("exportTrajectoryBundle", () => {
         sourceSessionHash: "sha256:v1:not-a-canonical-hash",
       },
     ];
-    const runtimeEvents = origins.map(
-      (origin, index): TrajectoryEvent => ({
+    const runtimeEvents: TrajectoryEvent[] = [
+      {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
         traceId: "session-1",
         source: "runtime",
-        type: "prompt.submitted",
-        ts: `2026-04-22T08:00:0${index}.000Z`,
-        seq: index + 1,
-        sourceSeq: index + 1,
+        type: "context.compiled",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
         sessionId: "session-1",
-        data: { prompt: `prompt-${index}`, origin },
-      }),
-    );
-    fs.writeFileSync(
-      runtimeFile,
-      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
-      "utf8",
-    );
+        data: { prompt: `earlier echo ${rawSessionKey}` },
+      },
+      ...origins.map(
+        (origin, index): TrajectoryEvent => ({
+          traceSchema: "openclaw-trajectory",
+          schemaVersion: 1,
+          traceId: "session-1",
+          source: "runtime",
+          type: "prompt.submitted",
+          ts: `2026-04-22T08:00:0${index + 1}.000Z`,
+          seq: index + 2,
+          sourceSeq: index + 2,
+          sessionId: "session-1",
+          data: { prompt: `prompt-${index}`, origin },
+        }),
+      ),
+    ];
+    const runtimeBytes = `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    fs.writeFileSync(runtimeFile, runtimeBytes, "utf8");
+    const sessionBytes = fs.readFileSync(sessionFile, "utf8");
 
     const bundle = await exportTrajectoryBundle({
       outputDir,
@@ -993,6 +1020,9 @@ describe("exportTrajectoryBundle", () => {
 
     const exportedPrompts = bundle.events.filter(
       (event) => event.source === "runtime" && event.type === "prompt.submitted",
+    );
+    expect(bundle.events.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
+      `earlier echo ${expectedSessionHash(PROVENANCE_TEXT_HASH_DOMAIN, rawSessionKey)}`,
     );
     expect(exportedPrompts[0]?.data?.origin).toEqual({
       kind: "inter_session",
@@ -1018,6 +1048,216 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedText).not.toContain(spoofedHash);
     expect(exportedText).not.toContain("nested-secret");
     expect(exportedText).not.toContain("drop-me");
+    expect(fs.readFileSync(sessionFile, "utf8")).toBe(sessionBytes);
+    expect(fs.readFileSync(runtimeFile, "utf8")).toBe(runtimeBytes);
+    expect(sessionBytes).toContain(rawSessionKey);
+    expect(runtimeBytes).toContain(rawSessionKey);
+  });
+
+  it("removes a seeded provenance identity from SQLite and every export artifact", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    const outputDir = path.join(tmpDir, "bundle");
+    const sessionId = "session-1";
+    const sessionKey = "agent:main:session-1";
+    const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: rawSessionKey,
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    };
+    const transcriptScope = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    await replaceTranscriptEvents(transcriptScope, [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-user",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: {
+          ...userMessage(`canonical transcript ${rawSessionKey}`),
+          provenance: inputProvenance,
+        } as Message,
+      },
+      {
+        type: "message",
+        id: "entry-assistant",
+        parentId: "entry-user",
+        timestamp: "2026-04-01T05:46:41.000Z",
+        message: assistantMessage([
+          { type: "text", text: `canonical assistant echo ${rawSessionKey}` },
+        ]),
+      },
+    ]);
+    const transcriptBefore = await loadTranscriptEvents(transcriptScope);
+    const transcriptBytesBefore = JSON.stringify(transcriptBefore);
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId,
+      sessionKey,
+      sessionTarget: transcriptScope,
+      inputProvenance,
+      workspaceDir: tmpDir,
+    });
+    const runtimeRecorder = expectDefined(recorder, "SQLite trajectory recorder");
+    runtimeRecorder.recordEvent("context.compiled", {
+      systemPrompt: `system ${rawSessionKey}`,
+      prompt: `compiled before prompt ${rawSessionKey}`,
+      tools: [{ name: "read", description: `tool ${rawSessionKey}` }],
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: `snapshot ${rawSessionKey}` }],
+        },
+      ],
+    });
+    runtimeRecorder.recordEvent("trace.metadata", {
+      harness: { type: "openclaw" },
+      prompting: {
+        skillsPrompt: `skills ${rawSessionKey}`,
+        userPromptPrefixText: `prefix ${rawSessionKey}`,
+      },
+    });
+    runtimeRecorder.recordEvent("model.completed", {
+      assistantTexts: [`assistant ${rawSessionKey}`],
+      messagesSnapshot: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: `content block ${rawSessionKey}` }],
+        },
+      ],
+    });
+    runtimeRecorder.recordEvent("trace.artifacts", {
+      finalStatus: "completed",
+      finalPromptText: `final prompt ${rawSessionKey}`,
+      assistantTexts: [`artifact ${rawSessionKey}`],
+      snapshot: { [rawSessionKey]: rawSessionKey },
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: `submitted ${rawSessionKey}`,
+      origin: inputProvenance,
+    });
+    await runtimeRecorder.flush();
+
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+    const rows = database.db
+      .prepare(
+        "SELECT event_json FROM trajectory_runtime_events WHERE session_id = ? ORDER BY seq ASC",
+      )
+      .all(sessionId) as Array<{ event_json: string }>;
+    const sqliteRawKeyPresent = rows.some((row) => row.event_json.includes(rawSessionKey));
+    expect(sqliteRawKeyPresent).toBe(false);
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: transcriptScope,
+      sessionId,
+      sessionKey,
+      workspaceDir: tmpDir,
+    });
+
+    const bundleFiles = fs.readdirSync(outputDir).toSorted();
+    expect(bundleFiles).toEqual([
+      "artifacts.json",
+      "events.jsonl",
+      "manifest.json",
+      "metadata.json",
+      "prompts.json",
+      "session-branch.json",
+      "system-prompt.txt",
+      "tools.json",
+    ]);
+    for (const file of bundleFiles) {
+      expect(fs.readFileSync(path.join(outputDir, file), "utf8"), file).not.toContain(
+        rawSessionKey,
+      );
+    }
+    expect(JSON.stringify(bundle.events)).not.toContain(rawSessionKey);
+    const textHash = expectedSessionHash(PROVENANCE_TEXT_HASH_DOMAIN, rawSessionKey);
+    expect(JSON.stringify(bundle.events)).toContain(textHash);
+    const sessionBranch = JSON.parse(
+      fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"),
+    ) as {
+      entries?: Array<{ message?: { provenance?: unknown } }>;
+    };
+    expect(sessionBranch.entries?.[0]?.message?.provenance).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    });
+    const transcriptAfter = await loadTranscriptEvents(transcriptScope);
+    expect(JSON.stringify(transcriptAfter)).toBe(transcriptBytesBefore);
+    expect(JSON.stringify(transcriptAfter)).toContain(rawSessionKey);
+  });
+
+  it.each([
+    {
+      name: "oversized identity",
+      identities: ["x".repeat(4097)],
+      error: /identity longer than 4096 characters/u,
+    },
+    {
+      name: "identity count overflow",
+      identities: Array.from(
+        { length: 65 },
+        (_value, index) => `export-identity-${index.toString().padStart(3, "0")}`,
+      ),
+      error: /more than 64 identities/u,
+    },
+  ])("refuses $name before creating export files", async ({ identities, error }) => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvents = identities.map(
+      (identity, index): TrajectoryEvent => ({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "prompt.submitted",
+        ts: `2026-04-22T08:00:00.${index.toString().padStart(3, "0")}Z`,
+        seq: index + 1,
+        sourceSeq: index + 1,
+        sessionId: "session-1",
+        data: {
+          origin: {
+            kind: "inter_session",
+            sourceSessionKey: identity,
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+        runtimeFile,
+      }),
+    ).rejects.toThrow(error);
+    expect(fs.existsSync(outputDir)).toBe(false);
   });
 
   it("rejects oversized runtime trajectory files", async () => {

@@ -19,7 +19,7 @@ import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
-import { sanitizeLivePromptSubmittedData } from "./provenance-sanitization.js";
+import { TrajectoryProvenanceSanitizer } from "./provenance-sanitization.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
@@ -35,6 +35,7 @@ type TrajectoryRuntimeInit = {
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
+  inputProvenance?: unknown;
   workspaceDir?: string;
   writer?: TrajectoryRuntimeWriter;
 };
@@ -240,11 +241,11 @@ function limitTrajectoryPayloadValue(
 }
 
 function sanitizeTrajectoryPayload(
+  provenanceSanitizer: TrajectoryProvenanceSanitizer,
   type: string,
   data: Record<string, unknown>,
 ): Record<string, unknown> {
-  const provenanceSanitizedData =
-    type === "prompt.submitted" ? sanitizeLivePromptSubmittedData(data) : data;
+  const provenanceSanitizedData = provenanceSanitizer.sanitizeEventData(type, data);
   const finalPromptText = provenanceSanitizedData.finalPromptText;
   const redactedFinalPromptText =
     typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;
@@ -460,6 +461,10 @@ export function createTrajectoryRuntimeRecorder(
   }
   let seq = 0;
   const traceId = params.sessionId;
+  const provenanceSanitizer = new TrajectoryProvenanceSanitizer({
+    mode: "live",
+    inputProvenance: params.inputProvenance,
+  });
 
   const buildEvent = (
     type: string,
@@ -483,7 +488,7 @@ export function createTrajectoryRuntimeRecorder(
       provider: params.provider,
       modelId: params.modelId,
       modelApi: params.modelApi,
-      data: data ? sanitizeTrajectoryPayload(type, data) : undefined,
+      data: data ? sanitizeTrajectoryPayload(provenanceSanitizer, type, data) : undefined,
     };
     const line = safeJsonStringify(event);
     if (!line) {

@@ -50,6 +50,7 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
         provider: attempt.provider,
         modelId: attempt.modelId,
         modelApi: attempt.model.api,
+        inputProvenance: attempt.inputProvenance,
         workspaceDir: attempt.workspaceDir,
       });
   recorder?.recordEvent("session.started", {
