@@ -367,6 +367,104 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("adopts a sessions_yield-paused subagent row when a plugin follows it up", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-plugin-subagent-yield-followup-" },
+      async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        resetSubagentRegistryForTests({ persist: false });
+        const childSessionKey = "agent:work:subagent:yield-followup";
+        const parentSessionKey = "agent:main:telegram:direct:555";
+        const followUpRunId = "plugin-followup-run";
+        // The parent spawned this child expecting a completion message, then the
+        // child parked itself with sessions_yield: terminal execution, no outcome.
+        const pausedRun = {
+          runId: "parent-spawned-paused-run",
+          childSessionKey,
+          controllerSessionKey: "agent:work:main",
+          requesterSessionKey: parentSessionKey,
+          requesterDisplayKey: parentSessionKey,
+          task: "original spawned task",
+          cleanup: "keep" as const,
+          createdAt: 1,
+          expectsCompletionMessage: true,
+          pauseReason: "sessions_yield" as const,
+          execution: {
+            status: "terminal" as const,
+            startedAt: 2,
+            endedAt: 3,
+          },
+        };
+
+        const cfg = {
+          session: { mainKey: "main", scope: "per-sender" },
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+            list: [{ id: "main", default: true }, { id: "work" }],
+          },
+        };
+        mocks.listAgentIds.mockReturnValue(["main", "work"]);
+        mocks.loadConfigReturn = cfg;
+        mocks.loadSessionEntry.mockReturnValue({
+          cfg,
+          storePath: "/tmp/sessions.json",
+          entry: { sessionId: "yield-followup-session", updatedAt: Date.now() },
+          canonicalKey: childSessionKey,
+        });
+        mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+          const store: Record<string, unknown> = {
+            [childSessionKey]: { sessionId: "yield-followup-session", updatedAt: Date.now() },
+          };
+          return await updater(store);
+        });
+        mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(pausedRun);
+        mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
+        mocks.agentCommand.mockResolvedValue({
+          payloads: [{ text: "follow-up done" }],
+          meta: { durationMs: 100 },
+        });
+        const context = makeContext();
+        const baseClient = requireValue(backendGatewayClient(), "expected backend client");
+        const pluginClient: AgentHandlerArgs["client"] = {
+          connect: baseClient.connect,
+          internal: {
+            ...baseClient.internal,
+            agentRunTracking: "plugin_subagent",
+            pluginRuntimeOwnerId: "memory-core",
+          },
+        };
+
+        await invokeAgent(
+          {
+            message: "continue the parked work",
+            sessionKey: childSessionKey,
+            idempotencyKey: followUpRunId,
+          },
+          { context, reqId: followUpRunId, client: pluginClient },
+        );
+
+        // Gateway admission must adopt the paused row through the same reactivation
+        // the execution phase already uses. Minting a row here instead outranks the
+        // paused row and degrades its requester to the child's own main session, so
+        // the parent waiting on this child never receives its announce.
+        expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
+          previousRunId: pausedRun.runId,
+          nextRunId: followUpRunId,
+          fallback: pausedRun,
+          runTimeoutSeconds: 0,
+          task: "continue the parked work",
+        });
+        expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
+      },
+    );
+  });
+
   it("rejects plugin SDK subagent runs and releases admission when registry persistence fails", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },

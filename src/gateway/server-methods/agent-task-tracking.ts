@@ -15,6 +15,7 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -161,6 +162,16 @@ export async function registerPluginSubagentRunFromGateway(params: {
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
   if (!childSessionKey) {
+    return;
+  }
+
+  if (
+    await reactivateCompletedSubagentSession({
+      sessionKey: childSessionKey,
+      runId: params.runId,
+      task: params.task,
+    })
+  ) {
     return;
   }
   const ownerSessionKey = resolveAgentMainSessionKey({
