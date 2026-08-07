@@ -15,6 +15,7 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import {
   registerPluginHttpRoute,
   withPluginHttpRouteRegistry,
@@ -139,6 +140,9 @@ describe("Gateway hosted web surfaces", () => {
 
       await withEnvAsync(
         {
+          ...Object.fromEntries(
+            GATEWAY_STARTUP_MUTATED_ENV_KEYS.map((key) => [key, process.env[key]]),
+          ),
           HOME: root,
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
