@@ -72,7 +72,7 @@ export const ConnectParamsSchema = closedObject({
   userAgent: Type.Optional(Type.String()),
 });
 
-/** Successful gateway hello response with negotiated protocol and initial state. */
+/** Successful gateway hello response with the server protocol and initial state. */
 export const HelloOkSchema = closedObject({
   type: Type.Literal("hello-ok"),
   protocol: Type.Integer({ minimum: 1 }),
