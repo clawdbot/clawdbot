@@ -1,11 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  createAgentExecutionAttribution,
-  type AgentExecutionIdentityAdmission,
-  type AgentExecutionAttribution,
-} from "../../agents/agent-execution-attribution.js";
-import {
   clearEmbeddedAgentRunAbortabilityForRunId,
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
@@ -50,7 +45,6 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export type PreparedAgentRunDispatch = {
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
-  attribution: AgentExecutionAttribution;
   effectiveProviderOverride?: string;
   effectiveModelOverride?: string;
   effectiveThinking?: string;
@@ -92,7 +86,6 @@ export async function prepareAgentRunDispatch(params: {
   inputProvenance?: InputProvenance;
   isOneShotModelRun: boolean;
   isRestartRecoveryResumeRun: boolean;
-  executionIdentityAdmission?: AgentExecutionIdentityAdmission;
   runId: string;
   agentDedupeKeys: readonly string[];
   context: GatewayRequestHandlerOptions["context"];
@@ -259,16 +252,6 @@ export async function prepareAgentRunDispatch(params: {
     });
     return undefined;
   }
-  const attribution = createAgentExecutionAttribution({
-    runId: params.runId,
-    lifecycleGeneration: params.lifecycleGeneration,
-    sessionKey: params.resolvedSessionKey,
-    sessionId: params.getAdmittedSessionId(),
-    agentId: params.activeSessionAgentId,
-    ...(params.executionIdentityAdmission
-      ? { executionIdentityAdmission: params.executionIdentityAdmission }
-      : {}),
-  });
   if (!activeRunAbort.registered) {
     activeGatewayWorkAdmission.release();
   } else {
@@ -280,14 +263,15 @@ export async function prepareAgentRunDispatch(params: {
       });
     }
     if (params.resolvedSessionKey) {
-      claimAgentRunContext(params.runId, {
-        attribution,
-        ...(attribution.sessionKey ? { sessionKey: attribution.sessionKey } : {}),
-        ...(attribution.sessionId ? { sessionId: attribution.sessionId } : {}),
-        ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
-        ...(params.suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
-        lifecycleGeneration: attribution.lifecycleGeneration,
-      });
+      claimAgentRunContext(
+        params.runId,
+        params.suppressVisibleSessionEffects
+          ? { isControlUiVisible: false, lifecycleGeneration: params.lifecycleGeneration }
+          : {
+              sessionKey: params.resolvedSessionKey,
+              lifecycleGeneration: params.lifecycleGeneration,
+            },
+      );
     }
   }
 
@@ -450,7 +434,6 @@ export async function prepareAgentRunDispatch(params: {
   return {
     activeGatewayWorkAdmission,
     activeRunAbort,
-    attribution,
     effectiveProviderOverride,
     effectiveModelOverride,
     effectiveThinking,
