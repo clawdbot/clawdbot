@@ -1910,3 +1910,49 @@ describe("containerRemoveReaction", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("container REST response UTF-8 decoding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function byteBodyStream(bytes: Uint8Array): { body: ReadableStream<Uint8Array> } {
+    return {
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    };
+  }
+
+  it("rejects invalid UTF-8 in container REST success JSON", async () => {
+    const raw = Buffer.concat([
+      Buffer.from('{"version":"1.'),
+      Buffer.from([0xff]),
+      Buffer.from('0"}'),
+    ]);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...byteBodyStream(new Uint8Array(raw)),
+    });
+
+    await expect(
+      containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" }),
+    ).rejects.toThrow(/not valid for encoding utf-8/i);
+  });
+
+  it("keeps valid UTF-8 container REST success JSON unchanged (negative control)", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ version: "1.0" })),
+    });
+
+    await expect(
+      containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" }),
+    ).resolves.toEqual({ version: "1.0" });
+  });
+});
