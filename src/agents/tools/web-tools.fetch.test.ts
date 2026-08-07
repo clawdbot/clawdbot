@@ -200,7 +200,7 @@ describe("web_fetch extraction fallbacks", () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 6000);
         });
-        return textResponse("Loaded page", resolveRequestUrl(input)) as Response;
+        return textResponse("Loaded page", resolveRequestUrl(input));
       });
       const updates: unknown[] = [];
       const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -277,7 +277,7 @@ describe("web_fetch extraction fallbacks", () => {
             { once: true },
           );
           setTimeout(() => {
-            resolve(textResponse("Loaded page") as Response);
+            resolve(textResponse("Loaded page"));
           }, 6000);
         });
       });
@@ -378,7 +378,7 @@ describe("web_fetch extraction fallbacks", () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 6000);
         });
-        return textResponse("Loaded page", resolveRequestUrl(input)) as Response;
+        return textResponse("Loaded page", resolveRequestUrl(input));
       });
       const tool = createFetchTool({ firecrawl: { enabled: false } });
       const onUpdate = vi.fn(() => {
@@ -612,7 +612,7 @@ describe("web_fetch extraction fallbacks", () => {
       const url = resolveRequestUrl(input);
       return Promise.resolve(
         htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
-      ) as Promise<Response>;
+      );
     });
 
     resolveWebFetchDefinitionMock.mockReturnValue({
@@ -635,11 +635,8 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(
-          htmlResponse("<html><body>hi</body></html>", resolveRequestUrl(input)),
-        ) as Promise<Response>,
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(htmlResponse("<html><body>hi</body></html>", resolveRequestUrl(input))),
     );
 
     const tool = createFetchTool({
@@ -653,14 +650,13 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("throws when readability is empty and the provider fallback yields no content", async () => {
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(
-          htmlResponse(
-            "<!doctype html><html><head></head><body></body></html>",
-            resolveRequestUrl(input),
-          ),
-        ) as Promise<Response>,
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        htmlResponse(
+          "<!doctype html><html><head></head><body></body></html>",
+          resolveRequestUrl(input),
+        ),
+      ),
     );
 
     resolveWebFetchDefinitionMock.mockReturnValue({
@@ -681,14 +677,13 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("falls back to basic HTML cleanup after readability and before giving up", async () => {
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(
-          htmlResponse(
-            "<!doctype html><html><head><title>Shell App</title></head><body><div id='app'></div></body></html>",
-            resolveRequestUrl(input),
-          ),
-        ) as Promise<Response>,
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        htmlResponse(
+          "<!doctype html><html><head><title>Shell App</title></head><body><div id='app'></div></body></html>",
+          resolveRequestUrl(input),
+        ),
+      ),
     );
 
     const tool = createFetchTool({
@@ -734,9 +729,8 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("wraps external content and clamps oversized maxChars", async () => {
     const large = "a".repeat(80_000);
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(textResponse(large, resolveRequestUrl(input))) as Promise<Response>,
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(textResponse(large, resolveRequestUrl(input))),
     );
 
     const tool = createFetchTool({
@@ -756,9 +750,8 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("rejects fractional maxChars before fetching", async () => {
-    const fetchMock = installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(textResponse("unused", resolveRequestUrl(input))) as Promise<Response>,
+    const fetchMock = installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(textResponse("unused", resolveRequestUrl(input))),
     );
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -778,11 +771,10 @@ describe("web_fetch extraction fallbacks", () => {
       "<!doctype html><html><head><title>Not Found</title></head><body><h1>Not Found</h1><p>" +
       long +
       "</p></body></html>";
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(
-          errorHtmlResponse(html, 404, resolveRequestUrl(input), "Text/HTML; charset=utf-8"),
-        ) as Promise<Response>,
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        errorHtmlResponse(html, 404, resolveRequestUrl(input), "Text/HTML; charset=utf-8"),
+      ),
     );
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });
@@ -802,11 +794,8 @@ describe("web_fetch extraction fallbacks", () => {
   it("strips HTML errors when content-type is missing", async () => {
     const html =
       "<!DOCTYPE HTML><html><head><title>Oops</title></head><body><h1>Oops</h1></body></html>";
-    installMockFetch(
-      (input: RequestInfo | URL) =>
-        Promise.resolve(
-          errorHtmlResponse(html, 500, resolveRequestUrl(input), null),
-        ) as Promise<Response>,
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(errorHtmlResponse(html, 500, resolveRequestUrl(input), null)),
     );
 
     const tool = createFetchTool({ firecrawl: { enabled: false } });
