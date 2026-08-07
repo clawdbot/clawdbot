@@ -56,12 +56,15 @@ vi.mock("./embedded-agent.js", () => ({
   compactEmbeddedAgentSession: (params: unknown) =>
     compactState.compactEmbeddedAgentSessionMock(params),
   queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
-  runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
   abortEmbeddedAgentRun: (sessionId: string) => {
     abortEmbeddedAgentRunMock(sessionId);
     return abortEmbeddedAgentRun(sessionId);
   },
   isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActive(sessionId),
+}));
+
+vi.mock("./embedded-agent-runner/run-orchestrator.js", () => ({
+  runEmbeddedAgentInternal: (params: unknown) => runEmbeddedAgentMock(params),
 }));
 
 vi.mock("./cli-runner.js", () => ({
@@ -122,6 +125,8 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 
 vi.mock("./subagent-registry.js", () => ({
   getLatestSubagentRunByChildSessionKey: () => null,
+  getSwarmRunByLaunchReplayKey: () => undefined,
+  initSubagentRegistry: () => {},
   listSubagentRunsForController: () => [],
   markSubagentRunTerminated: () => 0,
 }));
