@@ -6,11 +6,13 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { SessionUsageTimeSeries } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { SessionLogEntry } from "./types.ts";
+import type { UsageRouteData } from "./usage-page.ts";
 import "./usage-page.ts";
 
 type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
   providerUsageUnavailable: boolean;
+  routeData: UsageRouteData;
   usageError: string | null;
   usageSelectedSessions: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
