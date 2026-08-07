@@ -203,7 +203,7 @@ describe("buildSessionContext", () => {
             },
             stopReason: "toolUse",
             timestamp: Date.parse(timestamp),
-          },
+          } as unknown as Extract<SessionTreeEntry, { type: "message" }>["message"],
         },
         {
           type: "message",
@@ -217,7 +217,7 @@ describe("buildSessionContext", () => {
             content: [{ type: "text", text: "paired tool result" }],
             isError: false,
             timestamp: Date.parse(timestamp),
-          } as unknown as SessionTreeEntry["message"],
+          } as unknown as Extract<SessionTreeEntry, { type: "message" }>["message"],
         },
         {
           type: "message",
@@ -282,7 +282,7 @@ describe("buildSessionContext", () => {
           },
           stopReason: "toolUse",
           timestamp: Date.parse(timestamp),
-        },
+        } as unknown as Extract<SessionTreeEntry, { type: "message" }>["message"],
       },
       {
         type: "message",
@@ -296,7 +296,7 @@ describe("buildSessionContext", () => {
           content: [{ type: "text", text: "first paired result" }],
           isError: false,
           timestamp: Date.parse(timestamp),
-        } as unknown as SessionTreeEntry["message"],
+        } as unknown as Extract<SessionTreeEntry, { type: "message" }>["message"],
       },
       {
         type: "message",
@@ -319,7 +319,7 @@ describe("buildSessionContext", () => {
           },
           stopReason: "toolUse",
           timestamp: Date.parse(timestamp),
-        },
+        } as unknown as Extract<SessionTreeEntry, { type: "message" }>["message"],
       },
       {
         type: "message",
@@ -333,7 +333,7 @@ describe("buildSessionContext", () => {
           content: [{ type: "text", text: "second paired result" }],
           isError: false,
           timestamp: Date.parse(timestamp),
-        } as unknown as SessionTreeEntry["message"],
+        } as unknown as Extract<SessionTreeEntry, { type: "message" }>["message"],
       },
       {
         type: "message",

@@ -441,7 +441,9 @@ describe("session-entry compaction budgeting", () => {
         createMessageEntry(
           {
             ...createAssistant("", createUsage(2), 3),
-            content: [{ type: blockType, id: "call-1", name: "read", arguments: {} }],
+            content: [
+              { type: blockType, id: "call-1", name: "read", arguments: {} },
+            ] as unknown as AssistantMessage["content"],
             stopReason: "toolUse",
           },
           2,
