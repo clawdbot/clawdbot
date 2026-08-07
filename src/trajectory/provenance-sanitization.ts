@@ -8,7 +8,7 @@ import {
   type DiagnosticPayloadProjectionReason,
 } from "../agents/payload-redaction.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { redactSensitiveFieldValue } from "../logging/redact.js";
+import { isSensitiveFieldKey, redactSensitiveFieldValue } from "../logging/redact.js";
 import {
   maskStructuredFieldValue,
   shouldRedactStructuredAuthorizationCode,
@@ -90,7 +90,21 @@ function fieldPath(context: DiagnosticPayloadProjectionContext): string[] {
   return pathParts(context.path).filter((part): part is string => typeof part === "string");
 }
 
+function nearestSensitiveFieldKey(context: DiagnosticPayloadProjectionContext): string | undefined {
+  // Sensitive ancestry must override leaf-specific exemptions such as diagnostic code paths.
+  for (let current = context.path; current; current = current.parent) {
+    if (typeof current.key === "string" && isSensitiveFieldKey(current.key)) {
+      return current.key;
+    }
+  }
+  return undefined;
+}
+
 function redactPrimitiveAtPath(value: string, context: DiagnosticPayloadProjectionContext): string {
+  const sensitiveKey = nearestSensitiveFieldKey(context);
+  if (sensitiveKey) {
+    return redactSensitiveFieldValue(sensitiveKey, value);
+  }
   const key = fieldName(context);
   return shouldRedactStructuredAuthorizationCode(key, fieldPath(context))
     ? maskStructuredFieldValue(value)
@@ -116,7 +130,8 @@ function projectTrajectoryValue(
       const primitiveText = String(entry);
       return redactPrimitiveAtPath(primitiveText, context) === primitiveText ? entry : "***";
     },
-    redactString: (text, context) => redactSensitiveFieldValue(fieldName(context), text),
+    redactString: (text, context) =>
+      redactSensitiveFieldValue(nearestSensitiveFieldKey(context) ?? fieldName(context), text),
     transformString: (text, context) => {
       const transformed = options.transformString?.(text, context) ?? text;
       return shouldRedactStructuredAuthorizationCode(fieldName(context), fieldPath(context))

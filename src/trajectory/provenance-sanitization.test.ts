@@ -115,19 +115,27 @@ describe("TrajectoryProvenanceSanitizer", () => {
     const data = {
       assistantTexts: [`${nestedTargetIdentity} ${targetIdentity} ${sourceIdentity}`],
       finalPromptText: `${nestedTargetIdentity} ${targetIdentity} ${sourceIdentity}`,
+      key: { echo: nestedTargetIdentity },
+      sessionCount: { echo: nestedTargetIdentity },
     };
     const original = structuredClone(data);
 
     const sanitized = sanitizer.sanitizeEventData("model.completed", data);
 
+    const nestedTargetHash = expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, nestedTargetIdentity);
     const expectedText = [
-      expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, nestedTargetIdentity),
+      nestedTargetHash,
       expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, targetIdentity),
       expectedHash(PROVENANCE_TEXT_HASH_DOMAIN, sourceIdentity),
     ].join(" ");
     expect(data).toEqual(original);
     expect(sanitized.assistantTexts).toEqual([expectedText]);
     expect(sanitized.finalPromptText).toBe(expectedText);
+    const sanitizedKey = sanitized.key as { echo: string };
+    const sanitizedSessionCount = sanitized.sessionCount as { echo: string };
+    expect(sanitizedKey.echo).not.toBe(nestedTargetIdentity);
+    expect(sanitizedKey.echo).not.toBe(nestedTargetHash);
+    expect(sanitizedSessionCount.echo).toBe(nestedTargetHash);
   });
 
   it("does not learn target identities from payloads, hashes, or non-result options", () => {
@@ -390,6 +398,149 @@ describe("TrajectoryProvenanceSanitizer", () => {
     expect(JSON.stringify(sanitized)).toBe(JSON.stringify(data));
     expect(sanitized).not.toBe(data);
     expect(sanitized.messagesSnapshot).not.toBe(data.messagesSnapshot);
+  });
+
+  it("redacts nested strings, primitives, and arrays under sensitive exact keys", () => {
+    const secrets = {
+      authorization: "opaque-authorization-descendant-1234567890",
+      key: "opaque-key-descendant-1234567890",
+      session: "opaque-session-descendant-1234567890",
+      signature: "opaque-signature-descendant-1234567890",
+      token: "opaque-token-descendant-1234567890",
+    };
+    const safeValue = "visible-session-count-value";
+    const data = {
+      key: {
+        value: secrets.key,
+        primitive: 123_456,
+        values: [secrets.key, false, { nested: secrets.key }],
+      },
+      session: {
+        value: secrets.session,
+        primitive: 123_456,
+        values: [secrets.session, false, { nested: secrets.session }],
+      },
+      signature: {
+        value: secrets.signature,
+        primitive: 123_456,
+        values: [secrets.signature, false, { nested: secrets.signature }],
+      },
+      token: {
+        value: secrets.token,
+        primitive: 123_456,
+        values: [secrets.token, false, { nested: secrets.token }],
+      },
+      authorization: {
+        value: secrets.authorization,
+        primitive: 123_456,
+        values: [secrets.authorization, false, { nested: secrets.authorization }],
+      },
+      sessionCount: {
+        value: safeValue,
+        primitive: 123_456,
+        values: [safeValue, false, { nested: safeValue }],
+      },
+    };
+    const original = structuredClone(data);
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+
+    const sanitized = sanitizer.sanitizeEventData("model.completed", data);
+
+    expect(data).toEqual(original);
+    const serialized = JSON.stringify(sanitized);
+    for (const secret of Object.values(secrets)) {
+      expect(serialized).not.toContain(secret);
+    }
+    for (const key of ["key", "session", "signature"] as const) {
+      const projected = sanitized[key] as {
+        primitive: unknown;
+        value: unknown;
+        values: [unknown, unknown, { nested: unknown }];
+      };
+      expect(projected.value).not.toBe(secrets[key]);
+      expect(projected.primitive).toBe("***");
+      expect(projected.values[0]).not.toBe(secrets[key]);
+      expect(projected.values[1]).toBe("***");
+      expect(projected.values[2].nested).not.toBe(secrets[key]);
+    }
+    expect(sanitized).not.toHaveProperty("token");
+    expect(sanitized).not.toHaveProperty("authorization");
+    expect(sanitized.sessionCount).toEqual(data.sessionCount);
+  });
+
+  it("lets sensitive ancestors override diagnostic code exemptions", () => {
+    const sensitiveCodes = {
+      error: "ERR_SENSITIVE_ERROR_1234567890",
+      status: "SENSITIVE_STATUS_1234567890",
+      details: "SENSITIVE_DETAILS_1234567890",
+      warning: "sensitive-warning-1234567890",
+    };
+    const ordinaryCodes = {
+      error: "ERR_TOOL_FAILED",
+      status: "RETRY_REQUIRED",
+      details: "DETAILS_VISIBLE",
+      warning: "invalid-runtime-event",
+    };
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+
+    const sanitized = sanitizer.sanitizeEventData("model.completed", {
+      ordinary: {
+        error: { code: ordinaryCodes.error },
+        status: { code: ordinaryCodes.status },
+        details: { code: ordinaryCodes.details },
+        warnings: [{ code: ordinaryCodes.warning }],
+      },
+      session: {
+        error: { code: sensitiveCodes.error },
+        status: { code: sensitiveCodes.status },
+        details: { code: sensitiveCodes.details },
+        warnings: [{ code: sensitiveCodes.warning }],
+      },
+    });
+
+    expect(sanitized.ordinary).toEqual({
+      error: { code: ordinaryCodes.error },
+      status: { code: ordinaryCodes.status },
+      details: { code: ordinaryCodes.details },
+      warnings: [{ code: ordinaryCodes.warning }],
+    });
+    const serialized = JSON.stringify(sanitized.session);
+    for (const code of Object.values(sensitiveCodes)) {
+      expect(serialized).not.toContain(code);
+    }
+  });
+
+  it("keeps sensitive ancestry through arrays and circular references", () => {
+    const secret = "opaque-circular-session-value-1234567890";
+    const session: Record<string, unknown> = {
+      value: secret,
+      values: [secret, 17],
+    };
+    session.self = session;
+    const safe: Record<string, unknown> = { value: "visible-session-count-value" };
+    safe.self = safe;
+    const data = { session, sessionCount: safe };
+    const sanitizer = new TrajectoryProvenanceSanitizer({ mode: "live" });
+
+    const sanitized = sanitizer.sanitizeEventData("model.completed", data);
+    const sanitizedSession = sanitized.session as { self: unknown; values: unknown[] };
+
+    expect(JSON.stringify(sanitizedSession)).not.toContain(secret);
+    expect(sanitizedSession.values).toEqual([expect.not.stringContaining(secret), "***"]);
+    expect(sanitizedSession.self).toEqual({
+      truncated: true,
+      reason: "trajectory-circular-reference",
+    });
+    expect(sanitized.sessionCount).toEqual({
+      value: "visible-session-count-value",
+      self: {
+        truncated: true,
+        reason: "trajectory-circular-reference",
+      },
+    });
+    expect(data.session).toBe(session);
+    expect(session.self).toBe(session);
+    expect(safe.self).toBe(safe);
   });
 
   it("redacts authorization codes with full paths while preserving diagnostic codes", () => {
