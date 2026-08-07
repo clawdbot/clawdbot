@@ -13,7 +13,6 @@ import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.
 import { rebindAgentExecutionAttribution } from "../../agent-execution-attribution.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
-import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,
@@ -21,9 +20,10 @@ import {
   shouldNoteLaneWait,
   withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
-type LaneParams = RunEmbeddedAgentInternalParams & {
+type LaneParams = RunEmbeddedAgentParams & {
   sessionFile: string;
 };
 
@@ -148,16 +148,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         }
         lifecycleGeneration = currentLifecycleGeneration;
         options.setLifecycleGeneration(lifecycleGeneration);
-        // Lifecycle rebound preserves the admitted identity snapshot, including
-        // authoritative absence; only a fresh admission may replace identity.
-        const attribution = params.attribution
-          ? rebindAgentExecutionAttribution(params.attribution, lifecycleGeneration)
-          : undefined;
-        params = {
-          ...params,
-          lifecycleGeneration,
-          ...(attribution ? { attribution } : {}),
-        };
+        params = { ...params, lifecycleGeneration };
         options.setParams(params);
       }
       // Queue waits can outlive durable harness and placement bindings.
@@ -178,15 +169,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             releaseQueuedContext("admitted");
             // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
-            const attribution =
-              params.attribution ??
-              (existingContext?.attribution
-                ? rebindAgentExecutionAttribution(existingContext.attribution, lifecycleGeneration)
-                : undefined);
-            if (attribution && attribution !== params.attribution) {
-              params = { ...params, attribution };
-              options.setParams(params);
-            }
+            const attribution = existingContext?.attribution
+              ? rebindAgentExecutionAttribution(existingContext.attribution, lifecycleGeneration)
+              : undefined;
             claimAgentRunContext(params.runId, {
               ...existingContext,
               ...(attribution ? { attribution } : {}),

@@ -34,7 +34,6 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import type { AgentExecutionAttribution } from "../agent-execution-attribution.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -64,8 +63,6 @@ type CliSessionRetryParams = {
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
-  /** Admission-owned execution correlation carried unchanged across CLI retries. */
-  attribution?: AgentExecutionAttribution;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;

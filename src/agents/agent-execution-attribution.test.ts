@@ -66,26 +66,6 @@ describe("createAgentExecutionAttribution", () => {
     expect(attribution).not.toHaveProperty("executionIdentityAdmission");
   });
 
-  it("ignores inherited audit admission tokens", () => {
-    const inheritedToken = createExecutionIdentityAdmissionToken("run-1", {
-      contextId: "inherited-context",
-      executionId: "inherited-execution",
-      now: 123,
-    });
-    const params = Object.assign(
-      Object.create({
-        executionIdentityAdmission: { token: inheritedToken, retryOnly: true },
-      }) as object,
-      { runId: "run-1", lifecycleGeneration: "generation-1" },
-    );
-
-    const attribution = createAgentExecutionAttribution(params);
-
-    expect(attribution.contextId).not.toBe("inherited-context");
-    expect(attribution.executionId).not.toBe("inherited-execution");
-    expect(attribution).not.toHaveProperty("executionIdentityAdmission");
-  });
-
   it.each([false, true])(
     "changes only lifecycle ownership when rebound (token=%s)",
     (withToken) => {

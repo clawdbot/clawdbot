@@ -87,24 +87,4 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
     ]);
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
   });
-
-  it("strips host-owned attribution fields at the public runner boundary", async () => {
-    runEmbeddedAgentViaCliBackendIfEligible.mockResolvedValue(dispatchResult);
-    const forgedAttribution = {
-      runId: "forged",
-      lifecycleGeneration: "forged-generation",
-    };
-    const forgedAttributionObserver = vi.fn();
-
-    await runEmbeddedAgent({
-      ...laneRunParams(),
-      attribution: forgedAttribution,
-      onExecutionAttributionChanged: forgedAttributionObserver,
-    } as never);
-
-    const admittedParams = runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0];
-    expect(admittedParams).not.toHaveProperty("attribution");
-    expect(admittedParams).not.toHaveProperty("onExecutionAttributionChanged");
-    expect(forgedAttributionObserver).not.toHaveBeenCalled();
-  });
 });

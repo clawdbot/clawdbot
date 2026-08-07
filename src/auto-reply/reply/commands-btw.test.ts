@@ -180,14 +180,6 @@ describe("handleBtwCommand", () => {
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
     expect(runnerArgs.opts).toMatchObject({ runId: expect.any(String) });
-    const runnerAttribution = runnerArgs.attribution as Record<string, unknown>;
-    expect(Object.isFrozen(runnerAttribution)).toBe(true);
-    expect(runnerAttribution).toMatchObject({
-      runId: (runnerArgs.opts as { runId?: string }).runId,
-      sessionKey: "agent:main:main",
-      sessionId: "session-1",
-      agentId: "main",
-    });
     expect(resolvedTurnContext).toMatchObject({
       requesterAccountId: "account-1",
       requesterSenderId: "sender-1",

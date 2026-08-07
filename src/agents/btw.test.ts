@@ -9,7 +9,6 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
-import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 
@@ -795,13 +794,6 @@ describe("runBtwSideQuestion", () => {
     const codexSideQuestionMock = registerCodexSideQuestionHarness({
       supports,
     });
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-btw-codex",
-      lifecycleGeneration: "generation-1",
-      sessionKey: DEFAULT_SESSION_KEY,
-      sessionId: "session-1",
-      agentId: "main",
-    });
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "openai",
       id: "gpt-5.5",
@@ -837,7 +829,6 @@ describe("runBtwSideQuestion", () => {
     });
 
     const result = await runSideQuestion({
-      attribution,
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
@@ -855,7 +846,6 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Codex side answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
-    expect(mockArg(codexSideQuestionMock, 0, 0)).not.toHaveProperty("attribution");
     expect(codexSideQuestionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -1476,16 +1466,8 @@ describe("runBtwSideQuestion", () => {
 
   it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {
     const { cleanup, prepared } = mockCliOutput({ text: "CLI side answer." });
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-btw-cli",
-      lifecycleGeneration: "generation-1",
-      sessionKey: DEFAULT_SESSION_KEY,
-      sessionId: "session-1",
-      agentId: "main",
-    });
 
     const result = await runSideQuestion({
-      attribution,
       cfg: {
         agents: {
           defaults: {
@@ -1509,9 +1491,7 @@ describe("runBtwSideQuestion", () => {
       cliSessionId?: string;
       extraSystemPrompt?: string;
       prompt?: string;
-      attribution?: unknown;
     };
-    expect(prepareParams.attribution).toBe(attribution);
     expect(prepareParams.executionMode).toBe("side-question");
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.model).toBe("claude-opus-4-7");
