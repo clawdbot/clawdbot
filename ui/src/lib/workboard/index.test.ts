@@ -146,7 +146,7 @@ function createConfirmationClient(failTaskId?: string) {
 let host: object;
 let state: ReturnType<typeof getWorkboardState>;
 
-function openEditDraft(card: WorkboardCard, status = "running") {
+function openEditDraft(card: WorkboardCard, status: WorkboardCard["status"] = "running") {
   state.draftOpen = true;
   state.editingCardId = card.id;
   state.draftTitle = card.title;
