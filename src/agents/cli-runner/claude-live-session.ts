@@ -4,7 +4,10 @@
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
-import { createAbortError as createNamedAbortError } from "../../infra/abort-signal.js";
+import {
+  createAbortError as createNamedAbortError,
+  isAbortError,
+} from "../../infra/abort-signal.js";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticToolParamsSummary,
@@ -516,6 +519,23 @@ function failTurn(session: ClaudeLiveSession, error: unknown): void {
   clearTurnTimers(turn);
   clearOutstandingBackgroundTasks(session);
   session.currentTurn = null;
+  // An aborted turn may already have streamed a complete or near-complete
+  // answer. Settle it with the parsed partial output instead of rejecting so
+  // the transcript flush and agent_end hooks still run — mirroring the
+  // embedded runner, which settles aborted attempts rather than rethrowing and
+  // silently starving every agent_end consumer (attempt-stream-finalize.ts).
+  // Genuine failures (FailoverError paths) keep rejecting so fallback works.
+  if (isAbortError(error)) {
+    const partialOutput = turn.streamingParser.getOutput();
+    if (partialOutput?.text?.trim()) {
+      cliBackendLog.info(
+        `claude live session aborted turn preserved partial output: provider=${session.providerId} model=${session.modelId} durationMs=${Date.now() - turn.startedAtMs} ${formatCliBackendOutputDigest(partialOutput.text)}`,
+      );
+      turn.resolve(partialOutput);
+      scheduleIdleClose(session);
+      return;
+    }
+  }
   turn.reject(error);
 }
 
