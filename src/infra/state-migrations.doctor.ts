@@ -325,8 +325,6 @@ async function detectManagedWorktreeStateMigration(params: {
   doctorOnlyStateMigrations?: boolean;
 }): Promise<LegacyStateDetection["worktrees"]> {
   const rawRoot = path.join(params.stateDir, "worktrees");
-  await fs.mkdir(rawRoot, { recursive: true });
-  const canonicalRoot = await fs.realpath(rawRoot);
   const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
   const databaseExists = fileExists(resolveOpenClawStateSqlitePath(stateEnv));
   const hasCurrentSchema = params.stateSchemaMigrations.length === 0;
@@ -335,6 +333,24 @@ async function detectManagedWorktreeStateMigration(params: {
     hasCurrentSchema &&
     databaseExists &&
     hasLegacyRegistryWorktrees(stateEnv);
+  // Detection is read-only for the doctor --lint contract. ManagedWorktreeService.worktreesRoot()
+  // owns directory creation; absent roots are canonicalized through their existing state parent.
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await fs.realpath(rawRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    try {
+      canonicalRoot = path.join(await fs.realpath(params.stateDir), "worktrees");
+    } catch (stateDirError) {
+      if ((stateDirError as NodeJS.ErrnoException).code === "ENOENT") {
+        return { hasLegacy, pathRewrites: [] };
+      }
+      throw stateDirError;
+    }
+  }
   if (rawRoot === canonicalRoot || !hasCurrentSchema || !databaseExists) {
     return { hasLegacy, pathRewrites: [] };
   }

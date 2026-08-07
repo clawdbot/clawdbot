@@ -21,6 +21,23 @@ describe("managed worktree path state migrations", () => {
     });
   });
 
+  it("does not create the worktrees directory during detection", async () => {
+    const root = tempDirs.make("openclaw-worktree-path-detection-");
+    const stateDir = path.join(root, "state");
+    const worktreesDir = path.join(stateDir, "worktrees");
+    await fs.mkdir(stateDir, { recursive: true });
+    const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: stateDir };
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {} as OpenClawConfig,
+      env,
+      homedir: () => root,
+    });
+
+    expect(detected.worktrees.pathRewrites).toStrictEqual([]);
+    await expect(fs.stat(worktreesDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.skipIf(process.platform === "win32")(
     "canonicalizes persisted paths from symlinked state directories",
     { timeout: 240_000 },
