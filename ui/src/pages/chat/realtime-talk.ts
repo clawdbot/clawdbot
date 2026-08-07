@@ -83,10 +83,7 @@ type RealtimeTalkConfigResult = {
 };
 
 function normalizeLaunchTransport(value: unknown): RealtimeTalkLaunchTransport | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const transport = normalizeTalkTransport(value);
+  const transport = typeof value === "string" ? normalizeTalkTransport(value) : undefined;
   if (
     transport === "webrtc" ||
     transport === "provider-websocket" ||
