@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import { withMockedWindowsAclVerificationUnavailable } from "../test-utils/vitest-spies.js";
 import {
   resolveConfiguredSecretInputWithFallback,
   resolveRequiredConfiguredSecretRefInputString,
@@ -183,37 +183,43 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
   });
 
   it("keeps generic Windows ACL failures byte-compatible", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const { config } = await createWindowsAclUnavailableConfig();
-      const resolved = await resolveConfiguredSecretInputWithFallback({
-        config,
-        env: {} as NodeJS.ProcessEnv,
-        value: config.gateway?.auth?.token,
-        path: "gateway.auth.token",
-      });
+    await withMockedWindowsAclVerificationUnavailable(
+      path.join(fixtureRoot, "missing-windows-system-root"),
+      async () => {
+        const { config } = await createWindowsAclUnavailableConfig();
+        const resolved = await resolveConfiguredSecretInputWithFallback({
+          config,
+          env: {} as NodeJS.ProcessEnv,
+          value: config.gateway?.auth?.token,
+          path: "gateway.auth.token",
+        });
 
-      expect(resolved.unresolvedRefReason).toBe(
-        "gateway.auth.token SecretRef is unresolved (file:filemain:value).",
-      );
-    });
+        expect(resolved.unresolvedRefReason).toBe(
+          "gateway.auth.token SecretRef is unresolved (file:filemain:value).",
+        );
+      },
+    );
   });
 
   it("adds only the sanitized Windows ACL diagnostic in detailed mode", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const { config, filePath } = await createWindowsAclUnavailableConfig();
-      const resolved = await resolveConfiguredSecretInputWithFallback({
-        config,
-        env: {} as NodeJS.ProcessEnv,
-        value: config.gateway?.auth?.token,
-        path: "gateway.auth.token",
-        unresolvedReasonStyle: "detailed",
-      });
+    await withMockedWindowsAclVerificationUnavailable(
+      path.join(fixtureRoot, "missing-windows-system-root"),
+      async () => {
+        const { config, filePath } = await createWindowsAclUnavailableConfig();
+        const resolved = await resolveConfiguredSecretInputWithFallback({
+          config,
+          env: {} as NodeJS.ProcessEnv,
+          value: config.gateway?.auth?.token,
+          path: "gateway.auth.token",
+          unresolvedReasonStyle: "detailed",
+        });
 
-      expect(resolved.unresolvedRefReason).toBe(
-        "gateway.auth.token SecretRef is unresolved (file:filemain:value). ACL verification unavailable on Windows. Use a secret file path whose ACLs OpenClaw can verify.",
-      );
-      expect(resolved.unresolvedRefReason).not.toContain(filePath);
-    });
+        expect(resolved.unresolvedRefReason).toBe(
+          "gateway.auth.token SecretRef is unresolved (file:filemain:value). Windows path security could not be verified. Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify.",
+        );
+        expect(resolved.unresolvedRefReason).not.toContain(filePath);
+      },
+    );
   });
 
   it("keeps unrelated detailed provider failures unchanged", async () => {

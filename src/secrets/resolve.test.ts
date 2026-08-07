@@ -12,7 +12,10 @@ import {
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import {
+  withMockedWindowsAclVerificationUnavailable,
+  withMockedWindowsPlatform,
+} from "../test-utils/vitest-spies.js";
 import {
   describeSecretResolutionError,
   describeSecretResolutionOperatorDiagnostic,
@@ -799,37 +802,40 @@ describe("secret ref resolver", () => {
   });
 
   it("fails closed on Windows when file provider ACL source is unknown", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const dir = await createCaseDir("win-acl");
-      const filePath = path.join(dir, "secrets.json");
-      await writeSecureFile(filePath, '{"token":"abc123"}');
+    const dir = await createCaseDir("win-acl");
+    await withMockedWindowsAclVerificationUnavailable(
+      path.join(dir, "missing-windows-system-root"),
+      async () => {
+        const filePath = path.join(dir, "secrets.json");
+        await writeSecureFile(filePath, '{"token":"abc123"}');
 
-      const error = await resolveSecretRefString(
-        { source: "file", provider: "filemain", id: "/token" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                filemain: createFileProviderConfig(filePath),
+        const error = await resolveSecretRefString(
+          { source: "file", provider: "filemain", id: "/token" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  filemain: createFileProviderConfig(filePath),
+                },
               },
             },
           },
-        },
-      ).catch((caught: unknown) => caught);
+        ).catch((caught: unknown) => caught);
 
-      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-      if (!isProviderScopedSecretResolutionError(error)) {
-        return;
-      }
-      expect(error.code).toBe("SECRET_PROVIDER_ACL_UNVERIFIABLE");
-      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
-      expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
-        "ACL verification unavailable on Windows",
-      );
-      expect(describeSecretResolutionOperatorRecovery(error)).toBe(
-        "Use a secret file path whose ACLs OpenClaw can verify",
-      );
-    });
+        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+        if (!isProviderScopedSecretResolutionError(error)) {
+          return;
+        }
+        expect(error.code).toBe("SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE");
+        expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+        expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
+          "Windows path security could not be verified",
+        );
+        expect(describeSecretResolutionOperatorRecovery(error)).toBe(
+          "Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify",
+        );
+      },
+    );
   });
 
   it("keeps a missing Windows file provider path as a generic failure", async () => {
@@ -861,32 +867,35 @@ describe("secret ref resolver", () => {
   });
 
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const dir = await createCaseDir("win-exec-acl");
-      const markerPath = path.join(dir, "executed");
-      const commandPath = path.join(dir, "resolver.sh");
-      await writeSecureFile(
-        commandPath,
-        ["#!/bin/sh", `touch ${JSON.stringify(markerPath)}`].join("\n"),
-        0o700,
-      );
+    const dir = await createCaseDir("win-exec-acl");
+    await withMockedWindowsAclVerificationUnavailable(
+      path.join(dir, "missing-windows-system-root"),
+      async () => {
+        const markerPath = path.join(dir, "executed");
+        const commandPath = path.join(dir, "resolver.sh");
+        await writeSecureFile(
+          commandPath,
+          ["#!/bin/sh", `touch ${JSON.stringify(markerPath)}`].join("\n"),
+          0o700,
+        );
 
-      const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
+        const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
 
-      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-      if (!isProviderScopedSecretResolutionError(error)) {
-        return;
-      }
-      expect(error.code).toBe("SECRET_PROVIDER_ACL_UNVERIFIABLE");
-      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
-      expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
-        "ACL verification unavailable on Windows",
-      );
-      expect(describeSecretResolutionOperatorRecovery(error)).toBe(
-        "Use a provider command path whose ACLs OpenClaw can verify",
-      );
-      await expect(fs.access(markerPath)).rejects.toThrow();
-    });
+        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+        if (!isProviderScopedSecretResolutionError(error)) {
+          return;
+        }
+        expect(error.code).toBe("SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE");
+        expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+        expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
+          "Windows path security could not be verified",
+        );
+        expect(describeSecretResolutionOperatorRecovery(error)).toBe(
+          "Restore Windows path security verification, or use an existing provider command whose owner and ACLs OpenClaw can verify",
+        );
+        await expect(fs.access(markerPath)).rejects.toThrow();
+      },
+    );
   });
 
   it("keeps a missing Windows exec provider path as a generic failure", async () => {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { withSecureTestNodeCommand } from "../../../../src/secrets/test-node-command.test-support.js";
+import { forceWindowsAclVerificationUnavailable } from "../../../../src/test-utils/vitest-spies.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -103,6 +104,49 @@ describe("doctor auth and SecretRef product proof", () => {
       };
       expect(unresolvedConfig.gateway?.auth?.token).toEqual(unresolvedRef);
 
+      const missingSystemRoot = path.join(instance.stateDir, "missing-windows-system-root");
+      await expect(fs.access(missingSystemRoot)).rejects.toThrow();
+      if (process.platform === "win32") {
+        forceWindowsAclVerificationUnavailable(instance.env, missingSystemRoot);
+      }
+
+      const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
+      const fileSecret = "qa-file-token";
+      await fs.writeFile(filePath, JSON.stringify({ gateway: { token: fileSecret } }), {
+        mode: 0o600,
+      });
+      await writeConfig({
+        ...localGatewayConfig({
+          source: "file",
+          provider: "filemain",
+          id: "/gateway/token",
+        }),
+        secrets: {
+          providers: {
+            filemain: {
+              source: "file",
+              path: filePath,
+            },
+          },
+        },
+      });
+      const fileResult = await instance.cli(
+        ["doctor", "--non-interactive", "--no-workspace-suggestions"],
+        { timeoutMs: 120_000 },
+      );
+      expect(fileResult.code).toBe(0);
+      const fileOutput = normalizedOutputOf(fileResult);
+      if (process.platform === "win32") {
+        expect(fileOutput).toMatch(
+          /Gateway token SecretRef could not be resolved: .*Windows path security could not be verified\. Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify\./,
+        );
+        expect(fileOutput).not.toContain(filePath);
+        expect(fileOutput).not.toContain(missingSystemRoot);
+      } else {
+        expect(fileOutput).not.toContain("Gateway token SecretRef could not be resolved");
+      }
+      expect(fileOutput).not.toContain(fileSecret);
+
       const execMarker = path.join(instance.stateDir, "doctor-exec-secretref.marker");
       const execScript = [
         "const fs = require('node:fs');",
@@ -146,10 +190,11 @@ describe("doctor auth and SecretRef product proof", () => {
         const execAllowedOutput = normalizedOutputOf(execAllowed);
         if (process.platform === "win32") {
           expect(execAllowedOutput).toMatch(
-            /Gateway token SecretRef could not be resolved: .*ACL verification unavailable on Windows\. Use a provider command path whose ACLs OpenClaw can verify\./,
+            /Gateway token SecretRef could not be resolved: .*Windows path security could not be verified\. Restore Windows path security verification, or use an existing provider command whose owner and ACLs OpenClaw can verify\./,
           );
           expect(execAllowedOutput).not.toContain(command);
           expect(execAllowedOutput).not.toContain(execMarker);
+          expect(execAllowedOutput).not.toContain(missingSystemRoot);
           await expect(fs.access(execMarker)).rejects.toThrow();
         } else {
           await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
@@ -185,6 +230,8 @@ describe("doctor auth and SecretRef product proof", () => {
           execRefGated: true,
           execRefAllowed: process.platform !== "win32",
           execRefWindowsAclBlocked: process.platform === "win32",
+          fileRefAllowed: process.platform !== "win32",
+          fileRefWindowsAclBlocked: process.platform === "win32",
           generatedTokenPersisted: true,
         })}`,
       );

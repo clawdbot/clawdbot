@@ -99,15 +99,17 @@ function throwUnknownProviderResolutionError(params: {
   if (isSecretResolutionError(params.err)) {
     throw params.err;
   }
-  // fs-safe 0.5 exposes one fail-closed receipt for unavailable Windows permission and
-  // owner verification. The resolver intentionally coarsens it to one path-free ACL diagnostic.
-  const isWindowsAclFailure =
+  // fs-safe 0.5 exposes one fail-closed receipt for failed permission inspection,
+  // unavailable ACL data, and indeterminate owner trust. Keep the diagnostic path-free.
+  const isWindowsPathSecurityFailure =
     process.platform === "win32" &&
     (params.source === "file" || params.source === "exec") &&
     params.err instanceof FsSafeError &&
     params.err.code === "permission-unverified";
   throw providerResolutionError({
-    ...(isWindowsAclFailure ? { code: "SECRET_PROVIDER_ACL_UNVERIFIABLE" as const } : {}),
+    ...(isWindowsPathSecurityFailure
+      ? { code: "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE" as const }
+      : {}),
     source: params.source,
     provider: params.provider,
     message: formatErrorMessage(params.err),

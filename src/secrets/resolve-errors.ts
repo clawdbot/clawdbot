@@ -9,7 +9,7 @@ type SecretRefResolutionCode =
   | "SECRET_REF_PROVIDER_CONTRACT";
 
 type SecretProviderResolutionCode =
-  | "SECRET_PROVIDER_ACL_UNVERIFIABLE"
+  | "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
   | "SECRET_PROVIDER_INVALID"
   | "SECRET_PROVIDER_NOT_CONFIGURED"
   | "SECRET_PROVIDER_UNAVAILABLE";
@@ -88,7 +88,7 @@ export function describeSecretResolutionError(
 ): SecretResolutionFailureReason | undefined {
   if (value instanceof SecretProviderResolutionError) {
     return value.code === "SECRET_PROVIDER_UNAVAILABLE" ||
-      value.code === "SECRET_PROVIDER_ACL_UNVERIFIABLE"
+      value.code === "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
       ? "secret provider failed"
       : undefined;
   }
@@ -114,9 +114,9 @@ export function describeSecretResolutionError(
 export function describeSecretResolutionOperatorDiagnostic(value: unknown): string | undefined {
   if (
     value instanceof SecretProviderResolutionError &&
-    value.code === "SECRET_PROVIDER_ACL_UNVERIFIABLE"
+    value.code === "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
   ) {
-    return "ACL verification unavailable on Windows";
+    return "Windows path security could not be verified";
   }
   return undefined;
 }
@@ -125,13 +125,13 @@ export function describeSecretResolutionOperatorDiagnostic(value: unknown): stri
 export function describeSecretResolutionOperatorRecovery(value: unknown): string | undefined {
   if (
     !(value instanceof SecretProviderResolutionError) ||
-    value.code !== "SECRET_PROVIDER_ACL_UNVERIFIABLE"
+    value.code !== "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
   ) {
     return undefined;
   }
   return value.source === "exec"
-    ? "Use a provider command path whose ACLs OpenClaw can verify"
-    : "Use a secret file path whose ACLs OpenClaw can verify";
+    ? "Restore Windows path security verification, or use an existing provider command whose owner and ACLs OpenClaw can verify"
+    : "Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify";
 }
 
 export function providerResolutionError(params: {

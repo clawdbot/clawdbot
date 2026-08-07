@@ -60,3 +60,68 @@ export function withMockedWindowsPlatform<T>(run: () => T): T;
 export function withMockedWindowsPlatform<T>(run: () => T | Promise<T>): T | Promise<T> {
   return withMockedPlatform("win32", run);
 }
+
+const WINDOWS_ACL_ENV_KEYS = new Set([
+  "fs_safe_native_mode",
+  "openclaw_fs_safe_native_mode",
+  "systemroot",
+  "windir",
+]);
+
+function takeWindowsAclEnvSnapshot(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => WINDOWS_ACL_ENV_KEYS.has(key.toLowerCase())),
+  );
+}
+
+function clearWindowsAclEnv(env: NodeJS.ProcessEnv): void {
+  for (const key of Object.keys(env)) {
+    if (WINDOWS_ACL_ENV_KEYS.has(key.toLowerCase())) {
+      delete env[key];
+    }
+  }
+}
+
+export function forceWindowsAclVerificationUnavailable(
+  env: NodeJS.ProcessEnv,
+  missingSystemRoot: string,
+): void {
+  clearWindowsAclEnv(env);
+  // Disable the optional native backend and make both Windows ACL tool paths
+  // unavailable, so permission checks exercise the real fail-closed result.
+  env.FS_SAFE_NATIVE_MODE = "off";
+  env.OPENCLAW_FS_SAFE_NATIVE_MODE = "off";
+  env.SystemRoot = missingSystemRoot;
+  env.WINDIR = missingSystemRoot;
+}
+
+export function withMockedWindowsAclVerificationUnavailable<T>(
+  missingSystemRoot: string,
+  run: () => Promise<T>,
+): Promise<T>;
+export function withMockedWindowsAclVerificationUnavailable<T>(
+  missingSystemRoot: string,
+  run: () => T,
+): T;
+export function withMockedWindowsAclVerificationUnavailable<T>(
+  missingSystemRoot: string,
+  run: () => T | Promise<T>,
+): T | Promise<T> {
+  const snapshot = takeWindowsAclEnvSnapshot(process.env);
+  forceWindowsAclVerificationUnavailable(process.env, missingSystemRoot);
+  const restore = () => {
+    clearWindowsAclEnv(process.env);
+    Object.assign(process.env, snapshot);
+  };
+  try {
+    const result = withMockedWindowsPlatform(run);
+    if (isPromiseLike(result)) {
+      return result.finally(restore);
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
