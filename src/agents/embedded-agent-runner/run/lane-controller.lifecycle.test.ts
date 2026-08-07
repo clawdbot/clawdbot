@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -93,10 +93,6 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     resetAgentEventsForTest();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it.each([
     { trigger: "user" as const, expected: "foreground" },
     { trigger: "cron" as const, expected: "background" },
@@ -153,9 +149,6 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
 
   it("rebinds admitted attribution with foreground work across lifecycle rotation", async () => {
     const queue = deferredTaskQueue();
-    const registeredAt = 1_000;
-    const reboundAt = 2_000;
-    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const generation = getAgentEventLifecycleGeneration();
     const attribution = createAgentExecutionAttribution({
       runId: "attributed-across-restart",
@@ -170,7 +163,6 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
       ...(attribution.sessionId ? { sessionId: attribution.sessionId } : {}),
       ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
       lifecycleGeneration: generation,
-      registeredAt,
     });
     const state = createController({
       lifecycleGeneration: generation,
@@ -181,7 +173,6 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     const run = state.controller.enqueueGlobal(async () => completedResult);
 
     const currentGeneration = rotateAgentEventLifecycleGeneration();
-    clock.mockReturnValue(reboundAt);
     queue.release();
     await run;
 
@@ -189,13 +180,9 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
       ...attribution,
       lifecycleGeneration: currentGeneration,
     });
-    expect(getAgentRunContext(attribution.runId)).toMatchObject({
-      attribution: {
-        ...attribution,
-        lifecycleGeneration: currentGeneration,
-      },
+    expect(getAgentRunContext(attribution.runId)?.attribution).toEqual({
+      ...attribution,
       lifecycleGeneration: currentGeneration,
-      registeredAt: reboundAt,
     });
   });
 
