@@ -16,6 +16,7 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { collectErrorGraphCandidates, isMissingPathError } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
@@ -171,8 +172,8 @@ function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | 
   return findErrorWithCode(err.cause, code);
 }
 
-function isMissingPathError(err: unknown): boolean {
-  return findErrorWithCode(err, "ENOENT") !== undefined;
+function hasMissingPathErrorCause(err: unknown): boolean {
+  return collectErrorGraphCandidates(err, (current) => [current.cause]).some(isMissingPathError);
 }
 
 async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
@@ -188,7 +189,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
       attempts: 2,
       minDelayMs: 0,
       maxDelayMs: 0,
-      shouldRetry: isMissingPathError,
+      shouldRetry: hasMissingPathErrorCause,
       onRetry: async () => {
         // Cleanup can prune the directory between mkdir and file open. Recreate
         // it once; further failures remain terminal instead of looping.
