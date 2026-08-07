@@ -2876,3 +2876,48 @@ describe("createConfiguredOllamaStreamFn", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("parseNdjsonStream UTF-8 decoding", () => {
+  function byteReader(bytes: Uint8Array): ReadableStreamDefaultReader<Uint8Array> {
+    let consumed = false;
+    return {
+      read: async () => {
+        if (consumed) {
+          return { done: true as const, value: undefined };
+        }
+        consumed = true;
+        return { done: false as const, value: bytes };
+      },
+      releaseLock: () => {},
+      cancel: async () => {},
+      closed: Promise.resolve(undefined),
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+  }
+
+  it("rejects invalid UTF-8 bytes in streaming NDJSON", async () => {
+    const encoded = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"hello"}}\n',
+    );
+    const corrupted = new Uint8Array(encoded);
+    corrupted[encoded.indexOf(0x68) + 1] = 0xff;
+
+    const generator = parseNdjsonStream(byteReader(corrupted));
+    await expect(async () => {
+      for await (const _ of generator) {
+        // Drain the generator; the corrupted byte must reject the stream.
+      }
+    }).rejects.toThrow(/not valid for encoding utf-8/i);
+  });
+
+  it("parses valid UTF-8 NDJSON unchanged (negative control)", async () => {
+    const encoded = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"hello"}}\n',
+    );
+    const chunks: unknown[] = [];
+    for await (const chunk of parseNdjsonStream(byteReader(encoded))) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(1);
+    expect((chunks[0] as { message?: { content?: string } }).message?.content).toBe("hello");
+  });
+});
