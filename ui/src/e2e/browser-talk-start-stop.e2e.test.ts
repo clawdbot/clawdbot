@@ -58,6 +58,19 @@ suite.define(() => {
       await page.setViewportSize({ width: 320, height: 720 });
       await page.getByRole("button", { name: "Start voice input" }).click();
 
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { wakeLocksRequested: number };
+                }
+              ).openclawTalkE2eState?.wakeLocksRequested,
+          ),
+        )
+        .toBe(1);
+
       const createRequest = await gateway.waitForRequest("talk.client.create");
       expect(createRequest.params).toMatchObject({ sessionKey: "main" });
       await expect
@@ -176,18 +189,23 @@ suite.define(() => {
           page.evaluate(() => {
             const state = (
               window as Window & {
-                openclawTalkE2eState?: { audioContextsClosed: number; tracksStopped: number };
+                openclawTalkE2eState?: {
+                  audioContextsClosed: number;
+                  tracksStopped: number;
+                  wakeLocksReleased: number;
+                };
               }
             ).openclawTalkE2eState;
             return state
               ? {
                   audioContextsClosed: state.audioContextsClosed,
                   tracksStopped: state.tracksStopped,
+                  wakeLocksReleased: state.wakeLocksReleased,
                 }
               : null;
           }),
         )
-        .toEqual({ audioContextsClosed: 2, tracksStopped: 1 });
+        .toEqual({ audioContextsClosed: 2, tracksStopped: 1, wakeLocksReleased: 1 });
 
       await gateway.deliverLatest({ setupComplete: {} });
       await expect

@@ -28,6 +28,7 @@ import {
   waitForTranscriptRetry,
 } from "./realtime-talk-transcript-owner.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
+import { ScreenWakeLock } from "./screen-wake-lock.ts";
 
 export type { RealtimeTalkStatus };
 
@@ -141,6 +142,7 @@ function compactLaunchParams(
 }
 
 export class RealtimeTalkSession {
+  private readonly screenWakeLock = new ScreenWakeLock();
   private transport: RealtimeTalkTransport | null = null;
   private pendingTransport: RealtimeTalkTransport | null = null;
   private closed = false;
@@ -170,6 +172,7 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = ++this.lifecycleGeneration;
       this.stopPendingTransport();
       this.closed = false;
+      this.screenWakeLock.start();
       this.callbacks.onStatus?.("connecting");
       const existingTransport = this.transport;
       const existingVoiceSessionId = this.voiceSessionId;
@@ -436,6 +439,7 @@ export class RealtimeTalkSession {
   stop(): void {
     this.lifecycleGeneration += 1;
     this.closed = true;
+    this.screenWakeLock.stop();
     this.videoOperation += 1;
     this.videoEnabled = false;
     activeRealtimeTalkSessions.delete(this);
@@ -559,6 +563,7 @@ export class RealtimeTalkSession {
     }
     this.lifecycleGeneration += 1;
     this.closed = true;
+    this.screenWakeLock.stop();
     this.videoOperation += 1;
     this.videoEnabled = false;
     activeRealtimeTalkSessions.delete(this);
