@@ -9,6 +9,16 @@ function splitModelRef(raw: string) {
     : null;
 }
 
+function normalizeModelRef(raw: string) {
+  const split = splitModelRef(raw);
+  if (!split) {
+    return null;
+  }
+  return split.provider === "openai" && split.model.toLowerCase() === "alternate-alias"
+    ? { provider: "openai", model: "alternate-model" }
+    : split;
+}
+
 function terminalReceipt(params: {
   runId: string;
   provider: string;
@@ -32,8 +42,9 @@ async function runFollowUp(params?: {
   alternateModel?: string;
   alternateReceiptRunId?: string;
   alternateReplyText?: string;
+  alternateOutboundText?: string;
+  alternateDelivery?: { status: string; resultCount: number } | null;
   unrelatedLaterOutboundText?: string;
-  deleteAlternateReply?: boolean;
   onRun?: () => void;
 }) {
   const state = createQaBusState();
@@ -49,14 +60,14 @@ async function runFollowUp(params?: {
         call === 1
           ? "hello from the primary model"
           : (params?.alternateReplyText ?? "the model switch handoff completed");
-      const outbound = state.addOutboundMessage({
+      state.addOutboundMessage({
         accountId: "qa-channel",
         to: "dm:qa-operator",
-        text: replyText,
+        text:
+          call === 2
+            ? (params?.alternateOutboundText ?? replyText)
+            : "hello from the primary model",
       });
-      if (call === 2 && params?.deleteAlternateReply) {
-        state.deleteMessage({ accountId: "qa-channel", messageId: outbound.id });
-      }
       if (call === 2 && params?.unrelatedLaterOutboundText) {
         state.addOutboundMessage({
           accountId: "qa-channel",
@@ -68,6 +79,14 @@ async function runFollowUp(params?: {
         started: { runId },
         waited: {
           status: "ok",
+          ...(call === 2 && params?.alternateDelivery === null
+            ? {}
+            : {
+                terminalDelivery:
+                  call === 2
+                    ? (params?.alternateDelivery ?? { status: "sent", resultCount: 1 })
+                    : { status: "sent", resultCount: 1 },
+              }),
           terminalReply: { disposition: "visible", text: replyText },
           terminalReceipt: terminalReceipt({
             runId: call === 2 ? (params?.alternateReceiptRunId ?? runId) : runId,
@@ -84,12 +103,12 @@ async function runFollowUp(params?: {
       env: {
         providerMode: "mock-openai",
         primaryModel: "openai/primary-model",
-        alternateModel: params?.alternateModel ?? "openai/alternate-model",
+        alternateModel: params?.alternateModel ?? "OPENAI/alternate-alias",
         gateway: {},
       },
       runAgentPrompt,
       splitModelRef,
-      normalizeModelRef: splitModelRef,
+      normalizeModelRef,
       normalizeLowercaseStringOrEmpty: (value: unknown) =>
         typeof value === "string" ? value.trim().toLowerCase() : "",
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
@@ -99,16 +118,27 @@ async function runFollowUp(params?: {
 }
 
 describe("model-switch follow-up terminal evidence", () => {
-  it("records exact receipts for both visible model runs", async () => {
-    const { result } = await runFollowUp();
+  it("invokes the canonical alias target and records exact run-owned evidence", async () => {
+    const { result, runAgentPrompt } = await runFollowUp({
+      alternateReplyText: "the **model switch** handoff completed",
+      alternateOutboundText: "the model switch handoff completed",
+    });
 
     expect(result.status).toBe("pass");
+    expect(runAgentPrompt.mock.calls[1]?.[1]).toMatchObject({
+      provider: "openai",
+      model: "alternate-model",
+    });
     expect(result.modelSwitchEvidence).toMatchObject({
       primary: { runId: "run-1", effective: { responseModel: "primary-model" } },
       alternate: { runId: "run-2", effective: { responseModel: "alternate-model" } },
-      terminalReply: { disposition: "visible", text: "the model switch handoff completed" },
+      terminalReply: {
+        disposition: "visible",
+        text: "the **model switch** handoff completed",
+      },
+      terminalDelivery: { status: "sent", resultCount: 1 },
     });
-    expect(result.steps[1]?.details).toBe("the model switch handoff completed");
+    expect(result.steps[1]?.details).toBe("the **model switch** handoff completed");
   });
 
   it("rejects a delayed prior-run receipt", async () => {
@@ -125,12 +155,6 @@ describe("model-switch follow-up terminal evidence", () => {
     expect(onRun).not.toHaveBeenCalled();
   });
 
-  it("rejects a deleted alternate reply", async () => {
-    await expect(runFollowUp({ deleteAlternateReply: true })).rejects.toThrow(
-      "test condition was not met",
-    );
-  });
-
   it("rejects unrelated later continuity text when the alternate reply lacks it", async () => {
     await expect(
       runFollowUp({
@@ -139,4 +163,20 @@ describe("model-switch follow-up terminal evidence", () => {
       }),
     ).rejects.toThrow("alternate-model terminal reply missed switch continuity");
   });
+
+  it.each([
+    ["missing", null],
+    ["suppressed", { status: "suppressed", resultCount: 0 }],
+    ["zero-count", { status: "sent", resultCount: 0 }],
+  ] as const)(
+    "rejects %s delivery evidence despite an identical bus message",
+    async (_, evidence) => {
+      await expect(
+        runFollowUp({
+          alternateDelivery: evidence,
+          alternateOutboundText: "the model switch handoff completed",
+        }),
+      ).rejects.toThrow("alternate-model run did not return owned sent delivery evidence");
+    },
+  );
 });

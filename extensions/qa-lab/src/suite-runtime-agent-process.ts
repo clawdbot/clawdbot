@@ -53,6 +53,10 @@ type QaAgentWaitResult = {
   status?: string;
   error?: string;
   stopReason?: string;
+  terminalDelivery?: {
+    status: "sent" | "suppressed" | "partial_failed" | "failed";
+    resultCount: number;
+  };
   terminalReceipt?: Record<string, unknown>;
   terminalReply?: QaAgentTerminalReply;
 };

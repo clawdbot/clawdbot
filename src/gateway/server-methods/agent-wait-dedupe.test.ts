@@ -157,7 +157,7 @@ describe("agent.wait gateway dedupe observations", () => {
   });
 
   it.each(["lifecycle-first", "dedupe-first"] as const)(
-    "keeps reply evidence when sticky status arrives $0",
+    "keeps terminal evidence when sticky status arrives $0",
     async (order) => {
       const runId = `run-reply-merge-${order}`;
       const dedupe = new Map<string, DedupeEntry>();
@@ -174,6 +174,11 @@ describe("agent.wait gateway dedupe observations", () => {
             phase: "end",
             startedAt: 100,
             endedAt: 300,
+            terminalDelivery: {
+              status: "sent",
+              resultCount: 1,
+              target: "private-target",
+            },
             terminalReceipt: terminalReceipt(runId),
             terminalReply: { disposition: "visible", text: "canonical reply" },
           },
@@ -208,10 +213,12 @@ describe("agent.wait gateway dedupe observations", () => {
         expect.objectContaining({
           runId,
           status: "timeout",
+          terminalDelivery: { status: "sent", resultCount: 1 },
           terminalReceipt: terminalReceipt(runId),
           terminalReply: { disposition: "visible", text: "canonical reply" },
         }),
       );
+      expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
     },
   );
 });

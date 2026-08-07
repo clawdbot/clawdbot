@@ -32,9 +32,6 @@ flow:
   steps:
     - name: keeps using tools after switching models
       actions:
-        - set: alternate
-          value:
-            expr: splitModelRef(env.alternateModel)
         - set: expectedAlternate
           value:
             expr: normalizeModelRef(env.alternateModel)
@@ -58,9 +55,6 @@ flow:
         - assert:
             expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible'; })()"
             message: default-model run did not return owned successful read evidence
-        - set: beforeSwitchCursor
-          value:
-            expr: state.getSnapshot().messages.length
         - call: runAgentPrompt
           saveAs: alternateRun
           args:
@@ -69,9 +63,9 @@ flow:
               message:
                 expr: config.followupPrompt
               provider:
-                expr: alternate?.provider
+                expr: expectedAlternate.provider
               model:
-                expr: alternate?.model
+                expr: expectedAlternate.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
         - assert:
@@ -80,12 +74,9 @@ flow:
         - assert:
             expr: "alternateRun?.waited?.terminalReply?.disposition === 'visible' && hasModelSwitchContinuitySignal(alternateRun.waited.terminalReply.text)"
             message: alternate-model terminal reply missed kickoff continuity
-        - call: waitForCondition
-          saveAs: outbound
-          args:
-            - lambda:
-                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && alternateRun?.waited?.terminalReply?.disposition === 'visible' && candidate.text === alternateRun.waited.terminalReply.text).at(-1)"
-            - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
+        - assert:
+            expr: "alternateRun?.waited?.terminalDelivery?.status === 'sent' && typeof alternateRun.waited.terminalDelivery.resultCount === 'number' && alternateRun.waited.terminalDelivery.resultCount > 0"
+            message: alternate-model run did not return owned sent delivery evidence
         - set: modelSwitchEvidence
           value:
             primary:
@@ -94,4 +85,6 @@ flow:
               ref: alternateRun.waited.terminalReceipt
             terminalReply:
               ref: alternateRun.waited.terminalReply
+            terminalDelivery:
+              ref: alternateRun.waited.terminalDelivery
       detailsExpr: alternateRun.waited.terminalReply.text

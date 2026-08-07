@@ -29,9 +29,6 @@ flow:
   steps:
     - name: runs on the default configured model
       actions:
-        - set: alternate
-          value:
-            expr: splitModelRef(env.alternateModel)
         - set: expectedAlternate
           value:
             expr: normalizeModelRef(env.alternateModel)
@@ -61,9 +58,6 @@ flow:
       detailsExpr: outbound.text
     - name: switches to the alternate model and continues
       actions:
-        - set: beforeSwitchCursor
-          value:
-            expr: state.getSnapshot().messages.length
         - call: runAgentPrompt
           saveAs: alternateRun
           args:
@@ -72,9 +66,9 @@ flow:
               message:
                 expr: config.followupPrompt
               provider:
-                expr: alternate?.provider
+                expr: expectedAlternate.provider
               model:
-                expr: alternate?.model
+                expr: expectedAlternate.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
         - assert:
@@ -83,12 +77,9 @@ flow:
         - assert:
             expr: "(() => { const reply = alternateRun?.waited?.terminalReply; if (reply?.disposition !== 'visible') return false; const lower = normalizeLowercaseStringOrEmpty(reply.text); return lower.includes('switch') || lower.includes('handoff'); })()"
             message: alternate-model terminal reply missed switch continuity
-        - call: waitForCondition
-          saveAs: outbound
-          args:
-            - lambda:
-                expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && alternateRun?.waited?.terminalReply?.disposition === 'visible' && candidate.text === alternateRun.waited.terminalReply.text).at(-1)"
-            - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
+        - assert:
+            expr: "alternateRun?.waited?.terminalDelivery?.status === 'sent' && typeof alternateRun.waited.terminalDelivery.resultCount === 'number' && alternateRun.waited.terminalDelivery.resultCount > 0"
+            message: alternate-model run did not return owned sent delivery evidence
         - set: modelSwitchEvidence
           value:
             primary:
@@ -97,4 +88,6 @@ flow:
               ref: alternateRun.waited.terminalReceipt
             terminalReply:
               ref: alternateRun.waited.terminalReply
+            terminalDelivery:
+              ref: alternateRun.waited.terminalDelivery
       detailsExpr: alternateRun.waited.terminalReply.text

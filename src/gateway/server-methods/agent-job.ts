@@ -3,6 +3,10 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  normalizeAgentRunTerminalDeliverySnapshot,
+  type AgentRunTerminalDeliverySnapshot,
+} from "../../agents/agent-run-terminal-delivery.js";
+import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -39,6 +43,7 @@ type AgentJobTerminalSnapshot = {
   pendingError?: boolean;
   timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
   providerStarted?: boolean;
+  terminalDelivery?: AgentRunTerminalDeliverySnapshot;
   terminalReceipt?: AgentRunTerminalReceipt;
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
@@ -173,12 +178,14 @@ function mergeSnapshot(
     existing.terminalReply,
     incoming.terminalReply,
   );
+  const terminalDelivery = incoming.terminalDelivery ?? existing.terminalDelivery;
   const terminalReceipt = incoming.terminalReceipt ?? existing.terminalReceipt;
   const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
   // Terminal status precedence and producer reply evidence are independent;
   // a late sticky timeout must not erase the final reply (or vice versa).
   return {
     ...canonical,
+    ...(terminalDelivery ? { terminalDelivery } : {}),
     ...(terminalReceipt ? { terminalReceipt } : {}),
     ...(terminalReply ? { terminalReply } : {}),
     cachedAt: incoming.cachedAt,
@@ -284,6 +291,7 @@ function createPendingErrorTimeoutSnapshot(
     ...(snapshot.providerStarted !== undefined
       ? { providerStarted: snapshot.providerStarted }
       : {}),
+    ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
   };
 }
 
@@ -306,6 +314,7 @@ function createSnapshotFromLifecycleEvent(params: {
   // Modern explicit stop reasons keep the canonical cancellation projection.
   const legacyBareAbort =
     terminalOutcome.reason === "aborted" && data?.stopReason == null && data?.status == null;
+  const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(data?.terminalDelivery);
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(data?.terminalReply);
   const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(data?.terminalReceipt);
   const terminalReceipt =
@@ -325,6 +334,7 @@ function createSnapshotFromLifecycleEvent(params: {
     ...(terminalOutcome.providerStarted !== undefined
       ? { providerStarted: terminalOutcome.providerStarted }
       : {}),
+    ...(terminalDelivery ? { terminalDelivery } : {}),
     ...(terminalReply ? { terminalReply } : {}),
     ...(terminalReceipt ? { terminalReceipt } : {}),
     version: nextAgentRunVersion(),
@@ -571,6 +581,7 @@ function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot
     pendingError: snapshot.pendingError,
     timeoutPhase: snapshot.timeoutPhase,
     providerStarted: snapshot.providerStarted,
+    ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
     terminalReceipt: snapshot.terminalReceipt,
     terminalReply: snapshot.terminalReply,
   };
