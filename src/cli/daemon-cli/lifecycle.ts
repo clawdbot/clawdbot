@@ -58,10 +58,10 @@ import {
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
 import { createDaemonActionContext, createNullWriter } from "./response.js";
+import { formatRestartFailure, resolveStillStartingMessage } from "./restart-health-diagnostics.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
-  type GatewayRestartSnapshot,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
@@ -80,54 +80,6 @@ function postRestartHealthAttempts(): number {
   return process.platform === "win32"
     ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
     : POST_RESTART_HEALTH_ATTEMPTS;
-}
-
-function formatRestartFailure(params: {
-  health: GatewayRestartSnapshot;
-  port: number;
-  defaultTimeoutSeconds: number;
-}): { statusLine: string; failMessage: string } {
-  if (params.health.waitOutcome === "stopped-free") {
-    const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
-    return {
-      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
-      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
-    };
-  }
-
-  const timeoutSeconds = Math.max(
-    1,
-    Math.round(
-      params.health.elapsedMs === undefined
-        ? params.defaultTimeoutSeconds
-        : params.health.elapsedMs / 1000,
-    ),
-  );
-  return {
-    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
-  };
-}
-
-/**
- * Renders the "still starting" note for in-process (SIGUSR1) gateway restarts:
- * the PID is unchanged and the process is alive while the port is still free,
- * so the restart is progressing rather than failed. Explicitly non-failure
- * language — failure here would push operators toward destructive recovery of
- * a healthy, booting process.
- */
-function formatGatewayStillStartingMessage(params: {
-  elapsedMs?: number;
-  pid: number;
-  fallbackTimeoutSeconds: number;
-}): string {
-  const elapsedSeconds = Math.max(
-    1,
-    Math.round(
-      params.elapsedMs === undefined ? params.fallbackTimeoutSeconds : params.elapsedMs / 1000,
-    ),
-  );
-  return `Gateway restart is still in progress after ${elapsedSeconds}s: process PID ${params.pid} is alive and booting (in-process restart keeps the PID). Poll readiness with "openclaw gateway status --deep".`;
 }
 
 async function resolveGatewayLifecycleContext(service = resolveGatewayService()): Promise<{
@@ -471,30 +423,13 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     return false;
   }
 
-  if (health.waitOutcome === "still-starting") {
-    const stillStartingMessage = formatGatewayStillStartingMessage({
-      elapsedMs: health.elapsedMs,
-      pid: signaled.pid,
-      fallbackTimeoutSeconds: healthWait.timeoutSeconds,
-    });
-    emit({
-      ok: true,
-      result: signaled.result,
-      message: stillStartingMessage,
-    });
-    if (!json) {
-      defaultRuntime.log(theme.info(stillStartingMessage));
-    }
-    return true;
-  }
-
-  emit({
-    ok: true,
-    result: signaled.result,
-    message: signaled.message,
-  });
+  const message =
+    health.waitOutcome === "still-starting"
+      ? resolveStillStartingMessage(health, signaled.pid, healthWait.timeoutSeconds)
+      : signaled.message;
+  emit({ ok: true, result: signaled.result, message });
   if (!json) {
-    defaultRuntime.log(signaled.message);
+    defaultRuntime.log(theme.info(message));
   }
   return true;
 }
@@ -703,11 +638,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           return undefined;
         }
         if (health.waitOutcome === "still-starting" && unmanagedRestartPid !== undefined) {
-          const stillStartingLine = formatGatewayStillStartingMessage({
-            elapsedMs: health.elapsedMs,
-            pid: unmanagedRestartPid,
-            fallbackTimeoutSeconds: unmanagedRestartWaitSeconds,
-          });
+          const stillStartingLine = resolveStillStartingMessage(
+            health,
+            unmanagedRestartPid,
+            unmanagedRestartWaitSeconds,
+          );
           if (!jsonOutput) {
             defaultRuntime.log(theme.info(stillStartingLine));
           } else {
