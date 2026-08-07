@@ -1358,7 +1358,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).not.toHaveBeenCalled();
   });
 
-  it("allows an explicit steer after its active owner advances the transcript leaf", async () => {
+  it("allows an explicit steer during injectable non-streaming tool work", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-moving-leaf-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1377,7 +1377,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     operation.attachBackend({
       kind: "embedded",
       cancel: () => {},
-      isStreaming: () => true,
+      isStreaming: () => false,
+      isStopped: () => false,
       queueMessage: async () => {},
     });
 

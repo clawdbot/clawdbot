@@ -4286,6 +4286,8 @@ export const en: TranslationMap = {
   chat: {
     sendErrors: {
       activeLeafChanged: "The thread switched branches — review and resend.",
+      steerRunNoLongerActive:
+        "This steer still targets the previous run, but that run is no longer active.",
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
@@ -4712,7 +4714,7 @@ export const en: TranslationMap = {
         waitingForRun: "Waiting for current run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
-        needsReview: "Needs review",
+        needsReview: "Delivery uncertain",
       },
       imageCount: "Image ({count})",
     },

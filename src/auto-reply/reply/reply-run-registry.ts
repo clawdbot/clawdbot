@@ -240,7 +240,7 @@ type ReplyRunRegistry = {
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
   isStreaming(sessionKey: string): boolean;
-  isStreamingFromOriginatingLeaf(
+  isMessageInjectableFromOriginatingLeaf(
     sessionKey: string,
     originatingLeafEntryId: string | null,
   ): boolean;
@@ -1176,7 +1176,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return getAttachedBackend(operation)?.isStreaming() ?? false;
   },
-  isStreamingFromOriginatingLeaf(sessionKey, originatingLeafEntryId) {
+  isMessageInjectableFromOriginatingLeaf(sessionKey, originatingLeafEntryId) {
     const operation = this.get(sessionKey);
     if (
       !operation ||
@@ -1185,7 +1185,8 @@ export const replyRunRegistry: ReplyRunRegistry = {
     ) {
       return false;
     }
-    return getAttachedBackend(operation)?.isStreaming() ?? false;
+    const backend = getAttachedBackend(operation);
+    return backend ? isReplyBackendMessageInjectable(backend) : false;
   },
   abort(sessionKey) {
     const operation = this.get(sessionKey);
