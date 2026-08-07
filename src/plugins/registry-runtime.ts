@@ -7,6 +7,7 @@ import {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
@@ -25,6 +26,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
@@ -310,9 +312,28 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       if (sessionIds.size === 0 && sessionFiles.size === 0) {
         return;
       }
+      const soleSessionKey = sessionKeys.size === 1 ? sessionKeys.values().next().value : undefined;
+      const sessionKeyAgentId = parseAgentSessionKey(soleSessionKey)?.agentId;
+      const explicitScanAgentId = soleSessionKey && agentId ? normalizeAgentId(agentId) : agentId;
+      if (sessionKeyAgentId && explicitScanAgentId && explicitScanAgentId !== sessionKeyAgentId) {
+        throw new Error(
+          `Plugin session ownership agent "${explicitScanAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
+        );
+      }
+      const scanAgentId = sessionKeyAgentId ?? explicitScanAgentId;
+      // Keyed reads resolve agent and incognito-store ownership from the key itself,
+      // while ID/file scans need that same scope carried forward explicitly.
+      const scanStorePath =
+        soleSessionKey && sessionKeyAgentId
+          ? resolveSessionStorePathForScope({
+              agentId: scanAgentId,
+              sessionKey: soleSessionKey,
+              ...(storePath ? { storePath } : {}),
+            })
+          : storePath;
       const entries = registryParams.runtime.agent.session.listSessionEntries({
-        ...(agentId ? { agentId } : {}),
-        ...(storePath ? { storePath } : {}),
+        ...(scanAgentId ? { agentId: scanAgentId } : {}),
+        ...(scanStorePath ? { storePath: scanStorePath } : {}),
         readOnly: true,
       });
       for (const { sessionKey, entry } of entries) {

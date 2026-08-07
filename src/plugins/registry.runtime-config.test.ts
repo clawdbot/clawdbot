@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../utils.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
@@ -445,6 +446,87 @@ describe("plugin registry runtime config scope", () => {
         initialEntry: { ...initialEntry, cliBackendId: "opencode" } as never,
       }),
     ).rejects.toThrow("requires exactly one runtime owner");
+  });
+
+  it("carries incognito scope into embedded agent session identity checks", async () => {
+    const sessionKey = "agent:researcher:dashboard:incognito-ownership-check";
+    const entry = {
+      sessionId: "incognito-session",
+      updatedAt: 1,
+      agentHarnessId: "test-harness",
+      modelSelectionLocked: true as const,
+    };
+    const runtime = createPluginRuntime();
+    runtime.agent.session.getSessionEntry = vi.fn((params) => {
+      expect(params).toEqual(
+        params.agentId === undefined
+          ? { sessionKey, readConsistency: "latest" }
+          : { agentId: "main", sessionKey, readConsistency: "latest" },
+      );
+      return params.sessionKey === sessionKey ? entry : undefined;
+    });
+    runtime.agent.session.listSessionEntries = vi.fn((params) => {
+      expect(params).toEqual({
+        agentId: "researcher",
+        readOnly: true,
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "researcher" }),
+      });
+      return [{ sessionKey, entry }];
+    });
+    const runEmbeddedAgent = vi.fn(async () => ({
+      ok: true,
+    })) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
+    Object.defineProperty(runtime.agent, "runEmbeddedAgent", {
+      configurable: true,
+      value: runEmbeddedAgent,
+    });
+    const pluginRegistry = createTestRegistry(runtime);
+    const ownerRecord = createPluginRecord({
+      id: "harness-owner",
+      source: "/plugins/harness-owner/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const otherRecord = createPluginRecord({
+      id: "other-plugin",
+      source: "/plugins/other-plugin/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
+    const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
+    ownerApi.registerAgentHarness({
+      id: "test-harness",
+      label: "Test Harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    });
+    const runParams = {
+      sessionId: entry.sessionId,
+      sessionKey,
+      workspaceDir: "/tmp",
+      prompt: "continue",
+      timeoutMs: 1,
+      runId: "run-1",
+    } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0];
+
+    await expect(ownerApi.runtime.agent.runEmbeddedAgent(runParams)).resolves.toEqual({ ok: true });
+    expect(runtime.agent.session.listSessionEntries).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    await expect(
+      ownerApi.runtime.agent.runEmbeddedAgent({ ...runParams, agentId: "main" }),
+    ).rejects.toThrow('does not match session key agent "researcher"');
+    expect(runtime.agent.session.listSessionEntries).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    await expect(otherApi.runtime.agent.runEmbeddedAgent(runParams)).rejects.toThrow(
+      'owned by plugin "harness-owner"',
+    );
+    expect(runtime.agent.session.listSessionEntries).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("limits locked harness session mutation and execution to the harness owner", async () => {
