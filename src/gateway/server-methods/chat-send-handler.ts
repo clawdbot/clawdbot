@@ -12,7 +12,6 @@ import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { beginReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
@@ -41,7 +40,6 @@ import {
 } from "./chat-send-dispatch-errors.js";
 import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
-import { respondChatSessionRoutingChanged } from "./chat-send-pre-admission.js";
 import {
   applyChatSendReplyContextFields,
   resolveChatSendReplyContext,
@@ -106,7 +104,6 @@ export async function handleChatSend(
     activeRunAbort,
     admittedSessionId,
     chatSendTraceAttributes,
-    cleanupAdmittedRun,
     finishAbortedChatSend,
     gatewayWorkAdmission,
     lifecycleGeneration,
@@ -133,9 +130,7 @@ export async function handleChatSend(
   // Attachment preparation can suspend. Recheck immediately before the
   // synchronous ACK path so aborts and hot routing reloads cannot cross it.
   if (sessionRoutingChanged(context.getRuntimeConfig())) {
-    cleanupAdmittedRun({ force: true });
-    clearAgentRunContext(clientRunId, lifecycleGeneration);
-    respondChatSessionRoutingChanged(respond);
+    admitted.value.rejectSessionRoutingChanged();
     return;
   }
   const { imageOrder, prepareAttachmentsMs } = preparedAttachments.value;
@@ -211,9 +206,7 @@ export async function handleChatSend(
         if (!(await terminalizeRestartSafeAdmission({ retryable: true, status: "failed" }))) {
           throw new Error("chat admission ownership changed before terminalization");
         }
-        cleanupAdmittedRun({ force: true });
-        clearAgentRunContext(clientRunId, lifecycleGeneration);
-        respondChatSessionRoutingChanged(respond);
+        admitted.value.rejectSessionRoutingChanged();
         return;
       }
     }
@@ -265,6 +258,9 @@ export async function handleChatSend(
       // Accepted injection never consumes plugin-bound media, but the shared
       // persistence promise still needs a rejection observer.
       void pluginBoundMediaPromise.catch(() => undefined);
+      if (messageInjectionAttempt.rejectBeforeAck) {
+        return admitted.value.rejectActiveLeafChanged();
+      }
     }
 
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)

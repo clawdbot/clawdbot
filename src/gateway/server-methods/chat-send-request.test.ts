@@ -55,17 +55,22 @@ describe("normalizeChatSendRequest", () => {
     expect(result).toEqual({ ok: false, error: "message or attachment required" });
   });
 
-  it("rejects an explicit steer without an exact run target", () => {
+  it("preserves targetless steer for leaf-bound compatibility admission", () => {
     expect(
       normalizeChatSendRequest({
         params: validParams({ queueMode: "steer" }),
         client: null,
       }),
-    ).toEqual({
-      ok: false,
-      error: "explicit steer requires expectedRunId; refresh the active run and retry",
-      reason: "active-run-target-required",
-    });
+    ).toMatchObject({ ok: true });
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({
+          queueMode: "steer",
+          expectedLeafEntryId: "leaf-1",
+        }),
+        client: null,
+      }),
+    ).toMatchObject({ ok: true });
     expect(
       normalizeChatSendRequest({
         params: validParams({ queueMode: "steer", expectedRunId: " run-1 " }),

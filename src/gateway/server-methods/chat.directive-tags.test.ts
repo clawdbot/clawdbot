@@ -49,6 +49,7 @@ import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -1344,7 +1345,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects an explicit steer without an exact run target before dispatch", async () => {
+  it("rejects targetless steer when no leaf-bound owner exists", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-stale-steer-no-owner-");
     await appendTranscriptMessage(transcriptScope(), {
       eventId: "current-leaf",
@@ -1357,6 +1358,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await send({
       idempotencyKey: "idem-stale-steer-no-owner",
       requestParams: {
+        expectedLeafEntryId: "current-leaf",
         queueMode: "steer",
       },
       waitFor: "none",
@@ -1365,9 +1367,216 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(lastRespondCall(respond)).toEqual([
       false,
       undefined,
-      expect.objectContaining({ details: { reason: "active-run-target-required" } }),
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
     ]);
     expect(context.addChatRun).not.toHaveBeenCalled();
+  });
+
+  it("rejects targetless steer without a supplied leaf before dispatch", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-no-leaf-");
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-targetless-no-leaf",
+        requestParams: { queueMode: "steer" },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("injects a matching leaf-bound targetless steer through the legacy backend seam", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-steer-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      isStopped: () => false,
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-targetless-steer",
+        requestParams: { expectedLeafEntryId: "current-leaf", queueMode: "steer" },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(context.addChatRun).toHaveBeenCalledOnce();
+  });
+
+  it("rejects targetless steer when the owner immutable leaf differs", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-leaf-mismatch-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond, send } = createChatRequestFixture();
+    const queueMessage = vi.fn(async () => {});
+    const operation = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "different-owner-leaf",
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage },
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-targetless-leaf-mismatch",
+        requestParams: { expectedLeafEntryId: "current-leaf", queueMode: "steer" },
+        waitFor: "none",
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("rejects a captured targetless steer when a successor replaces its operation", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-targetless-operation-aba-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "assistant", content: "working" },
+      now: 1,
+      parentId: null,
+    });
+    const { context, respond } = createChatRequestFixture();
+    const originalQueue = vi.fn(async () => {});
+    const successorQueue = vi.fn(async () => {});
+    const original = replyRunRegistry.begin({
+      sessionKey: "main",
+      sessionId: mockState.sessionId,
+      resetTriggered: false,
+      originatingLeafEntryId: "current-leaf",
+    });
+    original.setPhase("running");
+    original.attachBackend({
+      kind: "embedded",
+      cancel: () => {},
+      messageInjection: { isAvailable: () => true, queueMessage: originalQueue },
+    });
+    let successor: ReturnType<typeof replyRunRegistry.begin> | undefined;
+
+    try {
+      await handleChatSend(
+        {
+          params: {
+            sessionKey: "main",
+            message: "hello",
+            idempotencyKey: "idem-targetless-operation-aba",
+            expectedLeafEntryId: "current-leaf",
+            queueMode: "steer",
+          },
+          respond: respond as never,
+          req: {} as never,
+          client: {
+            connect: {
+              client: {
+                id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+                mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+                version: "dev",
+                platform: "web",
+              },
+              scopes: ["operator.admin"],
+            },
+          } as never,
+          isWebchatConnect: () => false,
+          context: context as GatewayRequestContext,
+        },
+        async () => {
+          original.complete();
+          successor = replyRunRegistry.begin({
+            sessionKey: "main",
+            sessionId: mockState.sessionId,
+            resetTriggered: false,
+            originatingLeafEntryId: "current-leaf",
+          });
+          successor.setPhase("running");
+          successor.attachBackend({
+            kind: "embedded",
+            cancel: () => {},
+            messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
+          });
+          return true;
+        },
+      );
+    } finally {
+      original.complete();
+      successor?.complete();
+    }
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(originalQueue).not.toHaveBeenCalled();
+    expect(successorQueue).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
   });
 
   it("allows an exact-run steer after the active transcript leaf advances", async () => {

@@ -149,7 +149,12 @@ describe("reply run registry", () => {
       originatingLeafEntryId: "leaf-b",
       expectedRunId: "run-a",
     });
-    expect(target).toBeDefined();
+    expect(target).toMatchObject({ identity: "run", runId: "run-a" });
+    const legacyTarget = replyRunRegistry.resolveMessageInjectionTarget({
+      sessionKey: "agent:main:main",
+      originatingLeafEntryId: "leaf-a",
+    });
+    expect(legacyTarget).toMatchObject({ identity: "leaf", runId: "run-a" });
     expect(
       replyRunRegistry.resolveMessageInjectionTarget({
         sessionKey: "agent:main:main",
@@ -159,12 +164,39 @@ describe("reply run registry", () => {
     await expect(
       queueReplyMessageInjectionTarget(target!, "steer during tool work"),
     ).resolves.toEqual({ status: "accepted" });
+    await expect(queueReplyMessageInjectionTarget(legacyTarget!, "legacy steer")).resolves.toEqual({
+      status: "accepted",
+    });
     expect(queueMessage).toHaveBeenCalledWith("steer during tool work");
+    expect(queueMessage).toHaveBeenCalledWith("legacy steer");
     stopped = true;
     await expect(queueReplyMessageInjectionTarget(target!, "late steer")).resolves.toEqual({
       status: "rejected",
       reason: "injection_unavailable",
     });
+  });
+
+  it("requires an explicit legacy leaf while preserving deliberate null", () => {
+    const operation = createTestReplyOperation({ originatingLeafEntryId: null });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
+    });
+
+    expect(
+      replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      replyRunRegistry.resolveMessageInjectionTarget({
+        sessionKey: operation.key,
+        originatingLeafEntryId: null,
+      }),
+    ).toMatchObject({ identity: "leaf", originatingLeafEntryId: null });
   });
 
   it("records reply-operation progress without claiming embedded-run activity", () => {

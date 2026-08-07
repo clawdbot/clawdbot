@@ -96,6 +96,8 @@ export type ReplyBackendHandle = {
 const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectionTargetOperation");
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
+  /** Legacy targets stay leaf-bound even when their backend exposes a run id. */
+  readonly identity: "leaf" | "run";
   readonly runId?: string;
   readonly originatingLeafEntryId: string | null | undefined;
 };
@@ -117,6 +119,8 @@ export type ReplyMessageInjectionOutcome =
 type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque operation target. */
   targetRunId: string | undefined;
+  /** Leaf-bound compatibility must reject before ACK instead of falling through. */
+  rejectBeforeAck?: true;
   /** Settles after the backend confirms or rejects this exact injection. */
   outcome: Promise<ReplyMessageInjectionOutcome>;
 };
@@ -1282,6 +1286,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     const target: ReplyMessageInjectionTarget = {
       [replyMessageInjectionTargetOperation]: operation!,
+      identity: normalizeOptionalString(expectedRunId) ? "run" : "leaf",
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
       originatingLeafEntryId,
     };
@@ -1384,13 +1389,15 @@ export function beginReplyMessageInjectionTarget(
   const resolved = resolveReplyMessageInjectionRejection({
     operation: target[replyMessageInjectionTargetOperation],
     originatingLeafEntryId: target.originatingLeafEntryId,
-    expectedRunId: target.runId,
+    expectedRunId: target.identity === "run" ? target.runId : undefined,
     options,
   });
   if (!("injection" in resolved)) {
+    const immediateRejection = { status: "rejected" as const, ...resolved };
     return {
       targetRunId: target.runId,
-      outcome: Promise.resolve({ status: "rejected", ...resolved }),
+      ...(target.identity === "leaf" ? { rejectBeforeAck: true as const } : {}),
+      outcome: Promise.resolve(immediateRejection),
     };
   }
   // Injection is user input, not run evidence: stamping activity here would let
@@ -1403,13 +1410,14 @@ export function beginReplyMessageInjectionTarget(
       ? resolved.injection.queueMessage(text, options)
       : resolved.injection.queueMessage(text);
   } catch (error) {
+    const immediateRejection = {
+      status: "rejected" as const,
+      reason: "runtime_rejected" as const,
+      errorMessage: String(error),
+    };
     return {
       targetRunId: target.runId,
-      outcome: Promise.resolve({
-        status: "rejected",
-        reason: "runtime_rejected",
-        errorMessage: String(error),
-      }),
+      outcome: Promise.resolve(immediateRejection),
     };
   }
   return {

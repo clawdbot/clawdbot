@@ -30,6 +30,7 @@ import {
   hasRestartRecoveryTerminalRun,
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
+  terminalizeRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
@@ -204,8 +205,9 @@ export async function admitChatSend(params: {
     // An active owner can advance this branch while a steer is being composed.
     // The lifecycle admission keeps branch identity fixed after this check; if
     // the owner clears, acceptance-aware dispatch preserves this turn as follow-up.
+    const hasSteerIdentity = expectedRunId !== undefined || expectedLeafEntryId !== undefined;
     const resolvedInjectionTarget =
-      p.queueMode === "steer"
+      p.queueMode === "steer" && hasSteerIdentity
         ? replyRunRegistry.resolveMessageInjectionTarget({
             sessionKey: activeRunScopeKey,
             originatingLeafEntryId: expectedLeafEntryId,
@@ -215,8 +217,10 @@ export async function admitChatSend(params: {
     if (commitOutcome && resolvedInjectionTarget) {
       messageInjectionTarget = resolvedInjectionTarget;
     }
-    if (commitOutcome && expectedRunId && !resolvedInjectionTarget) {
-      throw new Error(ACTIVE_RUN_CHANGED_ERROR_REASON);
+    if (commitOutcome && p.queueMode === "steer" && !resolvedInjectionTarget) {
+      throw new Error(
+        expectedRunId ? ACTIVE_RUN_CHANGED_ERROR_REASON : ACTIVE_LEAF_CHANGED_ERROR_REASON,
+      );
     }
     if (commitOutcome && expectedLeafEntryId !== undefined && !resolvedInjectionTarget) {
       // Runtime session identity resolves through the canonical SQLite accessor;
@@ -462,6 +466,30 @@ export async function admitChatSend(params: {
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
   };
+  const rejectActiveLeafChanged = async () => {
+    if (
+      restartSafeAdmission &&
+      !(await terminalizeRestartSafeChatAdmission({
+        admittedSessionId,
+        clientRunId,
+        sessionKey,
+        startedAt: now,
+        status: "failed",
+        storePath,
+        retryable: true,
+      }))
+    ) {
+      throw new Error("chat admission ownership changed before terminalization");
+    }
+    cleanupAdmittedRun({ force: true });
+    clearAgentRunContext(clientRunId, lifecycleGeneration);
+    respondChatActiveLeafChanged(respond);
+  };
+  const rejectSessionRoutingChanged = () => {
+    cleanupAdmittedRun({ force: true });
+    clearAgentRunContext(clientRunId, lifecycleGeneration);
+    respondChatSessionRoutingChanged(respond);
+  };
   const finishAbortedChatSend = () => {
     const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
     const endedAt = Date.now();
@@ -493,6 +521,8 @@ export async function admitChatSend(params: {
       lifecycleGeneration,
       messageInjectionTarget,
       originatingRoute,
+      rejectActiveLeafChanged,
+      rejectSessionRoutingChanged,
       retainGatewayWorkAdmission,
       restartSafeAdmission,
       setReleaseGatewayRootContinuation: (release: (() => void) | undefined) => {
