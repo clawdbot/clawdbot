@@ -9,6 +9,7 @@ import {
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import {
+  isSessionTranscriptProjectionUnavailableError,
   readSessionTranscriptActiveLeafEvents,
   resolveSessionTranscriptActiveLeafEntryId,
 } from "../../config/sessions/session-accessor.js";
@@ -323,6 +324,18 @@ export async function admitChatSend(params: {
     }
     if (err instanceof Error && err.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
       respondChatActiveLeafChanged(respond);
+      return { ok: false as const };
+    }
+    if (isSessionTranscriptProjectionUnavailableError(err)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
+          details: { method: "chat.send" },
+          retryable: true,
+          retryAfterMs: 250,
+        }),
+      );
       return { ok: false as const };
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));

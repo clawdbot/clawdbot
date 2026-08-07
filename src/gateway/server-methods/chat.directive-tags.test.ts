@@ -1332,6 +1332,53 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(1);
   });
 
+  it("returns retryable unavailable when expected-leaf admission finds a rebuilding projection", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-rebuilding-leaf-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "user", content: "existing" },
+      now: 1,
+      parentId: null,
+    });
+    const before = loadTranscriptEventsSync(transcriptScope());
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      env: suiteFixtureEnv,
+      path: suiteDatabasePath,
+    })
+      .db.prepare(
+        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+      )
+      .run(mockState.sessionId);
+    const { context, respond, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: "idem-rebuilding-leaf",
+      requestParams: { expectedLeafEntryId: "current-leaf" },
+      waitFor: "none",
+    });
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: "main",
+      env: suiteFixtureEnv,
+      path: suiteDatabasePath,
+    });
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        details: { method: "chat.send" },
+        message: "session transcript is rebuilding; retry shortly",
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
+  });
+
   it("rejects a stale explicit steer without an active owner", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-stale-steer-no-owner-");
     await appendTranscriptMessage(transcriptScope(), {
