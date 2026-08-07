@@ -122,6 +122,18 @@ function isRelayTabInfo(value: unknown): value is RelayTabInfo {
   );
 }
 
+function isRelayTabInfoArray(value: unknown): value is RelayTabInfo[] {
+  if (!Array.isArray(value) || value.length > 1_000 || !value.every(isRelayTabInfo)) {
+    return false;
+  }
+  const tabIds = new Set(value.map((tab) => tab.tabId));
+  return tabIds.size === value.length;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function isExtensionHelloMessage(value: object): value is ExtensionHelloMessage {
   if (
     !hasExactOwnKeys(value, ["type", "userAgent", "browserVersion", "extensionVersion", "tabs"])
@@ -140,14 +152,11 @@ function isExtensionHelloMessage(value: object): value is ExtensionHelloMessage 
     typeof hello.extensionVersion !== "string" ||
     hello.extensionVersion.length === 0 ||
     hello.extensionVersion.length > 128 ||
-    !Array.isArray(hello.tabs) ||
-    hello.tabs.length > 1_000 ||
-    !hello.tabs.every(isRelayTabInfo)
+    !isRelayTabInfoArray(hello.tabs)
   ) {
     return false;
   }
-  const tabIds = new Set(hello.tabs.map((tab) => tab.tabId));
-  return tabIds.size === hello.tabs.length;
+  return true;
 }
 
 /** Parse one extension frame; returns null for malformed input. */
@@ -165,17 +174,46 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
   if (typeof type !== "string") {
     return null;
   }
-  switch (type) {
+  const msg = parsed as Record<string, unknown>;
+  // Validate the fields the bridge dereferences per frame type. Anything else
+  // is dropped as malformed: bindSocket invokes the handler without try/catch,
+  // so a bad frame reaching the bridge would escape as an uncaughtException.
+  switch (msg.type) {
     case "hello":
       return isExtensionHelloMessage(parsed) ? parsed : null;
     case "tabs":
+      if (!isRelayTabInfoArray(msg.tabs)) {
+        return null;
+      }
+      break;
     case "cdpEvent":
+      if (
+        !isNonNegativeSafeInteger(msg.tabId) ||
+        (msg.sessionId !== undefined && typeof msg.sessionId !== "string") ||
+        typeof msg.method !== "string"
+      ) {
+        return null;
+      }
+      break;
     case "result":
+      if (!isNonNegativeSafeInteger(msg.seq)) {
+        return null;
+      }
+      break;
     case "error":
+      if (!isNonNegativeSafeInteger(msg.seq) || typeof msg.message !== "string") {
+        return null;
+      }
+      break;
     case "detached":
+      if (!isNonNegativeSafeInteger(msg.tabId) || typeof msg.reason !== "string") {
+        return null;
+      }
+      break;
     case "pong":
       return parsed as ExtensionToRelayMessage;
     default:
       return null;
   }
+  return parsed as ExtensionToRelayMessage;
 }
