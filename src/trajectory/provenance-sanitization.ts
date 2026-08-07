@@ -49,6 +49,7 @@ type UnsafeReason = "count" | "long" | "short";
 type EventLike = { source?: unknown; type: string; data?: Record<string, unknown> };
 type TranscriptEntryLike = { type?: unknown; message?: unknown };
 type Transforms = {
+  replacements?: ReadonlyMap<string, string>;
   transformKey?: (value: string) => string;
   transformString?: (value: string) => string;
 };
@@ -193,19 +194,34 @@ export function projectTrajectoryDiagnosticValue(value: unknown): unknown {
 export class TrajectoryProvenanceSanitizer {
   private readonly identities = new Set<string>();
   private readonly replacements = new Map<string, string>();
-  private pattern: RegExp | null | undefined;
+  private readonly patterns = new WeakMap<ReadonlyMap<string, string>, RegExp>();
   private unsafe?: UnsafeReason;
 
   constructor(private readonly params: { mode: Mode; inputProvenance?: unknown }) {
     this.learnProvenance(params.inputProvenance);
   }
 
-  sanitizeEventData(type: string, data: Record<string, unknown>): Record<string, unknown> {
+  sanitizeEventData(
+    type: string,
+    data: Record<string, unknown>,
+    trustedTargetIdentity?: string,
+  ): Record<string, unknown> {
     this.learnEventData(type, data);
-    if (this.unsafe) {
+    const targetIdentity = type === "tool.result" ? trustedTargetIdentity : undefined;
+    const invalidTargetIdentity =
+      targetIdentity !== undefined &&
+      (targetIdentity.length < MIN_IDENTITY_CHARS || targetIdentity.length > MAX_IDENTITY_CHARS);
+    if (this.unsafe || invalidTargetIdentity) {
       return { redacted: true, reason: "trajectory-provenance-sanitization-limit" };
     }
-    return this.project(this.prepareFinalPrompt(data), { kind: "data", type });
+    const identityReplacements = targetIdentity
+      ? new Map(this.replacements).set(
+          targetIdentity,
+          hashTrajectoryIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, targetIdentity),
+        )
+      : this.replacements;
+    const transforms = { replacements: identityReplacements };
+    return this.project(this.prepareFinalPrompt(data), { kind: "data", type }, transforms);
   }
 
   sanitizeExportSnapshot<
@@ -310,7 +326,7 @@ export class TrajectoryProvenanceSanitizer {
       identity,
       hashTrajectoryIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, identity),
     );
-    this.pattern = undefined;
+    this.patterns.delete(this.replacements);
   }
 
   private projectOrigin(value: unknown): PersistedOrigin | undefined {
@@ -351,10 +367,11 @@ export class TrajectoryProvenanceSanitizer {
   }
 
   private project<T>(value: T, scope: Scope, transforms: Transforms = {}): T {
+    const replacements = transforms.replacements ?? this.replacements;
     const chain = (external: ((value: string) => string) | undefined) =>
-      this.replacements.size > 0 || external
+      replacements.size > 0 || external
         ? (text: string) => {
-            const replaced = this.replaceIdentities(text);
+            const replaced = this.replaceIdentities(text, replacements);
             return external?.(replaced) ?? replaced;
           }
         : undefined;
@@ -401,7 +418,7 @@ export class TrajectoryProvenanceSanitizer {
     if (typeof raw !== "string") {
       return data;
     }
-    const projected = redactSensitiveFieldValue("", this.replaceIdentities(raw));
+    const projected = redactSensitiveFieldValue("", this.replaceIdentities(raw, this.replacements));
     if (Buffer.byteLength(projected, "utf8") > FINAL_PROMPT_MAX_BYTES) {
       return {
         ...data,
@@ -412,22 +429,22 @@ export class TrajectoryProvenanceSanitizer {
     return projected === raw ? data : { ...data, finalPromptText: projected };
   }
 
-  private replaceIdentities(value: string): string {
-    if (this.replacements.size === 0) {
+  private replaceIdentities(value: string, replacements: ReadonlyMap<string, string>): string {
+    if (replacements.size === 0) {
       return value;
     }
-    if (this.pattern === undefined) {
-      const identities = [...this.replacements.keys()].toSorted(
+    let pattern = this.patterns.get(replacements);
+    if (!pattern) {
+      const identities = [...replacements.keys()].toSorted(
         (left, right) => right.length - left.length || left.localeCompare(right),
       );
-      this.pattern = new RegExp(
+      pattern = new RegExp(
         identities.map((identity) => identity.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|"),
         "gu",
       );
+      this.patterns.set(replacements, pattern);
     }
-    return this.pattern
-      ? value.replace(this.pattern, (match) => this.replacements.get(match) ?? match)
-      : value;
+    return value.replace(pattern, (match) => replacements.get(match) ?? match);
   }
 
   private throwIfUnsafe(): void {

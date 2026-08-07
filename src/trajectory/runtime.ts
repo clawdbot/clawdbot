@@ -181,14 +181,6 @@ function truncateOversizedTrajectoryEvent(
   return best;
 }
 
-function sanitizeTrajectoryPayload(
-  provenanceSanitizer: TrajectoryProvenanceSanitizer,
-  type: string,
-  data: Record<string, unknown>,
-): Record<string, unknown> {
-  return provenanceSanitizer.sanitizeEventData(type, data);
-}
-
 function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): string | undefined {
   const diagnostics = writer.describeQueue?.();
   if (!diagnostics) {
@@ -387,10 +379,19 @@ export function createTrajectoryRuntimeRecorder(
   const buildEvent = (
     type: string,
     data?: Record<string, unknown>,
-    trustedData?: Record<string, unknown>,
+    targetSessionKey?: string,
   ): { event: TrajectoryEvent; line: string } | undefined => {
     const nextSeq = seq + 1;
     const sourceSeq = sink.nextSourceSeq?.() ?? nextSeq;
+    const eventData = data
+      ? provenanceSanitizer.sanitizeEventData(type, data, targetSessionKey)
+      : undefined;
+    if (eventData && targetSessionKey) {
+      eventData.targetSessionHash = hashTrajectoryIdentifier(
+        TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
+        targetSessionKey,
+      );
+    }
     const event: TrajectoryEvent = {
       traceSchema: "openclaw-trajectory",
       schemaVersion: 1,
@@ -407,13 +408,7 @@ export function createTrajectoryRuntimeRecorder(
       provider: params.provider,
       modelId: params.modelId,
       modelApi: params.modelApi,
-      data:
-        data || trustedData
-          ? {
-              ...(data ? sanitizeTrajectoryPayload(provenanceSanitizer, type, data) : {}),
-              ...trustedData,
-            }
-          : undefined,
+      data: eventData,
     };
     const line = safeJsonStringify(event);
     if (!line) {
@@ -441,18 +436,7 @@ export function createTrajectoryRuntimeRecorder(
       const targetSessionKey = consumeAgentToolTargetSessionKey(privateState);
       const untrustedData = { ...data };
       delete untrustedData.targetSessionHash;
-      const built = buildEvent(
-        "tool.result",
-        untrustedData,
-        targetSessionKey
-          ? {
-              targetSessionHash: hashTrajectoryIdentifier(
-                TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
-                targetSessionKey,
-              ),
-            }
-          : undefined,
-      );
+      const built = buildEvent("tool.result", untrustedData, targetSessionKey);
       if (built) {
         sink.write(built.event, built.line);
       }
