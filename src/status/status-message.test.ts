@@ -95,6 +95,44 @@ describe("buildStatusMessageParts presentation", () => {
     expect(clockLine).toContain("(UTC)");
     expect(contextTexts.join("\n")).not.toContain("Reference UTC");
     expect(contextTexts.join("\n")).not.toContain("Telegram rich messages");
+    // Boring defaults stay out of the card: no zero compaction row, no depth-0
+    // queue detail, no meter or warning without usage data.
+    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+    expect(rows.has("🧹 Compactions")).toBe(false);
+    expect(rows.get("🪢 Queue")).toBe("steer");
+    expect(String(rows.get("📚 Context"))).not.toContain("▰");
+    expect(parts.presentation.blocks.some((block) => block.type === "text")).toBe(false);
+  });
+
+  it("shows a context meter and a pressure warning when the window runs hot", () => {
+    const parts = buildStatusMessageParts({
+      now: 1_751_529_600_000,
+      config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      agent: { model: "anthropic/claude-haiku-4-5", contextTokens: 100_000 },
+      sessionEntry: {
+        totalTokens: 87_000,
+        totalTokensFresh: true,
+        compactionCount: 2,
+        updatedAt: 1_751_529_500_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 3 },
+      modelAuth: "api-key",
+    });
+
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+    if (table?.type !== "table") {
+      throw new Error("expected table block");
+    }
+    const rows = new Map(table.rows.map((row) => [row[0], row[1]]));
+    expect(String(rows.get("📚 Context"))).toMatch(/^▰{9}▱ /);
+    expect(rows.get("🧹 Compactions")).toBe("2");
+    expect(rows.get("🪢 Queue")).toBe("steer (depth 3)");
+    const warning = parts.presentation.blocks.find(
+      (block) => block.type === "text" && block.text.startsWith("⚠️ Context"),
+    );
+    expect(warning?.type === "text" ? warning.text : "").toBe("⚠️ Context 87% full");
   });
 });
 

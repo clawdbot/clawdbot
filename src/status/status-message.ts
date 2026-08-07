@@ -1181,8 +1181,20 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   pushStatusRow("🧮 Tokens", tokensValue);
   pushStatusRow("💵 Cost", costLabel);
   pushStatusRow("🗄️ Cache", cacheValue);
-  pushStatusRow("📚 Context", contextUsageLabel);
-  pushStatusRow("🧹 Compactions", entry?.compactionCount ?? 0);
+  const contextPct =
+    typeof totalTokens === "number" && totalTokens > 0 && contextTokens > 0
+      ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
+      : null;
+  const contextMeter =
+    contextPct !== null
+      ? (() => {
+          const filled = Math.min(10, Math.max(0, Math.round(contextPct / 10)));
+          return `${"▰".repeat(filled)}${"▱".repeat(10 - filled)} `;
+        })()
+      : "";
+  pushStatusRow("📚 Context", `${contextMeter}${contextUsageLabel}`);
+  const compactionCount = entry?.compactionCount ?? 0;
+  pushStatusRow("🧹 Compactions", compactionCount > 0 ? compactionCount : null);
   pushStatusRow("🧵 Session", sessionValue);
   pushStatusRow("⚙️ Execution", execution.label);
   pushStatusRow("Runtime", agentRuntimeLabel);
@@ -1199,7 +1211,10 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       .join(" · "),
   );
   pushStatusRow("👥 Activation", groupActivationValue);
-  pushStatusRow("🪢 Queue", `${queueMode}${queueDetails}`);
+  // Depth 0 is the boring default; the queue row keeps details only when the
+  // queue is non-empty or the session carries queue overrides.
+  const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
+  pushStatusRow("🪢 Queue", queueHasSignal ? `${queueMode}${queueDetails}` : queueMode);
 
   const contextBlock = (value: string | null | undefined): MessagePresentationBlock[] =>
     value?.trim() ? [{ type: "context", text: value }] : [];
@@ -1217,6 +1232,10 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     .join(" · ");
   // The header row doubles as the card title on native renderers, so the
   // presentation carries no separate title.
+  // Silence means nominal: the pressure line renders only when the context
+  // window is running hot, so its presence alone is the signal.
+  const contextPressureLine =
+    contextPct !== null && contextPct >= 80 ? `⚠️ Context ${contextPct}% full` : null;
   const presentation: MessagePresentation = {
     blocks: [
       {
@@ -1226,6 +1245,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         rows: statusRows,
         rowHeaderColumnIndex: 0,
       },
+      // A warning is not low-emphasis context; keep it a plain text block.
+      ...(contextPressureLine ? [{ type: "text", text: contextPressureLine } as const] : []),
       ...contextBlock(clockUptimeValue),
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
