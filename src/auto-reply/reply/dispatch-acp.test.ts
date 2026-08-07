@@ -788,6 +788,73 @@ describe("tryDispatchAcpReply", () => {
     clearAgentRunContext(runId, replacementGeneration);
   });
 
+  it("captures caller-owned ACP lifecycle before lazy dispatch setup yields", async () => {
+    setReadyAcpResolution();
+    const runId = "caller-reused-during-setup";
+    const admittedGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(runId, {
+      agentId: "caller",
+      lifecycleGeneration: admittedGeneration,
+      sessionKey,
+    });
+    const admittedToken = getAgentRunContextLifecycleToken(runId, admittedGeneration);
+    let startGeneration: string | undefined;
+    let startToken: object | undefined;
+    let callbackGeneration: string | undefined;
+    let callbackToken: object | undefined;
+    let terminalGeneration: string | undefined;
+    let terminalToken: object | undefined;
+
+    auditMocks.emitAcpLifecycleStart.mockImplementationOnce(
+      (params: { lifecycleGeneration?: string }) => {
+        startGeneration = params.lifecycleGeneration;
+        startToken = getAgentRunExecutionContextLifecycleToken(runId);
+      },
+    );
+    auditMocks.emitAcpRuntimeEvent.mockImplementationOnce(() => {
+      callbackGeneration = getAgentRunExecutionLifecycleGeneration();
+      callbackToken = getAgentRunExecutionContextLifecycleToken(runId);
+    });
+    auditMocks.emitAcpLifecycleEnd.mockImplementationOnce(() => {
+      terminalGeneration = getAgentRunExecutionLifecycleGeneration();
+      terminalToken = getAgentRunExecutionContextLifecycleToken(runId);
+    });
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        if (onEvent) {
+          await emitToolLifecycleEvents(onEvent, "tool-after-setup-reuse");
+        }
+      },
+    );
+
+    const dispatch = runDispatch({ bodyForAgent: "audit setup race", runId });
+    const replacementGeneration = rotateAgentEventLifecycleGeneration();
+    claimAgentRunContext(runId, {
+      agentId: "replacement",
+      lifecycleGeneration: replacementGeneration,
+      sessionKey: "agent:replacement:main",
+    });
+    const replacementToken = getAgentRunContextLifecycleToken(runId, replacementGeneration);
+
+    await dispatch;
+
+    expect(admittedToken).toBeTypeOf("object");
+    expect(replacementToken).toBeTypeOf("object");
+    expect(replacementToken).not.toBe(admittedToken);
+    expect(startGeneration).toBe(admittedGeneration);
+    expect(startToken).toBe(admittedToken);
+    expect(callbackGeneration).toBe(admittedGeneration);
+    expect(callbackToken).toBe(admittedToken);
+    expect(terminalGeneration).toBe(admittedGeneration);
+    expect(terminalToken).toBe(admittedToken);
+    expect(getAgentRunContext(runId)).toMatchObject({
+      agentId: "replacement",
+      lifecycleGeneration: replacementGeneration,
+      sessionKey: "agent:replacement:main",
+    });
+    clearAgentRunContext(runId, replacementGeneration);
+  });
+
   it("keeps audit run ids unique when channel message ids repeat", async () => {
     setReadyAcpResolution();
 

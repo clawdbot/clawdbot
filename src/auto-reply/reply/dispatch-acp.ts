@@ -22,8 +22,10 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { captureAgentRunExecutionContextLifecycleToken } from "../../infra/agent-run-execution-context.js";
 import {
   claimAgentRunContext,
+  getAgentRunContextLifecycleToken,
   releaseAgentRunContext,
   retainActiveAgentRunContext,
 } from "../../infra/agent-run-registry.js";
@@ -455,6 +457,17 @@ export async function tryDispatchAcpReply(params: {
     return null;
   }
 
+  const existingRunId = normalizeOptionalString(params.runId);
+  // Lazy ACP setup can yield while a caller-owned run id is rotated and reused.
+  // Snapshot both ownership identities now so later audit callbacks cannot rebound.
+  const admittedAuditLifecycleGeneration = existingRunId
+    ? captureAgentRunLifecycleGeneration(existingRunId)
+    : undefined;
+  const admittedAuditContextLifecycleToken =
+    existingRunId && admittedAuditLifecycleGeneration
+      ? getAgentRunContextLifecycleToken(existingRunId, admittedAuditLifecycleGeneration)
+      : undefined;
+
   const { getAcpSessionManager } = await loadDispatchAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const acpResolution = acpManager.resolveSession({
@@ -581,14 +594,13 @@ export async function tryDispatchAcpReply(params: {
       markIdle: params.markIdle,
     });
   const requestId = resolveAcpRequestId(params.ctx);
-  const existingRunId = normalizeOptionalString(params.runId);
   const auditOnly = existingRunId === undefined;
   const auditRunId = existingRunId ?? generateSecureUuid();
   const auditRuntime = await loadDispatchAcpAuditRuntime();
   const auditToolTracker = auditRuntime.createAcpToolLifecycleTracker();
   let auditStarted = false;
   let auditFinished = false;
-  let auditLifecycleGeneration: string | undefined;
+  let auditLifecycleGeneration = admittedAuditLifecycleGeneration;
   let auditContextOwnerToken: string | undefined;
   let releaseAuditContextLease: (() => void) | undefined;
   let auditTerminalOutcome: "blocked" | undefined;
@@ -639,7 +651,16 @@ export async function tryDispatchAcpReply(params: {
   const runWithAuditLifecycle = <T>(run: () => T): T => {
     claimAuditContext();
     return auditLifecycleGeneration
-      ? withAgentRunLifecycleGeneration(auditLifecycleGeneration, run)
+      ? withAgentRunLifecycleGeneration(auditLifecycleGeneration, () => {
+          if (admittedAuditContextLifecycleToken) {
+            captureAgentRunExecutionContextLifecycleToken(
+              auditRunId,
+              auditLifecycleGeneration,
+              admittedAuditContextLifecycleToken,
+            );
+          }
+          return run();
+        })
       : run();
   };
   const releaseAuditContext = () => {
