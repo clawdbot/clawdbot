@@ -1,0 +1,43 @@
+title: OTEL generation config watcher
+
+scenario:
+  id: otel-generation-config-watcher
+  surface: telemetry
+  coverage:
+    primary:
+      - observability.otlp-http-traces-qa-lab
+      - observability.telemetry-runtime-validation
+      - observability.telemetry-trace
+    secondary:
+      - gateway.restart-and-stop-gateway-restart
+      - observability.trace-correlation-fields
+  objective: Prove a watched OTEL endpoint change replaces one private provider generation with another inside the same Gateway PID.
+  successCriteria:
+    - Collector A receives correlated traces, metrics, and logs before the watched config mutation.
+    - The config watcher performs an OPENCLAW_NO_RESPAWN in-process restart without changing the Gateway PID.
+    - A fresh traced RPC after readiness exports correlated traces, metrics, and logs only to collector B.
+    - Collector A receives no requests after the post-restart readiness barrier, including final Gateway shutdown.
+    - Exported spans retain one valid traceparent-derived graph and logs carry valid correlation ids.
+    - The script emits redacted schema-v2 evidence with repo-relative artifact paths.
+  plugins:
+    - diagnostics-otel
+    - qa-lab
+  docsRefs:
+    - docs/gateway/opentelemetry.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/diagnostics-otel/src/service.ts
+    - extensions/diagnostics-otel/src/service-propagation.ts
+    - extensions/qa-lab/src/gateway-child.ts
+    - test/e2e/qa-lab/runtime/otel-generation-config-watcher-runtime.ts
+    - test/e2e/qa-lab/runtime/otel-test-support.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/otel-generation-config-watcher-runtime.ts
+    config:
+      requiredProviderMode: mock-openai
+    args:
+      - --output-dir
+      - ${outputDir}
+    timeoutMs: 300000
+    summary: Same-PID watched endpoint replacement with isolated trace, metric, and log exports.

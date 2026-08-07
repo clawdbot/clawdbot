@@ -872,7 +872,7 @@ describe("buildStatusReply subagent summary", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Runtime: OpenAI Codex");
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).not.toContain("Fast · codex");
     expect(
       providerUsageMock.loadProviderUsageSummary.mock.calls.some(([params]) =>
@@ -2207,7 +2207,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).not.toContain("codex");
   });
 
@@ -2241,8 +2241,8 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Think: max");
-    expect(normalized).not.toContain("Think: ultra");
+    expect(normalized).toContain("think max");
+    expect(normalized).not.toContain("think ultra");
   });
 
   it("clamps off to the active provider's always-thinking level", async () => {
@@ -2276,7 +2276,7 @@ describe("buildStatusReply subagent summary", () => {
       activeModelAuthOverride: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Think: max");
+    expect(normalizeTestText(text)).toContain("think max");
     expect(activeProviderThinkingMock.resolveThinkingProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "moonshot",
@@ -2380,7 +2380,7 @@ describe("buildStatusReply", () => {
 
     const reply = await buildKiraStatusReply(cfg);
 
-    expect(reply?.text).toContain("Think: xhigh");
+    expect(reply?.text).toContain("think xhigh");
   });
 
   it("shows per-agent fallback overrides in the status card", async () => {

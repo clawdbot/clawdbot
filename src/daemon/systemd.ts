@@ -1150,6 +1150,9 @@ async function writeSystemdUnit({
   await assertNoSystemGatewayOwnership(env);
 
   const unitPath = resolveSystemdUnitPath(env);
+  const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
+    (await readSystemdServiceExecStart(env))?.environment,
+  );
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
   await assertSystemdManagedPathIsNotSymlink(unitPath);
   const fileManagedKeys = collectSystemdFileManagedKeys({
@@ -1201,7 +1204,8 @@ async function writeSystemdUnit({
   try {
     const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
       stateDir,
-      dotenvVars: stateDirDotEnvVars,
+      stateDirDotEnvKeys: Object.keys(stateDirDotEnvVars),
+      priorManagedKeys,
       inlineManagedKeys,
       fileManagedKeys,
       skippedManagedKeys: skippedShellReferenceKeys,
@@ -1352,7 +1356,12 @@ async function publishSystemdUnit(params: {
 
 async function writeSystemdGatewayEnvironmentFile(params: {
   stateDir: string;
-  dotenvVars: Record<string, string>;
+  /** Keys loaded by the Gateway directly from the state-dir .env. They must be removed from
+   *  generated files so a supervisor restart cannot shadow a later .env edit. */
+  stateDirDotEnvKeys?: Iterable<string>;
+  /** Keys owned by the previously installed service. Preserve the prior ownership record so
+   *  deleting a managed dotenv key cannot reclassify its stale file value as operator-owned. */
+  priorManagedKeys?: Iterable<string>;
   /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
    *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
   inlineManagedKeys?: ReadonlySet<string>;
@@ -1365,7 +1374,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   fileBackedEnvironment?: Record<string, string>;
   environment?: GatewayServiceEnv;
 }): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
-  const incoming = { ...params.dotenvVars, ...params.fileBackedEnvironment };
+  const incoming = { ...params.fileBackedEnvironment };
   for (const [key, value] of Object.entries(incoming)) {
     if (/[\r\n]/.test(value)) {
       throw new Error(
@@ -1411,6 +1420,8 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   const managedKeysToDrop = normalizeServiceEnvKeys([
     ...(params.inlineManagedKeys ?? []),
     ...(params.fileManagedKeys ?? []),
+    ...(params.priorManagedKeys ?? []),
+    ...(params.stateDirDotEnvKeys ?? []),
     ...(params.skippedManagedKeys ?? []),
   ]);
   const operatorOnly = Object.fromEntries(
