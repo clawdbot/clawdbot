@@ -201,20 +201,23 @@ function buildTerminal(params: {
     timeoutPhase: meta.timeoutPhase,
     providerStarted: meta.providerStarted,
   });
-  const metadata: Record<string, unknown> = {};
-  const terminalReceipt = normalizeAgentRunTerminalReceipt(
-    (meta.agentMeta as { terminalReceipt?: unknown } | undefined)?.terminalReceipt,
-  );
-  if (terminalReceipt?.runId === params.runId) {
-    metadata.terminalReceipt = terminalReceipt;
-  }
-  metadata.terminalReply =
+  const terminalReply =
     normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
     buildAgentRunTerminalReplySnapshot({
       visibleText: meta.finalAssistantVisibleText,
       rawText: meta.finalAssistantRawText,
       terminalReplyKind: meta.terminalReplyKind,
     });
+  const metadata: Record<string, unknown> = { terminalReply };
+  const terminalReceipt = normalizeAgentRunTerminalReceipt(
+    (meta.agentMeta as { terminalReceipt?: unknown } | undefined)?.terminalReceipt,
+  );
+  if (terminalReceipt?.runId === params.runId) {
+    metadata.terminalReceipt = {
+      ...terminalReceipt,
+      terminalDisposition: terminalReply.disposition === "visible" ? "visible" : "not-visible",
+    };
+  }
   if (params.behavior.kind === "channel-delivery" || params.behavior.kind === "followup-delivery") {
     for (const key of [
       "stopReason",

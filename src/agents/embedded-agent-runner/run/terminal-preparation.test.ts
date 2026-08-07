@@ -277,7 +277,9 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       },
       successfulToolNames: ["read"],
       rerouted: true,
-      terminalDisposition: "visible",
     });
+    expect(
+      (prepared.agentMeta as { terminalReceipt?: Record<string, unknown> }).terminalReceipt,
+    ).not.toHaveProperty("terminalDisposition");
   });
 });

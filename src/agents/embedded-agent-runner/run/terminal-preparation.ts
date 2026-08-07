@@ -132,9 +132,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
     : undefined;
-  const attemptEvidence = attempt as EmbeddedRunAttemptResult & {
-    terminalTurnId?: string;
-  };
+  const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   const successfulToolNames = [
     ...new Set(
       attempt.toolMetas
@@ -147,7 +145,7 @@ export function prepareEmbeddedRunTerminal(input: {
     terminalReceipt: {
       runId: runParams.runId,
       sessionId: input.sessionIdUsed,
-      turnId: attemptEvidence.terminalTurnId?.trim() || runParams.runId,
+      turnId: terminalTurnId?.trim() || runParams.runId,
       requested: { provider: input.provider, model: input.model },
       effective: {
         provider: reportedModelRef.provider,
@@ -156,8 +154,7 @@ export function prepareEmbeddedRunTerminal(input: {
       },
       successfulToolNames,
       rerouted: responseModel !== input.model,
-      terminalDisposition: finalAssistantVisibleText ? "visible" : "not-visible",
-    } satisfies AgentRunTerminalReceipt,
+    } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
   // A yielded attempt ends before message_end. Its aborted tool-call assistant,
   // not an earlier completed cycle, owns paused-turn classification.
