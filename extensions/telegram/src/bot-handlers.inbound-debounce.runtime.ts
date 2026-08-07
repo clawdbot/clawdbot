@@ -6,7 +6,7 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
@@ -207,7 +207,7 @@ export function createTelegramInboundDebounceRuntime(
             threadId != null ? { message_thread_id: threadId } : undefined,
           )
           .catch((sendError: unknown) => {
-            logVerbose(`telegram: error fallback send failed: ${String(sendError)}`);
+            runtime.error?.(danger(`telegram: error fallback send failed: ${String(sendError)}`));
           });
       }
     },
