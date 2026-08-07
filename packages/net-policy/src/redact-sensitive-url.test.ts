@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSensitiveUrlQueryParamName,
+  isSensitiveUrlQueryParamNameForDiagnostics,
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
   hasSensitiveUrlHintTag,
@@ -325,6 +326,61 @@ describe("isSensitiveUrlQueryParamName", () => {
     expect(isSensitiveUrlQueryParamName("x-api-version")).toBe(false);
     expect(isSensitiveUrlQueryParamName("x-request-id")).toBe(false);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);
+  });
+
+  it("keeps the canonical classifier exact so visible URLs stay readable", () => {
+    // Pinned on purpose. These names embed a credential marker substring but
+    // are not credentials, and the canonical classifier drives redaction of
+    // URLs we show back to users. A diagnostic sink may over-redact them; this
+    // one must not, so the diagnostic superset stays a separate export.
+    expect(isSensitiveUrlQueryParamName("token_count")).toBe(false);
+    expect(isSensitiveUrlQueryParamName("signal")).toBe(false);
+    expect(isSensitiveUrlQueryParamName("sigmoid")).toBe(false);
+    expect(redactSensitiveUrl("https://example.com/v1?token_count=42&signal=keep")).toBe(
+      "https://example.com/v1?token_count=42&signal=keep",
+    );
+  });
+});
+
+describe("isSensitiveUrlQueryParamNameForDiagnostics", () => {
+  it("is a strict superset of the canonical classifier", () => {
+    for (const name of [
+      "token",
+      "refresh_token",
+      "access-token",
+      "x-amz-signature",
+      "X-Amz-Credential",
+      "X-Goog-Signature",
+      "client%5Fse\u200Bcret",
+      "client_se\u3164cret",
+      "upstream-token",
+      "sig",
+    ]) {
+      expect(isSensitiveUrlQueryParamName(name)).toBe(true);
+      expect(isSensitiveUrlQueryParamNameForDiagnostics(name)).toBe(true);
+    }
+  });
+
+  it("also redacts substring-marker names the canonical classifier leaves alone", () => {
+    for (const name of [
+      "sessionSecret",
+      "privateKeyPem",
+      "authMethod",
+      "apiKeyId",
+      "userToken",
+      "passwordHash",
+    ]) {
+      expect(isSensitiveUrlQueryParamName(name)).toBe(false);
+      expect(isSensitiveUrlQueryParamNameForDiagnostics(name)).toBe(true);
+    }
+  });
+
+  it("over-redacts marker-bearing non-secrets, which is the accepted diagnostic trade", () => {
+    expect(isSensitiveUrlQueryParamNameForDiagnostics("token_count")).toBe(true);
+    expect(isSensitiveUrlQueryParamNameForDiagnostics("signal")).toBe(false);
+    expect(isSensitiveUrlQueryParamNameForDiagnostics("sigmoid")).toBe(false);
+    expect(isSensitiveUrlQueryParamNameForDiagnostics("x-request-id")).toBe(false);
+    expect(isSensitiveUrlQueryParamNameForDiagnostics("safe")).toBe(false);
   });
 });
 
