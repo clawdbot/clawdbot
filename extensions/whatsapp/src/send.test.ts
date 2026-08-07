@@ -768,11 +768,14 @@ describe("web outbound", () => {
     });
   });
 
-  it("sends polls via active listener", async () => {
+  it("sends polls via active listener and records ownership when the hook is enabled", async () => {
+    const cfgWithHookEnabled: OpenClawConfig = {
+      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+    };
     const result = await sendPollWhatsApp(
       "+1555",
       { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
-      { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      { verbose: false, cfg: cfgWithHookEnabled },
     );
     expect(result).toEqual({
       messageId: "poll123",
@@ -793,8 +796,26 @@ describe("web outbound", () => {
       "default",
       "1555@s.whatsapp.net",
       "poll123",
-      WHATSAPP_TEST_CFG,
+      cfgWithHookEnabled,
     );
+  });
+
+  it("does not persist poll ownership/key state when the hook is disabled (default)", async () => {
+    // WHATSAPP_TEST_CFG has no pluginHooks.pollVoteReceived set — the
+    // default-off case. Sending a poll must still succeed, but nothing
+    // decryptable should be written to durable state: the opt-in being off
+    // must mean no durable poll-key material exists at all, not just that
+    // dispatch is suppressed later.
+    const result = await sendPollWhatsApp(
+      "+1555",
+      { question: "Lunch?", options: ["Pizza", "Sushi"] },
+      { verbose: false, cfg: WHATSAPP_TEST_CFG },
+    );
+    expect(result).toEqual({
+      messageId: "poll123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(hoisted.rememberWhatsAppOwnPollCreation).not.toHaveBeenCalled();
   });
 
   it("rejects polls without an accepted provider message key", async () => {

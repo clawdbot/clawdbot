@@ -51,7 +51,15 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       reactionLevels: ["off", "ack", "minimal", "extensive"],
     }),
     pluginHooks: WhatsAppPluginHooksSchema,
-    pollVoteRetentionMs: z.number().int().positive().optional(),
+    // Bounds how long decrypted poll-vote key material is retained on disk;
+    // unbounded retention of decryption keys is a privacy risk regardless of
+    // how unlikely a very large configured value would be in practice.
+    pollVoteRetentionMs: z
+      .number()
+      .int()
+      .positive()
+      .max(24 * 60 * 60 * 1000)
+      .optional(),
   };
 }
 

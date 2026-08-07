@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
+  rememberWhatsAppPollCreationMessage,
 } from "./inbound/poll-votes.js";
 import {
   buildPollCreationMessageForTests,
@@ -82,6 +83,22 @@ describe("web monitor inbox poll vote hook", () => {
     await vi.waitFor(() => {
       expect(params.baileysCache.recentMessageKeys.has(`${CHAT_JID}:${pollMessageId}`)).toBe(true);
     });
+    if (pollCreatorIsSelf) {
+      // Ownership is only ever recorded from the accepted-send path (see
+      // send.ts), never inferred from the fromMe echo emitted above — that
+      // echo alone must NOT be sufficient to establish ownership (a fromMe
+      // poll-creation message can also come from another linked device).
+      // Simulate what sendPollWhatsApp would have done at accepted-send time.
+      const cfg = mockLoadConfig();
+      rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId, cfg);
+      rememberWhatsAppPollCreationMessage(
+        DEFAULT_ACCOUNT_ID,
+        CHAT_JID,
+        pollMessageId,
+        pollCreationMessage,
+        cfg,
+      );
+    }
 
     const vote = encryptPollVoteForTests({
       selectedOptionNames: ["Sushi"],
@@ -214,6 +231,71 @@ describe("web monitor inbox poll vote hook", () => {
       pollCreatorIsSelf: false,
       pollMessageId: "POLL-THIRD-PARTY",
       voteMessageId: "VOTE-THIRD-PARTY",
+    });
+    // Give the fire-and-forget dispatch a tick to (not) run.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fire poll_vote_received for a fromMe poll-creation echo that was never an accepted OpenClaw send (linked-device poll)", async () => {
+    // Regression: a fromMe poll-creation message can also originate from
+    // another device linked to the same WhatsApp account — the gateway
+    // never sent it. Only an actual accepted send (send.ts) may establish
+    // ownership; observing the fromMe echo alone must not.
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          pluginHooks: { pollVoteReceived: true },
+        },
+      },
+    });
+    const baileysCache = createBaileysCacheSupport();
+    const pollMessageId = "POLL-LINKED-DEVICE";
+    const voteMessageId = "VOTE-LINKED-DEVICE";
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["Pizza", "Sushi"],
+    });
+    const creationKey = { remoteJid: CHAT_JID, id: pollMessageId, fromMe: true };
+
+    const { sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+      recentMessageKeys: baileysCache.recentMessageKeys,
+      baileysGroupMetaCache: baileysCache.baileysGroupMetaCache,
+    });
+    // A fromMe poll-creation echo arrives, but no matching accepted send was
+    // ever recorded (rememberWhatsAppOwnPollCreation was never called) —
+    // simulates a poll created manually from another linked device.
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        { key: creationKey, message: pollCreationMessage, messageTimestamp: 1_700_000_000 },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(baileysCache.recentMessageKeys.has(`${CHAT_JID}:${pollMessageId}`)).toBe(true);
+    });
+
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["Sushi"],
+      pollEncKey,
+      pollCreatorJid: SELF_JID,
+      pollMsgId: pollMessageId,
+      voterJid: VOTER_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { remoteJid: CHAT_JID, id: voteMessageId, fromMe: false, participant: VOTER_JID },
+          message: voteMessage,
+          messageTimestamp: 1_700_000_100,
+        },
+      ],
     });
     // Give the fire-and-forget dispatch a tick to (not) run.
     await new Promise((resolve) => {

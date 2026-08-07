@@ -278,23 +278,35 @@ agent run — and delivers `pollMessageId`, `chatJid`, `voter`, and
 [Plugin hooks → Message hooks](/plugins/hooks#message-hooks) for the full
 payload reference.
 
+**Ownership.** A poll is only ever recorded as "this account created it" from
+the accepted-send result of a `message(action="poll", ...)` call this
+gateway itself made — never inferred from observing a `fromMe` poll-creation
+message on the inbound stream. `fromMe` also covers polls created manually
+from another device linked to the same WhatsApp account, which the gateway
+never sent; trusting that signal would let opted-in plugins receive votes on
+polls this gateway didn't create. Ownership is written exactly once, at
+accepted-send time, so replaying or delaying delivery of the corresponding
+inbound echo has no effect on stored state — there's nothing left for a
+delayed echo to do.
+
 **Retention.** Decoding a vote requires the poll's decryption key, captured
-as soon as the poll creation is accepted by WhatsApp (no need to wait for the
-`messages.upsert` echo). That key (and the "this account created this poll"
-record) is kept in the runtime's canonical plugin-state store, namespaced
-under the `whatsapp` plugin id — not a bespoke database — so it survives a
-gateway restart, not just an in-memory cache. Each record's expiry is
-anchored to when it was first observed (`pollVoteRetentionMs`, default
-`600000`/10 minutes, from poll creation) and does not move: a later
-`messages.upsert` echo of the same poll, however delayed or replayed, can
-only shorten or confirm that expiry, never extend it. Expired records stop
-being readable immediately, and are physically removed from disk the next
-time the framework's plugin-state maintenance task runs (periodic, not
-synchronous with expiry) — so a small window can exist where expired key
-material is unreadable but not yet erased from the underlying database file.
-A vote arriving after the retention window (or an unrelated poll's leftover
-state) is not decodable and the hook simply does not fire for it — no error
-is raised. Configure the window channel-wide or per account:
+directly from the accepted send's own result (no need to wait for or rely on
+any later inbound echo). That key (and the ownership record above) is kept
+in the runtime's canonical plugin-state store, namespaced under the
+`whatsapp` plugin id — not a bespoke database — so it survives a gateway
+restart, not just an in-memory cache, but **only when the hook is enabled**:
+with `pluginHooks.pollVoteReceived` off (the default), nothing is persisted
+for outbound polls at all. Each record's expiry is anchored to when it was
+first written and does not move. Expired records stop being readable
+immediately, and are physically removed from disk the next time the
+framework's plugin-state maintenance task runs (periodic, not synchronous
+with expiry) — so a small window can exist where expired key material is
+unreadable but not yet erased from the underlying database file. A vote
+arriving after the retention window (or an unrelated poll's leftover state)
+is not decodable and the hook simply does not fire for it — no error is
+raised. `pollVoteRetentionMs` accepts any positive value up to a hard
+maximum of `86400000` (24 hours); larger configured values are clamped, not
+rejected. Configure the window channel-wide or per account:
 
 ```json5
 {

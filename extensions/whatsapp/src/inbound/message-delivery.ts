@@ -44,10 +44,7 @@ import {
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
 import {
   extractWhatsAppPollUpdateMessage,
-  isWhatsAppPollCreationMessage,
   maybeEmitWhatsAppPollVoteReceivedHook,
-  rememberWhatsAppOwnPollCreation,
-  rememberWhatsAppPollCreationMessage,
 } from "./poll-votes.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
@@ -504,22 +501,12 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     }
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
-      if (msg.key?.fromMe && isWhatsAppPollCreationMessage(msg.message)) {
-        const cfgForPollOwnership = options.loadConfig?.() ?? options.cfg;
-        rememberWhatsAppOwnPollCreation(
-          options.accountId,
-          msg.key.remoteJid,
-          msg.key.id,
-          cfgForPollOwnership,
-        );
-        rememberWhatsAppPollCreationMessage(
-          options.accountId,
-          msg.key.remoteJid,
-          msg.key.id,
-          msg.message,
-          cfgForPollOwnership,
-        );
-      }
+      // Poll ownership is recorded solely from the accepted-send path in
+      // send.ts, not from observing a fromMe echo here — fromMe also covers
+      // polls created manually from another linked device on the same
+      // WhatsApp account, which the accepted-send path never sees. Trusting
+      // any fromMe poll-creation echo as "OpenClaw created this" would let
+      // opted-in plugins receive votes on polls OpenClaw never sent.
 
       if (extractWhatsAppPollUpdateMessage(msg.message)) {
         // Poll votes are passive data (per #78963): decode and hook-dispatch

@@ -230,13 +230,6 @@ export function decodeWhatsAppPollVote(params: {
   };
 }
 
-export function isWhatsAppPollCreationMessage(message: proto.IMessage | null | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  return Boolean(findMessageSection(message, POLL_CREATION_SECTIONS));
-}
-
 // Poll retention: an in-memory cache for the common case (no restart between
 // creation and vote) backed by a durable, bounded, extension-local SQLite
 // store (see poll-durable-store.ts) so a gateway restart doesn't lose the
@@ -245,17 +238,21 @@ export function isWhatsAppPollCreationMessage(message: proto.IMessage | null | u
 // override); this remains the sole privacy control — see
 // docs/channels/whatsapp.md for the tradeoff this makes.
 const DEFAULT_POLL_VOTE_RETENTION_MS = 10 * 60 * 1000;
+// Mirrors the config schema's own bound (zod-schema.providers-whatsapp.ts) —
+// re-enforced here, at the point that actually persists decryption key
+// material, rather than trusting schema validation alone.
+const MAX_POLL_VOTE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const recentOwnPollCreationKeys: Map<string, { expiresAt: number; value: true }> = new Map();
 
-/** Resolves the configured poll-state retention window, account overriding channel, defaulting to 10 minutes. */
+/** Resolves the configured poll-state retention window, account overriding channel, defaulting to 10 minutes, clamped to a documented maximum. */
 function resolveWhatsAppPollVoteRetentionMs(cfg: OpenClawConfig, accountId?: string): number {
   const channelConfig = cfg.channels?.whatsapp;
   const accountConfig = accountId ? channelConfig?.accounts?.[accountId] : undefined;
-  return (
+  const configured =
     accountConfig?.pollVoteRetentionMs ??
     channelConfig?.pollVoteRetentionMs ??
-    DEFAULT_POLL_VOTE_RETENTION_MS
-  );
+    DEFAULT_POLL_VOTE_RETENTION_MS;
+  return Math.min(configured, MAX_POLL_VOTE_RETENTION_MS);
 }
 
 /**
@@ -349,9 +346,12 @@ const recentlyDispatchedPollVoteKeys: Map<string, { expiresAt: number; value: tr
  * Mirrors the `pluginHooks.messageReceived` opt-in gate in
  * `auto-reply/monitor/process-message.ts` — default off, account-level
  * overrides channel-level. Kept local rather than shared since it's the only
- * other privacy-gated inbound hook today.
+ * other privacy-gated inbound hook today. Exported so the outbound send path
+ * can gate durable poll-key persistence on the same effective setting — the
+ * hook being off must mean no decryptable poll state is retained at all, not
+ * just that dispatch is suppressed.
  */
-function shouldEmitWhatsAppPollVoteHooks(params: {
+export function shouldEmitWhatsAppPollVoteHooks(params: {
   cfg: OpenClawConfig;
   accountId?: string;
 }): boolean {
