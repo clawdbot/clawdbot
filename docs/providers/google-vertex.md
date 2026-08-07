@@ -33,6 +33,15 @@ location. Choose the authentication source that matches your environment:
 - **Service account key**: uses a dedicated service identity. Best for an always-on gateway host.
 
 <Steps>
+  <Step title="Select your Google Cloud project">
+    Set your active project so the commands below create resources in the
+    correct project. Use this same project ID for `GOOGLE_CLOUD_PROJECT` later.
+
+    ```bash
+    gcloud config set project your-project-id
+    ```
+
+  </Step>
   <Step title="Authenticate with ADC">
     <Tabs>
       <Tab title="gcloud CLI">
