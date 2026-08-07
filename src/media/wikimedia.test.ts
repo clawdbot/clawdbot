@@ -115,6 +115,51 @@ describe("withWikimediaOriginalFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("does not rewrite a thumbnail path missing the md5 hash-shard dirs (thumb/File/rendition)", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/Foo.jpg/800px-Foo.jpg",
+        () => true,
+        run,
+      ),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rewrite when the 2-char shard is not prefixed by the 1-char shard (a/bc)", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/a/bc/Foo.jpg/800px-Foo.jpg",
+        () => true,
+        run,
+      ),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rewrite when a hash-shard dir is not lowercase hex (Z/Z0)", async () => {
+    const err = new Error("400");
+    const run = vi.fn(async () => {
+      throw err;
+    });
+    await expect(
+      withWikimediaOriginalFallback(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/Z/Z0/Foo.jpg/800px-Foo.jpg",
+        () => true,
+        run,
+      ),
+    ).rejects.toBe(err);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces the ORIGINAL error when the fallback fetch also fails", async () => {
     const firstErr = new Error("thumbnail 400");
     const run = vi.fn(async (url: string) => {

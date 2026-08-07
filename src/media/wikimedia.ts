@@ -29,26 +29,39 @@ function resolveWikimediaOriginalUrl(url: string): string | undefined {
   if (parsed.hostname !== "upload.wikimedia.org") {
     return undefined;
   }
+  // Require the COMPLETE canonical thumbnail layout, not just a "thumb" segment:
+  //   /wikipedia/<project>/thumb/<a>/<ab>/<File>/<width>px-<File>
+  // where <a>/<ab> are the 1- and 2-char lowercase-hex md5 shards of <File> (and
+  // <ab> starts with <a>). The original drops the "thumb" segment and the trailing
+  // rendition: /wikipedia/<project>/<a>/<ab>/<File>. Validating the shards rejects
+  // incomplete thumbnail-shaped paths (e.g. `/wikipedia/commons/thumb/Foo.jpg/800px-Foo.jpg`,
+  // which has no shard dirs) so a 400 on such a URL never rewrites to an unrelated file.
   const parts = parsed.pathname.split("/").filter(Boolean);
-  if (parts.length < 5 || parts[0] !== "wikipedia" || parts[2] !== "thumb") {
+  if (parts.length !== 7 || parts[0] !== "wikipedia" || parts[2] !== "thumb") {
     return undefined;
   }
-  // The last segment must be a genuine width-prefixed rendition OF THE SOURCE FILE
-  // (e.g. "Foo.jpg" -> "800px-Foo.jpg", or "Foo.svg" -> "800px-Foo.svg.png"), not an
-  // arbitrary extra path segment. That is what makes "drop the last segment" the
-  // correct original-file URL; an incomplete thumbnail-shaped URL whose tail is not a
-  // "<width>px-...<sourcefile>..." rendition is left alone rather than rewritten.
-  const sourceFile = parts[parts.length - 2];
-  const rendition = parts[parts.length - 1];
-  if (sourceFile === undefined || rendition === undefined) {
+  const project = parts[1];
+  const shard1 = parts[3];
+  const shard2 = parts[4];
+  const sourceFile = parts[5];
+  const rendition = parts[6];
+  if (
+    project === undefined ||
+    shard1 === undefined ||
+    shard2 === undefined ||
+    sourceFile === undefined ||
+    rendition === undefined
+  ) {
+    return undefined;
+  }
+  if (!/^[0-9a-f]$/.test(shard1) || !/^[0-9a-f]{2}$/.test(shard2) || !shard2.startsWith(shard1)) {
     return undefined;
   }
   // The width token must be ANCHORED at the start of the rendition, and the source
   // filename must be the rendition's tail (exact, or the source name plus an added
   // rendition extension such as ".png" for SVG rasterization). This rejects malformed
   // layouts like "not-a-800px-Foo.jpg" (unanchored width) and renditions whose filename
-  // doesn't match the source ("800px-Bar.jpg"), so a 400 on a malformed thumbnail-shaped
-  // URL never triggers a rewrite to an unrelated original file.
+  // doesn't match the source ("800px-Bar.jpg").
   const renditionMatch = /^\d+px-(.+)$/.exec(rendition);
   if (renditionMatch === null) {
     return undefined;
@@ -60,8 +73,7 @@ function resolveWikimediaOriginalUrl(url: string): string | undefined {
   if (renditionFile !== sourceFile && !renditionFile.startsWith(`${sourceFile}.`)) {
     return undefined;
   }
-  const rest = parts.slice(0, 2).concat(parts.slice(3, -1));
-  return `${parsed.origin}/${rest.join("/")}`;
+  return `${parsed.origin}/wikipedia/${project}/${shard1}/${shard2}/${sourceFile}`;
 }
 
 /**
