@@ -181,6 +181,7 @@ export async function applyClawUpdatePlan(
   const targetAddPlan = await buildAddPlan({
     manifest: params.targetManifest,
     clawMarkdownBody: params.targetClawMarkdownBody,
+    includePackageBootstrap: false,
     openClawProfile: params.targetOpenClawProfile,
     source: params.targetSource,
     context: {
