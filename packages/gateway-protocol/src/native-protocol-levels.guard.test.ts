@@ -182,14 +182,18 @@ describe("native Gateway protocol levels", () => {
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {
-    const swiftChannelPath = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift";
-    const swiftChannel = await readRepoFile(swiftChannelPath);
+    const swiftSupportPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannelSupport.swift";
+    const swiftSupport = await readRepoFile(swiftSupportPath);
     assertPattern(
-      swiftChannel,
-      swiftChannelPath,
+      swiftSupport,
+      swiftSupportPath,
       /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
       "node connections must use the node compatibility floor without changing operator clients.",
     );
+
+    const swiftChannelPath = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift";
+    const swiftChannel = await readRepoFile(swiftChannelPath);
     assertPattern(
       swiftChannel,
       swiftChannelPath,

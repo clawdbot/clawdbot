@@ -33,7 +33,7 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
-import { renderTelegramTextEntities } from "./bot/body-helpers.js";
+import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 
 type TelegramMentionFacts = NonNullable<

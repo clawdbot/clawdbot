@@ -550,4 +550,30 @@ describe("audit event worker", () => {
       inspectExecutionIdentityRun({ runId: "after-key-loss" }, database).identity,
     ).toMatchObject({ state: "unknown", reasonCode: "run_not_found" });
   });
+
+  it("accepts bounded final records after the live queue fills", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-final-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      stateDir,
+      maxPending: 1,
+      onError: (error) => errors.push(error),
+    });
+    await writer.ready;
+    const { db } = openOpenClawStateDatabase(database);
+    const finalInput = input();
+    finalInput.sourceId = "run-2:2:started";
+    finalInput.sourceSequence = 2;
+    finalInput.runId = "run-2";
+    db.exec("BEGIN IMMEDIATE");
+    expect(writer.record(input())).toBe(true);
+    expect(writer.record(finalInput)).toBe(false);
+    const stopped = writer.stop([finalInput]);
+    db.exec("ROLLBACK");
+
+    await stopped;
+    expect(errors).toEqual(["audit event queue is full (1); dropping metadata"]);
+    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(2);
+  });
 });

@@ -224,6 +224,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
         prompt,
       });
       const messageBudget = Math.max(1, promptBudget - renderedPromptTokens);
+      const transcriptReadFence = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
       const assembled = await assembleAttemptContextEngine({
         contextEngine: input.activeContextEngine,
         sessionId: attempt.sessionId,
@@ -240,6 +241,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
         requestedModelId: attempt.requestedModelId,
         fallbackReason: attempt.fallbackReason,
         degradedReason: attempt.degradedReason,
+        transcriptReadFence,
         ...(attempt.prompt !== undefined ? { prompt } : {}),
       });
       if (!assembled) {

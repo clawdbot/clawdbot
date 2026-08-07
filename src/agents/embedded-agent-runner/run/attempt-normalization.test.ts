@@ -15,21 +15,20 @@ beforeEach(() => {
 });
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("uses the marker session id as the fallback compatibility key", () => {
+  it("leaves the key absent when a marker has no stored mapping", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
         sessionId: "stale-outer-session",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "main",
       sessionId: "marker-session",
-      sessionKey: "marker-session",
       storePath: "/tmp/sessions.json",
     });
   });
 
-  it("uses the configured default agent for an unscoped compatibility key", () => {
+  it("uses the configured default agent without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         config: {
@@ -39,15 +38,14 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         sessionFile: "compat-session",
         sessionId: "compat-session",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "worker",
       sessionId: "compat-session",
-      sessionKey: "compat-session",
       storePath: "/tmp/worker/sessions.json",
     });
   });
 
-  it("uses an adopted target session id when no session key is available", () => {
+  it("preserves an adopted session id without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         sessionFile: "",
@@ -58,10 +56,9 @@ describe("buildContextEngineCompactionSessionTarget", () => {
           storePath: "/tmp/sessions.json",
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "main",
       sessionId: "adopted-session",
-      sessionKey: "adopted-session",
       storePath: "/tmp/sessions.json",
     });
   });

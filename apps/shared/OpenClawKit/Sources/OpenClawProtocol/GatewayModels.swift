@@ -3384,6 +3384,20 @@ public struct NodeSkillsUpdateParams: Codable, Sendable {
     }
 }
 
+public struct NodeProtocolFeaturesUpdateParams: Codable, Sendable {
+    public let features: [String]
+
+    public init(
+        features: [String])
+    {
+        self.features = features
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case features
+    }
+}
+
 public struct NodePendingAckParams: Codable, Sendable {
     public let ids: [String]
 
@@ -3555,6 +3569,7 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
     public let paramsjson: String?
     public let timeoutms: Int?
     public let idempotencykey: String?
+    public let sessionkey: AnyCodable?
 
     public init(
         id: String,
@@ -3562,7 +3577,8 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         command: String,
         paramsjson: String? = nil,
         timeoutms: Int? = nil,
-        idempotencykey: String? = nil)
+        idempotencykey: String? = nil,
+        sessionkey: AnyCodable? = nil)
     {
         self.id = id
         self.nodeid = nodeid
@@ -3570,6 +3586,7 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         self.paramsjson = paramsjson
         self.timeoutms = timeoutms
         self.idempotencykey = idempotencykey
+        self.sessionkey = sessionkey
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3579,6 +3596,31 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         case paramsjson = "paramsJSON"
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+        case sessionkey = "sessionKey"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.nodeid = try container.decode(String.self, forKey: .nodeid)
+        self.command = try container.decode(String.self, forKey: .command)
+        self.paramsjson = try container.decodeIfPresent(String.self, forKey: .paramsjson)
+        self.timeoutms = try container.decodeIfPresent(Int.self, forKey: .timeoutms)
+        self.idempotencykey = try container.decodeIfPresent(String.self, forKey: .idempotencykey)
+        self.sessionkey = container.contains(.sessionkey)
+            ? try container.decode(AnyCodable.self, forKey: .sessionkey)
+            : nil
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(nodeid, forKey: .nodeid)
+        try container.encode(command, forKey: .command)
+        try container.encodeIfPresent(paramsjson, forKey: .paramsjson)
+        try container.encodeIfPresent(timeoutms, forKey: .timeoutms)
+        try container.encodeIfPresent(idempotencykey, forKey: .idempotencykey)
+        try container.encodeIfPresent(sessionkey, forKey: .sessionkey)
     }
 }
 
@@ -5029,6 +5071,12 @@ public struct SessionRow: Codable, Sendable {
     public let derivedtitle: String?
     public let lastmessagepreview: String?
     public let channel: String?
+    public let classification: String?
+    public let agentid: String?
+    public let accountid: String?
+    public let peerkind: String?
+    public let ismain: Bool?
+    public let isbackground: Bool?
     public let chattype: AnyCodable?
     public let updatedat: AnyCodable?
     public let archived: Bool?
@@ -5086,6 +5134,12 @@ public struct SessionRow: Codable, Sendable {
         derivedtitle: String? = nil,
         lastmessagepreview: String? = nil,
         channel: String? = nil,
+        classification: String? = nil,
+        agentid: String? = nil,
+        accountid: String? = nil,
+        peerkind: String? = nil,
+        ismain: Bool? = nil,
+        isbackground: Bool? = nil,
         chattype: AnyCodable? = nil,
         updatedat: AnyCodable? = nil,
         archived: Bool? = nil,
@@ -5142,6 +5196,12 @@ public struct SessionRow: Codable, Sendable {
         self.derivedtitle = derivedtitle
         self.lastmessagepreview = lastmessagepreview
         self.channel = channel
+        self.classification = classification
+        self.agentid = agentid
+        self.accountid = accountid
+        self.peerkind = peerkind
+        self.ismain = ismain
+        self.isbackground = isbackground
         self.chattype = chattype
         self.updatedat = updatedat
         self.archived = archived
@@ -5200,6 +5260,12 @@ public struct SessionRow: Codable, Sendable {
         case derivedtitle = "derivedTitle"
         case lastmessagepreview = "lastMessagePreview"
         case channel
+        case classification
+        case agentid = "agentId"
+        case accountid = "accountId"
+        case peerkind = "peerKind"
+        case ismain = "isMain"
+        case isbackground = "isBackground"
         case chattype = "chatType"
         case updatedat = "updatedAt"
         case archived

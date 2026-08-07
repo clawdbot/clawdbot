@@ -87,6 +87,26 @@ describe("Docker E2E helper CLIs", () => {
     expect(result.stderr).not.toContain("at file:");
   });
 
+  it("emits prerelease plugin registry planning outputs", () => {
+    const root = tempDirs.make("openclaw-docker-e2e-helper-plan-");
+    const file = path.join(root, "plan.json");
+    writeFileSync(
+      file,
+      `${JSON.stringify({
+        requiredPrepublishPluginPackages: ["@openclaw/discord", "@openclaw/feishu"],
+        needs: { prepublishPluginRegistry: true },
+      })}\n`,
+    );
+
+    const result = runHelper("scripts/docker-e2e.mjs", "github-outputs", file);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("needs_prepublish_plugin_registry=1");
+    expect(result.stdout).toContain(
+      'required_prepublish_plugin_packages=["@openclaw/discord","@openclaw/feishu"]',
+    );
+  });
+
   it("rejects oversized scheduler helper JSON artifacts without a Node stack trace", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-helper-`);
     try {

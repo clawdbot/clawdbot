@@ -8,10 +8,12 @@ import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
 import { digestClawAgentConfig } from "./lifecycle-config-removal.js";
 import {
   ClawRemoveError,
+  inspectClawBootstrap,
   inspectClawWorkspaceFile,
   readAllClawWorkspaceFiles,
   synthesizeOrphanInstall,
   type ClawManagedFileStatus,
+  type ClawBootstrapStatus,
 } from "./lifecycle-delete-support.js";
 import {
   digestClawMcpServer,
@@ -42,6 +44,8 @@ export type ClawStatusRecord = {
   install: PersistedClawInstall;
   orphaned?: boolean;
   agentState: "present" | "modified" | "missing";
+  bootstrapState: ClawBootstrapStatus["state"];
+  bootstrap: ClawBootstrapStatus;
   workspaceFiles: ClawManagedFileStatus[];
   packages: ClawPackageInspection[];
   mcpServers: ClawMcpServerStatus[];
@@ -56,6 +60,7 @@ type ClawStatusResult = {
   summary: {
     claws: number;
     partial: number;
+    pendingBootstrap: number;
     missingAgents: number;
     driftedFiles: number;
     packageRefs: number;
@@ -148,6 +153,13 @@ export async function readClawStatus(
     const workspaceFiles = installAgentIds.has(install.agentId)
       ? readClawWorkspaceFiles(install.agentId, options)
       : allWorkspaceFiles.filter((file) => file.agentId === install.agentId);
+    const bootstrap = installAgentIds.has(install.agentId)
+      ? await inspectClawBootstrap(install, options)
+      : {
+          state: "unknown" as const,
+          workspace: install.workspace,
+          path: "BOOTSTRAP.md" as const,
+        };
     records.push({
       install,
       ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
@@ -156,6 +168,8 @@ export async function readClawStatus(
         : digestClawAgentConfig(agent) === install.agentConfigDigest
           ? "present"
           : "modified",
+      bootstrapState: bootstrap.state,
+      bootstrap,
       workspaceFiles: await Promise.all(workspaceFiles.map(inspectClawWorkspaceFile)),
       packages: await Promise.all(
         packageRefs.map((packageRef) =>
@@ -177,6 +191,7 @@ export async function readClawStatus(
     summary: {
       claws: records.length,
       partial: records.filter((record) => record.install.status !== "complete").length,
+      pendingBootstrap: records.filter((record) => record.bootstrapState === "pending").length,
       missingAgents: records.filter((record) => record.agentState === "missing").length,
       driftedFiles: records
         .flatMap((record) => record.workspaceFiles)

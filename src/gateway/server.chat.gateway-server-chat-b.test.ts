@@ -3805,8 +3805,11 @@ describe("gateway server chat", () => {
       )?.ctx;
       expect(dispatchContext).toMatchObject({
         Body: "/reset examples",
+        BodyForAgent: "/reset examples",
         BodyForCommands: "/reset examples",
+        CommandBody: "/reset examples",
         CommandAuthorized: false,
+        CommandInterpretationSuppressed: true,
         CommandTurn: {
           kind: "normal",
           source: "message",

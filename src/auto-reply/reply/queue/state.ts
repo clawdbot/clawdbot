@@ -265,7 +265,8 @@ export function refreshQueuedFollowupSession(params: {
         delete run.hasAutoFallbackProvenance;
       }
       if (Object.hasOwn(params, "nextModelOverrideSource")) {
-        run.hasSessionModelOverride = Boolean(run.provider || run.model);
+        run.hasSessionModelOverride =
+          params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {

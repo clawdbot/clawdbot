@@ -181,6 +181,45 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
+  fun sessionMergeRetainsOrReplacesClassificationMetadataAsOneSnapshot() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:telegram:main:direct:491234567890",
+        updatedAtMs = 1L,
+        classification = "direct",
+        accountId = "main",
+        peerKind = "direct",
+        isMain = false,
+        isBackground = false,
+      )
+
+    val retained = mergeChatSessionEntry(existing, ChatSessionEntry(key = existing.key, updatedAtMs = 2L))
+    assertEquals("direct", retained.classification)
+    assertEquals("main", retained.accountId)
+    assertEquals("direct", retained.peerKind)
+    assertEquals(false, retained.isMain)
+    assertEquals(false, retained.isBackground)
+
+    val replaced =
+      mergeChatSessionEntry(
+        existing,
+        ChatSessionEntry(
+          key = existing.key,
+          updatedAtMs = 3L,
+          classification = "subagent",
+          isMain = false,
+          isBackground = true,
+          hasClassificationMetadata = true,
+        ),
+      )
+    assertEquals("subagent", replaced.classification)
+    assertEquals(null, replaced.accountId)
+    assertEquals(null, replaced.peerKind)
+    assertEquals(false, replaced.isMain)
+    assertEquals(true, replaced.isBackground)
+  }
+
+  @Test
   fun sessionMergeReplacesRunMetadataAsOneSnapshot() {
     val existing =
       ChatSessionEntry(

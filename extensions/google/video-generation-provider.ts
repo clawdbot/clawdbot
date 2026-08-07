@@ -1,6 +1,5 @@
 // Google provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
@@ -17,6 +16,7 @@ import type {
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { parseGeminiAuth, resolveGoogleGenerativeAiApiOrigin } from "./api.js";
+import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -568,7 +568,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             | { videoBytes?: string; uri?: string; mimeType?: string }
             | undefined;
           if (inline?.videoBytes) {
-            const canonicalVideo = canonicalizeBase64(inline.videoBytes);
+            const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);
             if (!canonicalVideo) {
               throw new Error("Google video generation returned malformed base64 video data");
             }

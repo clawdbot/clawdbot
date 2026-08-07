@@ -45,6 +45,7 @@ import {
 } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
+  projectGatewayConnectionDetailsForDiagnostics,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
@@ -247,24 +248,25 @@ export function formatGatewayTransportErrorJson(value: unknown): GatewayTranspor
   if (!isGatewayTransportError(value)) {
     return null;
   }
+  const connectionDetails = projectGatewayConnectionDetailsForDiagnostics(value.connectionDetails);
   return {
     ok: false,
     error: {
       type: "gateway_transport_error",
       kind: value.kind,
-      message: firstGatewayErrorLine(value.message),
+      // The message embeds the remote-controlled close reason, which can echo a
+      // credential-bearing URL; redact both before they reach CLI JSON output.
+      message: redactSensitiveUrlLikeString(firstGatewayErrorLine(value.message)),
       ...(value.code !== undefined ? { code: value.code } : {}),
-      ...(value.reason !== undefined ? { reason: value.reason } : {}),
+      ...(value.reason !== undefined ? { reason: redactSensitiveUrlLikeString(value.reason) } : {}),
       ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
     },
     gateway: {
-      url: redactSensitiveUrlLikeString(value.connectionDetails.url),
-      urlSource: value.connectionDetails.urlSource,
-      ...(value.connectionDetails.bindDetail
-        ? { bindDetail: value.connectionDetails.bindDetail }
-        : {}),
-      ...(value.connectionDetails.remoteFallbackNote
-        ? { remoteFallbackNote: value.connectionDetails.remoteFallbackNote }
+      url: connectionDetails.url,
+      urlSource: connectionDetails.urlSource,
+      ...(connectionDetails.bindDetail ? { bindDetail: connectionDetails.bindDetail } : {}),
+      ...(connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: connectionDetails.remoteFallbackNote }
         : {}),
     },
   };

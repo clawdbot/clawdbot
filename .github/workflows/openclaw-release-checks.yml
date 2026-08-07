@@ -331,8 +331,15 @@ jobs:
           RELEASE_PACKAGE_SPEC_INPUT: ${{ inputs.release_package_spec }}
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
           RELEASE_CODEX_PLUGIN_SPEC_INPUT: ${{ inputs.codex_plugin_spec }}
+          CANDIDATE_ARTIFACT_JSON_INPUT: ${{ inputs.candidate_artifact_json }}
         run: |
           set -euo pipefail
+          if [[ -n "${CANDIDATE_ARTIFACT_JSON_INPUT// }" ]] &&
+            { [[ -n "${RELEASE_PACKAGE_SPEC_INPUT// }" ]] ||
+              [[ -n "${RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT// }" ]]; }; then
+            echo "candidate_artifact_json cannot be combined with release package specs." >&2
+            exit 1
+          fi
           qa_live_matrix_enabled=true
           qa_live_buzz_enabled=true
           qa_live_telegram_enabled=true
@@ -749,7 +756,29 @@ jobs:
              (.imageArtifactDigest | hex64) and
              (.imageArtifactRunId | tostring | digits) and
              (.imageArtifactRunAttempt | tostring | digits) and
-             (.imageArchiveSha256 | hex64)' \
+             (.imageArchiveSha256 | hex64) and
+             (
+               (
+                 (has("prepublishPluginRegistryArtifactName") | not) and
+                 (has("prepublishPluginRegistryArtifactId") | not) and
+                 (has("prepublishPluginRegistryArtifactDigest") | not) and
+                 (has("prepublishPluginRegistryArtifactRunId") | not) and
+                 (has("prepublishPluginRegistryArtifactRunAttempt") | not) and
+                 (has("prepublishPluginRegistryManifestSha256") | not)
+               ) or
+               (
+                 (.prepublishPluginRegistryArtifactName | type == "string" and length > 0) and
+                 (.prepublishPluginRegistryArtifactId | tostring | digits) and
+                 (.prepublishPluginRegistryArtifactDigest | hex64) and
+                 (.prepublishPluginRegistryArtifactRunId | tostring | digits) and
+                 (.prepublishPluginRegistryArtifactRunAttempt | tostring | digits) and
+                 (.prepublishPluginRegistryManifestSha256 | hex64) and
+                 .prepublishPluginRegistryArtifactName ==
+                   ("docker-e2e-prepublish-plugin-registry-" +
+                     (.prepublishPluginRegistryArtifactRunId | tostring) + "-" +
+                     (.prepublishPluginRegistryArtifactRunAttempt | tostring))
+               )
+             )' \
             <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null
 
   install_smoke_release_checks:
@@ -901,6 +930,13 @@ jobs:
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      enable_prepublish_plugin_registry: ${{ needs.resolve_target.outputs.release_package_spec == '' }}
+      prepublish_plugin_registry_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
       shared_image_artifact_namespace: release-docker
       shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}

@@ -1,19 +1,16 @@
 import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Tasks mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
+
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/tasks");
 const baseTime = Date.parse("2026-07-05T18:00:00.000Z");
 
@@ -68,31 +65,13 @@ const failedTask = {
   error: "Worker exited",
 };
 
-let server: ControlUiE2eServer;
-let browser: Browser;
-
-describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("renders task sections, applies pushed completion, and sends cancel", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
     const rawVideoDir = path.join(artifactDir, "raw-video");
     await mkdir(rawVideoDir, { recursive: true });
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: { dir: rawVideoDir, size: { width: 1440, height: 900 } },
       serviceWorkers: "block",
@@ -114,7 +93,7 @@ describeControlUiE2e("Control UI Tasks mocked Gateway E2E", () => {
         },
       });
 
-      const response = await page.goto(`${server.baseUrl}tasks`);
+      const response = await page.goto(`${suite.server.baseUrl}tasks`);
       expect(response?.status()).toBe(200);
       const active = page.locator('[data-task-section="active"]');
       const recent = page.locator('[data-task-section="recent"]');

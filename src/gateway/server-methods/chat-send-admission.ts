@@ -203,7 +203,10 @@ export async function admitChatSend(params: {
     const hasActiveSteeringOwner =
       p.queueMode === "steer" &&
       expectedLeafEntryId !== undefined &&
-      replyRunRegistry.isStreamingFromOriginatingLeaf(activeRunScopeKey, expectedLeafEntryId);
+      replyRunRegistry.isMessageInjectableFromOriginatingLeaf(
+        activeRunScopeKey,
+        expectedLeafEntryId,
+      );
     if (commitOutcome && expectedLeafEntryId !== undefined && !hasActiveSteeringOwner) {
       // Runtime session identity resolves through the canonical SQLite accessor;
       // legacy/reset-archive files are read-only history fallbacks, never send targets.

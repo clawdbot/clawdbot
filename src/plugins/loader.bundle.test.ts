@@ -158,7 +158,7 @@ describe("bundle plugins", () => {
     expectNoUnwiredBundleDiagnostic(registry, pluginId);
   });
 
-  it("warns when bundle MCP only declares unsupported non-stdio transports", () => {
+  it("accepts bundle HTTP MCP and warns only for incomplete configs", () => {
     const stateDir = makeTempDir();
     const registry = loadBundleFixture({
       pluginId: "claude-mcp-url",
@@ -179,7 +179,11 @@ describe("bundle plugins", () => {
           JSON.stringify({
             mcpServers: {
               remoteProbe: {
+                transport: "streamable-http",
                 url: "http://127.0.0.1:8787/mcp",
+              },
+              incompleteProbe: {
+                transport: "streamable-http",
               },
             },
           }),
@@ -195,9 +199,14 @@ describe("bundle plugins", () => {
       registry.diagnostics.some(
         (diag) =>
           diag.pluginId === "claude-mcp-url" &&
-          diag.message.includes("stdio only today") &&
-          diag.message.includes("remoteProbe"),
+          diag.message.includes("unsupported transports or incomplete configs") &&
+          diag.message.includes("incompleteProbe"),
       ),
     ).toBe(true);
+    expect(
+      registry.diagnostics.some(
+        (diag) => diag.pluginId === "claude-mcp-url" && diag.message.includes("remoteProbe"),
+      ),
+    ).toBe(false);
   });
 });

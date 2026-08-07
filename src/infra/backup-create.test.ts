@@ -8,7 +8,6 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
-import { isPathWithin } from "../commands/cleanup-utils.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -2028,7 +2027,7 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("backs up durable SQLite while live gateway coordinators remain held under state", async () => {
+  it("excludes the state-local gateway lock tree while backing up durable SQLite", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -2038,7 +2037,7 @@ describe("createBackupArchive", () => {
       async (state) => {
         const outputDir = state.path("backups");
         const extractDir = state.path("extract");
-        const lockDir = resolveGatewayLockDir(() => state.statePath("tmp"));
+        const lockDir = resolveGatewayLockDir(state.stateDir);
         const pluginDbPath = state.statePath("plugins", "dedicated", "durable.sqlite");
         const producerShapedDbPath = state.statePath(
           "plugins",
@@ -2075,7 +2074,6 @@ describe("createBackupArchive", () => {
         if (!gatewayLock) {
           throw new Error("expected test gateway lock");
         }
-        expect(isPathWithin(resolveGatewayLockDir(), state.stateDir)).toBe(false);
         const gatewayCoordinatorPaths = [
           `${gatewayLock.lockPath}.sqlite`,
           `${gatewayLock.stateLockPath}.sqlite`,
@@ -2122,9 +2120,9 @@ describe("createBackupArchive", () => {
               entry.endsWith("/state/plugins/dedicated/gateway.12345678.lock.sqlite"),
             ),
           ).toBe(true);
-          expect(
-            entries.some((entry) => entry.endsWith(`/${path.basename(lockDir)}/retained.sqlite`)),
-          ).toBe(true);
+          expect(entries.some((entry) => entry.includes(`/${path.basename(lockDir)}/`))).toBe(
+            false,
+          );
 
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           await expect(
@@ -2135,7 +2133,6 @@ describe("createBackupArchive", () => {
           for (const [entrySuffix, value] of [
             ["/state/plugins/dedicated/durable.sqlite", "plugin-state"],
             ["/state/plugins/dedicated/gateway.12345678.lock.sqlite", "producer-shaped-state"],
-            [`/${path.basename(lockDir)}/retained.sqlite`, "colocated-state"],
           ] as const) {
             const archivedEntry = expectDefined(
               entries.find((entry) => entry.endsWith(entrySuffix)),

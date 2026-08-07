@@ -2,32 +2,29 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { QuestionResolveResult } from "@openclaw/gateway-protocol";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import {
-  canRunPlaywrightChromium,
   controlUiSessionUrl,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Gateway question flow",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}`,
+});
+
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "question-flow");
 const mainSessionKey = "agent:main:main";
 const questionSessionKey = "agent:main:question-proof";
 
-let browser: Browser;
 let context: BrowserContext | undefined;
-let server: ControlUiE2eServer;
-
 function questionRecord(
   id: string,
   questions: Array<{
@@ -80,7 +77,7 @@ function historyMessages() {
 }
 
 async function openQuestionPage() {
-  context = await browser.newContext({
+  context = await suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
@@ -125,7 +122,7 @@ async function openQuestionPage() {
     // lives in its own existing thread so the real sidebar can render its row.
     sessionKey: mainSessionKey,
   });
-  await page.goto(controlUiSessionUrl(server.baseUrl, questionSessionKey));
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
   // Chat and sidebar each own a projection; both must bind to the advertised
   // real client before a lost-broadcast test can prove cross-surface delivery.
   await expect
@@ -159,23 +156,10 @@ async function emitRequested(
   await gateway.emitGatewayEvent("question.requested", record);
 }
 
-describeControlUiE2e("Control UI Gateway question flow", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is not available at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
+suite.define(() => {
   afterEach(async () => {
     await context?.close().catch(() => {});
     context = undefined;
-  });
-
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
   });
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {

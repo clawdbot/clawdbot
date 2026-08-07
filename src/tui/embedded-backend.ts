@@ -41,7 +41,7 @@ import {
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
@@ -100,6 +100,7 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
+import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import type {
   ChatSendOptions,
@@ -378,7 +379,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
+  private readonly preparedModelRuntime = new EmbeddedPreparedModelRuntimeHost();
   private unsubscribePluginApprovals?: () => void;
+  private unsubscribeConfigWrites?: () => void;
   // Resolves once the one-time session-key migration has run; store methods await it.
   private ready: Promise<void> = Promise.resolve();
 
@@ -400,12 +403,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribePluginApprovals = this.pluginApprovalBroker.subscribe((event) => {
       this.emit(event.event, event.payload);
     });
+    const config = getRuntimeConfig();
+    this.unsubscribeConfigWrites = registerConfigWriteListener((event) => {
+      this.preparedModelRuntime.publish(event.runtimeConfig);
+    });
+    this.preparedModelRuntime.publish(config);
     // Local mode never runs gateway startup; canonicalize orphaned keys once here.
     this.ready = (async () => {
       const { runSessionStartupMigration } =
         await import("../config/sessions/startup-migration.js");
       await runSessionStartupMigration({
-        cfg: getRuntimeConfig(),
+        cfg: config,
         env: process.env,
         log: embeddedSessionStartupMigrationLog,
       });
@@ -416,6 +424,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async stop() {
+    this.unsubscribeConfigWrites?.();
+    this.unsubscribeConfigWrites = undefined;
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals?.();
     this.unsubscribePluginApprovals = undefined;
@@ -456,6 +466,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     await this.ready;
+    await this.preparedModelRuntime.waitUntilReady();
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
     const isQueueCommand = resolveTextCommand(opts.message)?.command.key === "queue";
@@ -1334,6 +1345,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     queuedAfter?: QueuedSessionRun;
   }) {
     try {
+      const recheckPreparedRuntimeAtAdmission = params.queuedAfter !== undefined;
       if (params.queuedAfter) {
         try {
           await Promise.race([
@@ -1372,6 +1384,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
         message = buildLocalQueuedPrompt(activeRun.pendingQueue);
         delete activeRun.pendingQueue;
+      }
+      if (recheckPreparedRuntimeAtAdmission) {
+        // A turn may have queued behind another local run while a config write published a new
+        // generation. Recheck at actual model admission so it cannot use stale facts.
+        await this.preparedModelRuntime.waitUntilReady();
+        if (params.controller.signal.aborted) {
+          if (activeRun) {
+            this.emitChatTerminal(params.runId, activeRun, "aborted");
+          }
+          return;
+        }
       }
       if (activeRun?.isBtw && activeRun.question) {
         const result = await this.runBtwTurn({

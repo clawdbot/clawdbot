@@ -68,6 +68,16 @@ function createInitialStateSchemaShape() {
   return shape;
 }
 
+function expectFirstUseStateTablesAbsent(database: DatabaseSync): void {
+  for (const tableName of FIRST_USE_STATE_TABLES) {
+    expect(
+      database
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(tableName),
+    ).toBeUndefined();
+  }
+}
+
 function expectStateSchemaMigrationRequired(
   run: () => unknown,
   expected: {
@@ -1091,11 +1101,7 @@ describe("openclaw state database", () => {
     });
 
     expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
-    expect(
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("execution_identity_contexts"),
-    ).toBeUndefined();
+    expectFirstUseStateTablesAbsent(database.db);
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
     expect(
       database.db
@@ -1851,6 +1857,107 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
       canonicalShape,
     );
+  });
+
+  it("repairs same-version Claw bootstrap columns before runtime schema validation", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec(`
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+      `);
+      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    } finally {
+      shippedSchema.close();
+    }
+
+    const reopened = openOpenClawStateDatabase({ env });
+    const columns = reopened.db.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["bootstrap_source_path", "bootstrap_content_digest"]),
+    );
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
+      normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()),
+    );
+  });
+
+  it("repairs same-version Claw bootstrap columns with physical index drift", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec(`
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+      `);
+    } finally {
+      shippedSchema.close();
+    }
+    createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+    const reopened = openOpenClawStateDatabase({ env });
+    const columns = reopened.db.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["bootstrap_source_path", "bootstrap_content_digest"]),
+    );
+    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
+        )
+        .all(),
+    ).toEqual([{ task_id: "task-index-repair" }]);
+  });
+
+  it("does not add Claw bootstrap columns before rejecting unrelated index corruption", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedSchema = new DatabaseSync(databasePath);
+    try {
+      shippedSchema.exec(`
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
+        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+      `);
+    } finally {
+      shippedSchema.close();
+    }
+    createUnsafeIndexDrift(databasePath);
+
+    expect(() => openOpenClawStateDatabase({ env })).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const columns = preserved.prepare("PRAGMA table_info(claw_installs)").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.map((column) => column.name)).not.toEqual(
+        expect.arrayContaining(["bootstrap_source_path", "bootstrap_content_digest"]),
+      );
+    } finally {
+      preserved.close();
+    }
   });
 
   it("repairs physical ordinary-index drift before cold-open reads", () => {
@@ -3324,6 +3431,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           requester_agent_id: "main",
         });
         expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+        expectFirstUseStateTablesAbsent(db);
       } finally {
         db.close();
       }
@@ -3349,6 +3457,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
         ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
         expect(collectSqliteSchemaShape(db)).toEqual(expectedShape);
+        expectFirstUseStateTablesAbsent(db);
       } finally {
         db.close();
       }

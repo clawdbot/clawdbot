@@ -122,6 +122,12 @@ export type MemoryReadResult = {
 };
 
 /** Aggregated memory backend status for CLI/UI diagnostics. */
+export type MemoryVectorIndexState =
+  | { state: "empty" }
+  | { state: "complete" }
+  | { state: "incomplete" }
+  | { state: "unverified" };
+
 export type MemoryProviderStatus = {
   backend: "builtin" | "qmd";
   provider: string;
@@ -140,6 +146,7 @@ export type MemoryProviderStatus = {
   fallback?: { from: string; reason?: string };
   vector?: {
     enabled: boolean;
+    index?: MemoryVectorIndexState;
     storeAvailable?: boolean;
     semanticAvailable?: boolean;
     available?: boolean;
