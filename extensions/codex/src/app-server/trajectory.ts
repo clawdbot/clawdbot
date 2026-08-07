@@ -201,9 +201,9 @@ export function createCodexTrajectoryRecorder(
     },
     recordPromptSubmitted: (data, origin) => {
       const sanitizedData = sanitizeValue(data) as Record<string, unknown>;
-      const sanitizedOrigin = sanitizeInputProvenance(origin);
-      if (sanitizedOrigin) {
-        sanitizedData.origin = sanitizedOrigin;
+      const projectedOrigin = projectInputProvenance(origin);
+      if (projectedOrigin) {
+        sanitizedData.origin = projectedOrigin;
       }
       recordSanitizedEvent("prompt.submitted", sanitizedData, ["origin"]);
     },
@@ -325,7 +325,7 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
   return JSON.stringify(value);
 }
 
-function sanitizeInputProvenance(provenance: unknown): Record<string, string> | undefined {
+function projectInputProvenance(provenance: unknown): Record<string, string> | undefined {
   if (!provenance || typeof provenance !== "object") {
     return undefined;
   }
@@ -333,6 +333,8 @@ function sanitizeInputProvenance(provenance: unknown): Record<string, string> | 
   if (typeof record.kind !== "string" || !INPUT_PROVENANCE_KINDS.has(record.kind)) {
     return undefined;
   }
+  // The host recorder owns persistence pseudonymization. This adapter only
+  // projects recognized provenance fields across the runtime boundary.
   const sanitized: Record<string, string> = { kind: record.kind };
   for (const key of [
     "originSessionId",

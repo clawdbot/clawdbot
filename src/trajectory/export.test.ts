@@ -10,6 +10,7 @@ import {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
@@ -24,6 +25,12 @@ import type { TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
 let tempDirId = 0;
+const SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
+const ORIGIN_SESSION_HASH_DOMAIN = "openclaw:trajectory:origin-session-id:v1";
+
+function expectedSessionHash(domain: string, value: string): string {
+  return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
+}
 
 function makeTempDir(): string {
   const dir = path.join(tempRoot, `case-${tempDirId++}`);
@@ -916,6 +923,101 @@ describe("exportTrajectoryBundle", () => {
     }
     expect(JSON.stringify(bundle.events)).not.toContain(rawSecrets[5]);
     expect(JSON.stringify(bundle.manifest)).not.toContain(rawSecrets[5]);
+  });
+
+  it("pseudonymizes legacy prompt provenance at the export boundary", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const rawSessionKey = "p1-reproduction=LEAKS_UNCHANGED";
+    const spoofedHash = `sha256:v1:${"f".repeat(64)}`;
+    const canonicalSourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "canonical-source");
+    const canonicalOriginHash = expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, "canonical-origin");
+    writeSimpleSessionFile(sessionFile);
+    const origins: unknown[] = [
+      {
+        kind: "inter_session",
+        sourceSessionKey: ` ${rawSessionKey} `,
+        originSessionId: ` ${rawSessionKey} `,
+        sourceSessionHash: spoofedHash,
+        originSessionHash: spoofedHash,
+        sourceChannel: " discord ",
+        sourceTool: " sessions_send ",
+        nested: { sourceSessionKey: "nested-secret" },
+        extra: "drop-me",
+      },
+      {
+        kind: "external_user",
+        sourceSessionHash: canonicalSourceHash,
+        originSessionHash: canonicalOriginHash,
+        sourceChannel: "telegram",
+      },
+      {
+        kind: "forged",
+        sourceSessionKey: rawSessionKey,
+      },
+      [{ kind: "inter_session", sourceSessionKey: rawSessionKey }],
+      {
+        kind: "inter_session",
+        sourceSessionHash: "sha256:v1:not-a-canonical-hash",
+      },
+    ];
+    const runtimeEvents = origins.map(
+      (origin, index): TrajectoryEvent => ({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "prompt.submitted",
+        ts: `2026-04-22T08:00:0${index}.000Z`,
+        seq: index + 1,
+        sourceSeq: index + 1,
+        sessionId: "session-1",
+        data: { prompt: `prompt-${index}`, origin },
+      }),
+    );
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    const exportedPrompts = bundle.events.filter(
+      (event) => event.source === "runtime" && event.type === "prompt.submitted",
+    );
+    expect(exportedPrompts[0]?.data?.origin).toEqual({
+      kind: "inter_session",
+      sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),
+      originSessionHash: expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, rawSessionKey),
+      sourceChannel: "discord",
+      sourceTool: "sessions_send",
+    });
+    expect(exportedPrompts[1]?.data?.origin).toEqual({
+      kind: "external_user",
+      sourceSessionHash: canonicalSourceHash,
+      originSessionHash: canonicalOriginHash,
+      sourceChannel: "telegram",
+    });
+    expect(exportedPrompts[2]?.data?.origin).toBeUndefined();
+    expect(exportedPrompts[3]?.data?.origin).toBeUndefined();
+    expect(exportedPrompts[4]?.data?.origin).toEqual({ kind: "inter_session" });
+    const exportedText = fs
+      .readdirSync(outputDir)
+      .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
+      .join("\n");
+    expect(exportedText).not.toContain(rawSessionKey);
+    expect(exportedText).not.toContain(spoofedHash);
+    expect(exportedText).not.toContain("nested-secret");
+    expect(exportedText).not.toContain("drop-me");
   });
 
   it("rejects oversized runtime trajectory files", async () => {

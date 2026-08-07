@@ -19,6 +19,7 @@ import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
+import { sanitizeLivePromptSubmittedData } from "./provenance-sanitization.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
@@ -60,6 +61,10 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
   "systemPrompt",
 ] as const;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache", "prompt"] as const;
+const TRAJECTORY_RUNTIME_OVERSIZE_PROMPT_SUBMITTED_KEYS = [
+  "origin",
+  ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
+] as const;
 const TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS = [
   "name",
   "toolCallId",
@@ -94,12 +99,14 @@ function truncateOversizedTrajectoryEvent(
   const originalDataKeys = Object.keys(originalData);
   const preservedDataKeys = new Set<string>();
   const preservedDataKeyOrder =
-    event.type === "tool.result"
-      ? [
-          ...TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS,
-          ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
-        ]
-      : TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS;
+    event.type === "prompt.submitted"
+      ? TRAJECTORY_RUNTIME_OVERSIZE_PROMPT_SUBMITTED_KEYS
+      : event.type === "tool.result"
+        ? [
+            ...TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS,
+            ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
+          ]
+        : TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS;
   const baseData = {
     truncated: true,
     originalBytes: bytes,
@@ -232,8 +239,13 @@ function limitTrajectoryPayloadValue(
   return limited;
 }
 
-function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
-  const finalPromptText = data.finalPromptText;
+function sanitizeTrajectoryPayload(
+  type: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const provenanceSanitizedData =
+    type === "prompt.submitted" ? sanitizeLivePromptSubmittedData(data) : data;
+  const finalPromptText = provenanceSanitizedData.finalPromptText;
   const redactedFinalPromptText =
     typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;
   const boundedData =
@@ -243,7 +255,7 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
       Buffer.byteLength(redactedFinalPromptText, "utf8") >
         TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES)
       ? {
-          ...data,
+          ...provenanceSanitizedData,
           finalPromptText: truncateUtf8Prefix(
             redactedFinalPromptText,
             TRAJECTORY_RUNTIME_FINAL_PROMPT_MAX_BYTES,
@@ -251,8 +263,8 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
           finalPromptTextOriginalLength: finalPromptText.length,
         }
       : typeof redactedFinalPromptText === "string"
-        ? { ...data, finalPromptText: redactedFinalPromptText }
-        : data;
+        ? { ...provenanceSanitizedData, finalPromptText: redactedFinalPromptText }
+        : provenanceSanitizedData;
   return redactSecrets(
     sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(boundedData)),
   ) as Record<string, unknown>;
@@ -471,7 +483,7 @@ export function createTrajectoryRuntimeRecorder(
       provider: params.provider,
       modelId: params.modelId,
       modelApi: params.modelApi,
-      data: data ? sanitizeTrajectoryPayload(data) : undefined,
+      data: data ? sanitizeTrajectoryPayload(type, data) : undefined,
     };
     const line = safeJsonStringify(event);
     if (!line) {

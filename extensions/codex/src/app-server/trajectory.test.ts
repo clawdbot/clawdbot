@@ -173,27 +173,31 @@ describe("Codex trajectory recorder", () => {
     ).resolves.toEqual([expect.objectContaining({ type: "session.started" })]);
   });
 
-  it("redacts secrets, including routing-shaped tool arguments, and keeps strings UTF-16 safe", async () => {
-    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
-    recorder.recordEvent("tool.call", {
-      text: `${"x".repeat(19_999)}😀`,
-      apiKey: "secret",
-      authorization: "Bearer sk-test-secret-token",
-      arguments: {
-        sessionKey: "agent:receiver:main",
-        sourceSessionKey: "agent:sender:main",
-      },
-    });
-    await recorder.flush();
+  it.each(["dynamic", "mcp"])(
+    "redacts secrets in %s tool arguments and keeps strings UTF-16 safe",
+    async (toolKind) => {
+      const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+      recorder.recordEvent("tool.call", {
+        toolKind,
+        text: `${"x".repeat(19_999)}😀`,
+        apiKey: "secret",
+        authorization: "Bearer sk-test-secret-token",
+        arguments: {
+          sessionKey: "agent:receiver:main",
+          sourceSessionKey: "agent:sender:main",
+        },
+      });
+      await recorder.flush();
 
-    expect(events[0]?.data?.text).toBe(`${"x".repeat(19_999)}…`);
-    expect(events[0]?.data?.apiKey).toBe("<redacted>");
-    expect(events[0]?.data?.authorization).toBe("<redacted>");
-    expect(events[0]?.data?.arguments).toEqual({
-      sessionKey: "<redacted>",
-      sourceSessionKey: "<redacted>",
-    });
-  });
+      expect(events[0]?.data?.text).toBe(`${"x".repeat(19_999)}…`);
+      expect(events[0]?.data?.apiKey).toBe("<redacted>");
+      expect(events[0]?.data?.authorization).toBe("<redacted>");
+      expect(events[0]?.data?.arguments).toEqual({
+        sessionKey: "<redacted>",
+        sourceSessionKey: "<redacted>",
+      });
+    },
+  );
 
   it("records namespace dynamic tools as callable trajectory definitions", async () => {
     const tools = [
@@ -291,7 +295,7 @@ describe("Codex trajectory recorder", () => {
     expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");
   });
 
-  it("preserves trusted prompt origin when truncating an oversized prompt event", async () => {
+  it("projects trusted prompt origin for the host when truncating an oversized prompt event", async () => {
     const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
     const oversized = "界".repeat(30_000);
     const truncated = `${"界".repeat(20_000)}…`;
@@ -345,6 +349,9 @@ describe("Codex trajectory recorder", () => {
         kind: "inter_session",
         sourceSessionKey: "agent:sender:main",
         sourceTool: "sessions_send",
+        sourceSessionHash: `sha256:v1:${"f".repeat(64)}`,
+        originSessionHash: `sha256:v1:${"e".repeat(64)}`,
+        nested: { sourceSessionKey: "nested-secret" },
         apiKey: "must-not-leak",
       } as never,
     );
