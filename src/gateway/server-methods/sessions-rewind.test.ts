@@ -2,6 +2,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import {
+  clearSessionQueues,
+  enqueueFollowupRun,
+  getFollowupQueueDepth,
+  type FollowupRun,
+} from "../../auto-reply/reply/queue.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import {
+  CommandLaneClearedError,
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  setCommandLaneConcurrency,
+} from "../../process/command-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -32,9 +46,12 @@ import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:rewind-handler";
+const sourceSessionId = "rewind-handler-source";
+const sessionLane = resolveEmbeddedSessionLane(sessionKey);
 const storedImageId = "stored-image.png";
 const storedImagePath = `/state/media/inbound/${storedImageId}`;
 const storedImageData = Buffer.from("stored-image");
+const queuedCommandSettlements = new Set<Promise<void>>();
 
 beforeEach(async () => {
   mocks.upstreamFork.mockReset();
@@ -54,12 +71,12 @@ beforeEach(async () => {
   await upsertSessionEntry(
     { agentId: "main", sessionKey },
     {
-      sessionId: "rewind-handler-source",
+      sessionId: sourceSessionId,
       updatedAt: Date.now(),
     },
   );
   for (const event of [
-    { type: "session", id: "rewind-handler-source", version: 3 },
+    { type: "session", id: sourceSessionId, version: 3 },
     {
       type: "message",
       id: "user-entry",
@@ -99,7 +116,7 @@ beforeEach(async () => {
       targetId: "assistant-entry",
     },
   ]) {
-    const scope = { agentId: "main", sessionId: "rewind-handler-source", sessionKey };
+    const scope = { agentId: "main", sessionId: sourceSessionId, sessionKey };
     if (event.type === "message") {
       await appendTranscriptMessage(scope, {
         eventId: event.id,
@@ -112,7 +129,11 @@ beforeEach(async () => {
   }
 });
 
-afterEach(() => {
+afterEach(async () => {
+  clearSessionQueues([sessionKey, sourceSessionId]);
+  setCommandLaneConcurrency(sessionLane, 1);
+  await Promise.all(queuedCommandSettlements);
+  queuedCommandSettlements.clear();
   resetPluginRuntimeStateForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -123,7 +144,7 @@ function context(active = false): GatewayRequestContext {
   return {
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(
-      active ? [["active-run", { sessionId: "rewind-handler-source", sessionKey }]] : undefined,
+      active ? [["active-run", { sessionId: sourceSessionId, sessionKey }]] : undefined,
     ),
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
     getSessionEventSubscriberConnIds: () => new Set(),
@@ -162,6 +183,63 @@ async function invoke(
     isWebchatConnect: () => false,
   });
   return respond;
+}
+
+type QueuedSessionWork = {
+  command: Promise<string>;
+  followup: FollowupRun;
+  hasCommandRun: () => boolean;
+};
+
+function enqueueSessionWork(label: string): QueuedSessionWork {
+  const followupFixture = createQueueTestRun({ prompt: `${label} follow-up` });
+  const followup: FollowupRun = {
+    ...followupFixture,
+    run: {
+      ...followupFixture.run,
+      agentId: "main",
+      sessionId: sourceSessionId,
+      sessionKey,
+    },
+  };
+  expect(
+    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false),
+  ).toBe(true);
+
+  setCommandLaneConcurrency(sessionLane, 0);
+  let commandRan = false;
+  const command = enqueueCommandInLane(sessionLane, async () => {
+    commandRan = true;
+    return `${label} command`;
+  });
+  const settlement = command.then(
+    () => undefined,
+    () => undefined,
+  );
+  queuedCommandSettlements.add(settlement);
+
+  return { command, followup, hasCommandRun: () => commandRan };
+}
+
+function expectSessionWorkQueued(work: QueuedSessionWork): void {
+  expect(getFollowupQueueDepth(sessionKey)).toBe(1);
+  expect(work.followup.queueAbortSignal?.aborted).toBe(false);
+  expect(getCommandLaneSnapshot(sessionLane)).toMatchObject({
+    activeCount: 0,
+    queuedCount: 1,
+  });
+  expect(work.hasCommandRun()).toBe(false);
+}
+
+async function expectSessionWorkCleared(work: QueuedSessionWork): Promise<void> {
+  expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+  expect(work.followup.queueAbortSignal?.aborted).toBe(true);
+  expect(getCommandLaneSnapshot(sessionLane)).toMatchObject({
+    activeCount: 0,
+    queuedCount: 0,
+  });
+  await expect(work.command).rejects.toBeInstanceOf(CommandLaneClearedError);
+  expect(work.hasCommandRun()).toBe(false);
 }
 
 function linkToUpstreamConversation(): void {
@@ -242,6 +320,51 @@ describe("session message-cut methods", () => {
 
     const switched = await invoke("sessions.branches.switch", "off-path-entry");
     expect(switched).toHaveBeenCalledWith(true, {}, undefined);
+  });
+
+  it("clears queued session work after a successful branch switch", async () => {
+    const work = enqueueSessionWork("branch switch");
+    expectSessionWorkQueued(work);
+
+    const respond = await invoke("sessions.branches.switch", "off-path-entry");
+
+    expect(respond).toHaveBeenCalledWith(true, {}, undefined);
+    await expectSessionWorkCleared(work);
+  });
+
+  it("clears queued session work after a successful rewind", async () => {
+    const work = enqueueSessionWork("rewind");
+    expectSessionWorkQueued(work);
+
+    const respond = await invoke("sessions.rewind", "user-entry");
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ editorText: "edit me" }),
+      undefined,
+    );
+    await expectSessionWorkCleared(work);
+  });
+
+  it("preserves queued session work after a rejected branch switch", async () => {
+    const work = enqueueSessionWork("rejected branch switch");
+    expectSessionWorkQueued(work);
+
+    const respond = await invoke("sessions.branches.switch", "missing");
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("branch entry not found"),
+      }),
+    );
+    expectSessionWorkQueued(work);
+
+    setCommandLaneConcurrency(sessionLane, 1);
+    await expect(work.command).resolves.toBe("rejected branch switch command");
+    expect(work.hasCommandRun()).toBe(true);
   });
 
   it.each([
