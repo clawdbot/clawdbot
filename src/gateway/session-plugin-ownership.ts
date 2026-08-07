@@ -46,7 +46,7 @@ export function resolvePluginSessionOwnershipError(params: {
 export function resolvePluginOwnedCleanupOptions(
   params:
     | {
-        client?: { connect?: { scopes?: readonly string[] } };
+        client?: { connect?: { scopes?: readonly string[] } } | null;
         pluginId?: string;
       }
     | undefined,
