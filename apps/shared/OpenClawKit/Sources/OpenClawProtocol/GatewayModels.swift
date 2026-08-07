@@ -13833,16 +13833,16 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let workspace: String?
     public let modelvalue: AnyCodable?
     public var model: String? { modelvalue?.value as? String }
-    public let emoji: String?
-    public let avatar: String?
+    public let emoji: AnyCodable?
+    public let avatar: AnyCodable?
 
     public init(
         agentid: String,
         name: String? = nil,
         workspace: String? = nil,
         modelvalue: AnyCodable?,
-        emoji: String? = nil,
-        avatar: String? = nil)
+        emoji: AnyCodable? = nil,
+        avatar: AnyCodable? = nil)
     {
         self.agentid = agentid
         self.name = name
@@ -13857,8 +13857,8 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String? = nil,
         workspace: String? = nil,
         model: String? = nil,
-        emoji: String? = nil,
-        avatar: String? = nil)
+        emoji: AnyCodable? = nil,
+        avatar: AnyCodable? = nil)
     {
         self.init(
             agentid: agentid,
@@ -13886,8 +13886,8 @@ public struct AgentsUpdateParams: Codable, Sendable {
         self.modelvalue = container.contains(.modelvalue)
             ? try container.decode(AnyCodable.self, forKey: .modelvalue)
             : nil
-        self.emoji = try container.decodeIfPresent(String.self, forKey: .emoji)
-        self.avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+        self.emoji = try container.decodeIfPresent(AnyCodable.self, forKey: .emoji)
+        self.avatar = try container.decodeIfPresent(AnyCodable.self, forKey: .avatar)
     }
 
     public func encode(to encoder: Encoder) throws {

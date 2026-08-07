@@ -1044,7 +1044,10 @@ describe("agents.update", () => {
     });
     const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
     const agents = expectRecordFields(persisted.agents, {});
-    const [agent] = agents.list as MockAgentEntry[];
+    const agent = expectDefined(
+      (agents.list as MockAgentEntry[])[0],
+      "persisted agent after emoji clear",
+    );
     expect(agent.identity).toEqual({ name: "Current Agent", theme: "steady" });
     expect(agent.identity).not.toHaveProperty("emoji");
   });
@@ -1074,7 +1077,10 @@ describe("agents.update", () => {
     if (mocks.writeConfigFile.mock.calls.length > 0) {
       const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
       const agents = expectRecordFields(persisted.agents, {});
-      const [agent] = agents.list as MockAgentEntry[];
+      const agent = expectDefined(
+        (agents.list as MockAgentEntry[])[0],
+        "persisted agent after whitespace emoji",
+      );
       expect(agent.identity).toMatchObject({ emoji: "🦞" });
     }
   });
@@ -1105,7 +1111,10 @@ describe("agents.update", () => {
     expectRespondOk(respond, { ok: true, agentId: "test-agent" });
     const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
     const agents = expectRecordFields(persisted.agents, {});
-    const [agent] = agents.list as MockAgentEntry[];
+    const agent = expectDefined(
+      (agents.list as MockAgentEntry[])[0],
+      "persisted agent after avatar clear",
+    );
     expect(agent.identity).toEqual({ name: "Current Agent", emoji: "🐢" });
     expect(agent.identity).not.toHaveProperty("avatar");
   });
