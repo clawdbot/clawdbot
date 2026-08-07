@@ -94,6 +94,23 @@
       }
     },
     {
+      "name": "@openclaw/daytona-sandbox",
+      "description": "OpenClaw Daytona cloud sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "daytona",
+          "label": "Daytona Sandbox"
+        },
+        "install": {
+          "npmSpec": "@openclaw/daytona-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/diagnostics-otel",
       "description": "OpenClaw diagnostics OpenTelemetry exporter",
       "source": "official",

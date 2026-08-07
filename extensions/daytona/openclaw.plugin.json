@@ -1,0 +1,181 @@
+{
+  "id": "daytona",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Daytona Sandbox",
+  "description": "OpenClaw sandbox backend that runs agent exec and file tools inside Daytona cloud sandboxes over the Daytona toolbox API.",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "env"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]{0,127}$"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "exec"
+                  },
+                  "provider": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        ]
+      },
+      "apiUrl": {
+        "type": "string",
+        "minLength": 1
+      },
+      "target": {
+        "type": "string",
+        "minLength": 1
+      },
+      "snapshot": {
+        "type": "string",
+        "minLength": 1
+      },
+      "autoStopInterval": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "autoDeleteInterval": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "networkBlockAll": {
+        "type": "boolean"
+      },
+      "remoteWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "remoteAgentWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000
+      }
+    },
+    "additionalProperties": false
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "Daytona API Key",
+      "help": "Daytona API key or SecretRef (fallback: DAYTONA_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "dtn_..."
+    },
+    "apiUrl": {
+      "label": "Daytona API URL",
+      "help": "Optional Daytona API base URL (fallback: DAYTONA_API_URL env var). Defaults to Daytona cloud.",
+      "advanced": true
+    },
+    "target": {
+      "label": "Target Region",
+      "help": "Optional Daytona target region for new sandboxes (fallback: DAYTONA_TARGET env var).",
+      "advanced": true
+    },
+    "snapshot": {
+      "label": "Snapshot",
+      "help": "Daytona snapshot for new sandboxes. Defaults to the Daytona default snapshot. The image needs sh, tar, base64, stat, and python3 on PATH."
+    },
+    "autoStopInterval": {
+      "label": "Auto-stop Interval Minutes",
+      "help": "Minutes of inactivity before Daytona stops the sandbox; 0 keeps it running. Defaults to the Daytona default (15). Stopped sandboxes restart on next use."
+    },
+    "autoDeleteInterval": {
+      "label": "Auto-delete Interval Minutes",
+      "help": "Minutes a sandbox may stay stopped before Daytona deletes it; 0 deletes immediately on stop. Disabled by default.",
+      "advanced": true
+    },
+    "networkBlockAll": {
+      "label": "Block Network",
+      "help": "Block all sandbox network egress at creation. Defaults to Daytona's network policy.",
+      "advanced": true
+    },
+    "remoteWorkspaceDir": {
+      "label": "Remote Workspace Dir",
+      "help": "Absolute path of the writable session workspace inside the Daytona sandbox.",
+      "advanced": true
+    },
+    "remoteAgentWorkspaceDir": {
+      "label": "Remote Agent Dir",
+      "help": "Absolute path mirroring the real agent workspace when workspaceAccess is not none.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "API Timeout Seconds",
+      "help": "Timeout for Daytona API operations such as create, upload, and filesystem commands.",
+      "advanced": true
+    }
+  }
+}

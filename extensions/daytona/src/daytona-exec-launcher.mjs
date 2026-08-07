@@ -1,0 +1,216 @@
+#!/usr/bin/env node
+// Bridges one OpenClaw sandbox exec into a Daytona sandbox over the toolbox API.
+// Spawned by the daytona sandbox backend with a payload file describing the run.
+
+import { randomBytes } from "node:crypto";
+import { readFileSync, rmSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const EXIT_POLL_INTERVAL_MS = 500;
+const SIGNAL_NUMBERS = new Map([
+  ["SIGHUP", 1],
+  ["SIGINT", 2],
+  ["SIGTERM", 15],
+]);
+
+export function decodePayload(argv) {
+  const payloadFileIndex = argv.indexOf("--payload-file");
+  if (payloadFileIndex < 0) {
+    throw new Error("Missing --payload-file");
+  }
+  const payloadFile = argv[payloadFileIndex + 1];
+  if (!payloadFile) {
+    throw new Error("Missing --payload-file value");
+  }
+  const payloadJson = readFileSync(payloadFile, "utf8");
+  // The payload carries the Daytona API key; drop it from disk as soon as it
+  // is read so the secret only lives in this process.
+  rmSync(path.dirname(payloadFile), { force: true, recursive: true });
+  return JSON.parse(payloadJson);
+}
+
+export function shellEscape(value) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function formatError(error) {
+  if (error && typeof error === "object" && typeof error.stack === "string") {
+    return error.stack;
+  }
+  return String(error);
+}
+
+function signalExitCode(signal) {
+  const signalNumber = SIGNAL_NUMBERS.get(signal);
+  return signalNumber === undefined ? 1 : 128 + signalNumber;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function runPtyExec(sandbox, payload) {
+  const ptyId = `openclaw-pty-${randomBytes(6).toString("hex")}`;
+  const ptyHandle = await sandbox.process.createPty({
+    id: ptyId,
+    cwd: payload.cwd,
+    envs: payload.env,
+    cols: process.stdout.columns ?? 80,
+    rows: process.stdout.rows ?? 24,
+    onData: (data) => {
+      process.stdout.write(Buffer.from(data));
+    },
+  });
+  await ptyHandle.waitForConnection();
+  // `exec` replaces the interactive shell so the PTY session ends with the
+  // command and reports its exit code. The command stays single quoted, which
+  // keeps embedded newlines inside one shell word for the line-based PTY.
+  await ptyHandle.sendInput(`exec /bin/sh -c ${shellEscape(payload.command)}\n`);
+
+  process.stdin.on("data", (chunk) => {
+    void ptyHandle.sendInput(new Uint8Array(chunk)).catch(() => {});
+  });
+  process.stdin.resume();
+  process.stdout.on("resize", () => {
+    void ptyHandle.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24).catch(() => {});
+  });
+  for (const signal of SIGNAL_NUMBERS.keys()) {
+    process.on(signal, () => {
+      void sandbox.process
+        .killPtySession(ptyId)
+        .catch(() => {})
+        .finally(() => process.exit(signalExitCode(signal)));
+    });
+  }
+
+  const result = await ptyHandle.wait();
+  await ptyHandle.disconnect().catch(() => {});
+  if (result.error && result.exitCode === undefined) {
+    process.stderr.write(`[daytona-sandbox] pty failed: ${result.error}\n`);
+    return 1;
+  }
+  return result.exitCode ?? 0;
+}
+
+async function runSessionExec(sandbox, payload) {
+  const sessionId = `openclaw-exec-${randomBytes(6).toString("hex")}`;
+  await sandbox.process.createSession(sessionId);
+  let interrupted = null;
+  const deleteSession = async () => {
+    await sandbox.process.deleteSession(sessionId).catch(() => {});
+  };
+  try {
+    const execution = await sandbox.process.executeSessionCommand(sessionId, {
+      command: payload.command,
+      runAsync: true,
+      suppressInputEcho: true,
+    });
+    const commandId = execution.cmdId;
+    if (!commandId) {
+      throw new Error("Daytona did not return a command id for the exec session");
+    }
+
+    for (const signal of SIGNAL_NUMBERS.keys()) {
+      process.on(signal, () => {
+        interrupted = signal;
+        // Deleting the session kills the remote command; the poll loop then
+        // exits through the interrupted path.
+        void deleteSession().finally(() => process.exit(signalExitCode(signal)));
+      });
+    }
+    process.stdin.on("data", (chunk) => {
+      void sandbox.process
+        .sendSessionCommandInput(sessionId, commandId, chunk.toString("utf8"))
+        .catch(() => {});
+    });
+    process.stdin.resume();
+
+    // Track emitted lengths so the post-exit catch-up fetch only appends
+    // output the live stream missed. The stream can end while the command is
+    // still running, so command lifecycle never depends on it.
+    let stdoutEmitted = 0;
+    let stderrEmitted = 0;
+    const emitStdout = (chunk) => {
+      stdoutEmitted += chunk.length;
+      process.stdout.write(chunk);
+    };
+    const emitStderr = (chunk) => {
+      stderrEmitted += chunk.length;
+      process.stderr.write(chunk);
+    };
+    void sandbox.process
+      .getSessionCommandLogs(sessionId, commandId, emitStdout, emitStderr)
+      .catch(() => {});
+
+    let exitCode;
+    let pollFailures = 0;
+    for (;;) {
+      if (interrupted) {
+        return signalExitCode(interrupted);
+      }
+      try {
+        const command = await sandbox.process.getSessionCommand(sessionId, commandId);
+        exitCode = command.exitCode;
+        pollFailures = 0;
+      } catch (error) {
+        pollFailures += 1;
+        if (pollFailures >= 5) {
+          throw error;
+        }
+      }
+      if (exitCode !== undefined && exitCode !== null) {
+        break;
+      }
+      await sleep(EXIT_POLL_INTERVAL_MS);
+    }
+
+    const finalLogs = await sandbox.process.getSessionCommandLogs(sessionId, commandId);
+    const stdoutTail = (finalLogs.stdout ?? "").slice(stdoutEmitted);
+    const stderrTail = (finalLogs.stderr ?? "").slice(stderrEmitted);
+    if (stdoutTail) {
+      process.stdout.write(stdoutTail);
+    }
+    if (stderrTail) {
+      process.stderr.write(stderrTail);
+    }
+    return exitCode;
+  } finally {
+    await deleteSession();
+  }
+}
+
+function isMain() {
+  const mainPath = process.argv[1];
+  if (!mainPath) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
+}
+
+export async function main() {
+  let exitCode;
+  try {
+    const payload = decodePayload(process.argv.slice(2));
+    const { Daytona } = await import("@daytona/sdk");
+    const client = new Daytona({
+      apiKey: payload.apiKey,
+      apiUrl: payload.apiUrl,
+      target: payload.target,
+    });
+    const sandbox = await client.get(payload.sandboxId);
+    exitCode = payload.usePty
+      ? await runPtyExec(sandbox, payload)
+      : await runSessionExec(sandbox, payload);
+  } catch (error) {
+    process.stderr.write(`[daytona-sandbox] ${formatError(error)}\n`);
+    exitCode = 127;
+  }
+  process.exit(exitCode ?? 1);
+}
+
+if (isMain()) {
+  void main();
+}
