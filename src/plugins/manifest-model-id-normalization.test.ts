@@ -336,15 +336,15 @@ describe("manifest model id normalization", () => {
     setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
 
-    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    const openSyncSpy = vi.spyOn(fs, "openSync");
 
     expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
     expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
 
-    const manifestReads = readFileSyncSpy.mock.calls.filter(
+    const manifestReads = openSyncSpy.mock.calls.filter(
       ([filePath]) => String(filePath) === manifestPath,
     );
     expect(manifestReads).toHaveLength(1);
-    readFileSyncSpy.mockRestore();
+    openSyncSpy.mockRestore();
   });
 });

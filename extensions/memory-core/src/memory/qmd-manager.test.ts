@@ -54,16 +54,18 @@ type EmbedLockCall = [
   () => Promise<unknown>,
 ];
 
+type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
+
 interface MockChild extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+  stdout: MockStream;
+  stderr: MockStream;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
 }
 
 function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }): MockChild {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child: MockChild = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
