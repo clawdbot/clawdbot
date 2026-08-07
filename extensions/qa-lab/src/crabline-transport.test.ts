@@ -28,6 +28,31 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
+type CrablineTransport = Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>;
+
+function resolveTelegramApi(transport: CrablineTransport) {
+  const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
+  const telegram = config.channels?.telegram as { apiRoot?: string; botToken?: string } | undefined;
+  return {
+    apiRoot: requireString(telegram?.apiRoot, "Telegram API root"),
+    botToken: requireString(telegram?.botToken, "Telegram bot token"),
+  };
+}
+
+async function postTelegram(
+  api: ReturnType<typeof resolveTelegramApi>,
+  method: string,
+  body: Record<string, unknown>,
+) {
+  const response = await fetch(`${api.apiRoot}/bot${api.botToken}/${method}`, {
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  expect(response.ok).toBe(true);
+  return (await response.json()) as { result: { message_id: number } };
+}
+
 describe("crabline transport", () => {
   it("cancels a failed inbound response before surfacing the provider error", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
@@ -149,13 +174,8 @@ describe("crabline transport", () => {
           text: "driver",
         });
 
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
-        const botToken = requireString(telegram?.botToken, "Telegram bot token");
-        const response = await fetch(`${apiRoot}/bot${botToken}/getUpdates`);
+        const api = resolveTelegramApi(transport);
+        const response = await fetch(`${api.apiRoot}/bot${api.botToken}/getUpdates`);
         const payload = (await response.json()) as {
           result?: Array<{ message?: { from?: { id?: number }; text?: string } }>;
         };
@@ -203,13 +223,8 @@ describe("crabline transport", () => {
           nativeCommand: { name: "status" },
         });
 
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
-        const botToken = requireString(telegram?.botToken, "Telegram bot token");
-        const response = await fetch(`${apiRoot}/bot${botToken}/getUpdates`);
+        const api = resolveTelegramApi(transport);
+        const response = await fetch(`${api.apiRoot}/bot${api.botToken}/getUpdates`);
         await expect(response.json()).resolves.toMatchObject({
           result: [
             {
@@ -232,6 +247,63 @@ describe("crabline transport", () => {
     });
   });
 
+  it("projects Telegram HTML as visible text without changing raw recorder events", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+
+      try {
+        const api = resolveTelegramApi(transport);
+        const html = "Use <code>QA_KICKOFF_TASK.md</code> &amp; continue";
+        const raw = "Raw <code>QA_KICKOFF_TASK.md</code> &amp; unchanged";
+        const cases = [
+          { text: html, parseMode: "hTmL", expected: "Use QA_KICKOFF_TASK.md & continue" },
+          { text: raw, parseMode: undefined, expected: raw },
+        ] as const;
+        for (const testCase of cases) {
+          await transport.state.reset();
+          await postTelegram(api, "sendMessage", {
+            chat_id: "-1001234567890",
+            ...(testCase.parseMode ? { parse_mode: testCase.parseMode } : {}),
+            text: testCase.text,
+          });
+          expect(transport.state.getSnapshot().messages.at(-1)?.text).toBe(testCase.expected);
+          await expect(
+            transport.waitForOutboundSequence!({
+              conversationId: "-1001234567890",
+              finalSettleMs: 0,
+              finalTextIncludes: testCase.expected,
+              minimumPreviewEvents: 0,
+              timeoutMs: 1_000,
+            }),
+          ).resolves.toMatchObject({
+            events: [{ message: { text: testCase.expected } }],
+            final: { text: testCase.expected },
+          });
+        }
+        const recorderEvents = (
+          await fs.readFile(
+            path.join(outputDir, "artifacts", "crabline", "telegram-fake-provider.jsonl"),
+            "utf8",
+          )
+        )
+          .trim()
+          .split(/\r?\n/u)
+          .map((line) => JSON.parse(line) as unknown);
+        expect(recorderEvents).toContainEqual(
+          expect.objectContaining({
+            body: expect.objectContaining({ parse_mode: "hTmL", text: html }),
+          }),
+        );
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("observes Telegram preview edits through the shared transport adapter", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
@@ -241,22 +313,8 @@ describe("crabline transport", () => {
       });
 
       try {
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
-        const botToken = requireString(telegram?.botToken, "Telegram bot token");
-        const postTelegram = async (method: string, body: Record<string, unknown>) => {
-          const response = await fetch(`${apiRoot}/bot${botToken}/${method}`, {
-            body: JSON.stringify(body),
-            headers: { "content-type": "application/json" },
-            method: "POST",
-          });
-          expect(response.ok).toBe(true);
-          return (await response.json()) as { result: { message_id: number } };
-        };
-        const sent = await postTelegram("sendMessage", {
+        const api = resolveTelegramApi(transport);
+        const sent = await postTelegram(api, "sendMessage", {
           chat_id: "-1001234567890",
           message_thread_id: 42,
           text: "preview text",
@@ -264,7 +322,7 @@ describe("crabline transport", () => {
         expect(transport.state.searchMessages({ query: "preview text" })).toEqual([
           expect.objectContaining({ text: "preview text" }),
         ]);
-        await postTelegram("editMessageText", {
+        await postTelegram(api, "editMessageText", {
           chat_id: "-1001234567890",
           message_id: sent.result.message_id,
           text: "final marker",
@@ -932,14 +990,9 @@ describe("crabline transport", () => {
           text: "Channel baseline marker check.",
         });
 
-        const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-        const telegram = config.channels?.telegram as
-          | { apiRoot?: string; botToken?: string }
-          | undefined;
-        expect(telegram?.apiRoot).toBeTruthy();
-        expect(telegram?.botToken).toBeTruthy();
+        const api = resolveTelegramApi(transport);
         const { response, release } = await fetchWithSsrFGuard({
-          url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
+          url: `${api.apiRoot}/bot${api.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
               chat_id: inbound.conversation.id,
@@ -972,7 +1025,7 @@ describe("crabline transport", () => {
         await transport.state.reset();
         const delivery = transport.buildAgentDelivery({ target: "dm:qa-operator" });
         const { response: directResponse, release: directRelease } = await fetchWithSsrFGuard({
-          url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
+          url: `${api.apiRoot}/bot${api.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
               chat_id: delivery.to,

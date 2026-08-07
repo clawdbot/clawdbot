@@ -7,6 +7,7 @@ import {
   type OpenClawCrablineInbound,
   type StartedOpenClawCrablineAdapter,
 } from "@openclaw/crabline";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -14,6 +15,7 @@ import {
   normalizeStringifiedOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import {
   createCrablineProviderDelivery,
@@ -90,7 +92,20 @@ function formatLogicalQaTarget({ conversation, threadId }: QaBusInboundMessageIn
 
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
 
+function projectCrablineObservedText(channel: string, event: unknown, text: string): string {
+  if (
+    channel !== "telegram" ||
+    !isRecord(event) ||
+    !isRecord(event.body) ||
+    readStringValue(event.body.parse_mode)?.toLowerCase() !== "html"
+  ) {
+    return text;
+  }
+  return stripMarkdown(sanitizeForPlainText(text));
+}
+
 function readTelegramLifecycleEvent(params: {
+  channel: string;
   cursor: number;
   event: unknown;
   messageByProviderId: Map<string, QaBusMessage>;
@@ -124,7 +139,11 @@ function readTelegramLifecycleEvent(params: {
       params.pendingByChat.delete(chatId);
     }
   }
-  const text = readStringValue(params.event.body.text) ?? previous?.text ?? "";
+  const observedText = readStringValue(params.event.body.text);
+  const text =
+    observedText === undefined
+      ? (previous?.text ?? "")
+      : projectCrablineObservedText(params.channel, params.event, observedText);
   if (!text && method !== "deleteMessage") {
     return null;
   }
@@ -231,6 +250,7 @@ function createCrablineState(params: {
     observeEvent(event) {
       if (params.adapter.channel === "telegram") {
         const lifecycle = readTelegramLifecycleEvent({
+          channel: params.adapter.channel,
           cursor: outboundEvents.length + 1,
           event,
           messageByProviderId: telegramMessageByProviderId,
@@ -258,7 +278,10 @@ function createCrablineState(params: {
         targetByProviderTarget,
       }) as QaBusOutboundMessageInput | null;
       if (outbound) {
-        baseState.addOutboundMessage(outbound);
+        baseState.addOutboundMessage({
+          ...outbound,
+          text: projectCrablineObservedText(params.adapter.channel, event, outbound.text),
+        });
       }
     },
     async addInboundMessage(input: QaBusInboundMessageInput) {
