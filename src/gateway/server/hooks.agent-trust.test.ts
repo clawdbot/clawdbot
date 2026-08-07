@@ -1014,4 +1014,74 @@ describe("dispatchAgentHook trust handling", () => {
     });
     expect(requestHeartbeatMock.mock.calls[0]?.[0]?.sessionKey).toBeUndefined();
   });
+
+  it("keeps the global announce wake on the dispatch-time agent after a default-agent reload", async () => {
+    // Dispatch accepts "main" as the default; while the run is queued the
+    // config reloads so "work" becomes default. The announce wake must still
+    // target the accepted agent — the one the isolated run actually used —
+    // not the freshly resolved default.
+    const dispatch = resolveDispatchAgentHook();
+    let currentConfig = {
+      agents: { entries: { main: { default: true }, work: { default: false } } },
+      session: { scope: "global" },
+    };
+    loadConfigMock.mockImplementation(() => currentConfig);
+    const firstGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return { status: "ok", summary: "done", delivered: false, deliveryAttempted: false };
+    });
+
+    dispatch({ ...buildAgentPayload("Email"), deliver: true });
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+
+    currentConfig = {
+      agents: { entries: { work: { default: true } } },
+      session: { scope: "global" },
+    };
+    firstGate.resolve();
+
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(wake).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
+      agentId: "main",
+    });
+    expect(wake.sessionKey).toBeUndefined();
+  });
+
+  it("keeps the global failure wake on the dispatch-time agent after a default-agent reload", async () => {
+    const dispatch = resolveDispatchAgentHook();
+    let currentConfig = {
+      agents: { entries: { main: { default: true }, work: { default: false } } },
+      session: { scope: "global" },
+    };
+    loadConfigMock.mockImplementation(() => currentConfig);
+    const firstGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      throw new Error("agent exploded");
+    });
+
+    dispatch(buildAgentPayload("Email"));
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+
+    currentConfig = {
+      agents: { entries: { work: { default: true } } },
+      session: { scope: "global" },
+    };
+    firstGate.resolve();
+
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(wake).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      agentId: "main",
+    });
+    expect(wake.sessionKey).toBeUndefined();
+  });
 });
