@@ -3,6 +3,11 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  CLAW_SETUP_SECRET_REJECTION_MESSAGE,
+  containsSensitiveClawSetupValue,
+  isSensitiveClawSetupField,
+} from "./setup-secret-validation.js";
 import type { ClawSetupMaterialization } from "./setup.js";
 import type { ClawAddPlan } from "./types.js";
 
@@ -289,6 +294,18 @@ export function readClawSetupPending(
   return pendingExists ? readPendingInDatabase(agentId, database.db) : undefined;
 }
 
+function assertSafeClawSetupAnswers(answers: readonly PersistedClawSetupAnswer[]): void {
+  if (
+    answers.some(
+      (answer) =>
+        isSensitiveClawSetupField({ id: answer.id }) ||
+        containsSensitiveClawSetupValue(answer.value),
+    )
+  ) {
+    throw new Error(CLAW_SETUP_SECRET_REJECTION_MESSAGE);
+  }
+}
+
 function samePendingTarget(
   pending: PersistedClawSetupPending,
   target: ClawSetupTargetState,
@@ -306,6 +323,7 @@ export function beginClawSetupUpdate(
   target: ClawSetupTargetState,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): PersistedClawSetupPending {
+  assertSafeClawSetupAnswers(target.answers);
   ensureTable(options);
   const nowMs = options.nowMs ?? Date.now();
   return runOpenClawStateWriteTransaction(({ db }) => {
@@ -504,6 +522,7 @@ export function beginClawSetupState(
   materialization: ClawSetupMaterialization,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): PersistedClawSetupState {
+  assertSafeClawSetupAnswers(materialization.answers);
   ensureTable(options);
   const nowMs = options.nowMs ?? Date.now();
   return runOpenClawStateWriteTransaction(({ db }) => {

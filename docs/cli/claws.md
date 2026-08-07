@@ -98,7 +98,9 @@ on this page use JSON, with equivalent keys available in `CLAW.md` frontmatter.
 Schema version 2 adds declarative, non-secret setup inputs and seed-once
 personalization. Version 1 remains strict and rejects these fields. Version 2
 persists one current non-secret answer record and creates seed files only after
-an integrity-bound preview. Seed files become user-owned immediately: update
+an integrity-bound preview. Credential-named fields and recognized credential
+values are rejected before planning, rendering, or persistence; configure those
+through an existing SecretRef or auth profile instead. Seed files become user-owned immediately: update
 and remove preserve them, while status and doctor report only their origin and
 handoff state.
 

@@ -5,6 +5,11 @@ import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isValidClawLanguageTag, isValidClawTimezone } from "./schema-portability.js";
 import {
+  CLAW_SETUP_SECRET_REJECTION_MESSAGE,
+  containsSensitiveClawSetupValue,
+  isSensitiveClawSetupField,
+} from "./setup-secret-validation.js";
+import {
   MAX_CLAW_SETUP_RENDERED_BYTES,
   MAX_CLAW_SETUP_RENDERED_SEED_BYTES,
   MAX_CLAW_SETUP_TEMPLATE_BYTES,
@@ -439,6 +444,18 @@ export async function buildClawSetupPlan(params: {
           ),
         );
       }
+      resolved.set(input.id, { value: undefined, source });
+      continue;
+    }
+    if (isSensitiveClawSetupField(input) || containsSensitiveClawSetupValue(value)) {
+      diagnostics.push(
+        diagnostic(
+          "setup_answer_sensitive",
+          "plan",
+          `$.answers.${input.id}`,
+          CLAW_SETUP_SECRET_REJECTION_MESSAGE,
+        ),
+      );
       resolved.set(input.id, { value: undefined, source });
       continue;
     }

@@ -2,15 +2,18 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
+import { beginClawSetupState, readClawSetupState } from "./setup-state.js";
 import { buildClawSetupPlan } from "./setup.js";
 import { MAX_CLAW_SETUP_SEEDS } from "./source-limits.js";
-import type { ClawManifestV2, ClawSourceIdentity } from "./types.js";
+import type { ClawAddPlan, ClawManifestV2, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 function manifest(overrides: Partial<ClawManifestV2> = {}): ClawManifestV2 {
   const parsed = parseClawManifest({
@@ -105,6 +108,35 @@ describe("Claw setup schema version 2", () => {
         setup: { inputs: [] },
         personalization: { seeds: [] },
       },
+    });
+  });
+
+  it("rejects credential setup fields and credential-like defaults", () => {
+    const credentialField = parseClawManifest({
+      schemaVersion: 2,
+      agent: { id: "credential-field" },
+      setup: {
+        inputs: [{ id: "api_key", label: "API key", type: "string", maxLength: 128 }],
+      },
+    });
+    const secretLike = `sk-${"A".repeat(32)}`;
+    const credentialDefault = parseClawManifest({
+      schemaVersion: 2,
+      agent: { id: "credential-default" },
+      setup: {
+        inputs: [
+          { id: "name", label: "Name", type: "string", default: secretLike, maxLength: 128 },
+        ],
+      },
+    });
+
+    expect(credentialField).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ message: expect.stringContaining("SecretRef") })],
+    });
+    expect(credentialDefault).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ message: expect.stringContaining("SecretRef") })],
     });
   });
 
@@ -267,6 +299,58 @@ describe("Claw setup templates and plans", () => {
       expect.objectContaining({ code: "setup_answer_invalid", path: "$.answers.timezone" }),
     );
     expect(JSON.stringify(plan.setup)).not.toContain("Gio");
+  });
+
+  it("rejects credential-like answers before materialization or persistence", async () => {
+    const root = await packageRoot();
+    const secretLike = `sk-${"A".repeat(32)}`;
+    const answers = { principal_name: secretLike, timezone: "UTC" };
+    const setup = await buildClawSetupPlan({ manifest: manifest(), packageRoot: root, answers });
+    const add = await buildClawAddPlan({
+      manifest: manifest(),
+      source: source(root),
+      context: { workspace: join(root, "workspace") },
+      answers,
+    });
+    const persistRecord = vi.fn();
+
+    expect(setup.plan).toMatchObject({
+      valid: false,
+      diagnostics: [expect.objectContaining({ code: "setup_answer_sensitive" })],
+    });
+    expect(setup.materialization).toBeUndefined();
+    expect(JSON.stringify(setup.plan)).not.toContain(secretLike);
+    expect(add.blockers).toContainEqual(
+      expect.objectContaining({ code: "setup_answer_sensitive" }),
+    );
+    await expect(applyClawAddPlan(add, { persistRecord })).rejects.toMatchObject({
+      code: "plan_blocked",
+    });
+    expect(persistRecord).not.toHaveBeenCalled();
+  });
+
+  it("rejects injected credential-like materialization before setup-state persistence", () => {
+    const root = tempDirs.make("openclaw-claw-setup-state-");
+    const secretLike = `sk-${"A".repeat(32)}`;
+    const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+    const plan = {
+      agent: { finalId: "executive-assistant" },
+      claw: { name: "local:executive-assistant", version: "0.0.0-development" },
+    } as ClawAddPlan;
+
+    expect(() =>
+      beginClawSetupState(
+        plan,
+        {
+          schemaDigest: "sha256:schema",
+          answerDigest: "sha256:answers",
+          answers: [{ id: "principal_name", value: secretLike, source: "explicit" }],
+          seeds: [],
+        },
+        { env },
+      ),
+    ).toThrow("SecretRef");
+    expect(readClawSetupState("executive-assistant", { env })).toBeUndefined();
   });
 
   it("renders deterministic Markdown-safe seed bytes and binds answers", async () => {

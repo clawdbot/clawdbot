@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
-import { parseRequestedClawHubSkillRef } from "./clawhub-store.js";
+import { formatClawHubSkillRef, parseRequestedClawHubSkillRef } from "./clawhub-store.js";
 import { resolveClawHubSkillStatusLinkSync, untrackClawHubSkill } from "./clawhub.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
@@ -39,10 +39,12 @@ export async function planClawHubSkillUninstall(params: {
 }): Promise<ClawHubSkillUninstallPlanResult> {
   let slug: string;
   let ownerHandle: string | undefined;
+  let requestedReference: string | undefined;
   try {
     const requested = parseRequestedClawHubSkillRef(params.slug);
     slug = normalizeTrackedSkillSlug(requested.slug);
     ownerHandle = requested.ownerHandle;
+    requestedReference = requested.requestedReference;
   } catch (error) {
     return { ok: false, code: "ambiguous", error: String(error) };
   }
@@ -74,6 +76,13 @@ export async function planClawHubSkillUninstall(params: {
       ok: false,
       code: "ambiguous",
       error: `Skill ${JSON.stringify(slug)} is tracked as ${trackedRef}, not @${ownerHandle}/${slug}.`,
+    };
+  }
+  if (requestedReference && link.requestedReference !== requestedReference) {
+    return {
+      ok: false,
+      code: "ambiguous",
+      error: `Skill ${JSON.stringify(slug)} is tracked from ${JSON.stringify(link.requestedReference ?? slug)}, not ${JSON.stringify(requestedReference)}.`,
     };
   }
   if (link.installedVersion !== params.expectedVersion) {
@@ -122,7 +131,10 @@ export async function planClawHubSkillUninstall(params: {
     ok: true,
     plan: {
       workspaceDir: params.workspaceDir,
-      requestedRef: ownerHandle ? `@${ownerHandle}/${slug}` : slug,
+      requestedRef:
+        link.requestedReference ??
+        requestedReference ??
+        formatClawHubSkillRef({ slug, ...(ownerHandle ? { ownerHandle } : {}) }),
       slug,
       version: link.installedVersion,
       installedAt: link.installedAt,

@@ -5,6 +5,11 @@ import {
   isValidClawTimezone,
 } from "./schema-portability.js";
 import {
+  CLAW_SETUP_SECRET_REJECTION_MESSAGE,
+  containsSensitiveClawSetupValue,
+  isSensitiveClawSetupField,
+} from "./setup-secret-validation.js";
+import {
   DEFAULT_CLAW_SETUP_STRING_LENGTH,
   MAX_CLAW_SETUP_DESCRIPTION_LENGTH,
   MAX_CLAW_SETUP_LABEL_LENGTH,
@@ -237,14 +242,45 @@ const setupMultiChoiceInputSchema = z
     }
   });
 
-export const clawSetupInputSchema = z.union([
-  setupStringInputSchema,
-  setupMultilineInputSchema,
-  setupIntegerInputSchema,
-  setupBooleanInputSchema,
-  setupChoiceInputSchema,
-  setupMultiChoiceInputSchema,
-]);
+function validateSetupInputSecrets(
+  input: { id: string; label: string; default?: unknown; options?: Array<{ value: string }> },
+  ctx: z.RefinementCtx,
+): void {
+  if (isSensitiveClawSetupField(input)) {
+    ctx.addIssue({
+      code: "custom",
+      path: [isSensitiveClawSetupField({ id: input.id }) ? "id" : "label"],
+      message: CLAW_SETUP_SECRET_REJECTION_MESSAGE,
+    });
+  }
+  if (containsSensitiveClawSetupValue(input.default)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["default"],
+      message: CLAW_SETUP_SECRET_REJECTION_MESSAGE,
+    });
+  }
+  input.options?.forEach((option, index) => {
+    if (containsSensitiveClawSetupValue(option.value)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["options", index, "value"],
+        message: CLAW_SETUP_SECRET_REJECTION_MESSAGE,
+      });
+    }
+  });
+}
+
+export const clawSetupInputSchema = z
+  .union([
+    setupStringInputSchema,
+    setupMultilineInputSchema,
+    setupIntegerInputSchema,
+    setupBooleanInputSchema,
+    setupChoiceInputSchema,
+    setupMultiChoiceInputSchema,
+  ])
+  .superRefine(validateSetupInputSecrets);
 
 export const clawSetupSchema = z
   .object({ inputs: z.array(clawSetupInputSchema).optional().default([]) })

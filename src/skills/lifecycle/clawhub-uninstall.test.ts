@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { CLAWHUB_SKILLS_SH_TRUST_STATE } from "../../infra/clawhub.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -14,7 +15,7 @@ import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => resetGlobalHookRunner());
 
-async function fixture(ownerHandle?: string) {
+async function fixture(ownerHandle?: string, requestedReference?: string) {
   const workspaceDir = tempDirs.make("openclaw-skill-uninstall-");
   const slug = "triage";
   const skillDir = join(workspaceDir, "skills", slug);
@@ -33,6 +34,9 @@ async function fixture(ownerHandle?: string) {
       registry,
       slug,
       ...(ownerHandle ? { ownerHandle } : {}),
+      ...(requestedReference
+        ? { requestedReference, trustState: CLAWHUB_SKILLS_SH_TRUST_STATE }
+        : {}),
       installedVersion: "1.0.0",
       installedAt,
       skillFile: { path: "SKILL.md", sha256 },
@@ -48,6 +52,9 @@ async function fixture(ownerHandle?: string) {
           version: "1.0.0",
           registry,
           ...(ownerHandle ? { ownerHandle } : {}),
+          ...(requestedReference
+            ? { requestedReference, trustState: CLAWHUB_SKILLS_SH_TRUST_STATE }
+            : {}),
           installedAt,
           skillFile: { path: "SKILL.md", sha256 },
           fileTreeSha256,
@@ -154,6 +161,41 @@ describe("ClawHub skill uninstall lifecycle", () => {
     );
     const retainedLock = JSON.parse(await readFile(lockPath, "utf8"));
     expect(retainedLock.skills.triage.ownerHandle).toBe("other");
+  });
+
+  it("preserves the full skills.sh reference when revalidating removal", async () => {
+    const requestedReference = "skills-sh:acme/triage-repo/triage";
+    const replacementReference = "skills-sh:other/replacement-repo/triage";
+    const current = await fixture(undefined, requestedReference);
+    const planned = await planClawHubSkillUninstall({
+      workspaceDir: current.workspaceDir,
+      slug: requestedReference,
+      expectedVersion: "1.0.0",
+    });
+    expect(planned).toMatchObject({
+      ok: true,
+      plan: { requestedRef: requestedReference, slug: "triage" },
+    });
+    if (!planned.ok) {
+      throw new Error(planned.error);
+    }
+
+    const originPath = join(current.skillDir, ".clawhub", "origin.json");
+    const lockPath = join(current.workspaceDir, ".clawhub", "lock.json");
+    const origin = JSON.parse(await readFile(originPath, "utf8"));
+    const lock = JSON.parse(await readFile(lockPath, "utf8"));
+    origin.requestedReference = replacementReference;
+    lock.skills.triage.requestedReference = replacementReference;
+    await writeFile(originPath, JSON.stringify(origin));
+    await writeFile(lockPath, JSON.stringify(lock));
+
+    await expect(applyClawHubSkillUninstall(planned.plan)).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining(replacementReference),
+    });
+    await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "name: triage",
+    );
   });
 
   it("retains a locally modified skill", async () => {
