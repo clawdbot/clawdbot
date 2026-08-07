@@ -57,6 +57,13 @@ when personas must not share compiled wiki knowledge.
 | Sessions and transcripts         | `<agentDir>/openclaw-agent.sqlite`                                                     | `agents.entries.*.agentDir`                                                                 |
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
+<Note>
+These paths use `~` for the OS home directory. Tilde expansion works on every
+platform, including Windows, so the examples are portable as written — see
+[`agents.defaults.workspace`](/gateway/config-agents#agentsdefaultsworkspace)
+for the path conventions.
+</Note>
+
 ### Single-agent mode (default)
 
 If you configure nothing, OpenClaw runs one agent:
