@@ -2,6 +2,7 @@ import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard dispatch workspace helpers keep authority resolution outside the orchestration loop.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
+import { cardRunId, cardSessionKey, latestRunningAttempt } from "./store-card-helpers.js";
 import type { WorkboardStore } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -25,6 +26,36 @@ export function managedWorktreeName(cardId: string): string {
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-");
   return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
+}
+
+export async function reconcileWorkboardEndedRun(params: {
+  store: WorkboardStore;
+  runId: string;
+  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  error?: string;
+  reason?: string;
+}): Promise<void> {
+  const card = (await params.store.list()).find((entry) => cardRunId(entry) === params.runId);
+  if (!card || card.status === "done" || card.status === "blocked") {
+    return;
+  }
+  const remainsActive =
+    card.execution?.status === "running" ||
+    Boolean(card.metadata?.claim) ||
+    Boolean(latestRunningAttempt(card));
+  if (!remainsActive) {
+    return;
+  }
+  const outcome = params.outcome ?? "unknown";
+  const detail =
+    outcome === "ok"
+      ? "Worker ended without completing or blocking the card."
+      : `Worker ended with outcome ${outcome}${params.error ? `: ${params.error}` : params.reason ? `: ${params.reason}` : "."}`;
+  await params.store.recordProtocolViolation(card.id, {
+    detail,
+    runId: params.runId,
+    ...(cardSessionKey(card) ? { sessionKey: cardSessionKey(card) } : {}),
+  });
 }
 
 export async function cleanupWorkboardRunWorktree(params: {

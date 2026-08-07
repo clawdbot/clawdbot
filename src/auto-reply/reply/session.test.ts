@@ -3358,7 +3358,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
   });
-  it("retains the transcript in place on /new", async () => {
+  it("rotates provider-owned session state and records the old transcript boundary on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
     const existingSessionId = "existing-session-archive";
@@ -3366,7 +3366,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       storePath,
       sessionKey,
       sessionId: existingSessionId,
-      overrides: { verboseLevel: "on" },
+      overrides: { verboseLevel: "on", agentHarnessId: "codex" },
     });
     await appendTranscriptMessage(
       { agentId: "main", sessionId: existingSessionId, sessionKey, storePath },
@@ -3399,7 +3399,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.sessionId).toBe(result.sessionId);
     const events = await loadTranscriptEvents({
       agentId: "main",
       sessionId: existingSessionId,

@@ -798,11 +798,15 @@ async function initSessionStateAttemptLocked(
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
     persistedLabel = reusableEntry.label;
   } else {
-    // Durable resets retain their transcript identity for cursor continuity; ACP
-    // resets still rotate the local session id that owns provider conversation state.
-    sessionId = isAcpSessionKey(sessionKey)
-      ? crypto.randomUUID()
-      : (entry?.sessionId ?? crypto.randomUUID());
+    // Explicit resets of provider-owned sessions mint a physical generation so delayed
+    // harness work cannot reattach retired conversation state. Ordinary local and implicit
+    // daily/idle boundaries retain transcript identity for cursor continuity.
+    const rotateProviderSession =
+      resetTriggered && (Boolean(entry?.agentHarnessId) || hasProviderOwnedSession(entry));
+    sessionId =
+      rotateProviderSession || isAcpSessionKey(sessionKey)
+        ? crypto.randomUUID()
+        : (entry?.sessionId ?? crypto.randomUUID());
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;

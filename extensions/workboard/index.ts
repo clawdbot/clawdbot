@@ -3,7 +3,10 @@ import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
-import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
+import {
+  cleanupWorkboardRunWorktree,
+  reconcileWorkboardEndedRun,
+} from "./src/dispatcher-workspace.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -33,7 +36,18 @@ export default definePluginEntry({
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
     api.on("subagent_ended", async (event) => {
-      if (event.runId) {
+      if (!event.runId) {
+        return;
+      }
+      try {
+        await reconcileWorkboardEndedRun({
+          store,
+          runId: event.runId,
+          outcome: event.outcome,
+          error: event.error,
+          reason: event.reason,
+        });
+      } finally {
         await cleanupWorkboardRunWorktree({
           store,
           worktrees: api.runtime.worktrees,

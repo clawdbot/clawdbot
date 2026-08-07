@@ -74,6 +74,17 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
   loadRuntimeConfig.mockReturnValue(config);
 }
 
+function removeTempStoreDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EBUSY")) {
+      throw err;
+    }
+  }
+}
+
 async function withTempStore(
   fn: (ctx: { dir: string; store: string }) => Promise<void>,
   overrides?: Partial<OpenClawConfig>,
@@ -84,7 +95,7 @@ async function withTempStore(
   try {
     await fn({ dir, store });
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeTempStoreDir(dir);
   }
 }
 
@@ -1720,6 +1731,47 @@ describe("agentCliCommand", () => {
         2,
       );
       expect(jsonRuntime.log).not.toHaveBeenCalled();
+    });
+  });
+
+  it("aborts an accepted gateway run when the client wait times out", async () => {
+    await withTempStore(async () => {
+      const error = createGatewayTimeoutError();
+      callGateway.mockImplementation(
+        async (request: { method?: string; onAccepted?: (payload: unknown) => void }) => {
+          if (request.method === "agent") {
+            request.onAccepted?.({
+              status: "accepted",
+              runId: "accepted-timeout-run",
+              sessionKey: "agent:main:incident-42",
+            });
+            throw error;
+          }
+          if (request.method === "chat.abort") {
+            return { aborted: true, runIds: ["accepted-timeout-run"] };
+          }
+          throw new Error(`unexpected method ${String(request.method)}`);
+        },
+      );
+
+      await expect(
+        agentCliCommand({ message: "hi", sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toBe(error);
+
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(callGateway.mock.calls[1]?.[0]).toMatchObject({
+        method: "chat.abort",
+        params: {
+          sessionKey: "agent:main:incident-42",
+          runId: "accepted-timeout-run",
+        },
+      });
+      expect(
+        mockMessages(runtime.error).some(
+          (message) =>
+            message.includes("accepted-timeout-run") && message.includes("confirmed aborted"),
+        ),
+      ).toBe(true);
     });
   });
 

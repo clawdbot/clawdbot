@@ -90,6 +90,8 @@ type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
 };
 
 type AgentCliSignal = "SIGINT" | "SIGTERM";
+type AgentCliAbortReason = AgentCliSignal | "timeout";
+const acceptedRunTimeoutContext = new WeakMap<object, { runId: string; abortConfirmed: boolean }>();
 type AgentCliProcessLike = {
   exitCode?: NodeJS.Process["exitCode"];
   on(signal: AgentCliSignal, handler: () => void): unknown;
@@ -502,15 +504,19 @@ function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): bool
   return Array.isArray(response.runIds) && response.runIds.includes(runId);
 }
 
+function formatAgentCliAbortReason(reason: AgentCliAbortReason): string {
+  return reason === "timeout" ? "Gateway wait timed out" : `Interrupted by ${reason}`;
+}
+
 async function abortAcceptedGatewayAgentRunWithRequest(params: {
   runId: string | undefined;
   sessionKey: string | undefined;
-  signal: AgentCliSignal | undefined;
+  reason: AgentCliAbortReason | undefined;
   runtime: RuntimeEnv;
   request: GatewayRequestFunction;
   logFailure?: boolean;
 }): Promise<boolean> {
-  if (!params.signal || !params.runId || !params.sessionKey) {
+  if (!params.reason || !params.runId || !params.sessionKey) {
     return false;
   }
   try {
@@ -527,14 +533,14 @@ async function abortAcceptedGatewayAgentRunWithRequest(params: {
     }
     if (params.logFailure !== false) {
       params.runtime.error?.(
-        `Interrupted by ${params.signal}; Gateway run ${params.runId} was not confirmed aborted.`,
+        `${formatAgentCliAbortReason(params.reason)}; Gateway run ${params.runId} was not confirmed aborted.`,
       );
     }
     return false;
   } catch (err) {
     if (params.logFailure !== false) {
       params.runtime.error?.(
-        `Interrupted by ${params.signal}; failed to abort Gateway run ${params.runId}: ${String(
+        `${formatAgentCliAbortReason(params.reason)}; failed to abort Gateway run ${params.runId}: ${String(
           err,
         )}`,
       );
@@ -546,11 +552,11 @@ async function abortAcceptedGatewayAgentRunWithRequest(params: {
 async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
   runId: string | undefined;
   sessionKey: string | undefined;
-  signal: AgentCliSignal | undefined;
+  reason: AgentCliAbortReason | undefined;
   runtime: RuntimeEnv;
   gatewayIdentity: AgentGatewayCallIdentity;
   config: OpenClawConfig;
-}): Promise<void> {
+}): Promise<boolean> {
   const request: GatewayRequestFunction = async <T = Record<string, unknown>>(
     method: string,
     requestParams?: unknown,
@@ -570,22 +576,23 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
-      signal: params.signal,
+      reason: params.reason,
       runtime: params.runtime,
       request,
       logFailure: isFinalAttempt,
     });
     if (aborted || isFinalAttempt) {
-      return;
+      return aborted;
     }
     await delayMs(retryDelayMs);
   }
+  return false;
 }
 
 async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
   runId: string | undefined;
   sessionKey: string | undefined;
-  signal: AgentCliSignal | undefined;
+  reason: AgentCliAbortReason | undefined;
   runtime: RuntimeEnv;
   request: GatewayRequestFunction;
 }): Promise<boolean> {
@@ -595,7 +602,7 @@ async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
       runId: params.runId,
       sessionKey: params.sessionKey,
-      signal: params.signal,
+      reason: params.reason,
       runtime: params.runtime,
       request: params.request,
       logFailure: false,
@@ -784,7 +791,7 @@ async function agentViaGatewayCommand(
             activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
               runId: acceptedRunId,
               sessionKey: acceptedSessionKey,
-              signal: signalBridge.getReceivedSignal(),
+              reason: signalBridge.getReceivedSignal(),
               runtime,
               request,
             });
@@ -809,6 +816,24 @@ async function agentViaGatewayCommand(
         continue;
       }
       if (
+        acceptedGatewayRun &&
+        acceptedRunId &&
+        isGatewayTransportError(err) &&
+        err.kind === "timeout"
+      ) {
+        const abortConfirmed = await abortAcceptedGatewayAgentRunWithGatewayCall({
+          runId: acceptedRunId,
+          sessionKey: acceptedSessionKey,
+          reason: "timeout",
+          runtime,
+          gatewayIdentity,
+          config: cfg,
+        });
+        if (err && typeof err === "object") {
+          acceptedRunTimeoutContext.set(err, { runId: acceptedRunId, abortConfirmed });
+        }
+      }
+      if (
         isAbortError(err) &&
         !activeConnectionAbortSucceeded &&
         (acceptedGatewayRun || activeConnectionAbortAttempted)
@@ -816,7 +841,7 @@ async function agentViaGatewayCommand(
         await abortAcceptedGatewayAgentRunWithGatewayCall({
           runId: acceptedRunId,
           sessionKey: acceptedSessionKey,
-          signal: signalBridge.getReceivedSignal(),
+          reason: signalBridge.getReceivedSignal(),
           runtime,
           gatewayIdentity,
           config: cfg,
@@ -949,8 +974,16 @@ export async function agentCliCommand(
         throw err;
       }
       const failureHint = resolveGatewayAgentFailureHint(err);
-      if (failureHint) {
-        // Transport loss is ambiguous: the Gateway may have accepted and may still
+      const acceptedTimeout =
+        err && typeof err === "object" ? acceptedRunTimeoutContext.get(err) : undefined;
+      if (acceptedTimeout) {
+        runtime.error?.(
+          acceptedTimeout.abortConfirmed
+            ? `Gateway agent call timed out after accepting run ${acceptedTimeout.runId}; the run was confirmed aborted.`
+            : `Gateway agent call timed out after accepting run ${acceptedTimeout.runId}; abort could not be confirmed, so the run may still be active. Check the session transcript before retrying.`,
+        );
+      } else if (failureHint) {
+        // Transport loss is ambiguous before acceptance: the Gateway may have accepted and may still
         // finish this turn. Recommending a blind retry or --local here could
         // double-execute the message, so point at verification first.
         runtime.error?.(
