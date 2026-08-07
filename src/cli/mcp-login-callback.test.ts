@@ -92,6 +92,24 @@ describe("startMcpLoginCallbackServer", () => {
     expect(response.status).toBe(400);
   });
 
+  it("escapes provider-controlled error text in the rendered page", async () => {
+    const server = await startMcpLoginCallbackServer("http://127.0.0.1:0/oauth/callback", {
+      serverName: "docs",
+      waitMs: 10_000,
+    });
+    activeServers.push(server);
+    const address = server.server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+
+    const response = await fetch(
+      `http://127.0.0.1:${port}/oauth/callback?error=%3Cscript%3Ealert(1)%3C%2Fscript%3E`,
+    );
+    expect(response.status).toBe(400);
+    const body = await response.text();
+    expect(body).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(body).not.toContain("<script>alert(1)</script>");
+  });
+
   it("settles the wait with null on timeout", async () => {
     const server = await startMcpLoginCallbackServer("http://127.0.0.1:0/oauth/callback", {
       serverName: "docs",

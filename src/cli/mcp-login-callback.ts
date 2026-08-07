@@ -30,13 +30,22 @@ export function isMcpLoginLoopbackRedirectUrl(url: string): boolean {
   return parsed.protocol === "http:" && LOOPBACK_HOSTNAMES.has(hostname);
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function renderHtml(title: string, detail?: string): string {
   return `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>${title}</title></head>
+<head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head>
 <body style="font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem;">
-<h1>${title}</h1>
-${detail ? `<p>${detail}</p>` : ""}
+<h1>${escapeHtml(title)}</h1>
+${detail ? `<p>${escapeHtml(detail)}</p>` : ""}
 </body>
 </html>
 `;
