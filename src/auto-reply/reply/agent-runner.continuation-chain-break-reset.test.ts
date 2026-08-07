@@ -76,7 +76,6 @@ vi.mock("../../agents/embedded-agent.js", () => {
     compactEmbeddedAgentSession: (params: unknown) =>
       compactState.compactEmbeddedAgentSessionMock(params),
     queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
-    runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     abortEmbeddedAgentRun: (sessionId: string) => {
       abortEmbeddedAgentRunMock(sessionId);
       return abortEmbeddedAgentRun(sessionId);
@@ -84,6 +83,10 @@ vi.mock("../../agents/embedded-agent.js", () => {
     isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActive(sessionId),
   };
 });
+
+vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
+  runEmbeddedAgentInternal: (params: unknown) => runEmbeddedAgentMock(params),
+}));
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
@@ -154,6 +157,8 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   getLatestSubagentRunByChildSessionKey: () => null,
+  getSwarmRunByLaunchReplayKey: () => undefined,
+  initSubagentRegistry: () => {},
   listSubagentRunsForController: () => [],
   markSubagentRunTerminated: () => 0,
 }));
