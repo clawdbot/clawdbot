@@ -11,6 +11,7 @@ import { renderChatNotice } from "./chat-divider.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   dismissConfirmedActionPopovers,
+  renderActivityGroup,
   renderMessageGroup,
   renderStreamGroup,
 } from "./chat-message.ts";
@@ -2175,6 +2176,174 @@ describe("grouped chat rendering", () => {
     ).toBe("Read 2 files");
     expect(container.querySelectorAll(".chat-activity-group")).toHaveLength(1);
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("renders consecutive original tool groups behind one activity summary", () => {
+    const container = document.createElement("div");
+    const groups = [
+      createToolGroup("tool-group-1", [
+        createMessageEntry(
+          "tool-message-1",
+          createToolResultMessage("call-1", "run_command", "one"),
+        ),
+        createMessageEntry("tool-message-2", createToolResultMessage("call-2", "read_file", "two")),
+      ]),
+      createToolGroup("tool-group-2", [
+        createMessageEntry(
+          "tool-message-3",
+          createToolResultMessage("call-3", "write_file", "three"),
+        ),
+      ]),
+    ];
+
+    render(
+      renderActivityGroup(groups, {
+        showReasoning: true,
+        showToolCalls: true,
+        assistantName: "OpenClaw",
+        isToolMessageExpanded: (id) => id === "activity:tool-group-1",
+      }),
+      container,
+    );
+
+    expect(container.querySelectorAll(".chat-activity-group")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-activity-group__summary")).toHaveLength(1);
+    expect(container.querySelector(".chat-activity-group__label")?.textContent).toContain(
+      "Ran a command, read a file, created a file",
+    );
+    expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
+    expect(
+      container.querySelectorAll(".chat-activity-group__body .chat-activity-group"),
+    ).toHaveLength(0);
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-message-id]")].map(
+        (row) => row.dataset.messageId,
+      ),
+    ).toEqual(["tool-message-1", "tool-message-2", "tool-message-3"]);
+  });
+
+  it("keeps aggregate expansion and accessibility ids stable when groups append", () => {
+    const container = document.createElement("div");
+    const groups = [
+      createToolGroup("stable-first", [
+        createMessageEntry("stable-1", createToolResultMessage("call-1", "read_file", "one")),
+      ]),
+      createToolGroup("stable-second", [
+        createMessageEntry("stable-2", createToolResultMessage("call-2", "read_file", "two")),
+      ]),
+      createToolGroup("stable-third", [
+        createMessageEntry("stable-3", createToolResultMessage("call-3", "read_file", "three")),
+      ]),
+    ];
+    const opts: RenderMessageGroupOptions = {
+      showReasoning: true,
+      showToolCalls: true,
+      isToolMessageExpanded: (id) => id === "activity:stable-first",
+    };
+
+    render(renderActivityGroup(groups.slice(0, 2), opts), container);
+    const initialSummary = expectElement(
+      container,
+      ".chat-activity-group__summary",
+      HTMLButtonElement,
+    );
+    const initialBodyId = initialSummary.getAttribute("aria-controls");
+    expect(initialSummary.getAttribute("aria-expanded")).toBe("true");
+    expect(initialBodyId).toMatch(/^activity-body-[0-9a-f]+$/);
+    expect(container.querySelector(`[id="${initialBodyId}"]`)).not.toBeNull();
+
+    render(renderActivityGroup(groups, opts), container);
+    const appendedSummary = expectElement(
+      container,
+      ".chat-activity-group__summary",
+      HTMLButtonElement,
+    );
+    expect(appendedSummary.getAttribute("aria-controls")).toBe(initialBodyId);
+    expect(appendedSummary.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
+  });
+
+  it("uses the newest live card label before settling to the aggregate summary", () => {
+    const container = document.createElement("div");
+    const groups = [
+      createToolGroup("live-first", [
+        createMessageEntry("finished-read", createToolResultMessage("call-read", "read", "done")),
+      ]),
+      createToolGroup(
+        "live-second",
+        [
+          createMessageEntry("running-edit", {
+            role: "assistant",
+            __openclawToolStreamLive: true,
+            __openclawToolStreamResultReceived: false,
+            content: [
+              {
+                type: "tool_use",
+                id: "call-edit",
+                name: "edit",
+                input: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
+              },
+            ],
+          }),
+        ],
+        { isStreaming: true },
+      ),
+    ];
+    const opts = { showReasoning: true, showToolCalls: true, runActive: true };
+
+    render(renderActivityGroup(groups, opts), container);
+    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
+      "Editing a.ts…",
+    );
+
+    render(renderActivityGroup(groups, { ...opts, runActive: false }), container);
+    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
+      "Read a file, edited a file",
+    );
+  });
+
+  it("computes aggregate errors per owning group", () => {
+    const container = document.createElement("div");
+    const failedMessage = (id: string) =>
+      createToolResultMessage(id, "web_search", JSON.stringify({ error: "No matches" }), {
+        isError: true,
+      });
+    const recovered = createToolGroup(
+      "recovered",
+      [createMessageEntry("recovered-message", failedMessage("call-recovered"))],
+      { turnSucceeded: true },
+    );
+    const successful = createToolGroup("successful", [
+      createMessageEntry("successful-message", createToolResultMessage("call-ok", "read", "ok")),
+    ]);
+
+    render(
+      renderActivityGroup([recovered, successful], {
+        showReasoning: true,
+        showToolCalls: true,
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
+    expect(container.querySelector(".chat-activity-group__summary--error")).toBeNull();
+    expect(container.querySelector(".chat-activity-group__label")?.textContent).toContain(
+      "1 failed",
+    );
+
+    const unrecovered = createToolGroup(
+      "unrecovered",
+      [createMessageEntry("unrecovered-message", failedMessage("call-unrecovered"))],
+      { turnSucceeded: false },
+    );
+    render(
+      renderActivityGroup([recovered, unrecovered], {
+        showReasoning: true,
+        showToolCalls: true,
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-activity-group.is-open")).not.toBeNull();
+    expect(container.querySelector(".chat-activity-group__summary--error")).not.toBeNull();
   });
 
   it("uses the running mutation verb in an active group summary", () => {

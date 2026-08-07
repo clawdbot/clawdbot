@@ -39,21 +39,29 @@ describe("renderChatAvatar", () => {
   it("renders assistant fallback, blob image, and text avatars", () => {
     const defaultAvatar = renderAvatar(["assistant"]);
     expect(defaultAvatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
+    expect(defaultAvatar?.classList.contains("chat-avatar--logo")).toBe(true);
 
     const remoteAvatar = renderAvatar([
       "assistant",
       { avatar: "https://example.com/avatar.png", name: "Val" },
     ]);
     expect(remoteAvatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
+    expect(remoteAvatar?.classList.contains("chat-avatar--logo")).toBe(true);
 
     const blobAvatar = renderAvatar(["assistant", { avatar: "blob:managed-image", name: "Val" }]);
     expect(blobAvatar?.tagName).toBe("IMG");
     expect(blobAvatar?.getAttribute("src")).toBe("blob:managed-image");
+    expect(blobAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
 
     const textAvatar = renderAvatar(["assistant", { avatar: "VC", name: "Val" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("VC");
     expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
+    expect(textAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
+
+    const localAvatar = renderAvatar(["assistant", { avatar: "/avatar/main", name: "OpenClaw" }]);
+    expect(localAvatar?.getAttribute("src")).toBe("/avatar/main");
+    expect(localAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
   });
 
   it("uses the assistant fallback while authenticated avatar routes are loading", () => {
@@ -66,16 +74,19 @@ describe("renderChatAvatar", () => {
     ]);
 
     expect(avatar?.getAttribute("src")).toBe("/apple-touch-icon.png");
+    expect(avatar?.classList.contains("chat-avatar--logo")).toBe(true);
   });
 
   it("renders local user image and text avatars", () => {
     const imageAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "/avatar/user" }]);
     expect(imageAvatar?.getAttribute("src")).toBe("/avatar/user");
     expect(imageAvatar?.getAttribute("alt")).toBe("Buns");
+    expect(imageAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
 
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
+    expect(textAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
   });
 
   it("swaps a failing local user image to initials instead of a broken image", () => {

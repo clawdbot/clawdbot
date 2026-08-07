@@ -7,7 +7,7 @@ export {
   openChatHideConfirmation,
   openChatRewindConfirmation,
 } from "./chat-message-confirmation.ts";
-export { renderMessageGroup } from "./chat-message-group.ts";
+export { renderActivityGroup, renderMessageGroup } from "./chat-message-group.ts";
 export type { MessageReplyTarget } from "./chat-message-markdown.ts";
 export { renderStreamGroup, renderWorkGroupSummary } from "./chat-message-stream.ts";
 export type { StreamGroupOptions, StreamGroupPart } from "./chat-message-stream.ts";

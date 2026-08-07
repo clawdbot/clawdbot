@@ -23,9 +23,11 @@ import {
 export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
+  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
+export type { ActivityRunRenderItem } from "./chat-thread-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
