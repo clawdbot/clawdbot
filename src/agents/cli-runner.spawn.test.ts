@@ -5599,6 +5599,44 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("defaults a blank POSIX marker after the bundle MCP capture merge", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        mcpDeliveryCapture: true,
+        preparedEnv: { AI_AGENT: "   " },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.AI_AGENT).toBe("openclaw");
+    expect(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY).toEqual(expect.any(String));
+  });
+
+  it("collapses Windows marker aliases after the bundle MCP capture merge", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        mcpDeliveryCapture: true,
+        preparedEnv: { ai_agent: "prepared-agent" },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.AI_AGENT).toBe("prepared-agent");
+    expect(Object.keys(input.env ?? {}).filter((key) => key.toUpperCase() === "AI_AGENT")).toEqual([
+      "AI_AGENT",
+    ]);
+  });
+
   it("keeps selected Claude auth authoritative over ambient and configured credentials", async () => {
     vi.stubEnv("OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV", '["ANTHROPIC_API_KEY"]');
     vi.stubEnv("ANTHROPIC_API_KEY", "ambient-api-key");

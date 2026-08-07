@@ -452,7 +452,7 @@ export async function executePreparedCliRun(
           ),
         );
       }
-      Object.assign(env, mcpCaptureAttempt.env);
+      Object.assign(env, canonicalizeAiAgentEnvOverrides(mcpCaptureAttempt.env ?? {}));
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
