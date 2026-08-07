@@ -63,22 +63,22 @@ function findSafeParagraphBreakIndex(params: {
   offset?: number;
 }): number {
   const { text, fenceSpans, minChars, reverse, offset = 0 } = params;
-  let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
-  while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
-    const separator = text.slice(paragraphIdx).match(/^\n[\t ]*\n+/)?.[0];
-    const boundary = paragraphIdx + (separator?.length ?? 0);
+  let lastSafeBoundary = -1;
+  for (const match of text.matchAll(/\n[\t ]*\n+/g)) {
+    const paragraphIdx = match.index ?? -1;
+    const boundary = paragraphIdx + match[0].length;
     if (
       boundary >= minChars &&
       boundary <= text.length &&
       isSafeFenceBreak(fenceSpans, offset + boundary)
     ) {
-      return boundary;
+      if (!reverse) {
+        return boundary;
+      }
+      lastSafeBoundary = boundary;
     }
-    paragraphIdx = reverse
-      ? text.lastIndexOf("\n\n", paragraphIdx - 1)
-      : text.indexOf("\n\n", paragraphIdx + 2);
   }
-  return -1;
+  return lastSafeBoundary;
 }
 
 function findSafeNewlineBreakIndex(params: {
@@ -154,7 +154,7 @@ export class EmbeddedBlockChunker {
     }
 
     if (force && this.#buffer.length <= maxChars) {
-      if (this.#buffer.trim().length > 0) {
+      if (this.#buffer.trim().length > 0 || hasParagraphSeparatorPrefix(this.#buffer)) {
         emit(this.#buffer);
       }
       this.#buffer = "";
@@ -262,7 +262,7 @@ export class EmbeddedBlockChunker {
     const remaining = source.slice(start);
     this.#buffer = reopenFence
       ? `${reopenFence.openLine}\n${remaining}`
-      : findLeadingParagraphSeparator(remaining)
+      : hasParagraphSeparatorPrefix(remaining)
         ? remaining
         : stripLeadingNewlines(remaining);
   }
@@ -309,9 +309,11 @@ export class EmbeddedBlockChunker {
     }
 
     const preserveParagraphSeparator =
-      this.#chunking.flushOnParagraph &&
-      (Boolean(findLeadingParagraphSeparator(source, absoluteBreakIdx)) ||
-        hasTrailingParagraphSeparator(source, absoluteBreakIdx));
+      (this.#chunking.flushOnParagraph &&
+        (hasParagraphSeparatorPrefix(source, absoluteBreakIdx) ||
+          hasTrailingParagraphSeparator(source, absoluteBreakIdx))) ||
+      (hasTrailingParagraphSeparator(source, absoluteBreakIdx) &&
+        /^[\t ]/.test(source.slice(absoluteBreakIdx)));
     const nextStart = preserveParagraphSeparator
       ? absoluteBreakIdx
       : absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
@@ -431,7 +433,10 @@ export class EmbeddedBlockChunker {
         return absoluteIndex >= fence.start && absoluteIndex < fence.end;
       });
     for (let i = window.length - 1; i >= minChars; i--) {
-      if (firstVisibleInFence && window.slice(0, i).trim().length === 0) {
+      if (
+        (firstVisibleInFence || this.#chunking.flushOnParagraph) &&
+        window.slice(0, i).trim().length === 0
+      ) {
         continue;
       }
       if (/\s/.test(window.charAt(i)) && isSafeFenceBreak(fenceSpans, offset + i)) {
@@ -493,6 +498,11 @@ function stripLeadingNewlines(value: string): string {
 
 function findLeadingParagraphSeparator(value: string, start = 0): string | null {
   return value.slice(start).match(/^\n[\t ]*\n+/)?.[0] ?? null;
+}
+
+function hasParagraphSeparatorPrefix(value: string, start = 0): boolean {
+  const remaining = value.slice(start);
+  return findLeadingParagraphSeparator(remaining) !== null || /^\n[\t ]*$/.test(remaining);
 }
 
 function hasTrailingParagraphSeparator(value: string, end: number): boolean {

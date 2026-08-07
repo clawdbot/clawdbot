@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createParagraphChunkedBlockReplyHarness,
+  createSubscribedSessionHarness,
   emitAssistantTextDeltaAndEnd,
   expectFencedChunks,
   extractTextPayloads,
@@ -55,6 +56,33 @@ describe("paragraph and whole-fence chunking", () => {
     if ("expectAssistantTexts" in testCase) {
       expect(subscription.assistantTexts).toEqual(expected);
     }
+  });
+});
+
+describe("paragraph separator delivery", () => {
+  it("preserves paragraph separators through subscriber delivery", () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      blockReplyChunking: {
+        minChars: 1,
+        maxChars: 30,
+        breakPreference: "paragraph",
+        flushOnParagraph: true,
+      },
+    });
+
+    emitAssistantTextDeltaAndEnd({
+      emit,
+      text: "First paragraph.\n \nSecond paragraph.",
+    });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "First paragraph.\n \n",
+      "Second paragraph.",
+    ]);
   });
 });
 

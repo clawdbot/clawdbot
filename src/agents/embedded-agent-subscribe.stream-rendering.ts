@@ -357,12 +357,15 @@ export function createStreamRendering({
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const blockReplyText = stripDowngradedToolCallText(
+    const rawBlockReplyText = stripDowngradedToolCallText(
       stripBlockTags(text, state.blockState, {
         final: options?.final === true,
         completeMarkdownChunk: options?.completeMarkdownChunk === true,
       }),
-    ).trimEnd();
+    );
+    const blockReplyText = params.blockReplyChunking?.flushOnParagraph
+      ? trimBlockReplyTextPreservingParagraphSuffix(rawBlockReplyText)
+      : rawBlockReplyText.trimEnd();
     if (!blockReplyText) {
       return;
     }
@@ -474,6 +477,14 @@ export function createStreamRendering({
     );
     markBlockReplyTextHandled();
   };
+
+function trimBlockReplyTextPreservingParagraphSuffix(text: string): string {
+  const paragraphSuffix = text.match(/\n[\t ]*\n+$/)?.[0];
+  if (!paragraphSuffix) {
+    return text.trimEnd();
+  }
+  return `${text.slice(0, -paragraphSuffix.length).trimEnd()}${paragraphSuffix}`;
+}
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
     replyDirectiveAccumulator.consume(text, options);

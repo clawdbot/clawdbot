@@ -160,6 +160,29 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toBe("");
   });
 
+  it("preserves whitespace-bearing paragraph separators at the size boundary", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+
+    chunker.append("abcdefgh\n \nRest");
+
+    expect(drainChunks(chunker, true)).toEqual(["abcdefgh", "\n \nRest"]);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it("retains an incomplete whitespace-bearing separator across streamed deltas", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+
+    chunker.append("abcdefgh\n ");
+
+    expect(drainChunks(chunker)).toEqual(["abcdefgh"]);
+    expect(chunker.bufferedText).toBe("\n ");
+
+    chunker.append("\nRest");
+
+    expect(drainChunks(chunker, true)).toEqual(["\n \nRest"]);
+    expect(chunker.bufferedText).toBe("");
+  });
+
   it("retains a separator-only streamed delta until the next text delta", () => {
     const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
 

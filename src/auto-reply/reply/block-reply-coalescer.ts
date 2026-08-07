@@ -25,6 +25,7 @@ export function createBlockReplyCoalescer(params: {
   const joiner = config.joiner ?? "";
   const flushOnEnqueue = config.flushOnEnqueue === true;
   const paragraphSeparatorPattern = /\n[\t ]*\n+$/;
+  const leadingParagraphSeparatorPattern = /^\n[\t ]*\n+/;
 
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
@@ -45,6 +46,7 @@ export function createBlockReplyCoalescer(params: {
       !joiner ||
       bufferText.endsWith(joiner) ||
       paragraphSeparatorPattern.test(bufferText) ||
+      leadingParagraphSeparatorPattern.test(text) ||
       text.startsWith(joiner)
     ) {
       return `${bufferText}${text}`;
