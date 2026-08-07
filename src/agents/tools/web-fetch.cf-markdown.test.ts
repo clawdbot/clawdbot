@@ -6,7 +6,7 @@ import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-fetch.js";
-import { createBaseWebFetchToolConfig, makeFetchHeaders } from "./web-fetch.test-harness.js";
+import { createBaseWebFetchToolConfig } from "./web-fetch.test-harness.js";
 
 const lookupMock = vi.fn();
 const baseToolConfig = createBaseWebFetchToolConfig({
@@ -14,24 +14,20 @@ const baseToolConfig = createBaseWebFetchToolConfig({
 });
 
 function markdownResponse(body: string, extraHeaders: Record<string, string> = {}): Response {
-  return {
-    ok: true,
+  return new Response(body, {
     status: 200,
-    headers: makeFetchHeaders({
+    headers: {
       "content-type": "text/markdown; charset=utf-8",
       ...extraHeaders,
-    }),
-    text: async () => body,
-  } as Response;
+    },
+  });
 }
 
 function htmlResponse(body: string): Response {
-  return {
-    ok: true,
+  return new Response(body, {
     status: 200,
-    headers: makeFetchHeaders({ "content-type": "text/html; charset=utf-8" }),
-    text: async () => body,
-  } as Response;
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 }
 
 describe("web_fetch Cloudflare Markdown for Agents", () => {

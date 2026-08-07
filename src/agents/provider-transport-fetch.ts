@@ -460,7 +460,9 @@ function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | 
   const rfc850Date = OBSOLETE_RFC850_DATE_RE.exec(value);
   if (rfc850Date) {
     const now = new Date(nowMs);
-    if (Number.isNaN(now.getTime())) return undefined;
+    if (Number.isNaN(now.getTime())) {
+      return undefined;
+    }
     const candidateYear =
       Math.floor(now.getUTCFullYear() / 100) * 100 + Number.parseInt(rfc850Date[4] ?? "", 10);
     const components = {
@@ -472,7 +474,9 @@ function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | 
       seconds: Number.parseInt(rfc850Date[7] ?? "", 10),
     };
     const candidate = parseHttpDateCalendarMs({ year: candidateYear, ...components });
-    if (candidate === undefined) return undefined;
+    if (candidate === undefined) {
+      return undefined;
+    }
     const fiftyYearsFromNow = Date.UTC(
       now.getUTCFullYear() + 50,
       now.getUTCMonth(),
@@ -486,7 +490,9 @@ function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | 
     return parseHttpDateComponentsMs({ year: resolvedYear, ...components });
   }
   const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
-  if (!asctimeDate) return undefined;
+  if (!asctimeDate) {
+    return undefined;
+  }
   return parseHttpDateComponentsMs({
     weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(asctimeDate[1] ?? ""),
     year: Number.parseInt(asctimeDate[7] ?? "", 10),
@@ -500,7 +506,9 @@ function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | 
 
 function parseHttpDateComponentsMs(components: HttpDateComponents): number | undefined {
   const timestamp = parseHttpDateCalendarMs(components);
-  if (timestamp === undefined) return undefined;
+  if (timestamp === undefined) {
+    return undefined;
+  }
   const weekdayTimestamp = components.seconds === 60 ? timestamp - 1_000 : timestamp;
   return new Date(weekdayTimestamp).getUTCDay() === components.weekday ? timestamp : undefined;
 }
@@ -525,8 +533,9 @@ function parseHttpDateCalendarMs(
     !Number.isInteger(seconds) ||
     seconds < 0 ||
     seconds > 60
-  )
+  ) {
     return undefined;
+  }
   const calendarSecond = Math.min(seconds, 59);
   const timestamp = Date.UTC(year, month, day, hours, minutes, calendarSecond);
   const parsedDate = new Date(timestamp);
@@ -537,8 +546,9 @@ function parseHttpDateCalendarMs(
     parsedDate.getUTCHours() !== hours ||
     parsedDate.getUTCMinutes() !== minutes ||
     parsedDate.getUTCSeconds() !== calendarSecond
-  )
+  ) {
     return undefined;
+  }
   return seconds === 60 ? timestamp + 1_000 : timestamp;
 }
 
