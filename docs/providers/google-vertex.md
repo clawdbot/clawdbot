@@ -53,8 +53,8 @@ project and model, and confirm Gemini responds through Vertex AI.
         gcloud auth application-default login
         ```
 
-        This writes `~/.config/gcloud/application_default_credentials.json`, which
-        OpenClaw detects automatically.
+        Once you complete the authentication flow, gcloud writes the ADC file to
+        disk, which OpenClaw detects automatically.
       </Tab>
 
       <Tab title="Service account key">
