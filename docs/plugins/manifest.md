@@ -6,10 +6,11 @@ read_when:
 title: "Plugin manifest"
 ---
 
-This page covers the **native OpenClaw plugin manifest**, `openclaw.plugin.json`. For compatible bundle layouts (Codex, Claude, Cursor), see [Plugin bundles](/plugins/bundles).
+This page covers the **native OpenClaw plugin manifest**, `openclaw.plugin.json`. For compatible bundle layouts (Agent Plugins, Codex, Claude, Cursor), see [Plugin bundles](/plugins/bundles).
 
 Compatible bundle formats use their own manifest files instead:
 
+- Agent Plugins bundle: `plugin.json` at the package root, per the open [Agent Plugins standard](https://agent-plugins.org)
 - Codex bundle: `.codex-plugin/plugin.json`
 - Claude bundle: `.claude-plugin/plugin.json`, or the default Claude component layout with no manifest
 - Cursor bundle: `.cursor-plugin/plugin.json`
