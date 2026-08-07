@@ -450,10 +450,10 @@ async function resolveMemoryManagerStatusSnapshot(
         : undefined;
     const isStoreProbe = storeProbeFn != null;
     // Store the probe result so the status can reflect a real failure
-    // Even when internal state was not updated.
+    // even when internal state was not updated.
     let probeAvailable: boolean | undefined;
     try {
-      probeAvailable = storeProbeFn
+      probeAvailable = isStoreProbe
         ? await storeProbeFn()
         : await manager.probeVectorAvailability();
     } catch {
@@ -461,12 +461,14 @@ async function resolveMemoryManagerStatusSnapshot(
     }
     const status = manager.status();
     // Harden vector fields when the probe is authoritative and negative,
-    // So the operator sees the degraded state.
+    // so the operator sees the degraded state. A failed store probe only
+    // clears store availability; a failed semantic/fallback probe clears
+    // semantic availability and the aggregate available flag, leaving any
+    // distinct store health intact.
     if (!probeAvailable && status.vector) {
-      const isBuiltin = currentStatus.backend === "builtin";
       status.vector = {
         ...status.vector,
-        storeAvailable: isBuiltin ? false : status.vector.storeAvailable,
+        storeAvailable: isStoreProbe ? false : status.vector.storeAvailable,
         semanticAvailable: isStoreProbe ? status.vector.semanticAvailable : false,
         available: isStoreProbe ? status.vector.available : false,
       };

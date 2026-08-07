@@ -699,7 +699,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(result?.vector?.available).toBe(undefined);
   });
 
-  it("hardens vector.storeAvailable when builtin fallback probe throws without optional store probe", async () => {
+  it("hardens vector.semanticAvailable when builtin fallback probe throws without optional store probe", async () => {
     const manager = {
       // No probeVectorStoreAvailability — builtin without the optional store probe
       probeVectorAvailability: vi.fn(async () => {
@@ -739,7 +739,8 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
     expect(manager.probeVectorAvailability).toHaveBeenCalled();
     expect(manager.close).toHaveBeenCalled();
-    expect(result?.vector?.storeAvailable).toBe(false);
+    // The fallback probe is semantic, so store availability must stay intact.
+    expect(result?.vector?.storeAvailable).toBe(true);
     expect(result?.vector?.semanticAvailable).toBe(false);
     expect(result?.vector?.available).toBe(false);
   });
