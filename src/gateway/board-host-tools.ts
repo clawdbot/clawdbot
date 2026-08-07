@@ -15,7 +15,10 @@ type GatewayHandlerInvocation = Parameters<GatewayRequestHandlers[string]>[0];
 
 const BOARD_DATA_HANDLERS: Record<BoardDataBindingId, GatewayRequestHandlers[string]> = {
   "sessions.list": sessionReadHandlers["sessions.list"]!,
-  "usage.status": usageHandlers["usage.status"]!,
+  // Board reads are one-shot with no bounded-refetch machinery, so they must
+  // keep the blocking cold read: never forward the relaying operator
+  // connection's usage-refreshing capability into this dispatch.
+  "usage.status": (invocation) => usageHandlers["usage.status"]!({ ...invocation, client: null }),
   "usage.cost": usageHandlers["usage.cost"]!,
   "cron.list": cronHandlers["cron.list"]!,
   "cron.status": cronHandlers["cron.status"]!,

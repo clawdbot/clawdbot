@@ -26,6 +26,7 @@ type ModelProvidersPageTestElement = HTMLElement & {
   pendingLogoutProvider: string | null;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
+  refresh: (opts: { force: boolean }) => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
   saveDefaultModels: () => Promise<void>;
@@ -261,6 +262,109 @@ describe("ModelProvidersPage provider usage", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await page.updateComplete;
       expect(usageLoads()).toBeGreaterThan(afterSwap);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-arms the exhausted retry budget after a same-client reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const { context, request, snapshot } = createHarness("main");
+      request.mockImplementation(async (method: string): Promise<unknown> => {
+        switch (method) {
+          case "models.authStatus":
+            return { ts: 1, providers: [] };
+          case "models.list":
+            return { models: [] };
+          case "config.get":
+            return { config: {}, hash: "hash" };
+          case "usage.status":
+            return { updatedAt: 1, providers: [], refreshing: true };
+          case "sessions.usage":
+            return { aggregates: { byProvider: [] } };
+          default:
+            return {};
+        }
+      });
+      const usageLoads = () =>
+        request.mock.calls.filter(([method]) => method === "usage.status").length;
+      const page = appendPage(context);
+      // Burn the whole budget on the first connection.
+      for (let tick = 0; tick < 8; tick += 1) {
+        await vi.advanceTimersByTimeAsync(5_000);
+        await page.updateComplete;
+      }
+      const spent = usageLoads();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await page.updateComplete;
+      expect(usageLoads()).toBe(spent);
+
+      // The transport drops and reconnects inside the same client object.
+      snapshot.phase = "reconnecting";
+      page.requestUpdate();
+      await page.updateComplete;
+      snapshot.phase = "connected";
+      page.requestUpdate();
+      await page.updateComplete;
+
+      // An operator refresh lands another refreshing payload; the reconnect must
+      // have re-armed the budget, so a timer-driven retry follows.
+      await page.refresh({ force: true });
+      await page.updateComplete;
+      const afterRefresh = usageLoads();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await page.updateComplete;
+      expect(usageLoads()).toBeGreaterThan(afterRefresh);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending retry running across a same-client reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const { context, request, snapshot } = createHarness("main");
+      request.mockImplementation(async (method: string): Promise<unknown> => {
+        switch (method) {
+          case "models.authStatus":
+            return { ts: 1, providers: [] };
+          case "models.list":
+            return { models: [] };
+          case "config.get":
+            return { config: {}, hash: "hash" };
+          case "usage.status":
+            return { updatedAt: 1, providers: [], refreshing: true };
+          case "sessions.usage":
+            return { aggregates: { byProvider: [] } };
+          default:
+            return {};
+        }
+      });
+      const usageLoads = () =>
+        request.mock.calls.filter(([method]) => method === "usage.status").length;
+      const page = appendPage(context);
+      // Let the cold load land its refreshing payload and arm one retry.
+      for (let tick = 0; tick < 6; tick += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+        await page.updateComplete;
+      }
+      const armed = usageLoads();
+      expect(armed).toBeGreaterThan(0);
+
+      // The transport drops and reconnects while that retry is still pending.
+      snapshot.phase = "reconnecting";
+      page.requestUpdate();
+      await page.updateComplete;
+      snapshot.phase = "connected";
+      page.requestUpdate();
+      await page.updateComplete;
+
+      // The pending retry is the recovery: it must still fire after reconnect
+      // instead of being cancelled by the epoch rotation.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await page.updateComplete;
+      expect(usageLoads()).toBeGreaterThan(armed);
     } finally {
       vi.useRealTimers();
     }

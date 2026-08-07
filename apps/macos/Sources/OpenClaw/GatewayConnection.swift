@@ -15,7 +15,8 @@ actor GatewayConnection {
     static let shared = GatewayConnection(
         endpointProvider: GatewayConnection.defaultEndpointProvider)
     nonisolated static let operatorClientCaps =
-        [OpenClawGatewayClientCapability.agentKind, OpenClawGatewayClientCapability.inlineWidgets]
+        [OpenClawGatewayClientCapability.agentKind, OpenClawGatewayClientCapability.inlineWidgets,
+         OpenClawGatewayClientCapability.usageRefreshing]
 
     typealias Config = (url: URL, token: String?, password: String?)
 

@@ -47,12 +47,15 @@ export class UsageRefreshPolicy {
 
   constructor(private readonly options: UsageRefreshPolicyOptions) {}
 
-  setLastLoadedAtMs(value: number | null, params?: { incomplete?: boolean }): void {
-    this.applyLoadState(value, params?.incomplete === true);
+  setLastLoadedAtMs(
+    value: number | null,
+    params?: { incomplete?: boolean; connection?: unknown },
+  ): void {
+    this.applyLoadState(value, params?.incomplete === true, params?.connection);
   }
 
-  markLoaded(params?: { incomplete?: boolean }): void {
-    this.applyLoadState(Date.now(), params?.incomplete === true);
+  markLoaded(params?: { incomplete?: boolean; connection?: unknown }): void {
+    this.applyLoadState(Date.now(), params?.incomplete === true, params?.connection);
   }
 
   resetPayload(): void {
@@ -65,11 +68,18 @@ export class UsageRefreshPolicy {
     this.incompleteUsageRetry.dispose();
   }
 
-  private applyLoadState(loadedAtMs: number | null, incomplete: boolean): void {
+  private applyLoadState(
+    loadedAtMs: number | null,
+    incomplete: boolean,
+    connection?: unknown,
+  ): void {
     // An incomplete payload never starts the TTL, whether or not retries remain: the
     // view is missing provider usage either way, so focus, reconnect, and poll must
-    // still fetch instead of skipping on a fresh-looking timestamp.
-    this.lastLoadedAtMs = this.incompleteUsageRetry.observe(incomplete) ? null : loadedAtMs;
+    // still fetch instead of skipping on a fresh-looking timestamp. The connection
+    // keys the retry budget: a reconnect is a new cold cache and re-arms retries.
+    this.lastLoadedAtMs = this.incompleteUsageRetry.observe(incomplete, connection)
+      ? null
+      : loadedAtMs;
   }
 
   interrupt(): void {

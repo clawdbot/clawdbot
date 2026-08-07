@@ -87,6 +87,25 @@ describe("UsageRefreshPolicy", () => {
     expect(reload).toHaveBeenCalledTimes(5);
   });
 
+  it("re-arms the retry budget when a reconnected Gateway reports another cold cache", () => {
+    const { policy, reload } = createPolicy();
+    const firstConnection = {};
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      policy.markLoaded({ incomplete: true, connection: firstConnection });
+      vi.advanceTimersByTime(5_000);
+    }
+    expect(reload).toHaveBeenCalledTimes(3);
+
+    policy.markLoaded({ incomplete: true, connection: firstConnection });
+    vi.advanceTimersByTime(5_000);
+    expect(reload).toHaveBeenCalledTimes(3);
+
+    // A reconnect is a new cold cache: the exhausted budget must not carry over.
+    policy.markLoaded({ incomplete: true, connection: {} });
+    vi.advanceTimersByTime(5_000);
+    expect(reload).toHaveBeenCalledTimes(4);
+  });
+
   it("stops retrying once a complete payload lands and after disposal", () => {
     const { policy, reload } = createPolicy();
     policy.markLoaded({ incomplete: true });

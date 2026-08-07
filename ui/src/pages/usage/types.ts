@@ -9,6 +9,12 @@ import type {
   SessionUsageTimePoint,
 } from "./data-types.ts";
 
+/** Session-detail task result, keyed to the session it was fetched for. */
+export type UsageDetailTaskValue<T> = {
+  sessionKey: string;
+  data: T;
+};
+
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
 export type CostDailyEntry = CostUsageDailyEntry;

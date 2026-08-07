@@ -1,6 +1,7 @@
 public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
+    public static let usageRefreshing = "usage-refreshing"
 }
 
 public struct GatewayConnectOptions: Sendable {

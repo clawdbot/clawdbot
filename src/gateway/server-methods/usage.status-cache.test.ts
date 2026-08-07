@@ -46,6 +46,10 @@ const config = {
   agents: { list: [{ id: "main", default: true }] },
 } as OpenClawConfig;
 
+const refreshingCapableClient = {
+  connect: { caps: ["usage-refreshing"] },
+};
+
 function createStore(access = "access-one") {
   return {
     version: 1,
@@ -61,7 +65,7 @@ function createStore(access = "access-one") {
   };
 }
 
-async function runUsageStatus() {
+async function runUsageStatus(client?: unknown) {
   const respond = vi.fn();
   await expectDefined(
     usageHandlers["usage.status"],
@@ -70,6 +74,7 @@ async function runUsageStatus() {
     respond,
     params: {},
     context: { getRuntimeConfig: () => config },
+    client: client === undefined ? refreshingCapableClient : client,
   } as unknown as Parameters<(typeof usageHandlers)["usage.status"]>[0]);
   expect(respond).toHaveBeenCalledTimes(1);
   expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -136,6 +141,60 @@ describe("usage.status provider usage cache", () => {
 
     resolveProviderUsage?.({ updatedAt: now, providers: [] });
     expect(result).toEqual({ updatedAt: now, providers: [], refreshing: true });
+  });
+
+  it("keeps the blocking cold read for clients without the usage-refreshing capability", async () => {
+    let resolveProviderUsage:
+      | ((value: { updatedAt: number; providers: never[] }) => void)
+      | undefined;
+    mocks.loadProviderUsageSummary.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveProviderUsage = resolve;
+        }),
+    );
+
+    // A legacy client caches whatever it receives, so a cold read must not answer
+    // with an empty placeholder: it awaits the provider refresh like before.
+    const resultPromise = runUsageStatus({ connect: { caps: [] } });
+    const providerWait = Symbol("provider-wait");
+    const raced = await Promise.race([
+      resultPromise,
+      new Promise<typeof providerWait>((resolve) => {
+        setTimeout(() => resolve(providerWait), 25);
+      }),
+    ]);
+    expect(raced).toBe(providerWait);
+
+    resolveProviderUsage?.({ updatedAt: now, providers: [] });
+    const result = await resultPromise;
+    expect(result).toEqual({ updatedAt: now, providers: [] });
+    expect((result as { refreshing?: boolean }).refreshing).toBeUndefined();
+  });
+
+  it("keeps the blocking cold read when no client is attached", async () => {
+    const result = await runUsageStatus(null);
+    expect(result).toMatchObject({ providers: expect.any(Array) });
+    expect((result as { refreshing?: boolean }).refreshing).toBeUndefined();
+  });
+
+  it("keeps the blocking cold read for board widget data reads", async () => {
+    // The board relay carries the operator connection's client, but a widget
+    // one-shot read has no bounded-refetch machinery and must never see the
+    // cold placeholder.
+    const { readBoardDataBinding } = await import("../board-host-tools.js");
+    const result = (await readBoardDataBinding("usage.status", {}, {
+      respond: () => {},
+      params: {},
+      req: { method: "usage.status", params: {} },
+      context: { getRuntimeConfig: () => config },
+      client: refreshingCapableClient,
+    } as unknown as Parameters<typeof readBoardDataBinding>[2])) as {
+      providers: unknown[];
+      refreshing?: boolean;
+    };
+    expect(result.providers).toHaveLength(1);
+    expect(result.refreshing).toBeUndefined();
   });
 
   it("reuses byte-identical results within 60s and refreshes stale data in the background", async () => {

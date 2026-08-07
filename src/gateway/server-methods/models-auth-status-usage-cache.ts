@@ -221,6 +221,7 @@ type ProviderUsageCacheParams = {
   agentDir: string;
   configRef: object;
   credentialKey: string;
+  coldRead?: "refresh-marker";
   forceRefresh?: boolean;
   providerIds: UsageProviderId[];
   now: number;
@@ -290,10 +291,16 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
     providerIds,
     providerKey,
   });
-  void refresh.catch(() => {});
   if (matching) {
+    void refresh.catch(() => {});
     return matching.summary;
   }
+  if (params.coldRead !== "refresh-marker") {
+    // Clients that never negotiated the marker cache an empty payload as the
+    // answer, so their cold read keeps awaiting the provider refresh.
+    return await refresh;
+  }
+  void refresh.catch(() => {});
   // Cold read: the refresh owns the real values, so say so instead of letting an
   // empty list read as "no provider usage" for the client's whole cache window.
   return { updatedAt: params.now, providers: [], refreshing: true };
@@ -302,6 +309,8 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
 export async function loadUsageStatusStaleWhileRevalidate(params: {
   config: OpenClawConfig;
+  /** "refresh-marker" returns a marked incomplete payload on a cold cache miss. */
+  coldRead?: "refresh-marker";
   now?: number;
 }): Promise<UsageSummary> {
   const agentId = resolveDefaultAgentId(params.config);
@@ -340,6 +349,7 @@ export async function loadUsageStatusStaleWhileRevalidate(params: {
       store,
     }),
     providerIds,
+    coldRead: params.coldRead,
     now: params.now ?? Date.now(),
   });
 }

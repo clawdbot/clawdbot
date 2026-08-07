@@ -4,6 +4,10 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateSessionsUsageParams,
@@ -1145,9 +1149,18 @@ export { testApi as __test };
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
-  "usage.status": async ({ respond, context }) => {
+  "usage.status": async ({ respond, context, client }) => {
+    // The incomplete-marker cold read is opt-in: clients without the capability
+    // cache an empty payload as complete, so they keep the blocking cold read.
+    const coldRead = hasGatewayClientCap(
+      client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
+    )
+      ? ("refresh-marker" as const)
+      : undefined;
     const summary = await loadUsageStatusStaleWhileRevalidate({
       config: context.getRuntimeConfig(),
+      coldRead,
     });
     respond(true, summary, undefined);
   },

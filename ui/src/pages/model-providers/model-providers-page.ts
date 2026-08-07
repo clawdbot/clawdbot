@@ -44,6 +44,7 @@ import {
   buildProviderApiKeyPatch,
   DEFAULT_MODELS_REPLACE_PATHS,
 } from "./mutations.ts";
+import { mergeProbeResults } from "./probe-merge.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
 
 const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
@@ -60,39 +61,6 @@ function isMissingMethodError(error: unknown): boolean {
   return /method (?:not found|not supported)|unknown method/iu.test(
     modelProviderErrorMessage(error),
   );
-}
-
-const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
-  "auth",
-  "billing",
-  "rate_limit",
-  "timeout",
-  "format",
-  "no_model",
-  "unknown",
-];
-
-function mergeProbeResults(cardId: string, results: ModelsProbeResult[]): ModelsProbeResult {
-  if (results.length === 1) {
-    return results[0]!;
-  }
-  const status = results.some((result) => result.status === "ok")
-    ? "ok"
-    : (PROBE_FAILURE_PRIORITY.find((candidate) =>
-        results.some((result) => result.status === candidate),
-      ) ?? "unknown");
-  const error = results.find((result) => result.status === status)?.error;
-  return {
-    provider: cardId,
-    status,
-    ...(error ? { error } : {}),
-    results: results.flatMap((result) =>
-      result.results.map((target) => ({
-        ...target,
-        label: `${result.provider}: ${target.label}`,
-      })),
-    ),
-  };
 }
 
 export class ModelProvidersPage extends OpenClawLightDomElement {
@@ -118,6 +86,14 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
   private observedClient: GatewayBrowserClient | null = null;
+  // Tri-state: null until connectivity is first observed, so the initial
+  // connected render cannot rotate away a retry the router preload just armed.
+  private observedConnected: boolean | null = null;
+  // Keys the incomplete-usage retry budget. Rotated on client replacement AND on
+  // same-client reconnects: the client object survives a transport drop, so keying
+  // the budget to it would leave an exhausted budget in place after a reconnect and
+  // a later refresh landing refreshing:true would schedule no follow-up.
+  private usageRetryEpoch: object = {};
   private clientEpoch = 0;
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
@@ -200,7 +176,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private applyLoadedData(data: ModelProvidersData | null, client: GatewayBrowserClient | null) {
     this.data = data;
     this.dataClient = client;
-    this.usageRetry.observe(data !== null && isUsageIncomplete(data.providerUsage), client);
+    this.usageRetry.observe(
+      data !== null && isUsageIncomplete(data.providerUsage),
+      this.usageRetryEpoch,
+    );
   }
 
   override updated() {
@@ -208,6 +187,16 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (snapshot.client !== this.observedClient) {
       this.resetClientState(snapshot.client);
     }
+    const connected = snapshot.phase === "connected" && snapshot.client !== null;
+    if (connected && this.observedConnected === false) {
+      // A reconnect is a new cold gateway cache even when the client object
+      // survived the drop: rotate the epoch so an exhausted retry budget re-arms
+      // when the next payload lands. Rotation only - a pending retry timer must
+      // keep running, because its refetch against the reconnected gateway is the
+      // recovery, and its landing payload rekeys the budget to this epoch.
+      this.usageRetryEpoch = {};
+    }
+    this.observedConnected = connected;
     if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
       void this.context.agents.ensureList();
     }
@@ -225,11 +214,17 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private resetClientState(client: GatewayBrowserClient | null) {
+    // First observation keeps the initial epoch: the router preload may already
+    // have armed a retry on it in this same render, and rotating here would
+    // silently cancel that retry. Rekey only a real replacement, before it
+    // finishes loading, so an in-flight timer from the old connection cannot
+    // fire against the new one and restart its load.
+    if (this.observedClient !== null) {
+      this.usageRetryEpoch = {};
+      this.usageRetry.useConnection(this.usageRetryEpoch);
+    }
     this.observedClient = client;
     this.clientEpoch += 1;
-    // Rekey before the replacement finishes loading: an in-flight timer from the old
-    // connection would otherwise fire against the new one and restart its load.
-    this.usageRetry.useConnection(client);
     void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.busy = {};
     this.messages = {};
