@@ -20,6 +20,15 @@ import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
 
 type StreamingToolCall = ToolCall & { partialJson?: string };
 
+// Re-parsing the whole accumulated tool-call argument buffer on every single
+// forwarded delta makes total parse cost O(n^2) in the argument size (see
+// extensions/amazon-bedrock/stream.runtime.ts for the same fix applied at the
+// provider boundary - this adapter can receive the same raw per-delta stream
+// forwarded from that provider via Worker inference). Above this size, stop
+// re-deriving the live preview on every delta; `toolcall_end` below always
+// resolves the final value from the complete buffer regardless of size.
+const MAX_TOOLCALL_STREAMING_PREVIEW_CHARS = 8_000;
+
 type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
   sessionId: string;
@@ -165,7 +174,9 @@ function processInferenceEvent(
       }
       const streaming = content as StreamingToolCall;
       streaming.partialJson = `${streaming.partialJson ?? ""}${event.delta}`;
-      content.arguments = parseStreamingJson(streaming.partialJson);
+      if (streaming.partialJson.length <= MAX_TOOLCALL_STREAMING_PREVIEW_CHARS) {
+        content.arguments = parseStreamingJson(streaming.partialJson);
+      }
       return {
         type: "toolcall_delta",
         contentIndex: event.contentIndex,
@@ -181,7 +192,13 @@ function processInferenceEvent(
         }
         throw new Error("worker inference tool end has no active tool call");
       }
-      delete (content as StreamingToolCall).partialJson;
+      const streaming = content as StreamingToolCall;
+      // Always resolve the final arguments from the complete buffer exactly
+      // once here, regardless of whether per-delta re-parsing above was
+      // skipped for size - this is what guarantees correctness for large
+      // arguments once the preview stops tracking every delta.
+      content.arguments = parseStreamingJson(streaming.partialJson);
+      delete streaming.partialJson;
       return { type: "toolcall_end", contentIndex: event.contentIndex, toolCall: content, partial };
     }
   }

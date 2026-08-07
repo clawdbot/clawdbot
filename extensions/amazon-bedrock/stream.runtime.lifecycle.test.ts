@@ -151,8 +151,9 @@ describe("Bedrock provider-owned stream lifecycle", () => {
     const stream = streamSimpleBedrock(model as never, {
       messages: [{ role: "user", content: "Write the report", timestamp: 0 }],
     });
-    for await (const _event of stream) {
-      // drain
+    const drainedEventTypes: string[] = [];
+    for await (const event of stream) {
+      drainedEventTypes.push(event.type);
     }
     const output = await stream.result();
 
