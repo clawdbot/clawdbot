@@ -207,6 +207,7 @@ export function hasPersistedIMessageEcho(params: {
   text?: string;
   media?: MediaPlaceholderTextFact;
   messageId?: string;
+  skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
 }): boolean {
   const text = normalizeText(params.text);
@@ -225,12 +226,12 @@ export function hasPersistedIMessageEcho(params: {
     const hasConflictingMessageIds = Boolean(
       messageId && entry.messageId && messageId !== entry.messageId,
     );
-    // Same-id echoes match on the messageId branch above; an inbound message
-    // whose GUID differs from the recorded outbound GUID is a NEW message even
-    // when the text collides ("ok", "done"), never a reconnect echo.
+    // Same-id echoes match on the messageId branch above. Known conflicting
+    // GUIDs identify new messages, while no-GUID self-chat rows opt into text
+    // fallback because their numeric SQLite IDs cannot equal outbound GUIDs.
     if (
       text &&
-      !hasConflictingMessageIds &&
+      (!hasConflictingMessageIds || params.skipIdShortCircuit) &&
       entry.text === text &&
       (!entry.pending || params.includePendingText)
     ) {

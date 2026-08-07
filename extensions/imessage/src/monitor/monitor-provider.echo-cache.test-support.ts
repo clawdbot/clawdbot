@@ -183,6 +183,22 @@ describe("iMessage sent-message echo cache", () => {
     expect(hasPersistedIMessageEcho({ scope, text: "ok" })).toBe(true);
   });
 
+  it("matches persisted self-chat text after the in-memory cache expires", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const scope = "acct:imessage:+1555";
+    const cache = createSentMessageCache();
+    const text = "Delayed self-chat echo";
+    const outboundGuid = "p:0/guid-agent-text";
+
+    rememberPersistedIMessageEcho({ scope, text, messageId: outboundGuid });
+    cache.remember(scope, { text, messageId: outboundGuid });
+    vi.advanceTimersByTime(4_001);
+
+    expect(cache.has(scope, { text, messageId: "12345" }, { skipIdShortCircuit: true })).toBe(true);
+    expect(cache.has(scope, { text, messageId: "p:0/guid-user-text" })).toBe(false);
+  });
+
   it("matches persisted media through the primary sent-message cache", () => {
     const scope = "acct:imessage:+1555";
     const media = { contentType: "image/png", kind: "image" as const };

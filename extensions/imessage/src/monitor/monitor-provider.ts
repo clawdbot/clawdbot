@@ -27,6 +27,7 @@ import {
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -873,9 +874,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       // A tripped limiter silently eats real user messages — surface it at
       // default log level (once per conversation) instead of verbose-only.
       if (!loggedThrottledDropDiagnostics.check(`${rateLimitKey}:rate-limited`)) {
+        const conversationKind = chatId != null ? "group" : "dm";
+        const diagnosticConversationKey = `${conversationKind}:${redactIdentifier(conversationKey)}`;
         runtime.log?.(
           warn(
-            `[imessage:${accountInfo.accountId}] Suppressing inbound from ${conversationKey}: echo loop detected (rate limiter tripped)`,
+            `[imessage:${accountInfo.accountId}] Suppressing inbound from ${diagnosticConversationKey}: echo loop detected (rate limiter tripped)`,
           ),
         );
       }
