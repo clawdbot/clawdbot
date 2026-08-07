@@ -3372,22 +3372,15 @@ describe("deriveSessionTitle", () => {
     expect(result.includes("  ")).toBe(false);
   });
 
-  test("falls back to sessionId prefix with date", () => {
+  test("leaves a failed dashboard thread untitled so the UI can render New thread", () => {
     const entry = {
       sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
       updatedAt: new Date("2024-03-15T10:30:00Z").getTime(),
     } as SessionEntry;
-    const result = deriveSessionTitle(entry);
-    expect(result).toBe("abcd1234 (2024-03-15)");
-  });
 
-  test("falls back to sessionId prefix without date when updatedAt missing", () => {
-    const entry = {
-      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
-      updatedAt: 0,
-    } as SessionEntry;
-    const result = deriveSessionTitle(entry);
-    expect(result).toBe("abcd1234");
+    expect(deriveSessionTitle(entry)).toBeUndefined();
+    expect(deriveSessionTitle(entry, "")).toBeUndefined();
+    expect(deriveSessionTitle(entry, "   ")).toBeUndefined();
   });
 
   test("trims whitespace from displayName", () => {
