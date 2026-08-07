@@ -650,12 +650,13 @@ export async function tryDispatchAcpReply(params: {
   };
   const runWithAuditLifecycle = <T>(run: () => T): T => {
     claimAuditContext();
-    return auditLifecycleGeneration
-      ? withAgentRunLifecycleGeneration(auditLifecycleGeneration, () => {
+    const lifecycleGeneration = auditLifecycleGeneration;
+    return lifecycleGeneration
+      ? withAgentRunLifecycleGeneration(lifecycleGeneration, () => {
           if (admittedAuditContextLifecycleToken) {
             captureAgentRunExecutionContextLifecycleToken(
               auditRunId,
-              auditLifecycleGeneration,
+              lifecycleGeneration,
               admittedAuditContextLifecycleToken,
             );
           }
