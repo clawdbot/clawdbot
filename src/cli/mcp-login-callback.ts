@@ -2,12 +2,12 @@
 import type { Server } from "node:http";
 
 /** Browser redirect payload captured on the loopback callback route. */
-export type McpLoginCallback = {
+type McpLoginCallback = {
   code: string;
   state: string;
 };
 
-export type McpLoginCallbackServer = {
+type McpLoginCallbackServer = {
   server: Server;
   cancelWait: () => void;
   waitForCallback: () => Promise<McpLoginCallback | null>;

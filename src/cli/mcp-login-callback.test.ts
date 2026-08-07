@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   isMcpLoginLoopbackRedirectUrl,
   startMcpLoginCallbackServer,
-  type McpLoginCallbackServer,
 } from "./mcp-login-callback.js";
+
+type McpLoginCallbackServer = Awaited<ReturnType<typeof startMcpLoginCallbackServer>>;
 
 const activeServers: McpLoginCallbackServer[] = [];
 
@@ -72,7 +73,9 @@ describe("startMcpLoginCallbackServer", () => {
     void server.waitForCallback().then(() => {
       settled = true;
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(settled).toBe(false);
   });
 
