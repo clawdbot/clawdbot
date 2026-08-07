@@ -71,12 +71,6 @@ const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionSt
 
 vi.mock("../runtime-api.js", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
-  registerAcpRuntimeBackend: (entry: { id: string; runtime: unknown; healthy?: () => boolean }) => {
-    runtimeRegistry.set(entry.id, entry);
-  },
-  unregisterAcpRuntimeBackend: (id: string) => {
-    runtimeRegistry.delete(id);
-  },
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -173,10 +167,23 @@ function createOpenKeyedStore(ctx: OpenClawPluginServiceContext) {
 
 function createAcpxRuntimeService(
   ctx: OpenClawPluginServiceContext,
-  params: Parameters<typeof createRealAcpxRuntimeService>[0] = {},
+  params: Omit<Parameters<typeof createRealAcpxRuntimeService>[0], "backendLifecycle"> & {
+    backendLifecycle?: Parameters<typeof createRealAcpxRuntimeService>[0]["backendLifecycle"];
+  } = {},
 ) {
+  const backendLifecycle = params.backendLifecycle ?? {
+    publish(backend: { runtime: unknown; healthy?: () => boolean }) {
+      runtimeRegistry.set("acpx", backend);
+    },
+    retract(runtime: unknown) {
+      if (runtimeRegistry.get("acpx")?.runtime === runtime) {
+        runtimeRegistry.delete("acpx");
+      }
+    },
+  };
   return createRealAcpxRuntimeService({
     ...params,
+    backendLifecycle,
     openKeyedStore: params.openKeyedStore ?? createOpenKeyedStore(ctx),
   });
 }
