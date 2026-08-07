@@ -19,6 +19,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { isDashboardSessionKey } from "../sessions/session-key-utils.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
@@ -90,10 +91,6 @@ function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
   // ACP session keys can represent resumed subagents only when their persisted
   // envelope carries subagent metadata or points back to a subagent parent.
   return isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
-}
-
-function isDashboardSessionKey(sessionKey: string): boolean {
-  return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
 }
 
 function canInspectStoredSubagentEnvelope(

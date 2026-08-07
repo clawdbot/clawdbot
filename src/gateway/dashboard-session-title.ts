@@ -8,7 +8,7 @@ import { generateConversationLabelWithFallback } from "../auto-reply/reply/conve
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { isDashboardSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 type DashboardSessionTitleModelEntry = Pick<
@@ -41,10 +41,6 @@ export function hasExplicitSessionName(entry: SessionEntry | undefined): boolean
     entry?.groupChannel?.trim() ||
     entry?.space?.trim(),
   );
-}
-
-function isDashboardSessionKey(sessionKey: string): boolean {
-  return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
 }
 
 export function isDashboardSessionTitleCandidate(params: {

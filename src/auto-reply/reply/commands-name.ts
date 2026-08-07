@@ -58,7 +58,12 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
         params.sessionEntry;
       const current = normalizeOptionalString(entry?.label);
       const suggestionEntry = entry ? { ...entry, label: undefined } : undefined;
-      const suggestion = deriveSessionTitle(suggestionEntry);
+      const suggestion = deriveSessionTitle(
+        suggestionEntry,
+        undefined,
+        undefined,
+        params.sessionKey,
+      );
       const lines: string[] = [];
       lines.push(
         current ? `Current session name: ${current}` : "This session has no custom name yet.",

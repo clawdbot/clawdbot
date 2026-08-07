@@ -3372,15 +3372,54 @@ describe("deriveSessionTitle", () => {
     expect(result.includes("  ")).toBe(false);
   });
 
-  test("leaves a failed dashboard thread untitled so the UI can render New thread", () => {
+  test("falls back to sessionId prefix with date for non-dashboard sessions", () => {
     const entry = {
       sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
       updatedAt: new Date("2024-03-15T10:30:00Z").getTime(),
     } as SessionEntry;
+    const result = deriveSessionTitle(entry, undefined, undefined, "agent:main:telegram:direct:42");
+    expect(result).toBe("abcd1234 (2024-03-15)");
+  });
 
-    expect(deriveSessionTitle(entry)).toBeUndefined();
-    expect(deriveSessionTitle(entry, "")).toBeUndefined();
-    expect(deriveSessionTitle(entry, "   ")).toBeUndefined();
+  test("omits the sessionId fallback for an empty dashboard session", () => {
+    const entry = {
+      sessionId: "fade729d-5678-90ef-ghij-klmnopqrstuv",
+      updatedAt: new Date("2026-08-07T01:00:00Z").getTime(),
+    } as SessionEntry;
+
+    expect(
+      deriveSessionTitle(entry, undefined, undefined, "agent:main:dashboard:failed-turn"),
+    ).toBeUndefined();
+  });
+
+  test("uses the first user message for a dashboard session", () => {
+    const entry = {
+      sessionId: "fade729d-5678-90ef-ghij-klmnopqrstuv",
+      updatedAt: new Date("2026-08-07T01:00:00Z").getTime(),
+    } as SessionEntry;
+
+    expect(
+      deriveSessionTitle(
+        entry,
+        "Help me recover the failed turn",
+        undefined,
+        "agent:main:dashboard:failed-turn",
+      ),
+    ).toBe("Help me recover the failed turn");
+  });
+
+  test("falls back to sessionId prefix without date when updatedAt missing", () => {
+    const entry = {
+      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
+      updatedAt: 0,
+    } as SessionEntry;
+    const result = deriveSessionTitle(
+      entry,
+      undefined,
+      undefined,
+      "agent:main:telegram:direct:42",
+    );
+    expect(result).toBe("abcd1234");
   });
 
   test("trims whitespace from displayName", () => {

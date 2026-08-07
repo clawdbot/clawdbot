@@ -278,6 +278,10 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+export function isDashboardSessionKey(sessionKey: string): boolean {
+  return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+}
+
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {

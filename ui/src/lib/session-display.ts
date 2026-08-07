@@ -103,7 +103,7 @@ function typedSessionPrefix(kind: SessionTypedKind): string {
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
-  derivedTitle?: string;
+  derivedTitle?: string | null;
 } & SessionWorktreeDisplayRow;
 
 type SessionDisplayOptions = {

@@ -55,6 +55,7 @@ describe("resolveSessionDisplayName", () => {
         derivedTitle: undefined,
       }),
     ).toBe("New thread");
+    expect(resolveSessionDisplayName(key, { derivedTitle: null })).toBe("New thread");
   });
 
   it("names unnamed work sessions after their checkout", () => {

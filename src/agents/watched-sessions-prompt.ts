@@ -77,7 +77,7 @@ export function prepareWatchedSessionsPrompt(params: {
     // Exact persisted-key probe: watch cursors store canonical keys, so the
     // alias-resolving loader's full-snapshot scan is wasted work here.
     const entry = loadExactSessionEntryReadOnly({ sessionKey: key, clone: false })?.entry;
-    const title = deriveSessionTitle(entry);
+    const title = deriveSessionTitle(entry, undefined, undefined, key);
     if (title) {
       row.title = truncateUtf16Safe(title, WATCHED_SESSION_TITLE_MAX_CHARS);
     }

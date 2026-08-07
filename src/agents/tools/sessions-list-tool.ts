@@ -430,6 +430,8 @@ export function createSessionsListTool(opts?: {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,
                 fields.firstUserMessage,
+                undefined,
+                target.sessionKey,
               );
             }
             if (includeLastMessage && fields.lastMessagePreview) {

@@ -681,30 +681,6 @@ test("sessions.list ignores hidden internal abortable runs", async () => {
   );
 });
 
-test("sessions.list leaves failed-first-turn dashboard sessions untitled instead of an id-prefix title", async () => {
-  const sessionKey = "agent:main:dashboard:fade729d-1111-2222-3333-444455556666";
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "dashboard:fade729d-1111-2222-3333-444455556666": sessionStoreEntry("sess-dash-untitled"),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId: "sess-dash-untitled",
-    sessionKey,
-    storePath,
-    messages: [{ role: "assistant", content: "The first turn failed before a user message." }],
-  });
-
-  const { respond } = await invokeSessionsList({
-    requestId: "req-sessions-list-untitled-dashboard",
-    params: { includeDerivedTitles: true },
-  });
-
-  const session = findSession(expectRespondPayload(respond), sessionKey);
-  expect(session.derivedTitle).toBeUndefined();
-});
-
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
   const { storePath } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
@@ -753,6 +729,31 @@ test("sessions.list yields before responding during bulk transcript hydration", 
     derivedTitle: "title 0",
     lastMessagePreview: "last 0",
   });
+});
+
+test("sessions.list omits a derived title for a failed empty dashboard thread", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "dashboard:failed-turn": sessionStoreEntry("fade729d-failed-turn", {
+        updatedAt: new Date("2026-08-07T01:00:00Z").getTime(),
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: "fade729d-failed-turn",
+    sessionKey: "agent:main:dashboard:failed-turn",
+    storePath,
+    messages: [{ role: "assistant", content: "The first turn failed before user persistence." }],
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-empty-dashboard-title",
+    params: { includeDerivedTitles: true },
+  });
+
+  const session = findSession(expectRespondPayload(respond), "agent:main:dashboard:failed-turn");
+  expect(session.derivedTitle).toBeUndefined();
 });
 
 test("sessions.list does not block on slow model catalog discovery", async () => {

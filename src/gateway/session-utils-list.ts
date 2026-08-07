@@ -590,7 +590,12 @@ export async function listSessionsFromStoreAsync(
         );
         transcriptFieldIndex += 1;
         if (list.includeDerivedTitles) {
-          row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage, row.displayName);
+          row.derivedTitle = deriveSessionTitle(
+            entry,
+            fields.firstUserMessage,
+            row.displayName,
+            key,
+          );
         }
         if (list.includeLastMessage && fields.lastMessagePreview) {
           row.lastMessagePreview = fields.lastMessagePreview;
