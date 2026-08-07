@@ -46,7 +46,7 @@ describe("qa live timeout policy", () => {
       fallbackModel: "claude-cli/claude-opus-4-8",
       expectedTimeoutMs: 240_000,
     },
-  ])("$title", ({ mode, model, fallbackModel, expectedTimeoutMs }) => {
+  ] as const)("$title", ({ mode, model, fallbackModel, expectedTimeoutMs }) => {
     expect(
       resolveQaLiveTurnTimeoutMs(
         {
