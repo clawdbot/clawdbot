@@ -4706,7 +4706,7 @@ describe("gateway Gmail hot reload handlers", () => {
       activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => {
         secretsEntered?.();
         await releaseSecretsPromise;
-        return makePreparedSecretsSnapshot(config, { webTools: {} });
+        return makePreparedSecretsSnapshot(config, { webTools: {} as never });
       }) as never,
     });
     const registeredWriteListener = writeListenerRef.current;
