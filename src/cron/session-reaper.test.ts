@@ -527,6 +527,32 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(0);
   });
 
+  it.each([["0h"], ["0s"], ["0"]])(
+    "treats a zero retention (%s) as disabled instead of pruning everything",
+    async (sessionRetention) => {
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        "agent:main:cron:job1:run:run1": {
+          sessionId: "run1",
+          updatedAt: now - 100 * 3_600_000,
+        },
+      };
+      await seedSessionEntries(storePath, store);
+
+      const result = await sweepCronRunSessions({
+        cronConfig: { sessionRetention },
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+        force: true,
+      });
+
+      expect(result.swept).toBe(false);
+      expect(result.pruned).toBe(0);
+      expect(readSessionEntries(storePath)).toHaveProperty("agent:main:cron:job1:run:run1");
+    },
+  );
+
   it("sweeps immediately when disabled retention is enabled again", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:expired-run";
