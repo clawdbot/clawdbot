@@ -260,7 +260,6 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:webchat:direct:123",
-      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", model: "gpt-5.5" },

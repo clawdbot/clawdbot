@@ -129,7 +129,7 @@ function buildContextEngineCompactionSessionTarget(
   params: CompactEmbeddedAgentSessionParams,
 ): ContextEngineSessionTarget {
   const agentId = params.sessionTarget?.agentId ?? params.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
   const storePath = params.sessionTarget?.storePath;
   return {
     ...(agentId ? { agentId } : {}),
@@ -239,7 +239,10 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  const runtimeTarget = await resolveAgentRunSessionTarget(params);
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...params,
+    missingSessionKey: "resolve-existing",
+  });
   const resolvedParams = {
     ...params,
     agentId: runtimeTarget.agentId,
@@ -302,7 +305,10 @@ async function compactEmbeddedAgentSessionImpl(
   if (inputParams.abortSignal?.aborted) {
     return createCompactionAbortedResult();
   }
-  const runtimeTarget = await resolveAgentRunSessionTarget(inputParams);
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...inputParams,
+    missingSessionKey: "resolve-existing",
+  });
   const agentIds = resolveSessionAgentIds({
     sessionKey: runtimeTarget.sessionKey,
     config: inputParams.config,
@@ -387,7 +393,10 @@ async function compactResolvedContextEngine(
   preparedModelRuntime: PreparedModelRuntimeSnapshot,
   releaseContextEngineOwnership: () => void,
 ): Promise<EmbeddedAgentCompactResult> {
-  const runtimeTarget = await resolveAgentRunSessionTarget(params);
+  const runtimeTarget = await resolveAgentRunSessionTarget({
+    ...params,
+    missingSessionKey: "resolve-existing",
+  });
   const lockedHarnessRuntime =
     params.modelSelectionLocked === true
       ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
@@ -613,7 +622,7 @@ async function compactResolvedContextEngine(
         const hookRunner = engineOwnsCompaction
           ? asCompactionHookRunner(getGlobalHookRunner())
           : null;
-        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const hookSessionKey = runtimeTarget.sessionKey;
         const { sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
           config: params.config,

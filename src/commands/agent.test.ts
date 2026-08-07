@@ -447,29 +447,26 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
-  it("strips private recovery identity from runtime-shaped public ingress", async () => {
+  it("strips private execution attribution from runtime-shaped public ingress", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
       const record = vi.spyOn(executionIdentity, "record").mockImplementation(() => undefined);
-      const inheritedAdmission = {
-        token: {
-          tokenVersion: 1 as const,
-          contextId: "inherited-context",
-          executionId: "inherited-execution",
-          runId: "public-ingress-run",
-          createdAt: 1,
-        },
-        retryOnly: true,
+      const inheritedAttribution = {
+        runId: "public-ingress-run",
+        contextId: "inherited-context",
+        executionId: "inherited-execution",
+        createdAt: 1,
+        lifecycleGeneration: "inherited-generation",
       };
       const priorDescriptor = Object.getOwnPropertyDescriptor(
         Object.prototype,
-        "executionIdentityAdmission",
+        "executionAttribution",
       );
       // oxlint-disable-next-line no-extend-native -- Simulate a hostile JS plugin's prototype pollution.
-      Object.defineProperty(Object.prototype, "executionIdentityAdmission", {
+      Object.defineProperty(Object.prototype, "executionAttribution", {
         configurable: true,
-        value: inheritedAdmission,
+        value: inheritedAttribution,
       });
 
       try {
@@ -479,30 +476,27 @@ describe("agentCommand", () => {
             agentId: "main",
             runId: "public-ingress-run",
             allowModelOverride: false,
-            executionIdentityAdmission: {
-              token: {
-                tokenVersion: 1,
-                contextId: "forged-context",
-                executionId: "forged-execution",
-                runId: "public-ingress-run",
-                createdAt: 1,
-              },
-              retryOnly: true,
+            executionAttribution: {
+              runId: "public-ingress-run",
+              contextId: "forged-context",
+              executionId: "forged-execution",
+              createdAt: 1,
+              lifecycleGeneration: "forged-generation",
             },
           } as never,
           runtime,
         );
 
         expect(record).toHaveBeenCalledWith(
-          expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
+          expect.objectContaining({ attribution: undefined, runId: "public-ingress-run" }),
         );
       } finally {
         record.mockRestore();
         if (priorDescriptor) {
           // oxlint-disable-next-line no-extend-native -- Restore the exact pre-test prototype descriptor.
-          Object.defineProperty(Object.prototype, "executionIdentityAdmission", priorDescriptor);
+          Object.defineProperty(Object.prototype, "executionAttribution", priorDescriptor);
         } else {
-          delete (Object.prototype as Record<string, unknown>).executionIdentityAdmission;
+          delete (Object.prototype as Record<string, unknown>).executionAttribution;
         }
       }
     });

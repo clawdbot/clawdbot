@@ -197,9 +197,47 @@ describe("google video generation provider", () => {
     expect(httpOptions).not.toHaveProperty("apiVersion");
   });
 
+  it("returns inline video bytes encoded with URL-safe base64", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const videoBytes = Buffer.from([0xfb, 0xff, 0x6d, 0x70, 0x34]);
+    const videoBase64url = videoBytes.toString("base64url");
+    expect(videoBase64url).toMatch(/[-_]/);
+    expect(videoBase64url).not.toMatch(/[+/]/);
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      name: "operations/123",
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: videoBase64url,
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await buildGoogleVideoGenerationProvider().generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    expect(result.videos).toHaveLength(1);
+    expect(result.videos[0]?.buffer).toEqual(videoBytes);
+  });
+
   it.each([
     ["invalid alphabet", "not-base64!"],
     ["non-canonical pad bits", "ZE=="],
+    ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",

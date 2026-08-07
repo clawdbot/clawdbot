@@ -475,7 +475,7 @@ suite.define(() => {
   });
 
   it("keeps every read-only preference surface browser-local across reload", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -489,7 +489,7 @@ suite.define(() => {
     });
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/appearance`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       await waitForControlUiSettingsTakeover(page);
       await gateway.waitForRequest("config.get");
@@ -533,7 +533,7 @@ suite.define(() => {
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       const viewMenuTrigger = page.locator(".chat-view-menu-trigger");
       await viewMenuTrigger.click();
       const viewMenu = page.locator("wa-dropdown.chat-view-menu");
