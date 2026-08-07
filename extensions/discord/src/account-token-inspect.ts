@@ -18,9 +18,7 @@ type DiscordAccountTokenState = {
   configured: boolean;
 };
 
-export function inspectDiscordConfiguredToken(
-  value: unknown,
-): InspectedDiscordConfiguredToken | null {
+function inspectDiscordConfiguredToken(value: unknown): InspectedDiscordConfiguredToken | null {
   const normalized = normalizeSecretInputString(value);
   if (normalized) {
     return {
