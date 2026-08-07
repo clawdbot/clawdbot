@@ -321,7 +321,7 @@ function makeMainSessionParams(overrides: Record<string, unknown> = {}) {
 }
 
 function makeMainMessageParams(messageId: string) {
-  return makeMainSessionParams({ messageId });
+  return { sessionKey: "main", messageId };
 }
 
 function makeChatSendParams(overrides: ChatSendParamOverrides) {
@@ -337,7 +337,7 @@ function makeMainSessionScope(storePath: string | undefined) {
   };
 }
 
-function makeGatewayWebchatClient(id = GATEWAY_CLIENT_NAMES.CONTROL_UI) {
+function makeGatewayWebchatClient(id: string = GATEWAY_CLIENT_NAMES.CONTROL_UI) {
   return {
     client: {
       id,
@@ -5047,7 +5047,7 @@ describe("gateway server chat", () => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const historyMaxBytes = getMaxChatHistoryMessagesBytes();
       const baseText = "s".repeat(100_000);
-      const lines = Array.from({ length: 70 }, (_, index) =>
+      const lines: unknown[] = Array.from({ length: 70 }, (_, index) =>
         createTextTranscriptEvent("user", `small-${index}:${baseText}`, {
           timestamp: Date.now() + index,
         }),
