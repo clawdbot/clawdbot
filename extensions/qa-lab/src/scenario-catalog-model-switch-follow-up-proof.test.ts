@@ -1,255 +1,117 @@
-import path from "node:path";
-import { parseModelRef } from "openclaw/plugin-sdk/agent-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
-import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
-import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const { cleanup, makeTempDir } = createTempDirHarness();
-const sessionKey = "agent:qa:model-switch";
-const sessionId = "model-switch-follow-up";
+function splitModelRef(raw: string) {
+  const [provider, ...model] = raw.split("/");
+  return provider && model.length
+    ? { provider: provider.toLowerCase(), model: model.join("/") }
+    : null;
+}
 
-afterEach(cleanup);
-
-type ProviderMode = "mock-openai" | "live-frontier";
-
-async function runModelSwitchFollowUpScenario(params: {
-  providerMode: ProviderMode;
-  initialReply: string;
-  followUpReply?: string;
-  followUpDelivery?: "visible" | "deleted-only" | "deleted-preview-then-visible";
-  alternateModel?: string;
-  persistedFollowUpModel?: { provider: string; model: string };
+function terminalReceipt(params: {
+  runId: string;
+  provider: string;
+  model: string;
+  responseModel?: string;
 }) {
-  const tempRoot = await makeTempDir("qa-model-switch-follow-up-");
-  const runtimeEnv = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "state") };
-  const state = createQaBusState();
-  const requests: Array<{ allInputText: string; body: { model: string }; model: string }> = [];
-  const primaryModel = "openai/primary-model";
-  const alternateModel = params.alternateModel ?? "openai/alternate-model";
-  const normalizeModelRef = (raw: string) =>
-    parseModelRef(raw, raw.slice(0, raw.indexOf("/")), {
-      allowPluginNormalization: false,
-      manifestPlugins: [
-        {
-          modelIdNormalization: {
-            providers: { anthropic: { aliases: { opus: "claude-opus-5" } } },
-          },
-        },
-      ],
-    });
-  const env = {
-    providerMode: params.providerMode,
-    primaryModel,
-    alternateModel,
-    gateway: { tempRoot },
-    ...(params.providerMode === "mock-openai" ? { mock: { baseUrl: "http://mock.invalid" } } : {}),
+  const responseModel = params.responseModel ?? params.model;
+  return {
+    runId: params.runId,
+    sessionId: "session-model-switch",
+    turnId: `turn-${params.runId}`,
+    requested: { provider: params.provider, model: params.model },
+    effective: { provider: params.provider, model: responseModel, responseModel },
+    successfulToolNames: [],
+    rerouted: responseModel !== params.model,
+    terminalDisposition: "visible",
   };
+}
 
+async function runFollowUp(params?: {
+  alternateModel?: string;
+  alternateReceiptRunId?: string;
+  deleteAlternateReply?: boolean;
+  onRun?: () => void;
+}) {
+  const state = createQaBusState();
+  let call = 0;
+  const runAgentPrompt = vi.fn(
+    async (_env: unknown, prompt: { provider?: string; model?: string; message: string }) => {
+      params?.onRun?.();
+      call += 1;
+      const runId = `run-${call}`;
+      const provider = prompt.provider ?? "openai";
+      const model = prompt.model ?? "primary-model";
+      const outbound = state.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "dm:qa-operator",
+        text: call === 1 ? "hello from the primary model" : "the model switch handoff completed",
+      });
+      if (call === 2 && params?.deleteAlternateReply) {
+        state.deleteMessage({ accountId: "qa-channel", messageId: outbound.id });
+      }
+      return {
+        started: { runId },
+        waited: {
+          status: "ok",
+          terminalReceipt: terminalReceipt({
+            runId: call === 2 ? (params?.alternateReceiptRunId ?? runId) : runId,
+            provider,
+            model,
+          }),
+        },
+      };
+    },
+  );
   const result = await runLoadedScenarioFlow("model-switch-follow-up", {
     state,
     api: {
-      env,
-      splitModelRef: (ref: string) => {
-        const slash = ref.indexOf("/");
-        return slash > 0 ? { provider: ref.slice(0, slash), model: ref.slice(slash + 1) } : null;
+      env: {
+        providerMode: "mock-openai",
+        primaryModel: "openai/primary-model",
+        alternateModel: params?.alternateModel ?? "openai/alternate-model",
+        gateway: {},
       },
-      normalizeModelRef,
+      runAgentPrompt,
+      splitModelRef,
+      normalizeModelRef: splitModelRef,
       normalizeLowercaseStringOrEmpty: (value: unknown) =>
         typeof value === "string" ? value.trim().toLowerCase() : "",
-      readRawQaSessionStore,
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
-      fetchJson: async (rawUrl: string) => {
-        const url = new URL(rawUrl);
-        if (url.pathname === "/debug/last-request") {
-          return requests.at(-1);
-        }
-        if (url.pathname === "/debug/request-cursor") {
-          return { cursor: requests.length };
-        }
-        if (url.pathname === "/debug/requests") {
-          return requests.slice(Number(url.searchParams.get("after") ?? "0"));
-        }
-        throw new Error(`unexpected mock provider endpoint: ${url.pathname}`);
-      },
-      runAgentPrompt: async (
-        _env: unknown,
-        prompt: { message: string; model?: string; provider?: string },
-      ) => {
-        state.addInboundMessage({
-          accountId: "qa-channel",
-          conversation: { id: "qa-operator", kind: "direct" },
-          senderId: "qa-operator",
-          text: prompt.message,
-        });
-        const requestedModel = prompt.model ?? "primary-model";
-        const resolvedModel = normalizeModelRef(`${prompt.provider ?? "openai"}/${requestedModel}`);
-        const model = resolvedModel?.model ?? requestedModel;
-        requests.push({ allInputText: prompt.message, body: { model }, model });
-
-        const isFollowUp = requests.length > 1;
-        const actualModel =
-          isFollowUp && params.persistedFollowUpModel
-            ? params.persistedFollowUpModel
-            : { provider: resolvedModel?.provider ?? prompt.provider ?? "openai", model };
-        await upsertSessionEntry({
-          agentId: "qa",
-          env: runtimeEnv,
-          sessionKey,
-          entry: {
-            sessionId,
-            updatedAt: Date.now(),
-            modelProvider: actualModel.provider,
-            model: actualModel.model,
-          },
-        });
-
-        const reply = isFollowUp ? params.followUpReply : params.initialReply;
-        if (reply !== undefined) {
-          const outbound = state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "dm:qa-operator",
-            text: reply,
-          });
-          if (isFollowUp && params.followUpDelivery !== undefined) {
-            if (params.followUpDelivery !== "visible") {
-              state.deleteMessage({ accountId: "qa-channel", messageId: outbound.id });
-            }
-            if (params.followUpDelivery === "deleted-preview-then-visible") {
-              state.addOutboundMessage({
-                accountId: "qa-channel",
-                to: "dm:qa-operator",
-                text: reply,
-              });
-            }
-          }
-        }
-      },
     },
   });
-
-  return { env, requests, result, state };
+  return { result, runAgentPrompt };
 }
 
-describe("model-switch follow-up scenario outbound evidence", () => {
-  it.each([
-    ["mock-openai", "The requested handoff comes next."],
-    ["mock-openai", "The requested model switch comes next."],
-    ["live-frontier", "The requested handoff comes next."],
-    ["live-frontier", "The requested model switch comes next."],
-  ] as const)(
-    "rejects a stale first-turn handoff signal when %s produces no follow-up reply",
-    async (providerMode, initialReply) => {
-      await expect(runModelSwitchFollowUpScenario({ providerMode, initialReply })).rejects.toThrow(
-        "test condition was not met",
-      );
-    },
-  );
+describe("model-switch follow-up terminal evidence", () => {
+  it("records exact receipts for both visible model runs", async () => {
+    const { result } = await runFollowUp();
 
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "accepts a fresh alternate-model reply after mixed first-turn traffic (%s)",
-    async (providerMode) => {
-      const followUpReply = "The alternate-model handoff completed successfully.";
-      const { requests, result, state } = await runModelSwitchFollowUpScenario({
-        providerMode,
-        initialReply: "The requested handoff comes next.",
-        followUpReply,
-      });
+    expect(result.status).toBe("pass");
+    expect(result.modelSwitchEvidence).toMatchObject({
+      primary: { runId: "run-1", effective: { responseModel: "primary-model" } },
+      alternate: { runId: "run-2", effective: { responseModel: "alternate-model" } },
+    });
+  });
 
-      expect(result.status).toBe("pass");
-      expect(result.steps[1]?.details).toBe(followUpReply);
-      expect(requests.map((request) => request.model)).toEqual([
-        "primary-model",
-        "alternate-model",
-      ]);
-      expect(state.getSnapshot().messages.map((message) => message.direction)).toEqual([
-        "inbound",
-        "outbound",
-        "inbound",
-        "outbound",
-      ]);
-    },
-  );
+  it("rejects a delayed prior-run receipt", async () => {
+    await expect(runFollowUp({ alternateReceiptRunId: "run-1" })).rejects.toThrow(
+      "alternate-model run did not return distinct exact owned model evidence",
+    );
+  });
 
-  it.each([
-    ["mock-openai", "anthropic/opus", "anthropic"],
-    ["live-frontier", "anthropic/opus", "anthropic"],
-    ["mock-openai", "Anthropic/opus", "ANTHROPIC"],
-    ["live-frontier", "Anthropic/opus", "ANTHROPIC"],
-  ] as const)(
-    "accepts the canonical persisted model for %s alias %s with provider %s",
-    async (providerMode, alternateModel, persistedProvider) => {
-      const { env, requests, result } = await runModelSwitchFollowUpScenario({
-        providerMode,
-        alternateModel,
-        initialReply: "The requested handoff comes next.",
-        followUpReply: "The alternate-model handoff completed successfully.",
-        persistedFollowUpModel: { provider: persistedProvider, model: "claude-opus-5" },
-      });
+  it("rejects normalized-identical refs before starting an agent run", async () => {
+    const onRun = vi.fn();
+    await expect(runFollowUp({ alternateModel: "OPENAI/primary-model", onRun })).rejects.toThrow(
+      "primary and alternate models must normalize to different refs",
+    );
+    expect(onRun).not.toHaveBeenCalled();
+  });
 
-      expect(result.status).toBe("pass");
-      expect(requests.at(-1)?.model).toBe("claude-opus-5");
-      expect(await readRawQaSessionStore(env)).toMatchObject({
-        [sessionKey]: { modelProvider: persistedProvider, model: "claude-opus-5" },
-      });
-    },
-  );
-
-  it.each([
-    ["mock-openai", "openai", "primary-model"],
-    ["mock-openai", "anthropic", "alternate-model"],
-    ["live-frontier", "openai", "primary-model"],
-    ["live-frontier", "anthropic", "alternate-model"],
-  ] as const)(
-    "rejects a fresh handoff when the persisted %s run used %s/%s",
-    async (providerMode, provider, model) => {
-      await expect(
-        runModelSwitchFollowUpScenario({
-          providerMode,
-          initialReply: "The requested handoff comes next.",
-          followUpReply: "The alternate-model handoff completed successfully.",
-          persistedFollowUpModel: { provider, model },
-        }),
-      ).rejects.toThrow(/alternate.*model|persisted.*model|model.*switch/i);
-    },
-  );
-
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "rejects a deleted fresh handoff when no visible final reply remains (%s)",
-    async (providerMode) => {
-      await expect(
-        runModelSwitchFollowUpScenario({
-          providerMode,
-          initialReply: "The requested handoff comes next.",
-          followUpReply: "The alternate-model handoff completed successfully.",
-          followUpDelivery: "deleted-only",
-        }),
-      ).rejects.toThrow("test condition was not met");
-    },
-  );
-
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "accepts a visible final handoff after its streaming preview was deleted (%s)",
-    async (providerMode) => {
-      const { env, result, state } = await runModelSwitchFollowUpScenario({
-        providerMode,
-        initialReply: "The requested handoff comes next.",
-        followUpReply: "The alternate-model handoff completed successfully.",
-        followUpDelivery: "deleted-preview-then-visible",
-      });
-
-      expect(result.status).toBe("pass");
-      expect(await readRawQaSessionStore(env)).toMatchObject({
-        [sessionKey]: { modelProvider: "openai", model: "alternate-model" },
-      });
-      expect(
-        state
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .map((message) => message.deleted === true),
-      ).toEqual([false, true, false]);
-    },
-  );
+  it("rejects a deleted alternate reply", async () => {
+    await expect(runFollowUp({ deleteAlternateReply: true })).rejects.toThrow(
+      "test condition was not met",
+    );
+  });
 });

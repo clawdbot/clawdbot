@@ -29,8 +29,18 @@ flow:
   steps:
     - name: runs on the default configured model
       actions:
+        - set: alternate
+          value:
+            expr: splitModelRef(env.alternateModel)
+        - set: expectedAlternate
+          value:
+            expr: normalizeModelRef(env.alternateModel)
+        - assert:
+            expr: "normalizeModelRef(env.primaryModel) && expectedAlternate && (normalizeModelRef(env.primaryModel).provider !== expectedAlternate.provider || normalizeModelRef(env.primaryModel).model !== expectedAlternate.model)"
+            message: primary and alternate models must normalize to different refs
         - call: reset
         - call: runAgentPrompt
+          saveAs: primaryRun
           args:
             - ref: env
             - sessionKey: agent:qa:model-switch
@@ -38,6 +48,9 @@ flow:
                 expr: config.initialPrompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 30000)
+        - assert:
+            expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean'; })()"
+            message: default-model run did not return an exact owned terminal receipt
         - call: waitForOutboundMessage
           saveAs: outbound
           args:
@@ -45,22 +58,14 @@ flow:
             - lambda:
                 params: [candidate]
                 expr: "candidate.conversation.id === 'qa-operator'"
-      detailsExpr: "env.mock ? String((await fetchJson(`${env.mock.baseUrl}/debug/last-request`))?.body?.model ?? '') : outbound.text"
+      detailsExpr: outbound.text
     - name: switches to the alternate model and continues
       actions:
-        - set: alternate
-          value:
-            expr: splitModelRef(env.alternateModel)
-        - set: expectedAlternate
-          value:
-            expr: normalizeModelRef(env.alternateModel)
-        - set: switchRequestCursor
-          value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: beforeSwitchCursor
           value:
             expr: state.getSnapshot().messages.length
         - call: runAgentPrompt
+          saveAs: alternateRun
           args:
             - ref: env
             - sessionKey: agent:qa:model-switch
@@ -72,34 +77,19 @@ flow:
                 expr: alternate?.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
-        - call: readRawQaSessionStore
-          saveAs: sessionStore
-          args:
-            - ref: env
-        - set: sessionEntry
-          value:
-            expr: "sessionStore['agent:qa:model-switch']"
         - assert:
-            expr: "normalizeLowercaseStringOrEmpty(sessionEntry?.modelProvider) === expectedAlternate?.provider && sessionEntry?.model === expectedAlternate?.model"
-            message:
-              expr: "`expected persisted alternate model ${String(expectedAlternate?.provider ?? '')}/${String(expectedAlternate?.model ?? '')}, got ${String(sessionEntry?.modelProvider ?? '')}/${String(sessionEntry?.model ?? '')}`"
+            expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
+            message: alternate-model run did not return distinct exact owned model evidence
         - call: waitForCondition
           saveAs: outbound
           args:
             - lambda:
                 expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && !candidate.deleted && candidate.conversation.id === 'qa-operator' && (() => { const lower = normalizeLowercaseStringOrEmpty(candidate.text); return lower.includes('switch') || lower.includes('handoff'); })()).at(-1)"
             - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
-        - if:
-            expr: "Boolean(env.mock)"
-            then:
-              - set: switchDebugRequests
-                value:
-                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${switchRequestCursor}`)"
-              - set: switchRequest
-                value:
-                  expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.followupPrompt))"
-              - assert:
-                  expr: "String(switchRequest?.model ?? '') === String(expectedAlternate?.model ?? '')"
-                  message:
-                    expr: "`expected alternate model ${String(expectedAlternate?.model ?? '')}, got ${String(switchRequest?.model ?? '')}`"
+        - set: modelSwitchEvidence
+          value:
+            primary:
+              ref: primaryRun.waited.terminalReceipt
+            alternate:
+              ref: alternateRun.waited.terminalReceipt
       detailsExpr: outbound.text

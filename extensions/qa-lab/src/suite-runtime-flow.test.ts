@@ -216,14 +216,17 @@ describe("qa suite runtime flow", () => {
       raw: "anthropic/opus",
       defaultProvider: "anthropic",
     })?.ref;
+    const normalizeModelRef = call.deps.normalizeModelRef as (
+      raw: string,
+    ) => { provider: string; model: string } | null;
     expect(canonicalOpus).toEqual({ provider: "anthropic", model: "claude-opus-5" });
-    expect(call.deps.normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
-    expect(call.deps.normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
-    expect(call.deps.normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
+    expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
       provider: "openai",
       model: "gpt-5.6-luna",
     });
-    expect(call.deps.normalizeModelRef("")).toBeNull();
+    expect(normalizeModelRef("")).toBeNull();
     expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
     const outboundPredicate = vi.fn();
     call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);

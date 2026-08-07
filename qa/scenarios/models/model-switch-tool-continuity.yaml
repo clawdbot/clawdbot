@@ -32,18 +32,22 @@ flow:
   steps:
     - name: keeps using tools after switching models
       actions:
+        - set: alternate
+          value:
+            expr: splitModelRef(env.alternateModel)
+        - set: expectedAlternate
+          value:
+            expr: normalizeModelRef(env.alternateModel)
+        - assert:
+            expr: "normalizeModelRef(env.primaryModel) && expectedAlternate && (normalizeModelRef(env.primaryModel).provider !== expectedAlternate.provider || normalizeModelRef(env.primaryModel).model !== expectedAlternate.model)"
+            message: primary and alternate models must normalize to different refs
         - call: waitForGatewayHealthy
           args:
             - ref: env
             - 60000
         - call: reset
-        - call: readSessionTranscriptSummary
-          saveAs: beforeAttemptTranscript
-          args:
-            - ref: env
-            - agent:qa:model-switch-tools
-            - allowEmpty: true
         - call: runAgentPrompt
+          saveAs: primaryRun
           args:
             - ref: env
             - sessionKey: agent:qa:model-switch-tools
@@ -51,27 +55,14 @@ flow:
                 expr: config.initialPrompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 30000)
-        - call: waitForCondition
-          saveAs: beforeSwitchTranscript
-          args:
-            - lambda:
-                async: true
-                expr: "readSessionTranscriptSummary(env, 'agent:qa:model-switch-tools', { afterEventCursor: beforeAttemptTranscript.eventCursor, allowEmpty: true }).then((summary) => (summary.successfulToolCallCounts.read ?? 0) >= 1 ? summary : undefined)"
-            - 5000
-            - 50
-        - set: alternate
-          value:
-            expr: splitModelRef(env.alternateModel)
-        - set: expectedAlternate
-          value:
-            expr: normalizeModelRef(env.alternateModel)
+        - assert:
+            expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible'; })()"
+            message: default-model run did not return owned successful read evidence
         - set: beforeSwitchCursor
           value:
             expr: state.getSnapshot().messages.length
-        - set: beforeSwitchRequestCursor
-          value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
+          saveAs: alternateRun
           args:
             - ref: env
             - sessionKey: agent:qa:model-switch-tools
@@ -83,29 +74,9 @@ flow:
                 expr: alternate?.model
               timeoutMs:
                 expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
-        - call: readRawQaSessionStore
-          saveAs: afterSwitchSessions
-          args:
-            - ref: env
-        - set: afterSwitchSession
-          value:
-            expr: "afterSwitchSessions['agent:qa:model-switch-tools']"
         - assert:
-            expr: "normalizeLowercaseStringOrEmpty(afterSwitchSession?.modelProvider) === normalizeLowercaseStringOrEmpty(expectedAlternate?.provider) && String(afterSwitchSession?.model ?? '') === String(expectedAlternate?.model ?? '')"
-            message:
-              expr: "`expected alternate persisted model ${String(expectedAlternate?.provider ?? '')}/${String(expectedAlternate?.model ?? '')}, got ${String(afterSwitchSession?.modelProvider ?? '')}/${String(afterSwitchSession?.model ?? '')}`"
-        - call: waitForCondition
-          saveAs: afterSwitchTranscript
-          args:
-            - lambda:
-                async: true
-                expr: "readSessionTranscriptSummary(env, 'agent:qa:model-switch-tools', { afterEventCursor: beforeSwitchTranscript.eventCursor, allowEmpty: true }).then((summary) => (summary.successfulToolCallCounts.read ?? 0) >= 1 ? summary : undefined)"
-            - 5000
-            - 50
-        - assert:
-            expr: "(afterSwitchTranscript.successfulToolCallCounts.read ?? 0) >= 1"
-            message:
-              expr: "`expected a successful read after the model switch; successfulTools=${JSON.stringify(afterSwitchTranscript.successfulToolCallCounts ?? {})}`"
+            expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.successfulToolNames?.includes('read') && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
+            message: alternate-model run did not return exact owned successful read evidence
         - call: waitForCondition
           saveAs: outbound
           args:
@@ -116,17 +87,10 @@ flow:
             expr: hasModelSwitchContinuitySignal(outbound.text)
             message:
               expr: "`switch reply missed kickoff continuity: ${outbound.text}`"
-        - if:
-            expr: "Boolean(env.mock)"
-            then:
-              - set: switchDebugRequests
-                value:
-                  expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${beforeSwitchRequestCursor}`)"
-              - set: switchRequest
-                value:
-                  expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
-              - assert:
-                  expr: "String(switchRequest?.model ?? '') === String(expectedAlternate?.model ?? '')"
-                  message:
-                    expr: "`expected alternate model, got ${String(switchRequest?.model ?? '')}`"
+        - set: modelSwitchEvidence
+          value:
+            primary:
+              ref: primaryRun.waited.terminalReceipt
+            alternate:
+              ref: alternateRun.waited.terminalReceipt
       detailsExpr: outbound.text
