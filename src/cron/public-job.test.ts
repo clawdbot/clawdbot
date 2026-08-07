@@ -42,4 +42,16 @@ describe("toPublicCronJob", () => {
       state: { triggerState: { revision: 1 } },
     });
   });
+
+  it("strips private tool-cap provenance without mutating the stored job", () => {
+    const job = makeCronJob({
+      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+    });
+
+    expect(toPublicCronJob(job).toolsAllowProvenance).toBeUndefined();
+    expect(job.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+    });
+  });
 });

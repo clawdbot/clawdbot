@@ -16,6 +16,7 @@ export type CronCallerScope = {
   sessionKey?: string;
   accountId: string;
   currentJobId?: string;
+  toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
 };
 
 export function readCronCallerScope(
@@ -36,6 +37,14 @@ export function readCronCallerScope(
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),
     currentJobId,
+    ...(identity.cronToolsAllowCapture === "final-executable-surface"
+      ? {
+          toolsAllowProvenance: {
+            version: 1 as const,
+            source: "final-executable-surface" as const,
+          },
+        }
+      : {}),
   };
 }
 

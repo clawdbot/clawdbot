@@ -6,6 +6,7 @@ import {
   supportsModelTools,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
@@ -138,14 +139,24 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");
+  const codexMcpToolOverrides = resolveCodexMcpToolOverridesForAgent(params.config, {
+    agentId: sessionAgentId,
+    toolOverrides: params.toolOverrides,
+  });
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
-    toolOverrides: params.toolOverrides,
+    toolOverrides: codexMcpToolOverrides,
   });
+  const authenticatedScheduledMode =
+    params.trigger === "cron" &&
+    params.scheduledToolPolicy !== undefined &&
+    Array.isArray(params.toolsAllow);
+  const ownsScheduledConfiguredMcpSurface =
+    authenticatedScheduledMode && bundleMcpThreadConfig.staticServerNames.length > 0;
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -209,6 +220,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
+    authenticatedScheduledMode,
+    ownsScheduledConfiguredMcpSurface,
+    codexMcpToolOverrides,
     sandboxExecServerEnabled,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,

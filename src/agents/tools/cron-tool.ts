@@ -5,7 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -13,12 +13,10 @@ import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { normalizeToolName } from "../tool-policy.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import {
@@ -28,6 +26,12 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "./common.js";
+import {
+  assertCronToolAgentFieldMatchesScope,
+  assertCronToolSessionRefsMatchScope,
+  readCronToolAgentId,
+  resolveCronToolCallerScope,
+} from "./cron-tool-caller-scope.js";
 import {
   canonicalizeCronToolObject,
   hasCronCreateSignal,
@@ -39,115 +43,33 @@ import {
   REMINDER_CONTEXT_MARKER,
   stripExistingContext,
 } from "./cron-tool-context.js";
-import { capCronJobToolsAllowOnCreate } from "./cron-tool-creator-cap.js";
+import {
+  assertInheritedCronToolCaptureReady,
+  capCronJobToolsAllowOnCreate,
+} from "./cron-tool-creator-cap.js";
 import {
   assertCronPacingInput,
   createCronToolSchema,
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { assertNoCronShellExecution, updateCronJobFromAgentTool } from "./cron-tool-write.js";
-import type {
-  CronCreatorToolAllowlistEntry,
-  CronToolCallerScope,
-  CronToolDeps,
-  CronToolOptions,
-} from "./cron-tool.types.js";
+import type { CronToolDeps, CronToolOptions } from "./cron-tool.types.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-export type { CronCreatorToolAllowlistEntry } from "./cron-tool.types.js";
+export type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./cron-tool.types.js";
+export {
+  captureFinalEffectiveCronCreatorToolAllowlist,
+  replaceWithEffectiveCronCreatorToolAllowlist,
+} from "./cron-tool-creator-cap.js";
 
 function isMissingOrEmptyObject(value: unknown): boolean {
   return !value || (isRecord(value) && Object.keys(value).length === 0);
 }
 
-export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
-  target: CronCreatorToolAllowlistEntry[],
-  tools: readonly T[],
-  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
-): void {
-  target.length = 0;
-  const seen = new Set<string>();
-  for (const tool of tools) {
-    const name = normalizeToolName(tool.name);
-    if (!name || seen.has(name)) {
-      continue;
-    }
-    seen.add(name);
-    const meta = toolMeta?.(tool);
-    const pluginId =
-      typeof meta?.pluginId === "string" ? normalizeToolName(meta.pluginId) : undefined;
-    target.push(pluginId ? { name, pluginId } : { name });
-  }
-}
-
 function readCronJobIdParam(params: Record<string, unknown>) {
   return readStringParam(params, "jobId") ?? readStringParam(params, "id");
-}
-
-function resolveCronToolCallerScope(
-  opts: CronToolOptions | undefined,
-  cfg: OpenClawConfig,
-): CronToolCallerScope | undefined {
-  const sessionKey = opts?.agentSessionKey?.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  return {
-    kind: "agentTool",
-    agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
-  };
-}
-
-function readCronToolAgentId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? normalizeAgentId(value) : undefined;
-}
-
-function readAgentIdFromCronToolSessionRef(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim()
-    ? parseAgentSessionKey(value.trim())?.agentId
-    : undefined;
-}
-
-function readAgentIdFromCronToolSessionTarget(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("session:")) {
-    return undefined;
-  }
-  return readAgentIdFromCronToolSessionRef(trimmed.slice("session:".length));
-}
-
-function assertCronToolAgentFieldMatchesScope(params: {
-  value: unknown;
-  field: string;
-  callerScope: CronToolCallerScope;
-}): void {
-  if (params.value === undefined) {
-    return;
-  }
-  const agentId = readCronToolAgentId(params.value);
-  if (agentId && agentId === params.callerScope.agentId) {
-    return;
-  }
-  throw new Error(`${params.field} must match the calling agent`);
-}
-
-function assertCronToolSessionRefsMatchScope(
-  value: Record<string, unknown>,
-  callerScope: CronToolCallerScope,
-): void {
-  const sessionAgentId = readAgentIdFromCronToolSessionRef(value.sessionKey);
-  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
-    throw new Error("automations sessionKey must match the calling agent");
-  }
-  const sessionTargetAgentId = readAgentIdFromCronToolSessionTarget(value.sessionTarget);
-  if (sessionTargetAgentId && normalizeAgentId(sessionTargetAgentId) !== callerScope.agentId) {
-    throw new Error("automations sessionTarget must match the calling agent");
-  }
 }
 
 const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
@@ -336,6 +258,10 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               ...(readCronSelfRemoveOnlyJobId(opts)
                 ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
                 : {}),
+              ...(opts?.creatorToolAllowlistCaptureRef?.value?.version === 1 &&
+              opts.creatorToolAllowlistCaptureRef.value.source === "final-executable-surface"
+                ? { cronToolsAllowCapture: "final-executable-surface" as const }
+                : {}),
             }
           : undefined;
 
@@ -468,6 +394,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
               delete job.enabled;
             }
             capCronJobToolsAllowOnCreate(job, opts?.creatorToolAllowlist);
+            assertInheritedCronToolCaptureReady(job, opts?.creatorToolAllowlistCaptureRef);
             if (job && typeof job === "object") {
               const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
               const resolvedSessionKey = opts?.agentSessionKey
@@ -609,6 +536,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
                 id,
                 patch,
                 creatorToolAllowlist: opts?.creatorToolAllowlist,
+                creatorToolAllowlistCaptureRef: opts?.creatorToolAllowlistCaptureRef,
                 gatewayOpts,
                 callGateway,
               }),

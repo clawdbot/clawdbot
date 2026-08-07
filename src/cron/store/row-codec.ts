@@ -281,6 +281,12 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   const trigger = triggerFromRow(row);
   const pacing = pacingFromRow(row);
   const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
+  const toolsAllowProvenance =
+    isRecord(jobJson.toolsAllowProvenance) &&
+    jobJson.toolsAllowProvenance.version === 1 &&
+    jobJson.toolsAllowProvenance.source === "final-executable-surface"
+      ? ({ version: 1, source: "final-executable-surface" } as const)
+      : undefined;
   if (!schedule || !payload) {
     return null;
   }
@@ -299,6 +305,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
         }
       : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
+    ...(toolsAllowProvenance ? { toolsAllowProvenance } : {}),
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
     enabled: row.enabled !== 0,

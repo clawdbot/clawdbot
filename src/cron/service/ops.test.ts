@@ -36,6 +36,59 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("scheduled tool policy provenance", () => {
+  it("stores final-surface provenance privately and never synthesizes it from the default marker", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const base = {
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+    };
+    const proven = await add(
+      state,
+      {
+        ...base,
+        name: "proven",
+        payload: {
+          kind: "agentTurn" as const,
+          message: "run",
+          toolsAllow: ["notes__read"],
+          toolsAllowIsDefault: true,
+        },
+      },
+      {
+        toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+      },
+    );
+    expect(proven.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+    });
+
+    const legacy = await add(state, {
+      ...base,
+      name: "legacy-default",
+      payload: {
+        kind: "agentTurn",
+        message: "run",
+        toolsAllow: ["notes__read"],
+        toolsAllowIsDefault: true,
+      },
+    });
+    expect(legacy.toolsAllowProvenance).toBeUndefined();
+
+    const routine = await update(state, proven.id, { description: "keep" });
+    expect(routine.toolsAllowProvenance).toEqual(proven.toolsAllowProvenance);
+    const explicit = await update(state, proven.id, {
+      payload: { kind: "agentTurn", toolsAllow: ["read"] },
+    });
+    expect(explicit.toolsAllowProvenance).toBeUndefined();
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("stamps trusted and authenticated-account creates", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-23T12:00:00.000Z");

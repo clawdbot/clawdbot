@@ -82,16 +82,11 @@ import {
 import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-type CodexDynamicToolHookContext = {
-  agentId?: string;
-  config?: EmbeddedRunAttemptParams["config"];
-  workspaceDir?: string;
+type CodexDynamicToolHookContext = NonNullable<
+  Parameters<typeof wrapToolWithBeforeToolCallHook>[1]
+> & {
   remoteWorkspaceRoot?: string;
   remoteWorkspaceRequestTimeoutMs?: number;
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  channelId?: string;
   currentChannelProvider?: string;
   contextWindowTokens?: number;
   currentChannelId?: string;
@@ -101,8 +96,6 @@ type CodexDynamicToolHookContext = {
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
-  onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
-  allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -356,6 +349,8 @@ function hasExplicitNonSourceMessageRoute(
 
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
+  /** Final executable tools after schema projection and hook-wrapper quarantine. */
+  availableTools: AnyAgentTool[];
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
@@ -540,6 +535,7 @@ export function createCodexDynamicToolBridge(params: {
   ]);
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
+    availableTools: availableTools.map((entry) => entry.tool),
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,
       loading: params.loading ?? "searchable",

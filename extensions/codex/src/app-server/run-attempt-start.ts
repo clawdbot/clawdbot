@@ -1,6 +1,11 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  captureFinalCodexCronCreatorToolAllowlist,
+  projectMcpCatalogToolsForHarnessPolicy,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
+import { loadCodexEffectiveMcpCatalogFromThread } from "./effective-mcp-catalog.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
 import {
@@ -8,6 +13,7 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
@@ -43,6 +49,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     sandboxExecServerEnabled,
   } = runtime;
   const { toolBridge, toolState } = attemptTools;
+  const developerInstructions = joinPresentSections(
+    turnState.promptBuild.developerInstructions,
+    attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+  );
   const {
     params,
     attemptClientFactory,
@@ -94,9 +104,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       dynamicTools: toolBridge.specs,
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
-      developerInstructions: turnState.promptBuild.developerInstructions,
+      developerInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
+      configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
@@ -127,6 +138,35 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
     state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
     state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+    if (
+      attemptTools.configuredMcpOwnershipVersion === undefined &&
+      attemptTools.nativeConfiguredMcpServerNames.length > 0
+    ) {
+      try {
+        const catalog = await loadCodexEffectiveMcpCatalogFromThread({
+          client: startupResult.client,
+          threadId: startupResult.thread.threadId,
+          mcpServerNames: attemptTools.nativeConfiguredMcpServerNames,
+          toolOverrides: runtime.codexMcpToolOverrides,
+          requireInitializedInventory: true,
+        });
+        const nativeMcpTools = await projectMcpCatalogToolsForHarnessPolicy(
+          catalog,
+          attemptTools.mcpCreatorPolicyParams,
+        );
+        const finalCreatorTools = [...toolBridge.availableTools, ...nativeMcpTools];
+        await captureFinalCodexCronCreatorToolAllowlist(
+          attemptTools.cronCreatorToolAllowlist,
+          attemptTools.cronCreatorToolAllowlistCaptureRef,
+          finalCreatorTools,
+        );
+      } catch (error) {
+        embeddedAgentLog.warn(
+          "Codex configured MCP discovery was incomplete; ordinary chat continues, but inherited-tool automation mutations will fail until discovery recovers",
+          { errorName: error instanceof Error ? error.name : "unknown" },
+        );
+      }
+    }
     pluginAppServer = startupResult.pluginAppServer;
     if (
       usesSupervisionConnection &&
@@ -200,7 +240,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
     cwd: effectiveCwd,
-    developerInstructions: buildRenderedCodexDeveloperInstructions(),
+    developerInstructions: joinPresentSections(
+      buildRenderedCodexDeveloperInstructions(),
+      attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+    ),
     prompt: turnState.codexTurnPromptText,
     tools: toolBridge.availableSpecs,
   });

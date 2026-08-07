@@ -12,6 +12,7 @@ type GatewayToolCallerIdentity = {
   sessionKey: string;
   /** Host-signed capability for the scheduled run's existing self-management surface. */
   cronSelfManagementJobId?: string;
+  cronToolsAllowCapture?: "final-executable-surface";
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -49,6 +50,9 @@ export async function withGatewayToolCallerIdentity<T>(
       sessionKey: identity.sessionKey.trim(),
       ...(identity.cronSelfManagementJobId?.trim()
         ? { cronSelfManagementJobId: identity.cronSelfManagementJobId.trim() }
+        : {}),
+      ...(identity.cronToolsAllowCapture === "final-executable-surface"
+        ? { cronToolsAllowCapture: identity.cronToolsAllowCapture }
         : {}),
       ...(identity.turnSourceChannel?.trim()
         ? { turnSourceChannel: identity.turnSourceChannel.trim() }

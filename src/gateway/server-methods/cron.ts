@@ -718,7 +718,12 @@ export const cronHandlers: GatewayRequestHandlers = {
             defaultAgentId: context.cron.getDefaultAgentId(),
           }),
         ...(cronJobUsesToolRuntime(jobCreate)
-          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          ? {
+              scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
+              ...(callerScope?.toolsAllowProvenance
+                ? { toolsAllowProvenance: callerScope.toolsAllowProvenance }
+                : {}),
+            }
           : {}),
       });
     } catch (err) {
@@ -905,7 +910,12 @@ export const cronHandlers: GatewayRequestHandlers = {
           }
         },
         cronPatchTouchesToolRuntime(patch)
-          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          ? {
+              scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
+              ...(callerScope?.toolsAllowProvenance
+                ? { toolsAllowProvenance: callerScope.toolsAllowProvenance }
+                : {}),
+            }
           : undefined,
       );
     } catch (err) {

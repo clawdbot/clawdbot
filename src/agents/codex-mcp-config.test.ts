@@ -158,6 +158,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       },
     });
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(loaded.staticServerNames).toEqual(["search"]);
   });
 
   it("applies session server and tool denials to bundled Codex MCP config", () => {
@@ -252,6 +253,8 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.configPatch).toBeUndefined();
     expect(loaded.fingerprint).toBeUndefined();
     expect(loaded.evaluated).toBe(true);
+    expect(loaded.staticServerNames).toEqual(["search"]);
+    expect(loaded.userStaticServerNames).toEqual(["search"]);
   });
 
   it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", () => {
@@ -281,6 +284,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       expect(loaded.configPatch).toBeUndefined();
       expect(loaded.fingerprint).toBeUndefined();
       expect(loaded.evaluated).toBe(true);
+      expect(loaded.staticServerNames).toEqual([]);
     }
   });
 
@@ -353,6 +357,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(JSON.stringify(loaded.configPatch)).not.toContain("user-mail");
     expect(loaded.configPatch).toEqual(withoutScopedConfig.configPatch);
     expect(loaded.fingerprint).toBe(withoutScopedConfig.fingerprint);
+    expect(loaded.staticServerNames).toEqual(["search"]);
   });
 
   it("keeps static projection byte-identical when no resolver exists", () => {

@@ -208,6 +208,7 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
     trigger: job.trigger,
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
+    toolsAllowProvenance: job.toolsAllowProvenance,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
@@ -265,6 +266,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         nowMs: now,
         cronConfig: state.deps.cronConfig,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
+        toolsAllowProvenance: opts?.toolsAllowProvenance,
         configuredChannels,
       });
       const includeEnabled = opts?.enabledExplicit === true;
@@ -294,6 +296,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, normalizedInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
+      toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
     state.store?.jobs.push(job);
@@ -381,6 +384,7 @@ export async function updateLoadedJob(params: {
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
+    toolsAllowProvenance: opts?.toolsAllowProvenance,
     configuredChannels,
   });
   if (patch.agentId !== undefined) {

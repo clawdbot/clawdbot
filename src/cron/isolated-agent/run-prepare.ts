@@ -510,8 +510,11 @@ export async function prepareCronRunContext(params: {
       modelApi,
       agentId: modelOwner.agentId,
       agentDir: modelOwner.agentDir,
+      workspaceDir,
       sessionKey: agentSessionKey,
       agentPayload,
+      agentRuntime: effectiveAgentRuntime,
+      toolsAllowProvenance: input.job.toolsAllowProvenance,
     });
     const { deliveryPlan, deliveryRequested, resolvedDelivery, sourceDelivery } =
       await resolveCronDeliveryContext({

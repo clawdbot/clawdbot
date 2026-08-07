@@ -137,6 +137,23 @@ describe("agent runtime identity token", () => {
     nowSpy.mockRestore();
   });
 
+  it("round-trips final cron-cap capture provenance", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+    });
+  });
+
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

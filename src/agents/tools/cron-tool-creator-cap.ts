@@ -6,7 +6,7 @@ import {
   expandToolGroups,
   normalizeToolName,
 } from "../tool-policy.js";
-import type { CronCreatorToolAllowlistEntry } from "./cron-tool.types.js";
+import type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./cron-tool.types.js";
 
 type NormalizedCronCreatorTool = {
   name: string;
@@ -16,6 +16,54 @@ type NormalizedCronCreatorTool = {
 type CronJobUpdatePatchPlan =
   | { kind: "ready"; patch: Record<string, unknown> }
   | { kind: "needs-current-job" };
+
+export function assertInheritedCronToolCaptureReady(
+  value: unknown,
+  captureRef: CronToolsAllowCaptureRef | undefined,
+): void {
+  const payload = isRecord(value) && isRecord(value.payload) ? value.payload : undefined;
+  if (
+    payload?.toolsAllowIsDefault !== true ||
+    !captureRef ||
+    captureRef.value?.source === "final-executable-surface"
+  ) {
+    return;
+  }
+  throw new Error(
+    "The final tool surface is unavailable, so this automation was not created with an incomplete inherited tool cap. Retry after configured MCP discovery succeeds, or provide an explicit tools list.",
+  );
+}
+
+export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
+  target: CronCreatorToolAllowlistEntry[],
+  tools: readonly T[],
+  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+): void {
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const name = normalizeToolName(tool.name);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    const meta = toolMeta?.(tool);
+    const pluginId =
+      typeof meta?.pluginId === "string" ? normalizeToolName(meta.pluginId) : undefined;
+    target.push(pluginId ? { name, pluginId } : { name });
+  }
+}
+
+/** Records the creator cap only after every runtime policy and schema quarantine has run. */
+export function captureFinalEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
+  target: CronCreatorToolAllowlistEntry[],
+  captureRef: CronToolsAllowCaptureRef,
+  tools: readonly T[],
+  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+): void {
+  replaceWithEffectiveCronCreatorToolAllowlist(target, tools, toolMeta);
+  captureRef.value = { version: 1, source: "final-executable-surface" };
+}
 
 function normalizeCronToolsAllow(values: readonly string[]): string[] {
   const normalized: string[] = [];

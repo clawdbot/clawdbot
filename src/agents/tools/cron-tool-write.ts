@@ -2,7 +2,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
 import { planCronJobUpdatePatch } from "./cron-tool-creator-cap.js";
-import type { CronCreatorToolAllowlistEntry, GatewayToolCaller } from "./cron-tool.types.js";
+import type {
+  CronCreatorToolAllowlistEntry,
+  CronToolsAllowCaptureRef,
+  GatewayToolCaller,
+} from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
 
 export function assertNoCronShellExecution(value: unknown): void {
@@ -73,6 +77,7 @@ export async function updateCronJobFromAgentTool(params: {
   id: string;
   patch: Record<string, unknown>;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
+  creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
   gatewayOpts: GatewayCallOptions;
   callGateway: GatewayToolCaller;
 }): Promise<unknown> {
@@ -83,6 +88,16 @@ export async function updateCronJobFromAgentTool(params: {
       // Kind-less caller payloads inherit the stored kind above. Recheck those
       // edits, but not a toolsAllow cap synthesized internally.
       assertNoCronShellExecution(prepared.patch);
+    }
+    const payload = isRecord(prepared.patch.payload) ? prepared.patch.payload : undefined;
+    if (
+      payload?.toolsAllowIsDefault === true &&
+      params.creatorToolAllowlistCaptureRef &&
+      params.creatorToolAllowlistCaptureRef?.value?.source !== "final-executable-surface"
+    ) {
+      throw new Error(
+        "The final tool surface is unavailable, so this automation was not updated with an incomplete inherited tool cap. Retry after configured MCP discovery succeeds, or provide an explicit tools list.",
+      );
     }
     try {
       return await params.callGateway("cron.update", params.gatewayOpts, {

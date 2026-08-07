@@ -350,6 +350,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
+    expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["message"]);
     expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
 
     const result = await bridge.handleToolCall(
@@ -3928,6 +3929,70 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.diagnosticTerminalReason).toBeUndefined();
     expect(result.sideEffectEvidence).toBeUndefined();
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("passes scheduled requester facts to hooks and rejects interactive approval", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Review before running",
+      },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: {
+        trigger: "cron",
+        runId: "run-scheduled-hook",
+        sessionId: "session-scheduled-hook",
+        sessionKey: "agent:main:cron:job-1",
+        requester: {
+          channel: "telegram",
+          accountId: "bot-a",
+          senderId: "sender-a",
+          senderIsOwner: true,
+          roleIds: ["operator"],
+        },
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat-a",
+        turnSourceAccountId: "bot-a",
+        turnSourceThreadId: "topic-a",
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-scheduled-hook",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringContaining("cron runs have no approval-capable initiating surface"),
+        },
+      ],
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(callArg(beforeToolCall, 0, 1, "scheduled before_tool_call context")).toMatchObject({
+      requester: {
+        channel: "telegram",
+        accountId: "bot-a",
+        senderId: "sender-a",
+        senderIsOwner: true,
+        roleIds: ["operator"],
+      },
+    });
   });
 
   it("applies dynamic tool result middleware before after_tool_call observes the result", async () => {

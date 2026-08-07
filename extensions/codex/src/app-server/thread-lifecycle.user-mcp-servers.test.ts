@@ -5,6 +5,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerBinding,
@@ -520,6 +521,196 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const preservedBinding = await readCodexAppServerBinding(sessionFile);
     expect(preservedBinding?.threadId).toBe("thread-native");
     expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
+  });
+
+  it.each([
+    {
+      name: "legacy native MCP fingerprint",
+      binding: { dynamicToolsFingerprint: "[]", mcpServersFingerprint: "mcp-v1" },
+    },
+    { name: "missing dynamic fingerprint", binding: {} },
+  ])("rotates $name when scheduled dynamic MCP takes ownership", async ({ binding }) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-legacy",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      ...binding,
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        // The successor is not authoritative until its exact-predecessor CAS commits.
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "thread-legacy",
+        });
+        return threadStartResult("thread-scheduled-v1");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      configuredMcpOwnershipVersion: 1,
+      mcpServersFingerprintEvaluated: true,
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-scheduled-v1",
+      configuredMcpOwnershipVersion: 1,
+    });
+  });
+
+  it("preserves the configured-MCP predecessor when successor start fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-legacy",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      mcpServersFingerprint: "mcp-v1",
+      dynamicToolsFingerprint: "[]",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        throw new Error("successor start failed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: createParams(sessionFile, workspaceDir),
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createAppServerOptions(),
+        configuredMcpOwnershipVersion: 1,
+        mcpServersFingerprintEvaluated: true,
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+      }),
+    ).rejects.toThrow("successor start failed");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-legacy",
+    });
+  });
+
+  it.each(["conflict", "error"] as const)(
+    "cleans an uncommitted successor and preserves its predecessor after CAS $case",
+    async (caseName) => {
+      const sessionFile = path.join(tempDir, `session-${caseName}.jsonl`);
+      const workspaceDir = path.join(tempDir, "workspace");
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-legacy",
+        cwd: workspaceDir,
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+        mcpServersFingerprint: "mcp-v1",
+        dynamicToolsFingerprint: "[]",
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "thread/start") {
+          return threadStartResult("thread-uncommitted");
+        }
+        if (method === "thread/delete") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const bindingStore: CodexAppServerBindingStore = {
+        ...testCodexAppServerBindingStore,
+        mutate: async (identity, mutation) => {
+          if (mutation.kind === "replace-thread") {
+            if (caseName === "error") {
+              throw new Error("lost replacement lease");
+            }
+            return false;
+          }
+          return await testCodexAppServerBindingStore.mutate(identity, mutation);
+        },
+      };
+
+      await expect(
+        startOrResumeThreadImpl({
+          bindingStore,
+          client: { request } as never,
+          params: createParams(sessionFile, workspaceDir),
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createAppServerOptions(),
+          configuredMcpOwnershipVersion: 1,
+          mcpServersFingerprintEvaluated: true,
+          nativeCodeModeEnabled: false,
+          userMcpServersEnabled: false,
+        }),
+      ).rejects.toThrow(
+        caseName === "error" ? "lost replacement lease" : "Codex thread binding changed",
+      );
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/start",
+        "thread/delete",
+      ]);
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+        threadId: "thread-legacy",
+      });
+    },
+  );
+
+  it("cleans the successor and preserves the predecessor on post-start abort", async () => {
+    const sessionFile = path.join(tempDir, "session-abort.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-legacy",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      mcpServersFingerprint: "mcp-v1",
+      dynamicToolsFingerprint: "[]",
+    });
+    const controller = new AbortController();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        controller.abort("test abort");
+        return threadStartResult("thread-uncommitted");
+      }
+      if (method === "thread/delete") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: createParams(sessionFile, workspaceDir),
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createAppServerOptions(),
+        configuredMcpOwnershipVersion: 1,
+        mcpServersFingerprintEvaluated: true,
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/delete"]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-legacy",
+    });
   });
 
   it("preserves MCP-mismatched bindings when provider web-search support is unknown", async () => {

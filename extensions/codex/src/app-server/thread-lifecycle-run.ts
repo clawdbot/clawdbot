@@ -83,6 +83,7 @@ export async function startOrResumeThread(
     let binding = await lifecycleTiming.measure("read-binding", () =>
       params.bindingStore.read(bindingIdentity),
     );
+    let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
     const normalizeBindingModelProvider = (
@@ -204,6 +205,7 @@ export async function startOrResumeThread(
             params.mcpServersFingerprintEvaluated === true
               ? params.mcpServersFingerprint
               : pendingBinding.mcpServersFingerprint,
+          configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -329,6 +331,25 @@ export async function startOrResumeThread(
       params.persistentWebSearchAllowed !== false &&
       transientWebSearchRestriction;
     const unknownProviderWebSearchSupport = params.nativeProviderWebSearchSupport === "unknown";
+    if (
+      binding?.threadId &&
+      params.configuredMcpOwnershipVersion === 1 &&
+      (binding.configuredMcpOwnershipVersion !== 1 ||
+        binding.dynamicToolsFingerprint === undefined ||
+        binding.mcpServersFingerprint !== undefined ||
+        binding.userMcpServersFingerprint !== undefined)
+    ) {
+      // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
+      // Rotate legacy or ambiguous bindings so no stale native surface can survive the handoff.
+      assertCodexBindingMayBeReplaced(binding, "changing configured MCP ownership");
+      embeddedAgentLog.debug(
+        "codex app-server configured MCP ownership changed; starting a new thread",
+        { threadId: binding.threadId },
+      );
+      replacementPredecessor = binding;
+      binding = undefined;
+      preserveExistingBinding = false;
+    }
     if (
       binding?.threadId &&
       params.mcpServersFingerprintEvaluated === true &&
@@ -660,6 +681,7 @@ export async function startOrResumeThread(
       prebuiltPluginThreadConfig,
       preserveExistingBinding,
       rotatedContextEngineBinding,
+      replacementPredecessor,
     });
   });
 }

@@ -88,6 +88,8 @@ const bundleMcpThreadConfig = {
   diagnostics: [],
   evaluated: false,
   fingerprint: undefined,
+  staticServerNames: [],
+  userStaticServerNames: [],
 } satisfies CodexBundleMcpThreadConfig;
 
 const HARNESS_REQUEST_TIMEOUT_MS = 15_000;

@@ -28,6 +28,7 @@ export type AgentRuntimeIdentity = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronToolsAllowCapture?: "final-executable-surface";
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -47,6 +48,7 @@ type AgentRuntimeIdentityTokenPayload = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronToolsAllowCapture?: "final-executable-surface";
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -214,6 +216,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       messageActionContext?: unknown;
       cronSelfManagementContext?: unknown;
       sessionSpawnContext?: unknown;
+      cronToolsAllowCapture?: unknown;
     };
     if (
       raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
@@ -265,6 +268,13 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (raw.sessionSpawnContext !== undefined && !sessionSpawnContext) {
       return undefined;
     }
+    const cronToolsAllowCapture =
+      raw.cronToolsAllowCapture === "final-executable-surface"
+        ? raw.cronToolsAllowCapture
+        : undefined;
+    if (raw.cronToolsAllowCapture !== undefined && !cronToolsAllowCapture) {
+      return undefined;
+    }
     return {
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
@@ -273,6 +283,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+      ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
     };
   } catch {
     return undefined;
@@ -286,6 +297,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
+  cronToolsAllowCapture?: "final-executable-surface";
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 }): Promise<string> {
   if (
@@ -320,6 +332,9 @@ export async function mintAgentRuntimeIdentityToken(params: {
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(messageActionContext ? { messageActionContext } : {}),
     ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+    ...(params.cronToolsAllowCapture === "final-executable-surface"
+      ? { cronToolsAllowCapture: params.cronToolsAllowCapture }
+      : {}),
     ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
@@ -355,6 +370,9 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.messageActionContext ? { messageActionContext: payload.messageActionContext } : {}),
     ...(payload.cronSelfManagementContext
       ? { cronSelfManagementContext: payload.cronSelfManagementContext }
+      : {}),
+    ...(payload.cronToolsAllowCapture
+      ? { cronToolsAllowCapture: payload.cronToolsAllowCapture }
       : {}),
     ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
   };

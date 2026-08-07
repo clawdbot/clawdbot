@@ -482,6 +482,11 @@ export type CronJob = CronJobBase<
   };
   /** Server-authored provenance for requester-scoped scheduled tool authority. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  /** Private proof that the default cap came from the creator's final executable surface. */
+  toolsAllowProvenance?: {
+    version: 1;
+    source: "final-executable-surface";
+  };
   trigger?: CronTrigger;
   state: CronJobState;
 };
@@ -499,7 +504,7 @@ type CronJobStateInput = Partial<
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
+  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "toolsAllowProvenance"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -520,6 +525,7 @@ export type CronJobPatch = Partial<
     | "displayName"
     | "owner"
     | "scheduledToolPolicy"
+    | "toolsAllowProvenance"
     | "pacing"
   >
 > & {

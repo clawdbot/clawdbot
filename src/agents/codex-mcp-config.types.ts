@@ -16,6 +16,10 @@ export type CodexBundleMcpThreadConfig = {
   diagnostics: BundleMcpDiagnostic[];
   evaluated: boolean;
   fingerprint?: string;
+  /** Enabled static servers across bundle defaults and owner config. */
+  staticServerNames: string[];
+  /** Enabled static servers originating from owner `mcp.servers` config. */
+  userStaticServerNames: string[];
 };
 
 /** Inputs used to load a Codex bundle-MCP thread config patch. */

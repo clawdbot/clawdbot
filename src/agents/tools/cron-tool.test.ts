@@ -1417,6 +1417,34 @@ describe("cron tool", () => {
     expect(params?.payload?.toolsAllow).toEqual(["read", "automations"]);
   });
 
+  it("fails only inherited-default adds while final tool capture is unavailable", async () => {
+    const captureRef = {};
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:main:telegram:group:restricted-room",
+      creatorToolAllowlist: ["read", "cron"],
+      creatorToolAllowlistCaptureRef: captureRef,
+    });
+
+    await expect(
+      tool.execute("call-default-capture-unavailable", {
+        action: "add",
+        job: buildReminderAgentTurnJob(),
+      }),
+    ).rejects.toThrow("final tool surface is unavailable");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+
+    await tool.execute("call-explicit-capture-unavailable", {
+      action: "add",
+      job: {
+        ...buildReminderAgentTurnJob(),
+        payload: { kind: "agentTurn", message: "hello", toolsAllow: ["read"] },
+      },
+    });
+    expect(expectSingleGatewayCallMethod("cron.add")).toMatchObject({
+      payload: { toolsAllow: ["read"] },
+    });
+  });
+
   it("caps trigger-script systemEvent adds to the creator tool surface", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:main:telegram:group:restricted-room",

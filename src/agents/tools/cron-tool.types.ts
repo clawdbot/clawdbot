@@ -9,6 +9,15 @@ export type CronCreatorToolAllowlistEntry =
       pluginId?: string;
     };
 
+type CronToolsAllowCaptureProvenance = {
+  version: 1;
+  source: "final-executable-surface";
+};
+
+export type CronToolsAllowCaptureRef = {
+  value?: CronToolsAllowCaptureProvenance;
+};
+
 export type CronToolOptions = {
   agentSessionKey?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */
@@ -20,6 +29,8 @@ export type CronToolOptions = {
    * need this cap persisted before the original session policy is lost.
    */
   creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
+  /** Host-owned proof that creatorToolAllowlist reached the final executable surface. */
+  creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
   selfRemoveOnlyJobId?: string;
   runId?: string;
 };
