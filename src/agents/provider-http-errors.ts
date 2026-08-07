@@ -428,7 +428,14 @@ export async function readProviderBinaryResponse(
   kind = "binary",
   opts?: ProviderResponseReadOptions,
 ): Promise<Uint8Array> {
-  assertProviderBinaryResponseContent(response, label, kind);
+  try {
+    assertProviderBinaryResponseContent(response, label, kind);
+  } catch (error) {
+    // A captured response may be teed; do not await cancellation before its
+    // rejected branch and dispatcher can be released.
+    void response.body?.cancel().catch(() => undefined);
+    throw error;
+  }
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
     ...opts,
