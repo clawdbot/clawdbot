@@ -491,11 +491,7 @@ describe("session transcript reader facade", () => {
       );
     }
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    openOpenClawAgentDatabase({ agentId: "main", path: databasePath })
-      .db.prepare(
-        "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-      )
-      .run("reader-title-rebuilding");
+    markProjectionNeedsRebuild("reader-title-rebuilding");
 
     expect(readSessionTitleFieldsFromTranscriptBatch(scopes)).toEqual([
       { firstUserMessage: "first prompt", lastMessagePreview: "first reply" },
