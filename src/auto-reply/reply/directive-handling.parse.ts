@@ -96,6 +96,8 @@ export type InlineDirectives = {
   rawModelDirective?: string;
   rawModelProfile?: string;
   rawModelRuntime?: string;
+  modelDirectiveSource?: "alias" | "model";
+  modelSessionOnly: boolean;
   hasQueueDirective: boolean;
   queueMode?: QueueMode;
   queueReset: boolean;
@@ -218,6 +220,8 @@ export function parseInlineDirectives(
     rawModelDirective: model.rawModel,
     rawModelProfile: model.rawProfile,
     rawModelRuntime: model.rawRuntime,
+    modelDirectiveSource: model.source,
+    modelSessionOnly: model.sessionOnly,
     hasQueueDirective: queue.hasDirective,
     queueMode: queue.queueMode,
     queueReset: queue.queueReset,

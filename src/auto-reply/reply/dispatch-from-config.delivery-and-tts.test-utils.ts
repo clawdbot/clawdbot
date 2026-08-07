@@ -1459,7 +1459,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("signals block boundaries before async block delivery is queued", async () => {
+  it("signals block boundaries after async block delivery is admitted", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
@@ -1491,7 +1491,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
+    expect(callOrder).toEqual(["dispatch:The answer is 42", "queued:The answer is 42"]);
   });
 
   it("does not wait for same-channel block dispatcher delivery before resolving block replies", async () => {

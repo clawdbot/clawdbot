@@ -23,6 +23,20 @@ const BASE_RUN_PARAMS = {
   runId: "run-1",
 } satisfies PreparedEmbeddedRunInput["runParams"];
 
+const TEST_ADMISSION = {
+  agentId: "main",
+  sessionId: BASE_RUN_PARAMS.sessionId,
+  sessionKey: BASE_RUN_PARAMS.sessionKey,
+  storePath: BASE_RUN_PARAMS.sessionTarget.storePath,
+  generation: "test-generation",
+  entryId: "msg-user-1",
+  rawSeq: 1,
+  effectiveParentId: null,
+  activeMessagePosition: 0,
+  logicalTurnId: "test-logical-turn",
+  role: "user" as const,
+};
+
 function makeUserMessage(content = BASE_RUN_PARAMS.prompt) {
   return { role: "user" as const, content, timestamp: 1 };
 }
@@ -34,6 +48,7 @@ function createRecorder(
   return {
     message: makeUserMessage(),
     resolveMessage: vi.fn(async () => makeUserMessage()),
+    getAdmissionReceipt: () => TEST_ADMISSION,
     markRuntimePersistencePending: vi.fn((pending) => {
       pendingPersistence = pending;
     }),
@@ -65,6 +80,7 @@ describe("embedded run session prompt state", () => {
   it("records canonical runtime persistence without mutating recorder lifecycle state", async () => {
     const persistedMessage = makeUserMessage();
     const persistApproved = vi.fn(async () => ({
+      admission: TEST_ADMISSION,
       sessionFile: BASE_RUN_PARAMS.sessionFile,
       sessionEntry: undefined,
       messageId: "msg-user-1",
@@ -125,6 +141,7 @@ describe("embedded run session prompt state", () => {
     };
     const persistApproved = vi.fn(async () => undefined);
     const persistBlocked = vi.fn(async () => ({
+      admission: TEST_ADMISSION,
       sessionFile: BASE_RUN_PARAMS.sessionFile,
       sessionEntry: undefined,
       messageId: "msg-user-blocked",
@@ -171,6 +188,7 @@ describe("embedded run session prompt state", () => {
     const persistedMessage = makeUserMessage();
     let resolvePersistence:
       | ((result: {
+          admission: typeof TEST_ADMISSION;
           sessionFile: string;
           sessionEntry: undefined;
           messageId: string;
@@ -180,6 +198,7 @@ describe("embedded run session prompt state", () => {
     const persistApproved = vi.fn(
       () =>
         new Promise<{
+          admission: typeof TEST_ADMISSION;
           sessionFile: string;
           sessionEntry: undefined;
           messageId: string;
@@ -207,6 +226,7 @@ describe("embedded run session prompt state", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(false);
 
     resolvePersistence?.({
+      admission: TEST_ADMISSION,
       sessionFile: BASE_RUN_PARAMS.sessionFile,
       sessionEntry: undefined,
       messageId: "msg-user-delayed",
