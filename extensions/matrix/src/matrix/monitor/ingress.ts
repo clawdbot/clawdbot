@@ -11,9 +11,11 @@
 // the core drain after a restart. The sync store's admission gate backs this
 // ordering: its debounced cursor write waits for waitForAdmissions(), so a
 // retrying append that holds the admission tail past the debounce can no
-// longer let the cursor outrun a still-unjournaled event, and a permanently
-// failed append freezes the cursor behind that event for redelivery after
-// restart. Tombstones land only after dispatch adopts or finishes, and the
+// longer let the cursor outrun a still-unjournaled event, and an append
+// whose retries exhaust is parked and retried on later drain polls while
+// the cursor stays frozen behind it — so a transient SQLite lock recovers
+// without a restart, and a genuinely dead journal still redelivers after
+// one. Tombstones land only after dispatch adopts or finishes, and the
 // persistent inbound deduper skips events already fully handled, so
 // redelivery after an unclean shutdown stays exactly-once.
 import {
@@ -306,6 +308,7 @@ export function createMatrixIngressMonitor(options: {
 
   const requestDrain = (): void => {
     requested = true;
+    scheduleAdmissionRetry();
     if (!running || pumping) {
       return;
     }
@@ -315,10 +318,74 @@ export function createMatrixIngressMonitor(options: {
   // Serialize admissions so a retry-backed-off append cannot invert room
   // arrival order in the queue (order over latency).
   let admissionTail: Promise<void> = Promise.resolve();
-  // Sticky once a journal append exhausts its retries: the sync-token store
-  // refuses to advance the durable cursor past the dropped event, so a
-  // restart redelivers it instead of skipping it permanently.
+  // A journal append that exhausts its live retries is parked here and
+  // retried on later drain polls until it lands. While any admission stays
+  // parked the sync-token store refuses to advance the durable cursor past
+  // it, so the event is never skipped — and the cursor unfreezes as soon as
+  // the journal append succeeds again instead of needing a restart.
+  const parkedAdmissions: Array<{
+    roomId: string;
+    event: MatrixRawEvent;
+    facts: { eventId: string; laneKey: string };
+    receivedAt: number;
+  }> = [];
   let admissionFailure: unknown = null;
+
+  const journalEvent = async (admission: {
+    roomId: string;
+    event: MatrixRawEvent;
+    facts: { eventId: string; laneKey: string };
+    receivedAt: number;
+  }): Promise<void> => {
+    await getQueue().enqueue(
+      admission.facts.eventId,
+      {
+        version: MATRIX_INGRESS_PAYLOAD_VERSION,
+        receivedAt: admission.receivedAt,
+        roomId: admission.roomId.trim(),
+        rawEvent: admission.event,
+      },
+      { receivedAt: admission.receivedAt, laneKey: admission.facts.laneKey },
+    );
+  };
+
+  // Single attempts only: the live retry budget already ran for these rows.
+  // Stop at the first failure so room arrival order cannot invert.
+  const retryParkedAdmissions = async (): Promise<void> => {
+    for (;;) {
+      const next = parkedAdmissions[0];
+      if (!next) {
+        admissionFailure = null;
+        requestDrain();
+        return;
+      }
+      try {
+        await journalEvent(next);
+        parkedAdmissions.shift();
+      } catch (error) {
+        admissionFailure = error;
+        return;
+      }
+    }
+  };
+
+  // The drain poll timer drives recovery while the cursor stays frozen, so a
+  // transient SQLite lock no longer turns into a process-lifetime block.
+  let admissionRetryScheduled = false;
+  const scheduleAdmissionRetry = (): void => {
+    if (admissionRetryScheduled || parkedAdmissions.length === 0) {
+      return;
+    }
+    admissionRetryScheduled = true;
+    const retry = admissionTail.then(async () => {
+      try {
+        await retryParkedAdmissions();
+      } finally {
+        admissionRetryScheduled = false;
+      }
+    });
+    admissionTail = retry.catch(() => undefined);
+  };
 
   const admitOnce = async (roomId: string, event: MatrixRawEvent): Promise<void> => {
     const facts = inspectMatrixIngressEvent(roomId, event);
@@ -326,11 +393,12 @@ export function createMatrixIngressMonitor(options: {
       options.onUnjournaledEvent(roomId, event);
       return;
     }
-    const receivedAt = Date.now();
     // The journal shares the state DB with the sync-token store: a dropped
     // append means the token persist fails too, so the homeserver redelivers
-    // after restart. Retry transient failures, then drop loudly rather than
-    // dispatching live around the drain's dedupe and lane serialization.
+    // after restart. Retry transient failures, then park for poll-driven
+    // retries rather than dispatching live around the drain's dedupe and
+    // lane serialization.
+    const admission = { roomId, event, facts, receivedAt: Date.now() };
     let lastError: unknown;
     for (const delayMs of [0, 100, 300]) {
       if (delayMs > 0) {
@@ -339,16 +407,7 @@ export function createMatrixIngressMonitor(options: {
         });
       }
       try {
-        await getQueue().enqueue(
-          facts.eventId,
-          {
-            version: MATRIX_INGRESS_PAYLOAD_VERSION,
-            receivedAt,
-            roomId: roomId.trim(),
-            rawEvent: event,
-          },
-          { receivedAt, laneKey: facts.laneKey },
-        );
+        await journalEvent(admission);
         requestDrain();
         return;
       } catch (error) {
@@ -358,12 +417,18 @@ export function createMatrixIngressMonitor(options: {
     options.runtime.error?.(
       `matrix ingress: failed to durably journal inbound event room=${roomId} id=${facts.eventId}: ${formatErrorMessage(lastError)}`,
     );
+    parkedAdmissions.push(admission);
     admissionFailure = lastError;
+    scheduleAdmissionRetry();
   };
 
   return {
     accept: (roomId, event) => {
-      const admission = admissionTail.then(() => admitOnce(roomId, event));
+      // Parked retries run first so a recovered queue cannot append a later
+      // event ahead of an earlier parked one.
+      const admission = admissionTail
+        .then(() => retryParkedAdmissions())
+        .then(() => admitOnce(roomId, event));
       admissionTail = admission.catch(() => undefined);
       return admission;
     },

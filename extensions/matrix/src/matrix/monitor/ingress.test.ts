@@ -123,7 +123,7 @@ describe("Matrix durable ingress", () => {
     });
   });
 
-  it("records a sticky admission failure after journal retries exhaust", async () => {
+  it("records an admission failure after journal retries exhaust", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async () => {});
       const monitor = createMonitor({ queue, dispatch });
@@ -134,6 +134,35 @@ describe("Matrix durable ingress", () => {
         // The wait itself still settles: the gate pairs it with the failure
         // signal to freeze the cursor instead of blocking forever.
         await monitor.waitForAdmissions();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("retries a parked admission on the drain poll and clears the failure gate", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(
+        async (_roomId: string, _event: MatrixRawEvent, _lifecycle: MatrixIngressLifecycle) => {},
+      );
+      const monitor = createMonitor({ queue, dispatch, pollIntervalMs: 10 });
+      try {
+        const enqueueSpy = vi
+          .spyOn(queue, "enqueue")
+          .mockRejectedValue(new Error("transient sqlite busy"));
+        await monitor.accept("!room:example.org", createRawEvent("$evt-parked"));
+        expect(monitor.getAdmissionFailure()).toBeInstanceOf(Error);
+        expect(await queue.listPending({ limit: 10 })).toEqual([]);
+
+        // The queue recovers without a restart: the next drain poll must
+        // retry the parked admission, journal it, and lift the cursor gate.
+        enqueueSpy.mockRestore();
+        monitor.start();
+        await vi.waitFor(() => {
+          expect(monitor.getAdmissionFailure()).toBe(null);
+        });
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[1]?.event_id).toBe("$evt-parked");
       } finally {
         await monitor.stop();
       }
