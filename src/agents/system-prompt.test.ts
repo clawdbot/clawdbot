@@ -2007,6 +2007,8 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("cannot spawn");
     expect(prompt).toContain("spawned by parent orchestrator");
     expect(prompt).toContain("auto-reported to parent orchestrator");
+    expect(prompt).toContain("No descendants: return your result directly");
+    expect(prompt).not.toContain("sessions_yield");
   });
 
   it("omits spawning guidance for depth-1 leaf agents", () => {
@@ -2035,6 +2037,8 @@ describe("buildSubagentSystemPrompt", () => {
       const prompt = buildSubagentSystemPrompt(testCase.input);
       expect(prompt, testCase.name).not.toContain("## Sub-Agent Spawning");
       expect(prompt, testCase.name).not.toContain("May `sessions_spawn`");
+      expect(prompt, testCase.name).toContain("No descendants: return your result directly");
+      expect(prompt, testCase.name).not.toContain("sessions_yield");
       if (testCase.expectMainAgentLabel) {
         expect(prompt, testCase.name).toContain("spawned by main agent");
       }

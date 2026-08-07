@@ -70,6 +70,7 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "sessions_history",
   "sessions_search",
   "sessions_spawn",
+  "sessions_yield",
 ];
 
 function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {

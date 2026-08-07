@@ -308,9 +308,62 @@ describe("resolveSubagentToolPolicyForSession", () => {
 
     const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_yield", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
+  });
+
+  it("keeps sessions_yield for orchestrator subagents", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-policy-orchestrator");
+    await writeSessionEntries(storePath, {
+      "agent:main:subagent:orchestrator": {
+        sessionId: "orchestrator",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+      },
+    });
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:orchestrator");
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("sessions_yield", policy)).toBe(true);
+  });
+
+  it("honors an explicit sessions_yield allow for leaf subagents", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-policy-leaf-override");
+    await writeSessionEntries(storePath, {
+      "agent:main:subagent:leaf-override": {
+        sessionId: "leaf-override",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+    });
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+      tools: {
+        subagents: {
+          tools: {
+            alsoAllow: ["sessions_yield"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:leaf-override");
+    expect(isToolAllowedByPolicyName("sessions_yield", policy)).toBe(true);
   });
 
   it("resolves inherited tool denies from stored subagent sessions", async () => {
