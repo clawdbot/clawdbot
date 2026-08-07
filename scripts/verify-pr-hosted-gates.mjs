@@ -174,8 +174,10 @@ function matchingAuthoritativeRuns(runs, workflowName, sha, allowManual = true) 
 }
 
 function latestRun(runs) {
-  return runs.toSorted((left, right) =>
-    String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? "")),
+  // GitHub run_number is creation order; updated_at moves as jobs finish.
+  return runs.toSorted(
+    (left, right) =>
+      Number(right.run_number ?? right.id ?? 0) - Number(left.run_number ?? left.id ?? 0),
   )[0];
 }
 
@@ -370,18 +372,23 @@ function isGateProvenInProgressRun(run, ciGateJobs, nowMs) {
 function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
-  const latestCompletedScheduledRun = latestRun(
-    scheduledRuns.filter((run) => run.status === "completed"),
+  const latestDecision = latestRun(
+    scheduledRuns.filter(
+      (run) => run.status === "completed" && !["cancelled", "skipped"].includes(run.conclusion),
+    ),
   );
   const latestManualRun = latestRun(runs.filter((run) => run.event === "workflow_dispatch"));
 
   // Manual proof may replace stale scheduled success or a pending run,
   // never an unresolved terminal non-success.
-  if (latestCompletedScheduledRun && latestCompletedScheduledRun.conclusion !== "success") {
-    return latestCompletedScheduledRun;
+  if (latestDecision && latestDecision.conclusion !== "success") {
+    return latestDecision;
   }
-  if (latestScheduledRun?.status === "completed" && isRecentRun(latestScheduledRun, nowMs)) {
-    return latestScheduledRun;
+  if (latestScheduledRun && latestScheduledRun.status !== "completed") {
+    return latestRun([latestScheduledRun, latestManualRun].filter(Boolean));
+  }
+  if (latestScheduledRun?.status === "completed" && isSuccessfulRecentRun(latestDecision, nowMs)) {
+    return latestDecision;
   }
   return latestManualRun ?? latestScheduledRun;
 }
