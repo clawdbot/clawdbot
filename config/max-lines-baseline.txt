@@ -900,7 +900,6 @@ src/secrets/runtime-web-tools.ts
 src/security/audit-extra.async.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
-src/security/install-policy.ts
 src/sessions/session-state-events.ts
 src/shared/json-schema-defaults.ts
 src/shared/text/assistant-visible-text.ts

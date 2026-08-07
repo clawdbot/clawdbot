@@ -1514,7 +1514,6 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps extensionless helper script edits on owner tests", () => {
     const expectedTargets = Object.entries({
-      "scripts/committer": ["test/scripts/committer.test.ts"],
       "scripts/gh-read": ["test/scripts/gh-read.test.ts"],
       "scripts/pr": [
         "test/scripts/pr-merge.test.ts",
@@ -3933,7 +3932,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
         [
           {
             config: "test/vitest/vitest.tooling.config.ts",
-            includePatterns: ["test/scripts/committer.test.ts"],
+            includePatterns: ["test/scripts/gh-read.test.ts"],
             watchMode: false,
           },
         ],
@@ -3981,7 +3980,7 @@ describe("scripts/test-projects local heavy-check lock", () => {
         [
           {
             config: "test/vitest/vitest.tooling.config.ts",
-            includePatterns: ["test/scripts/committer.test.ts"],
+            includePatterns: ["test/scripts/gh-read.test.ts"],
             watchMode: false,
           },
         ],
