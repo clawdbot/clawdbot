@@ -14,7 +14,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { createUsageRetry } from "../../lib/incomplete-usage-retry.ts";
+import { createUsageRetry, isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -140,13 +140,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
             signal,
           }).then((data) => ({ client, data }))
         : initialState,
-    onComplete: ({ client, data }) => {
-      this.data = data;
-      this.dataClient = client;
-      // Plan, quota, and billing cards come from usage.status. A cold response carries
-      // no providers, so without this retry they stay absent until a manual reload.
-      this.usageRetry.observe(data.providerUsage?.refreshing === true);
-    },
+    onComplete: ({ client, data }) => this.applyLoadedData(data, client),
   });
   private readonly usageRetry = createUsageRetry(this, () => void this.refresh({ force: false }));
   private readonly subscriptions = new SubscriptionsController(this)
@@ -187,14 +181,26 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (changed.has("routeData") && this.routeData) {
       const selectedAgentId = this.resolveSelectedAgentId();
       this.setSelectedAgent(selectedAgentId);
-      if (this.routeData.agentId === selectedAgentId) {
-        this.data = this.routeData.data;
-        this.dataClient = this.routeData.client;
-      } else {
-        this.data = null;
-        this.dataClient = null;
-      }
+      const matches = this.routeData.agentId === selectedAgentId;
+      this.applyLoadedData(
+        matches ? this.routeData.data : null,
+        matches ? this.routeData.client : null,
+      );
     }
+  }
+
+  /**
+   * Single landing point for loaded data, from the router preload and from the page's
+   * own refresh. Plan, quota, and billing cards come from usage.status, whose cold
+   * response carries no providers; arming the retry here is what keeps the router
+   * path — the normal way in — from parking on an incomplete payload. A failed
+   * usage.status arrives as null instead, which ends the retry chain: this page has
+   * no TTL or focus refresh, so those cards stay empty until an operator refresh.
+   */
+  private applyLoadedData(data: ModelProvidersData | null, client: GatewayBrowserClient | null) {
+    this.data = data;
+    this.dataClient = client;
+    this.usageRetry.observe(data !== null && isUsageIncomplete(data.providerUsage), client);
   }
 
   override updated() {
@@ -221,6 +227,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private resetClientState(client: GatewayBrowserClient | null) {
     this.observedClient = client;
     this.clientEpoch += 1;
+    // Rekey before the replacement finishes loading: an in-flight timer from the old
+    // connection would otherwise fire against the new one and restart its load.
+    this.usageRetry.useConnection(client);
     void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.busy = {};
     this.messages = {};

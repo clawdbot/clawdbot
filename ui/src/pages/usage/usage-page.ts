@@ -24,6 +24,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import {
   buildSessionUsageDateParams,
   requestSessionUsage,
@@ -216,7 +217,7 @@ class UsagePage extends OpenClawLightDomElement {
       this.providerUsageSummary = value.providerUsageSummary;
       this.usageError = null;
       this.refreshPolicy.markLoaded({
-        pendingRefresh: value.providerUsageSummary?.refreshing === true,
+        incomplete: isUsageIncomplete(value.providerUsageSummary),
       });
       this.refreshPolicy.flushPending();
     },
@@ -340,7 +341,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageCostSummary = data.costSummary;
     this.providerUsageSummary = data.providerUsageSummary;
     this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs, {
-      pendingRefresh: data.providerUsageSummary?.refreshing === true,
+      incomplete: isUsageIncomplete(data.providerUsageSummary),
     });
     this.usageError = data.error;
   }

@@ -58,7 +58,7 @@ describe("UsageRefreshPolicy", () => {
 
   it("refetches a payload the Gateway marked as still refreshing", () => {
     const { policy, reload } = createPolicy();
-    policy.markLoaded({ pendingRefresh: true });
+    policy.markLoaded({ incomplete: true });
 
     // The incomplete payload must not start the TTL, or every automatic refresh skips.
     policy.request("focus");
@@ -68,29 +68,34 @@ describe("UsageRefreshPolicy", () => {
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
-  it("gives up retrying when the payload never completes", () => {
+  it("stops retrying but keeps the TTL cold while the payload stays incomplete", () => {
     const { policy, reload } = createPolicy();
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      policy.markLoaded({ pendingRefresh: true });
+      policy.markLoaded({ incomplete: true });
       vi.advanceTimersByTime(5_000);
     }
 
-    // Three retries, then the normal TTL takes over instead of polling forever.
+    // Three timers, then no more automatic retries.
     expect(reload).toHaveBeenCalledTimes(3);
+
+    // Exhausting the timers must not mark the payload complete: the data never
+    // arrived, so focus/reconnect/manual refreshes still have to fetch it.
     policy.request("poll");
-    expect(reload).toHaveBeenCalledTimes(3);
+    expect(reload).toHaveBeenCalledTimes(4);
+    policy.request("focus");
+    expect(reload).toHaveBeenCalledTimes(5);
   });
 
   it("stops retrying once a complete payload lands and after disposal", () => {
     const { policy, reload } = createPolicy();
-    policy.markLoaded({ pendingRefresh: true });
+    policy.markLoaded({ incomplete: true });
     policy.markLoaded();
 
     vi.advanceTimersByTime(5_000);
     expect(reload).not.toHaveBeenCalled();
 
-    policy.markLoaded({ pendingRefresh: true });
+    policy.markLoaded({ incomplete: true });
     policy.dispose();
     vi.advanceTimersByTime(5_000);
     expect(reload).not.toHaveBeenCalled();

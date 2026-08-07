@@ -47,12 +47,12 @@ export class UsageRefreshPolicy {
 
   constructor(private readonly options: UsageRefreshPolicyOptions) {}
 
-  setLastLoadedAtMs(value: number | null, params?: { pendingRefresh?: boolean }): void {
-    this.applyLoadState(value, params?.pendingRefresh === true);
+  setLastLoadedAtMs(value: number | null, params?: { incomplete?: boolean }): void {
+    this.applyLoadState(value, params?.incomplete === true);
   }
 
-  markLoaded(params?: { pendingRefresh?: boolean }): void {
-    this.applyLoadState(Date.now(), params?.pendingRefresh === true);
+  markLoaded(params?: { incomplete?: boolean }): void {
+    this.applyLoadState(Date.now(), params?.incomplete === true);
   }
 
   resetPayload(): void {
@@ -65,10 +65,11 @@ export class UsageRefreshPolicy {
     this.incompleteUsageRetry.dispose();
   }
 
-  private applyLoadState(loadedAtMs: number | null, pendingRefresh: boolean): void {
-    // While a retry is pending the payload must not start the TTL, or the incomplete
-    // view survives every automatic refresh until the window expires.
-    this.lastLoadedAtMs = this.incompleteUsageRetry.observe(pendingRefresh) ? null : loadedAtMs;
+  private applyLoadState(loadedAtMs: number | null, incomplete: boolean): void {
+    // An incomplete payload never starts the TTL, whether or not retries remain: the
+    // view is missing provider usage either way, so focus, reconnect, and poll must
+    // still fetch instead of skipping on a fresh-looking timestamp.
+    this.lastLoadedAtMs = this.incompleteUsageRetry.observe(incomplete) ? null : loadedAtMs;
   }
 
   interrupt(): void {
