@@ -72,10 +72,11 @@ describe("engine/group/mention", () => {
         mentionPatterns: ["(b+)+$", "[invalid", "@safe"],
       });
       expect(debugWarn).toHaveBeenCalledTimes(2);
-      expect(debugWarn.mock.calls[0]?.[0]).toContain("unsafe-nested-repetition");
-      expect(debugWarn.mock.calls[0]?.[0]).toMatch(/\(b\+\)\+\$/);
-      expect(debugWarn.mock.calls[1]?.[0]).toContain("invalid-regex");
-      expect(debugWarn.mock.calls[1]?.[0]).toMatch(/\[invalid/);
+      const debugWarnMock = vi.mocked(debugWarn);
+      expect(debugWarnMock.mock.calls[0]?.[0]).toContain("unsafe-nested-repetition");
+      expect(debugWarnMock.mock.calls[0]?.[0]).toMatch(/\(b\+\)\+\$/);
+      expect(debugWarnMock.mock.calls[1]?.[0]).toContain("invalid-regex");
+      expect(debugWarnMock.mock.calls[1]?.[0]).toMatch(/\[invalid/);
     });
 
     it("does not re-warn rejected mentionPatterns on every message", async () => {
@@ -89,7 +90,8 @@ describe("engine/group/mention", () => {
       detectWasMentioned(input);
 
       expect(debugWarn).toHaveBeenCalledTimes(1);
-      expect(debugWarn.mock.calls[0]?.[0]).toMatch(/\(c\+\)\+\$/);
+      const debugWarnMock = vi.mocked(debugWarn);
+      expect(debugWarnMock.mock.calls[0]?.[0]).toMatch(/\(c\+\)\+\$/);
     });
 
     it("matches case-insensitively", () => {
