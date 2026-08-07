@@ -10,6 +10,8 @@ import "./usage-page.ts";
 
 type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
+  providerUsageUnavailable: boolean;
+  usageError: string | null;
   usageSelectedSessions: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
@@ -75,6 +77,68 @@ async function createPage(client: GatewayBrowserClient): Promise<TestUsagePage> 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+describe("UsagePage provider usage flag", () => {
+  it("clears a stale provider failure flag when a later aggregate load fails", async () => {
+    let phase = 1;
+    const request = vi.fn(async (method: string): Promise<unknown> => {
+      if (method === "usage.status") {
+        if (phase === 1) {
+          throw new Error("provider usage unreachable");
+        }
+        return { updatedAt: 2, providers: [] };
+      }
+      if (method === "usage.cost") {
+        if (phase === 2) {
+          throw new Error("cost unavailable");
+        }
+        return { daily: [] };
+      }
+      return { sessions: [], totals: null };
+    });
+    const page = document.createElement("openclaw-usage-page") as TestUsagePage;
+    page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
+    page.render = () => nothing;
+    document.body.append(page);
+    await page.updateComplete;
+    page.routeData = {
+      gateway: page.context.gateway,
+      gatewaySnapshot: page.context.gateway.snapshot,
+      query: {
+        startDate: "2026-08-07",
+        endDate: "2026-08-07",
+        scope: "family",
+        timeZone: "local",
+        agentId: null,
+      },
+      result: null,
+      costSummary: null,
+      providerUsageSummary: null,
+      providerUsageUnavailable: false,
+      loadedAtMs: null,
+      error: null,
+    };
+    await page.updateComplete;
+
+    // First load: only usage.status fails; the notice flag records the failure.
+    const refresh = () => {
+      (page as unknown as { refreshPolicy: { reload: () => void } }).refreshPolicy.reload();
+    };
+    refresh();
+    await vi.waitFor(() => {
+      expect(page.providerUsageUnavailable).toBe(true);
+    });
+
+    // Second load: usage.status succeeds but the aggregate fails on usage.cost.
+    // The stale flag must not keep claiming the last provider request failed.
+    phase = 2;
+    refresh();
+    await vi.waitFor(() => {
+      expect(page.usageError).not.toBeNull();
+    });
+    expect(page.providerUsageUnavailable).toBe(false);
+  });
 });
 
 describe("UsagePage detail requests", () => {

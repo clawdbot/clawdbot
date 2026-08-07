@@ -228,6 +228,10 @@ class UsagePage extends OpenClawLightDomElement {
     },
     onError: (error) => {
       this.usageTaskActiveClient = null;
+      // Per-attempt state: a failed aggregate load says nothing about provider
+      // usage, so a stale flag from an earlier attempt must not keep claiming
+      // the last provider request failed.
+      this.providerUsageUnavailable = false;
       if (isMissingOperatorReadScopeError(error)) {
         this.usageResult = null;
         this.usageCostSummary = null;
