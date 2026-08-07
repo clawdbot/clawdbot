@@ -253,7 +253,7 @@ every human `Thanks @...` attribution.
   generated checks are explicitly skipped
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
-- commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
+- stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
 - record the new commit as the Release SHA and require
   `git diff --name-only <code-sha>..<release-sha>` to print only
   `CHANGELOG.md`
