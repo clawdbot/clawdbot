@@ -928,70 +928,68 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).not.toContain("`run python3");
   });
 
-  it("prefers raw exec metadata when tool progress detail includes it", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
+  it.each([
+    {
+      title: "prefers raw exec metadata when tool progress detail includes it",
+      meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
       toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("prefers raw exec metadata when the literal command contains backticks", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
+      expected: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)",
+    },
+    {
+      title: "prefers raw exec metadata when the literal command contains backticks",
+      meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
       toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("leaves exec metadata unwrapped for plain tool results", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
+      expected: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)",
+    },
+    {
+      title: "leaves exec metadata unwrapped for plain tool results",
+      meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
       toolResultFormat: "plain",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)' (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("preserves raw exec context before trailing raw command metadata", () => {
+      expected: "⚠️ 🛠️ Exec failed: node -e 'console.log(1, `x`)' (exit 1)",
+    },
+    {
+      title: "preserves raw exec context before trailing raw command metadata",
+      meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+      toolResultFormat: "markdown",
+      expected: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
+    },
+    {
+      title: "does not promote display-summary commas into raw exec context",
+      meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
+      toolResultFormat: "markdown",
+      expected: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src` (exit 1)',
+    },
+    {
+      title: "does not treat parenthesized raw command arguments as cwd context",
+      meta: 'list files in (in progress) · `ls "(in progress)"`',
+      toolResultFormat: "markdown",
+      expected: '⚠️ 🛠️ Exec failed: `ls "(in progress)"` (exit 1)',
+    },
+    {
+      title: "does not duplicate compact cwd labels already present in raw command arguments",
+      meta: 'print text (repo) · `printf "%s" "(repo)"`',
+      toolResultFormat: "markdown",
+      expected: '⚠️ 🛠️ Exec failed: `printf "%s" "(repo)"` (exit 1)',
+    },
+    {
+      title: "keeps arbitrary exec cwd suffixes inside markdown command text",
+      meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
+      toolResultFormat: "markdown",
+      expected: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)` (exit 1)",
+    },
+  ] as const)("$title", ({ meta, toolResultFormat, expected }) => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
-        meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+        meta,
         error: "Command exited with code 1",
         mutatingAction: true,
       },
-      toolResultFormat: "markdown",
+      toolResultFormat,
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
+      text: expected,
       isError: true,
     });
   });
@@ -1035,57 +1033,6 @@ describe("buildEmbeddedRunPayloads", () => {
     });
     expectSinglePayloadSummary(semanticCompactPayloads, {
       text: "⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("does not promote display-summary commas into raw exec context", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("does not treat parenthesized raw command arguments as cwd context", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'list files in (in progress) · `ls "(in progress)"`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `ls "(in progress)"` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("does not duplicate compact cwd labels already present in raw command arguments", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'print text (repo) · `printf "%s" "(repo)"`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `printf "%s" "(repo)"` (exit 1)',
       isError: true,
     });
   });
@@ -1151,23 +1098,6 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, { text: expected, isError: true });
-  });
-
-  it("keeps arbitrary exec cwd suffixes inside markdown command text", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)` (exit 1)",
-      isError: true,
-    });
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {

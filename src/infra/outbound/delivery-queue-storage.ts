@@ -12,6 +12,7 @@ import {
   claimDeliveryQueueEntryPlatformSend,
   promoteDeliveryQueueEntryPlatformSend,
   transitionOwnedDeliveryQueueEntry,
+  type InitialDeliveryProducerClaim,
 } from "../delivery-queue-sqlite-claim.js";
 import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespaces,
@@ -86,7 +87,7 @@ export type QueuedDeliveryPayload = {
   queuePolicy?: "required" | "best_effort";
   /** Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
-  /** Reusable producer intents require one SQLite-fenced platform owner. */
+  /** Live producers that cross provider I/O require one SQLite-fenced platform owner. */
   requiresProducerClaim?: boolean;
   /** Canonical post-policy payloads; recovery must never rerun modifiers. */
   preparedBatch?: PreparedOutboundBatch;
@@ -184,7 +185,11 @@ function preparedBatchFromLowLevelInput(params: QueuedDeliveryPayload): Prepared
   return createUnmodifiedPreparedOutboundBatch(params.payloads);
 }
 
-function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): QueuedDelivery {
+type QueuedDeliveryAdmissionPayload = QueuedDeliveryPayload & {
+  initialProducerClaim?: InitialDeliveryProducerClaim;
+};
+
+function createQueuedDelivery(params: QueuedDeliveryAdmissionPayload, id: string): QueuedDelivery {
   return {
     id,
     enqueuedAt: Date.now(),
@@ -193,7 +198,8 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     accountId: params.accountId,
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
-    ...(params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {}),
+    ...(params.initialProducerClaim ??
+      (params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {})),
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
@@ -219,13 +225,12 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
   };
 }
 
-function getQueuedDeliveryPayloads(entry: QueuedDelivery): ReplyPayload[] {
-  return acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
-}
+const getQueuedDeliveryPayloads = (entry: QueuedDelivery) =>
+  acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
 
 /** Persist a delivery entry before attempting send. Returns the entry ID. */
 export async function enqueueDelivery(
-  params: QueuedDeliveryPayload,
+  params: QueuedDeliveryAdmissionPayload,
   stateDir?: string,
   mediaStageId?: string,
 ): Promise<string> {
@@ -254,7 +259,7 @@ export async function enqueueDelivery(
 
 /** Inserts one stable queue id without replacing prior pending or completed ownership. */
 export async function enqueueDeliveryOnce(
-  params: QueuedDeliveryPayload,
+  params: QueuedDeliveryAdmissionPayload,
   id: string,
   stateDir?: string,
   mediaStageId?: string,
@@ -300,7 +305,7 @@ export async function enqueueDeliveryOnce(
 
 /** Atomically replaces a payload-free stable preparation owner with prepared custody. */
 export async function enqueuePreparedDeliveryOnce(
-  params: QueuedDeliveryPayload,
+  params: QueuedDeliveryAdmissionPayload,
   id: string,
   preparation: StableDeliveryPreparation,
   stateDir?: string,
@@ -357,9 +362,7 @@ type AckDeliveryOptions = {
   expectedPlatformSendAttemptId?: string | null;
 };
 
-function lostPlatformClaim(id: string): Error {
-  return new Error(`Stable delivery platform claim was lost: ${id}`);
-}
+const lostPlatformClaim = (id: string) => new Error(`Delivery platform claim was lost: ${id}`);
 
 /** Remove a successfully delivered entry, or retain its producer-owned receipt. */
 export async function ackDelivery(
@@ -419,6 +422,11 @@ export async function failDelivery(
       retryCount: entry.retryCount + 1,
       lastAttemptAt: Date.now(),
       lastError: error,
+      // The failed attempt has settled. Keep platform evidence for recovery,
+      // but release the live owner so another process can reconcile or retry.
+      availableAt: undefined,
+      producerClaimId: undefined,
+      recoveryState: entry.recoveryState === "producer_claimed" ? undefined : entry.recoveryState,
     }),
     expectedPlatformSendAttemptId,
   );
@@ -551,7 +559,7 @@ export async function markDeliveryPlatformSendAttemptStarted(
       route,
     });
     if (!promoted) {
-      throw new Error(`Stable delivery platform claim was lost: ${id}`);
+      throw new Error(`Delivery platform claim was lost: ${id}`);
     }
     return;
   }
@@ -599,8 +607,8 @@ export async function markDeliveryPlatformOutcomeUnknown(
     stateDir,
     (entry) => ({
       ...entry,
-      // An explicit stable producer keeps its exact lease through the
-      // ambiguous outcome so recovery cannot race its remaining cleanup.
+      // An explicit live producer keeps its exact lease through the ambiguous
+      // outcome so recovery cannot race its remaining cleanup.
       availableAt:
         expectedPlatformSendAttemptId &&
         entry.requiresProducerClaim === true &&
@@ -616,16 +624,11 @@ export async function markDeliveryPlatformOutcomeUnknown(
 }
 
 /** Load a single pending delivery entry by ID from the queue directory. */
-export async function loadPendingDelivery(
+export const loadPendingDelivery = async (
   id: string,
   stateDir?: string,
-): Promise<QueuedDelivery | null> {
-  return loadDeliveryQueueEntry(
-    OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-  ) as QueuedDelivery | null;
-}
+): Promise<QueuedDelivery | null> =>
+  loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir) as QueuedDelivery | null;
 
 export function findDeliveryIntentOwner(
   id: string,

@@ -81,7 +81,6 @@ export async function prepareReplyAgentPayloads(state: {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,
@@ -483,13 +482,14 @@ export async function prepareReplyAgentPayloads(state: {
 
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
+  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(diagnosticUsage)) {
+    const input = diagnosticUsage.input ?? 0;
+    const output = diagnosticUsage.output ?? 0;
+    const cacheRead = diagnosticUsage.cacheRead ?? 0;
+    const cacheWrite = diagnosticUsage.cacheWrite ?? 0;
     const usagePromptTokens = input + cacheRead + cacheWrite;
-    const totalTokens = usage.total ?? usagePromptTokens + output;
+    const totalTokens = diagnosticUsage.total ?? usagePromptTokens + output;
     const contextUsedTokens = deriveContextPromptTokens({
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
@@ -500,8 +500,13 @@ export async function prepareReplyAgentPayloads(state: {
       model: modelUsed,
       config: cfg,
     });
-    const costUsd = hasBillableUsageBuckets
-      ? estimateUsageCost({ usage, cost: costConfig })
+    const hasDiagnosticBillableUsageBuckets =
+      diagnosticUsage.input !== undefined ||
+      diagnosticUsage.output !== undefined ||
+      diagnosticUsage.cacheRead !== undefined ||
+      diagnosticUsage.cacheWrite !== undefined;
+    const costUsd = hasDiagnosticBillableUsageBuckets
+      ? estimateUsageCost({ usage: diagnosticUsage, cost: costConfig })
       : undefined;
     emitTrustedDiagnosticEvent({
       type: "model.usage",

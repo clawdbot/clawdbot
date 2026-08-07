@@ -1356,6 +1356,9 @@ export async function runPreparedCliAgent(
           ...preparedContextAgentMeta,
           usage: resultParams.output.usage,
           ...(resultParams.output.usage ? { lastCallUsage: resultParams.output.usage } : {}),
+          ...(resultParams.output.diagnosticUsage
+            ? { diagnosticUsage: resultParams.output.diagnosticUsage }
+            : {}),
           ...(persistedCliSessionId
             ? {
                 cliSessionBinding: {

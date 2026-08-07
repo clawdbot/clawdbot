@@ -73,6 +73,14 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const request = params.params as AgentRunRequest;
+  if (!request.idempotencyKey.trim()) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "idempotencyKey must not be blank"),
+    );
+    return undefined;
+  }
   const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const requestSessionKey = request.sessionKey?.trim();
@@ -270,7 +278,7 @@ export function prepareAgentRequestPreflight(
     if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
       const cachedRunId =
         typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-          ? cached.payload.runId.trim()
+          ? cached.payload.runId
           : runId;
       const cachedSessionKey =
         typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
