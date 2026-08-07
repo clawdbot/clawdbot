@@ -16,6 +16,10 @@ function createHost() {
   };
 }
 
+function createCacheContext() {
+  return { host: createHost(), cache: new Map() as ChatMessageCache };
+}
+
 function cacheChatMessages(
   cache: ChatMessageCache,
   host: Parameters<typeof cacheChatSessionSnapshot>[1],
@@ -29,10 +33,17 @@ function cacheChatMessages(
   });
 }
 
+function cacheHomeSnapshot(
+  cache: ChatMessageCache,
+  host: Parameters<typeof cacheChatSessionSnapshot>[1],
+  snapshot: Parameters<typeof cacheChatSessionSnapshot>[3],
+): void {
+  cacheChatSessionSnapshot(cache, host, { sessionKey: "home" }, snapshot);
+}
+
 describe("session message cache", () => {
   it("canonicalizes main aliases without crossing agent scopes", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
 
     cacheChatMessages(cache, host, { sessionKey: "home" }, ["ops"]);
 
@@ -73,8 +84,7 @@ describe("session message cache", () => {
   ])(
     "keeps case-distinct $name in separate transcript caches",
     ({ sessionKey, canonicalKey, distinctKey }) => {
-      const host = createHost();
-      const cache: ChatMessageCache = new Map();
+      const { host, cache } = createCacheContext();
 
       cacheChatMessages(cache, host, { sessionKey }, ["first session"]);
       cacheChatMessages(cache, host, { sessionKey: distinctKey }, ["second session"]);
@@ -123,8 +133,7 @@ describe("session message cache", () => {
   });
 
   it("keeps only the 20 most recently used sessions", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
     for (let index = 0; index < 20; index += 1) {
       cacheChatMessages(cache, host, { sessionKey: `agent:ops:session-${index}` }, [index]);
     }
@@ -140,18 +149,12 @@ describe("session message cache", () => {
   });
 
   it("restores messages, pagination, and backing session identity together", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: ["oldest", "latest"],
-        pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
-        sessionId: "session-1",
-      },
-    );
+    const { host, cache } = createCacheContext();
+    cacheHomeSnapshot(cache, host, {
+      messages: ["oldest", "latest"],
+      pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
+      sessionId: "session-1",
+    });
 
     expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })).toEqual({
       messages: ["oldest", "latest"],
@@ -161,18 +164,12 @@ describe("session message cache", () => {
   });
 
   it("appends an inactive-session message without losing snapshot metadata", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: ["oldest"],
-        pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
-        sessionId: "session-1",
-      },
-    );
+    const { host, cache } = createCacheContext();
+    cacheHomeSnapshot(cache, host, {
+      messages: ["oldest"],
+      pagination: { hasMore: true, nextOffset: 400, totalMessages: 718 },
+      sessionId: "session-1",
+    });
 
     appendChatMessageToCache(cache, host, { sessionKey: "home" }, "latest");
 
@@ -184,37 +181,26 @@ describe("session message cache", () => {
   });
 
   it("keeps deeper same-session history when another pane saves only the latest tail", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
     const retained = Array.from({ length: 140 }, (_, index) => ({
       content: `retained-${index + 1}`,
       __openclaw: { seq: index + 1 },
     }));
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: retained,
-        pagination: { hasMore: false, totalMessages: 140 },
-        sessionId: "session-1",
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: retained,
+      pagination: { hasMore: false, totalMessages: 140 },
+      sessionId: "session-1",
+    });
     const refreshedTail = Array.from({ length: 40 }, (_, index) => ({
       content: `fresh-${index + 101}`,
       __openclaw: { seq: index + 101 },
     }));
 
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: refreshedTail,
-        pagination: { hasMore: true, nextOffset: 40, totalMessages: 140 },
-        sessionId: "session-1",
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: refreshedTail,
+      pagination: { hasMore: true, nextOffset: 40, totalMessages: 140 },
+      sessionId: "session-1",
+    });
 
     const snapshot = readChatSessionSnapshot(cache, host, { sessionKey: "home" });
     expect(snapshot?.messages).toHaveLength(140);
@@ -224,33 +210,22 @@ describe("session message cache", () => {
   });
 
   it("keeps the newer same-depth snapshot when a stale pane saves later", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
     const current = [1, 2, 3].map((seq) => ({
       content: `current-${seq}`,
       __openclaw: { seq },
     }));
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: current,
-        pagination: { hasMore: false, totalMessages: 3 },
-        sessionId: "session-1",
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: current,
+      pagination: { hasMore: false, totalMessages: 3 },
+      sessionId: "session-1",
+    });
 
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: current.slice(0, 2),
-        pagination: { hasMore: true, nextOffset: 2, totalMessages: 3 },
-        sessionId: "session-1",
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: current.slice(0, 2),
+      pagination: { hasMore: true, nextOffset: 2, totalMessages: 3 },
+      sessionId: "session-1",
+    });
 
     expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })).toEqual({
       messages: current,
@@ -260,30 +235,19 @@ describe("session message cache", () => {
   });
 
   it("does not retain history across backing session changes", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: [{ content: "old", __openclaw: { seq: 1 } }],
-        pagination: { hasMore: false, totalMessages: 1 },
-        sessionId: "session-1",
-      },
-    );
+    const { host, cache } = createCacheContext();
+    cacheHomeSnapshot(cache, host, {
+      messages: [{ content: "old", __openclaw: { seq: 1 } }],
+      pagination: { hasMore: false, totalMessages: 1 },
+      sessionId: "session-1",
+    });
     const replacement = [{ content: "new", __openclaw: { seq: 1 } }];
 
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: replacement,
-        pagination: { hasMore: false, totalMessages: 1 },
-        sessionId: "session-2",
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: replacement,
+      pagination: { hasMore: false, totalMessages: 1 },
+      sessionId: "session-2",
+    });
 
     expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })?.messages).toEqual(
       replacement,
@@ -291,72 +255,49 @@ describe("session message cache", () => {
   });
 
   it("reuses retained message weights when snapshot metadata changes", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
     const toJSON = vi.fn(() => ({ role: "assistant", content: "retained" }));
     const message = { toJSON };
 
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: [message],
-        pagination: { hasMore: true, nextOffset: 1, totalMessages: 2 },
-        sessionId: "session-1",
-      },
-    );
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: [message],
-        pagination: { hasMore: false, totalMessages: 1 },
-        sessionId: "session-1",
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: [message],
+      pagination: { hasMore: true, nextOffset: 1, totalMessages: 2 },
+      sessionId: "session-1",
+    });
+    cacheHomeSnapshot(cache, host, {
+      messages: [message],
+      pagination: { hasMore: false, totalMessages: 1 },
+      sessionId: "session-1",
+    });
 
     expect(toJSON).toHaveBeenCalledOnce();
   });
 
   it("removes an empty identity-free snapshot after a cleared session reload", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
     cacheChatMessages(cache, host, { sessionKey: "home" }, ["stale"]);
 
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: [],
-        pagination: { hasMore: false },
-        sessionId: null,
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: [],
+      pagination: { hasMore: false },
+      sessionId: null,
+    });
 
     expect(readChatSessionSnapshot(cache, host, { sessionKey: "home" })).toBeNull();
   });
 
   it("caps an oversized snapshot at a raw transcript boundary", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
     const content = "x".repeat(4 * 1024 * 1024);
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "home" },
-      {
-        messages: [
-          { content, __openclaw: { seq: 1 } },
-          { content, projection: "sibling", __openclaw: { seq: 1 } },
-          { content, __openclaw: { seq: 2 } },
-        ],
-        pagination: { hasMore: false, totalMessages: 2 },
-        sessionId: "session-1",
-      },
-    );
+    cacheHomeSnapshot(cache, host, {
+      messages: [
+        { content, __openclaw: { seq: 1 } },
+        { content, projection: "sibling", __openclaw: { seq: 1 } },
+        { content, __openclaw: { seq: 2 } },
+      ],
+      pagination: { hasMore: false, totalMessages: 2 },
+      sessionId: "session-1",
+    });
 
     const snapshot = readChatSessionSnapshot(cache, host, { sessionKey: "home" });
     expect(snapshot?.messages).toHaveLength(1);
@@ -368,8 +309,7 @@ describe("session message cache", () => {
   });
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {
-    const host = createHost();
-    const cache: ChatMessageCache = new Map();
+    const { host, cache } = createCacheContext();
     const content = "x".repeat(9 * 1024 * 1024);
     for (const sessionKey of ["one", "two", "three"]) {
       cacheChatSessionSnapshot(

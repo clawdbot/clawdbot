@@ -526,6 +526,7 @@ describe("message tool gateway timeout", () => {
 
   it("does not advertise the Codex-only final delivery control", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+    expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
 
   it("advertises timeoutMs as a positive integer", () => {
@@ -1178,6 +1179,17 @@ describe("message tool secret scoping", () => {
     expect(input?.params?.idempotencyKey).toMatch(
       /^run-message-tool:message-tool:[A-Za-z0-9_-]+:[A-Za-z0-9._:-]+$/,
     );
+  });
+
+  it("preserves a host-supplied retry idempotency key", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi", idempotencyKey: "stable-retry-key" },
+      toolOptions: { runId: "run-message-tool" },
+    });
+
+    expect(input?.params?.idempotencyKey).toBe("stable-retry-key");
   });
 
   it("keeps the Codex final control out of delivery and retry idempotency", async () => {

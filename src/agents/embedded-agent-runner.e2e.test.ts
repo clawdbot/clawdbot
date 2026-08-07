@@ -240,6 +240,7 @@ const resolveTestSessionTarget = async (params: {
 }) =>
   await resolveAgentRunSessionTarget({
     config: params.config,
+    missingSessionKey: "create",
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   });

@@ -62,6 +62,9 @@ export function makeTestModel(id: string, contextTokens: number): ModelDefinitio
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
+vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
+  runEmbeddedAgentInternal: (params: unknown) => state.runEmbeddedAgentMock(params),
+}));
 
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", async () => {
   const actual = await vi.importActual<
@@ -329,6 +332,10 @@ export type EmbeddedAgentParams = {
   transcriptPrompt?: string;
   lifecycleGeneration?: string;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionAttributionChanged?: (info: {
+    lifecycleGeneration?: string;
+    attribution?: import("../../agents/agent-execution-attribution.js").AgentExecutionAttribution;
+  }) => void;
   onExecutionPhase?: (info: {
     phase:
       | "runner_entered"

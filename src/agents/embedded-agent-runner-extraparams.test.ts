@@ -16,80 +16,6 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
 }));
 
-vi.mock("./codex-native-web-search.js", () => ({
-  patchCodexNativeWebSearchPayload: (params: {
-    payload: unknown;
-    config?: {
-      tools?: {
-        web?: {
-          search?: {
-            openaiCodex?: {
-              mode?: string;
-              allowedDomains?: string[];
-            };
-          };
-        };
-      };
-    };
-  }) => {
-    if (!params.payload || typeof params.payload !== "object") {
-      return { status: "payload_not_object" };
-    }
-    const payload = params.payload as { tools?: Array<Record<string, unknown>> };
-    if (payload.tools?.some((tool) => tool.type === "web_search")) {
-      return { status: "native_tool_already_present" };
-    }
-    const nativeConfig = params.config?.tools?.web?.search?.openaiCodex;
-    payload.tools = [
-      ...(payload.tools ?? []),
-      {
-        type: "web_search",
-        external_web_access: nativeConfig?.mode === "live",
-        ...(nativeConfig?.allowedDomains
-          ? { filters: { allowed_domains: nativeConfig.allowedDomains } }
-          : {}),
-      },
-    ];
-    return { status: "injected" };
-  },
-  resolveCodexNativeSearchActivation: (params: {
-    config?: {
-      auth?: { profiles?: Record<string, { provider?: string }> };
-      tools?: {
-        web?: {
-          search?: {
-            enabled?: boolean;
-            openaiCodex?: { enabled?: boolean; mode?: string };
-          };
-        };
-      };
-    };
-    modelProvider?: string;
-    modelApi?: string;
-  }) => {
-    const search = params.config?.tools?.web?.search;
-    const codex = search?.openaiCodex;
-    const nativeEligible =
-      params.modelProvider === "openai" || params.modelApi === "openai-chatgpt-responses";
-    const hasRequiredAuth =
-      params.modelProvider !== "openai" ||
-      Object.values(params.config?.auth?.profiles ?? {}).some(
-        (profile) => profile.provider === "openai",
-      );
-    const active =
-      search?.enabled !== false && codex?.enabled === true && nativeEligible && hasRequiredAuth;
-    return {
-      globalWebSearchEnabled: search?.enabled !== false,
-      codexNativeEnabled: codex?.enabled === true,
-      codexMode: codex?.mode === "live" ? "live" : "cached",
-      nativeEligible,
-      hasRequiredAuth,
-      state: active ? "native_active" : "managed_only",
-      ...(active ? {} : { inactiveReason: "test_inactive" }),
-    };
-  },
-}));
-
 const ANTHROPIC_DEFAULT_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
   "interleaved-thinking-2025-05-14",
@@ -2406,9 +2332,17 @@ describe("applyExtraParamsToAgent", () => {
 
   it("does not inject duplicate native Codex web_search tools", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "gateway",
+      applyProvider: "openai",
       applyModelId: "gpt-5.4",
       cfg: {
+        auth: {
+          profiles: {
+            "openai:default": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+        },
         tools: {
           web: {
             search: {
@@ -2423,7 +2357,7 @@ describe("applyExtraParamsToAgent", () => {
       },
       model: {
         api: "openai-chatgpt-responses",
-        provider: "gateway",
+        provider: "openai",
         id: "gpt-5.4",
       } as Model<"openai-chatgpt-responses">,
       payload: { tools: [{ type: "web_search" }] },

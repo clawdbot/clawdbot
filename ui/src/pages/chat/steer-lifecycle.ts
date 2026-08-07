@@ -55,8 +55,15 @@ export type SteerSendDependencies = {
     message: string,
     attachments: ChatAttachment[] | undefined,
     options: { canApplyError: () => boolean; queueMode?: QueueMode; runId: string },
-  ) => Promise<ChatSendAck | null>;
+  ) => Promise<SteerChatSendResult>;
 };
+
+type RejectedSteerChatSend = { kind: "rejected"; error: string };
+type SteerChatSendResult = ChatSendAck | RejectedSteerChatSend | null;
+
+function isRejectedSteerChatSend(result: SteerChatSendResult): result is RejectedSteerChatSend {
+  return result !== null && "kind" in result && result.kind === "rejected";
+}
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -259,6 +266,7 @@ export async function sendQueuedChatMessageWithQueueMode(
   // replay the original queued turn after active-run admission may have succeeded.
   const claimed = updateQueuedMessage(host, id, (entry) => ({
     ...entry,
+    ...(isSteer ? { kind: "steered" as const } : {}),
     sendError: unconfirmedError,
     sendRunId: entry.sendRunId ?? generateUUID(),
     sendState: "unconfirmed",
@@ -297,7 +305,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     return;
   }
   host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? pendingIndicator : entry));
-  const ack = await dependencies.sendChatMessage(
+  const result = await dependencies.sendChatMessage(
     host,
     message,
     attachments.length ? attachments : undefined,
@@ -319,7 +327,7 @@ export async function sendQueuedChatMessageWithQueueMode(
   }
   clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
   const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
-  if (!ack) {
+  if (!result) {
     // A transport failure does not prove active-run admission was rejected. Keep the
     // durable row parked so reconnect cannot replay it as a separate turn.
     if (itemStillVisible) {
@@ -327,6 +335,18 @@ export async function sendQueuedChatMessageWithQueueMode(
     }
     return;
   }
+  if (isRejectedSteerChatSend(result)) {
+    const failed = updateQueuedMessage(host, id, (entry) => ({
+      ...entry,
+      sendError: result.error,
+      sendState: "failed",
+    }));
+    if (itemStillVisible) {
+      setChatError(host, failed ? result.error : OFFLINE_QUEUE_STORAGE_ERROR);
+    }
+    return;
+  }
+  const ack = result;
   if (isTerminalFailureChatSendAck(ack)) {
     const restored = updateQueuedMessage(host, id, (entry) => ({
       ...item,
