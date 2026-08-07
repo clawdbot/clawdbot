@@ -14,10 +14,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import {
-  resolveImageToolFactoryAvailable,
-  resolveOptionalMediaToolFactoryPlan,
-} from "./openclaw-tools.media-factory-plan.js";
+import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
@@ -279,16 +276,16 @@ describe("optional media tool factory planning", () => {
     };
 
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         ...base,
         preparedModelRuntime: {
           metadataSnapshot: snapshot,
           mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
         } as never,
-      }),
+      }).image,
     ).toBe(false);
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         ...base,
         preparedModelRuntime: {
           metadataSnapshot: snapshot,
@@ -296,7 +293,7 @@ describe("optional media tool factory planning", () => {
             mediaUnderstandingProviders: [{ id: "media-owner", capabilities: ["image"] }],
           },
         } as never,
-      }),
+      }).image,
     ).toBe(true);
   });
 
@@ -313,7 +310,7 @@ describe("optional media tool factory planning", () => {
     ]);
 
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         config,
         agentDir: "/agent",
         authStore: createAuthStore(["audio-auth"]),
@@ -326,7 +323,7 @@ describe("optional media tool factory planning", () => {
             ],
           },
         } as never,
-      }),
+      }).image,
     ).toBe(false);
   });
 
@@ -361,27 +358,27 @@ describe("optional media tool factory planning", () => {
     };
 
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         config,
         agentDir: "/agent",
         authStore: createAuthStore(["custom"]),
         preparedModelRuntime,
-      }),
+      }).image,
     ).toBe(true);
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         config,
         agentDir: "/agent",
         authStore: oauthStore,
         preparedModelRuntime,
-      }),
+      }).image,
     ).toBe(false);
     for (const [capabilities, expected] of [
       [["audio"], false],
       [["image"], true],
     ] as const) {
       expect(
-        resolveImageToolFactoryAvailable({
+        resolveOptionalMediaToolFactoryPlan({
           config,
           agentDir: "/agent",
           authStore: oauthStore,
@@ -391,7 +388,7 @@ describe("optional media tool factory planning", () => {
               mediaUnderstandingProviders: [{ id: "codex", capabilities }],
             },
           } as never,
-        }),
+        }).image,
       ).toBe(expected);
     }
   });

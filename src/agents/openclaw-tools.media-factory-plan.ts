@@ -57,15 +57,14 @@ function resolvePreparedGenerationProviders(
   // Project prepared runtime providers onto the narrow readiness surface used by
   // isCapabilityProviderConfigured (id + optional isConfigured). Avoid casting the
   // full image/video/music provider unions — they are not assignable to each other.
-  return providers.map((provider) => ({
-    id: provider.id,
-    ...(typeof provider.isConfigured === "function"
-      ? {
-          isConfigured: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) =>
-            provider.isConfigured?.(ctx) === true,
-        }
-      : {}),
-  }));
+  return providers.map((provider) => {
+    const readiness: PreparedCapabilityProvider = { id: provider.id };
+    if (typeof provider.isConfigured === "function") {
+      readiness.isConfigured = (ctx: { cfg?: OpenClawConfig; agentDir?: string }) =>
+        provider.isConfigured?.(ctx) === true;
+    }
+    return readiness;
+  });
 }
 
 /**
@@ -188,7 +187,7 @@ function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): st
 }
 
 /** Returns whether the image understanding tool can be constructed for this agent context. */
-export function resolveImageToolFactoryAvailable(params: {
+function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;

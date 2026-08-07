@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
 import { getApiKeyForModel, hasUsableCustomProviderApiKey } from "../model-auth.js";
-import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
+import { resolveOptionalMediaToolFactoryPlan } from "../openclaw-tools.media-factory-plan.js";
 import { createImageTool } from "./image-tool.js";
 import { resolveImageModelConfigForTool, testing } from "./image-tool.test-support.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
@@ -159,11 +159,11 @@ describe("image custom provider auth regression", () => {
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig();
       expect(
-        resolveImageToolFactoryAvailable({
+        resolveOptionalMediaToolFactoryPlan({
           config: cfg,
           agentDir,
           modelHasVision: true,
-        }),
+        }).image,
       ).toBe(true);
     });
   });
@@ -181,11 +181,11 @@ describe("image custom provider auth regression", () => {
         primary: `${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
       });
       expect(
-        resolveImageToolFactoryAvailable({
+        resolveOptionalMediaToolFactoryPlan({
           config: cfg,
           agentDir,
           modelHasVision: true,
-        }),
+        }).image,
       ).toBe(true);
     });
   });
