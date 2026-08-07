@@ -9,7 +9,7 @@ import {
   type ExecutionIdentityAdmissionFacts,
 } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { reserveAgentRunAttribution } from "../../infra/agent-run-registry.js";
+import { assertAgentRunAttributionAdmissionCompatible } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 
 type AutoReplyExecutionIdentityContext = {
@@ -134,24 +134,21 @@ export function admitAutoReplyExecutionAttribution(params: {
   lifecycleGeneration: string;
   runId: string;
 }): AgentExecutionAttribution {
-  if (params.attribution) {
-    return reserveAgentRunAttribution(
-      params.runId,
-      params.attribution.lifecycleGeneration,
-      params.attribution,
-    );
-  }
-  const attribution = reserveAgentRunAttribution(
+  assertAgentRunAttributionAdmissionCompatible(
     params.runId,
     params.lifecycleGeneration,
-    createAgentExecutionAttribution({
-      runId: params.runId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      sessionKey: params.context.sessionKey,
-      sessionId: params.context.sessionId,
-      agentId: params.context.agentId,
-    }),
+    params.attribution,
   );
+  if (params.attribution) {
+    return params.attribution;
+  }
+  const attribution = createAgentExecutionAttribution({
+    runId: params.runId,
+    lifecycleGeneration: params.lifecycleGeneration,
+    sessionKey: params.context.sessionKey,
+    sessionId: params.context.sessionId,
+    agentId: params.context.agentId,
+  });
   enqueueExecutionIdentityContextAtAdmission(resolveAdmissionFacts(params), {
     enabled: isExecutionIdentityCollectionEnabled(params.config),
     contextId: attribution.contextId,

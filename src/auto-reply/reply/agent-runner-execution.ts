@@ -670,7 +670,6 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
       },
     };
   } catch (error) {
-    clearAgentRunContext(runId, lifecycleGeneration);
     if (
       isReplyOperationRestartAbort(executionParams.replyOperation) ||
       isAgentRunRestartAbortReason(error)

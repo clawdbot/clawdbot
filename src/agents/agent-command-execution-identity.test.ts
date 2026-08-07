@@ -3,11 +3,6 @@ import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
 } from "../audit/execution-identity-admission.js";
-import {
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-  resetAgentRunRegistryForTest,
-} from "../infra/agent-run-registry.js";
 import { executionIdentity } from "./agent-command-execution-identity.js";
 import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
 
@@ -17,7 +12,6 @@ describe("agent command execution identity", () => {
   afterEach(() => {
     restoreSink?.();
     restoreSink = undefined;
-    resetAgentRunRegistryForTest();
   });
 
   it("records the runtime correlation without requiring an audit admission token", () => {
@@ -107,28 +101,6 @@ describe("agent command execution identity", () => {
       agentId: "main",
     });
     expect(resolved.attribution).not.toHaveProperty("executionIdentityAdmission");
-  });
-
-  it("atomically reserves one attribution for concurrent cross-session admission", () => {
-    const lifecycleGeneration = getAgentRunLifecycleGeneration();
-    const runId = "run-shared";
-    const first = executionIdentity.resolveAttribution({ lifecycleGeneration } as never, {
-      runId,
-      sessionKey: "agent:main:first-session",
-      sessionId: "first-session",
-      sessionAgentId: "main",
-    });
-
-    expect(getAgentRunContext(runId)?.attribution).toBe(first.attribution);
-    expect(() =>
-      executionIdentity.resolveAttribution({ lifecycleGeneration } as never, {
-        runId,
-        sessionKey: "agent:main:second-session",
-        sessionId: "second-session",
-        sessionAgentId: "main",
-      }),
-    ).toThrow("Agent run ID is already bound to different execution attribution.");
-    expect(getAgentRunContext(runId)?.attribution).toBe(first.attribution);
   });
 
   it("replaces attribution only after lifecycle rebound", () => {

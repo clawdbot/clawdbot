@@ -4634,56 +4634,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         runId,
         allowModelOverride: false,
       }),
-    ).rejects.toThrow("Agent run ID is already bound to different execution attribution.");
+    ).rejects.toThrow("Agent run ID is already bound to host-owned execution attribution.");
 
     expect(state.enqueueExecutionIdentityContextAtAdmissionMock).not.toHaveBeenCalled();
     expect(state.registerAgentRunContextMock).not.toHaveBeenCalled();
     expect(state.acpRunTurnMock).not.toHaveBeenCalled();
-  });
-
-  it("atomically rejects concurrent cross-session ACP admissions sharing a run id", async () => {
-    setupAcpSession();
-    const runId = "concurrent-cross-session-run";
-    agentRunRegistry.claimAgentRunContext(runId, {
-      lifecycleGeneration: "test-generation",
-    });
-    let releaseFirst!: () => void;
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
-    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
-      markFirstStarted();
-      await firstBlocked;
-      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
-      onEvent?.({ type: "done", stopReason: "end_turn" });
-    });
-
-    const first = agentCommandFromIngress({
-      message: "first public ACP turn",
-      sessionKey: "agent:main:first-session",
-      runId,
-      allowModelOverride: false,
-    });
-    await firstStarted;
-
-    await expect(
-      agentCommandFromIngress({
-        message: "second public ACP turn",
-        sessionKey: "agent:main:second-session",
-        runId,
-        allowModelOverride: false,
-      }),
-    ).rejects.toThrow("Agent run ID is already bound to different execution attribution.");
-
-    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenCalledTimes(1);
-    expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
-
-    releaseFirst();
-    await first;
   });
 
   it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {
