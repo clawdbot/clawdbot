@@ -172,6 +172,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("ModelProvidersPage provider usage", () => {
+  it("refetches usage the Gateway marked as still refreshing", async () => {
+    vi.useFakeTimers();
+    try {
+      const { context, request } = createHarness("main");
+      request.mockImplementation(async (method: string): Promise<unknown> => {
+        switch (method) {
+          case "models.authStatus":
+            return { ts: 1, providers: [] };
+          case "models.list":
+            return { models: [] };
+          case "config.get":
+            return { config: {}, hash: "hash" };
+          case "usage.status":
+            return { updatedAt: 1, providers: [], refreshing: true };
+          case "sessions.usage":
+            return { aggregates: { byProvider: [] } };
+          default:
+            return {};
+        }
+      });
+      const usageLoads = () =>
+        request.mock.calls.filter(([method]) => method === "usage.status").length;
+      const page = appendPage(context);
+      for (let tick = 0; tick < 20 && usageLoads() === 0; tick += 1) {
+        await vi.advanceTimersByTimeAsync(0);
+        await page.updateComplete;
+      }
+      expect(usageLoads()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await page.updateComplete;
+
+      expect(usageLoads()).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("ModelProvidersPage agent scope", () => {
   it("links the page subtitle to the model providers guide", async () => {
     const { context } = createHarness("main");

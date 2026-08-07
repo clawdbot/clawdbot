@@ -14,6 +14,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { createUsageRetry } from "../../lib/incomplete-usage-retry.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -142,8 +143,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     onComplete: ({ client, data }) => {
       this.data = data;
       this.dataClient = client;
+      // Plan, quota, and billing cards come from usage.status. A cold response carries
+      // no providers, so without this retry they stay absent until a manual reload.
+      this.usageRetry.observe(data.providerUsage?.refreshing === true);
     },
   });
+  private readonly usageRetry = createUsageRetry(this, () => void this.refresh({ force: false }));
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
