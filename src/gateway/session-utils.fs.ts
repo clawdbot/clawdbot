@@ -929,22 +929,6 @@ export function capArrayByJsonBytes<T>(
   return { items: next, bytes };
 }
 
-export async function resolveSessionHistoryTranscriptPathAsync(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  opts?: { agentId?: string; allowResetArchiveFallback?: boolean },
-): Promise<string | null> {
-  return await new ArchivedTranscriptReader({
-    agentId: opts?.agentId,
-    sessionFile,
-    sessionId,
-    storePath,
-  }).resolvePath({
-    allowResetArchiveFallback: opts?.allowResetArchiveFallback,
-  });
-}
-
 export type SessionTranscriptUsageSnapshot = {
   modelProvider?: string;
   model?: string;

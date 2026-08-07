@@ -388,16 +388,19 @@ describe("session transcript reader facade", () => {
       allowResetArchiveFallback: true,
     });
     expect(archived).toMatchObject({ found: true, message: { content: "archived prompt" } });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "post-reset-active",
-          parentId: "reset-only",
-          message: { role: "assistant", content: "active answer" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
+    await persistSessionTranscriptTurn(
+      { ...scope, sessionEntry: { sessionId, updatedAt: 1 } },
+      {
+        messages: [
+          {
+            eventId: "post-reset-active",
+            parentId: "reset-only",
+            message: { role: "assistant", content: "active answer" },
+          },
+        ],
+        touchSessionEntry: false,
+      },
+    );
     const archivedAndActive = await readSessionMessagesWithSourceAsync(scope, {
       mode: "full",
       reason: "durable reference scan with active messages",
