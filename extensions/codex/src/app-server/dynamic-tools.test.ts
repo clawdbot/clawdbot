@@ -30,6 +30,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  consumeAgentToolTargetSessionKey,
+  recordAgentToolTargetSessionKey,
+} from "../../../../packages/agent-core/src/tool-execution-private-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
@@ -3557,7 +3561,15 @@ describe("createCodexDynamicToolBridge", () => {
     });
     setActivePluginRegistry(registry);
     const bridge = createCodexDynamicToolBridge({
-      tools: [createTool({ name: "message", execute: vi.fn(async () => textToolResult("ok")) })],
+      tools: [
+        createTool({
+          name: "message",
+          execute: vi.fn(async () => {
+            recordAgentToolTargetSessionKey("agent:codex-target:main");
+            return textToolResult("ok");
+          }),
+        }),
+      ],
       signal: new AbortController().signal,
       hookContext: { runId },
     });
@@ -3575,7 +3587,8 @@ describe("createCodexDynamicToolBridge", () => {
     );
     await vi.waitFor(() => expect(middleware).toHaveBeenCalledOnce());
 
-    expect(bridge.consumeToolExecutionSnapshot?.(callId)).toEqual({
+    const snapshot = bridge.consumeToolExecutionSnapshot?.(callId);
+    expect(snapshot).toMatchObject({
       executedArguments: {
         action: "send",
         target: "channel:adjusted",
@@ -3583,6 +3596,9 @@ describe("createCodexDynamicToolBridge", () => {
       },
       executionStarted: true,
     });
+    expect(consumeAgentToolTargetSessionKey(snapshot?.privateState)).toBe(
+      "agent:codex-target:main",
+    );
     releaseMiddleware?.();
     await result;
     expect(bridge.consumeToolExecutionSnapshot?.(callId)).toBeUndefined();

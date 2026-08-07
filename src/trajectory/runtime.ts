@@ -1,6 +1,10 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  consumeAgentToolTargetSessionKey,
+  type AgentToolExecutionPrivateState,
+} from "../../packages/agent-core/src/tool-execution-private-state.js";
 import type {
   QueuedFileWriter,
   QueuedFileWriterDiagnostics,
@@ -17,7 +21,9 @@ import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
 } from "./paths.js";
 import {
+  hashTrajectoryIdentifier,
   projectTrajectoryDiagnosticValue,
+  TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
   TrajectoryProvenanceSanitizer,
 } from "./provenance-sanitization.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
@@ -43,6 +49,10 @@ type TrajectoryRuntimeInit = {
 type TrajectoryRuntimeRecorder = {
   enabled: true;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  recordToolResult: (
+    data: Record<string, unknown>,
+    privateState?: AgentToolExecutionPrivateState,
+  ) => void;
   flush: () => Promise<void>;
   describeFlushState: () => string | undefined;
 };
@@ -66,6 +76,7 @@ const TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS = [
   "toolCallId",
   "isError",
   "success",
+  "targetSessionHash",
 ] as const;
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
@@ -376,6 +387,7 @@ export function createTrajectoryRuntimeRecorder(
   const buildEvent = (
     type: string,
     data?: Record<string, unknown>,
+    trustedData?: Record<string, unknown>,
   ): { event: TrajectoryEvent; line: string } | undefined => {
     const nextSeq = seq + 1;
     const sourceSeq = sink.nextSourceSeq?.() ?? nextSeq;
@@ -395,7 +407,13 @@ export function createTrajectoryRuntimeRecorder(
       provider: params.provider,
       modelId: params.modelId,
       modelApi: params.modelApi,
-      data: data ? sanitizeTrajectoryPayload(provenanceSanitizer, type, data) : undefined,
+      data:
+        data || trustedData
+          ? {
+              ...(data ? sanitizeTrajectoryPayload(provenanceSanitizer, type, data) : {}),
+              ...trustedData,
+            }
+          : undefined,
     };
     const line = safeJsonStringify(event);
     if (!line) {
@@ -418,6 +436,26 @@ export function createTrajectoryRuntimeRecorder(
         return;
       }
       sink.write(built.event, built.line);
+    },
+    recordToolResult: (data, privateState) => {
+      const targetSessionKey = consumeAgentToolTargetSessionKey(privateState);
+      const untrustedData = { ...data };
+      delete untrustedData.targetSessionHash;
+      const built = buildEvent(
+        "tool.result",
+        untrustedData,
+        targetSessionKey
+          ? {
+              targetSessionHash: hashTrajectoryIdentifier(
+                TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
+                targetSessionKey,
+              ),
+            }
+          : undefined,
+      );
+      if (built) {
+        sink.write(built.event, built.line);
+      }
     },
     flush: async () => {
       await sink.flush();

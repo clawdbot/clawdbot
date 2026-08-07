@@ -8,6 +8,7 @@ import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/sess
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { recordAgentToolTargetSessionKey } from "../../../packages/agent-core/src/tool-execution-private-state.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -953,7 +954,9 @@ export function createSessionsSendTool(opts?: {
               return start.result;
             }
             runId = start.runId;
-            const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
+            const dispatchedSessionKey = start.a2aSessionKey ?? resolvedKey;
+            recordAgentToolTargetSessionKey(dispatchedSessionKey);
+            const watchField = registerWatchIfRequested(dispatchedSessionKey);
             if (!start.activeRunQueue) {
               startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
@@ -977,6 +980,7 @@ export function createSessionsSendTool(opts?: {
             return start.result;
           }
           runId = start.runId;
+          recordAgentToolTargetSessionKey(resolvedKey);
           const watchField = registerWatchIfRequested(resolvedKey);
           const result = await waitForAgentRunAndReadUpdatedAssistantReply({
             runId,

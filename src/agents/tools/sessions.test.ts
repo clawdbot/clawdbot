@@ -4,6 +4,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // and assistant-visible text sanitization.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  consumeAgentToolTargetSessionKey,
+  createAgentToolExecutionPrivateState,
+  runWithAgentToolExecutionPrivateState,
+  snapshotAgentToolExecutionPrivateState,
+} from "../../../packages/agent-core/src/tool-execution-private-state.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
@@ -18,6 +24,17 @@ const inProcessCreationMock = vi.fn(
 // Default false mirrors running outside a gateway process; the trusted-creation
 // regression test flips it on and restores it.
 let inProcessGatewayContextAvailable = false;
+
+async function captureDispatchedTarget<T>(run: () => Promise<T>) {
+  const state = createAgentToolExecutionPrivateState();
+  const result = await runWithAgentToolExecutionPrivateState(state, run);
+  return {
+    result,
+    targetSessionKey: consumeAgentToolTargetSessionKey(
+      snapshotAgentToolExecutionPrivateState(state),
+    ),
+  };
+}
 const facadeRuntimeMock = vi.hoisted(() => ({
   sessionKeyResolvers: new Map<
     string,
@@ -890,16 +907,19 @@ describe("sessions_send gating", () => {
     });
 
     try {
-      const result = await createMainSessionsSendTool().execute("call-active-steer", {
-        sessionKey: targetSessionKey,
-        message: "delegated work",
-        timeoutSeconds: 0,
-      });
+      const { result, targetSessionKey: dispatchedTarget } = await captureDispatchedTarget(() =>
+        createMainSessionsSendTool().execute("call-active-steer", {
+          sessionKey: targetSessionKey,
+          message: "delegated work",
+          timeoutSeconds: 0,
+        }),
+      );
 
       expect(requireDetails(result)).toMatchObject({
         status: "accepted",
         sessionKey: targetSessionKey,
       });
+      expect(dispatchedTarget).toBe(targetSessionKey);
       expect(queueMessage).toHaveBeenCalledWith(
         expect.stringContaining("delegated work"),
         expect.objectContaining({
@@ -952,15 +972,18 @@ describe("sessions_send gating", () => {
       return {};
     });
 
-    const result = await tool.execute("call-denied-session-id", {
-      sessionKey: "session-id-only",
-      message: "hi",
-      timeoutSeconds: 0,
-    });
+    const { result, targetSessionKey } = await captureDispatchedTarget(() =>
+      tool.execute("call-denied-session-id", {
+        sessionKey: "session-id-only",
+        message: "hi",
+        timeoutSeconds: 0,
+      }),
+    );
 
     const details = requireDetails(result);
     expect(details.status).toBe("forbidden");
     expect(details.sessionKey).toBe("session-id-only");
+    expect(targetSessionKey).toBeUndefined();
   });
 
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {

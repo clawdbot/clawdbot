@@ -12,6 +12,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AgentToolExecutionPrivateState } from "../../packages/agent-core/src/tool-execution-private-state.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -1408,6 +1409,8 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;
+  const privateState = (evt as typeof evt & { privateState?: AgentToolExecutionPrivateState })
+    .privateState;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
@@ -1663,11 +1666,14 @@ export async function handleToolExecutionEnd(
     stream: "tool",
     data: toolResultEventData,
   });
-  ctx.params.trajectoryRecorder?.recordEvent("tool.result", {
-    ...toolResultEventData,
-    isError: observerIsError,
-    success: !observerIsError,
-  });
+  ctx.params.trajectoryRecorder?.recordToolResult(
+    {
+      ...toolResultEventData,
+      isError: observerIsError,
+      success: !observerIsError,
+    },
+    privateState,
+  );
   const endedAt = Date.now();
   const itemId = buildToolItemId(toolCallId);
   const itemData: AgentItemEventData = {

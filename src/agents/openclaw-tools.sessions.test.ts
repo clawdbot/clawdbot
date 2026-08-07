@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  consumeAgentToolTargetSessionKey,
+  createAgentToolExecutionPrivateState,
+  runWithAgentToolExecutionPrivateState,
+  snapshotAgentToolExecutionPrivateState,
+} from "../../packages/agent-core/src/tool-execution-private-state.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -21,6 +27,17 @@ import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
+
+async function captureDispatchedTarget<T>(run: () => Promise<T>) {
+  const state = createAgentToolExecutionPrivateState();
+  const result = await runWithAgentToolExecutionPrivateState(state, run);
+  return {
+    result,
+    targetSessionKey: consumeAgentToolTargetSessionKey(
+      snapshotAgentToolExecutionPrivateState(state),
+    ),
+  };
+}
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
@@ -1605,17 +1622,20 @@ describe("sessions tools", () => {
       config: cloneTestConfig(),
     });
 
-    const result = await tool.execute("call-run-scoped-caller", {
-      sessionKey: runScopedCallerKey,
-      message: "[TASK-COMPLETE] re-portal occupancy ready",
-      timeoutSeconds: 0,
-    });
+    const { result, targetSessionKey } = await captureDispatchedTarget(() =>
+      tool.execute("call-run-scoped-caller", {
+        sessionKey: runScopedCallerKey,
+        message: "[TASK-COMPLETE] re-portal occupancy ready",
+        timeoutSeconds: 0,
+      }),
+    );
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("error");
     expect(details.sessionKey).toBe(runScopedCallerKey);
     expect(details.error).toContain("queue_message_failed reason=runtime_rejected");
     expect(details.error).toContain("caller-active-session");
     expect(details.error).not.toContain("fallback_failed");
+    expect(targetSessionKey).toBeUndefined();
     const queuedText = queueMessage.mock.calls[0]?.[0];
     expect(queuedText).toContain("[Inter-session message]");
     expect(queuedText).toContain("[TASK-COMPLETE] re-portal occupancy ready");
@@ -1666,11 +1686,13 @@ describe("sessions tools", () => {
       config: cloneTestConfig(),
     });
 
-    const result = await tool.execute("call-run-scoped-caller", {
-      sessionKey: runScopedCallerKey,
-      message: "[TASK-COMPLETE] re-portal occupancy ready",
-      timeoutSeconds: 0,
-    });
+    const { result, targetSessionKey } = await captureDispatchedTarget(() =>
+      tool.execute("call-run-scoped-caller", {
+        sessionKey: runScopedCallerKey,
+        message: "[TASK-COMPLETE] re-portal occupancy ready",
+        timeoutSeconds: 0,
+      }),
+    );
 
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("error");
@@ -1678,6 +1700,7 @@ describe("sessions tools", () => {
     expect(details.error).toContain(
       "queue_message_failed reason=source_reply_delivery_mode_mismatch",
     );
+    expect(targetSessionKey).toBeUndefined();
     expect(queueMessage).not.toHaveBeenCalled();
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
@@ -1781,11 +1804,13 @@ describe("sessions tools", () => {
       config: cloneTestConfig(),
     });
 
-    const result = await tool.execute("call-run-scoped-caller", {
-      sessionKey: runScopedCallerKey,
-      message: "[TASK-COMPLETE] re-portal occupancy ready",
-      timeoutSeconds: 0,
-    });
+    const { result, targetSessionKey } = await captureDispatchedTarget(() =>
+      tool.execute("call-run-scoped-caller", {
+        sessionKey: runScopedCallerKey,
+        message: "[TASK-COMPLETE] re-portal occupancy ready",
+        timeoutSeconds: 0,
+      }),
+    );
 
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("accepted");
@@ -1796,6 +1821,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(1);
     const params = agentParams(agentCalls[0] ?? {});
     expect(params.sessionKey).toBe(durableCronCallerKey);
+    expect(targetSessionKey).toBe(durableCronCallerKey);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
     await waitForCalls(
@@ -1996,16 +2022,19 @@ describe("sessions tools", () => {
       agentChannel: "discord",
     });
 
-    const result = await tool.execute("call-terminal", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
+    const { result, targetSessionKey } = await captureDispatchedTarget(() =>
+      tool.execute("call-terminal", {
+        sessionKey: targetKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      }),
+    );
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("timeout");
     expect(details.error).toBe("agent run timed out");
     expect(details.sentBeforeError).toBe(true);
     expect(details.sessionKey).toBe(targetKey);
+    expect(targetSessionKey).toBe(targetKey);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -2033,16 +2062,19 @@ describe("sessions tools", () => {
       agentChannel: "discord",
     });
 
-    const result = await tool.execute("call-error", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
+    const { result, targetSessionKey } = await captureDispatchedTarget(() =>
+      tool.execute("call-error", {
+        sessionKey: targetKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      }),
+    );
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("error");
     expect(details.error).toBe("agent failed");
     expect(details.sentBeforeError).toBe(true);
     expect(details.sessionKey).toBe(targetKey);
+    expect(targetSessionKey).toBe(targetKey);
   });
 
   it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {

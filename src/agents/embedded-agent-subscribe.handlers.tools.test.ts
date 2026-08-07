@@ -223,6 +223,9 @@ function attachRecorder(ctx: ToolHandlerContext): RecordedTrajectoryEvent[] {
     recordEvent: (type, data) => {
       recorded.push({ type, ...(data ? { data } : {}) });
     },
+    recordToolResult: (data) => {
+      recorded.push({ type: "tool.result", data });
+    },
     flush: async () => {},
   };
   return recorded;

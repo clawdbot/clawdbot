@@ -974,6 +974,7 @@ describe("exportTrajectoryBundle", () => {
     const spoofedHash = `sha256:v1:${"f".repeat(64)}`;
     const canonicalSourceHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "canonical-source");
     const canonicalOriginHash = expectedSessionHash(ORIGIN_SESSION_HASH_DOMAIN, "canonical-origin");
+    const canonicalTargetHash = expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, "target-session");
     writeSimpleSessionFile(sessionFile, {
       userMessage: applyInputProvenanceToUserMessage(
         userMessage(`transcript echo ${rawSessionKey}`),
@@ -1028,6 +1029,7 @@ describe("exportTrajectoryBundle", () => {
             sessionKey: "legacy-opaque-session-credential",
             sourceSessionKey: "legacy-opaque-source-session-credential",
           },
+          targetSessionHash: canonicalTargetHash,
         },
       },
       ...origins.map(
@@ -1063,6 +1065,9 @@ describe("exportTrajectoryBundle", () => {
     expect(bundle.events.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
       `earlier echo ${expectedSessionHash(PROVENANCE_TEXT_HASH_DOMAIN, rawSessionKey)}`,
     );
+    expect(
+      bundle.events.find((event) => event.type === "context.compiled")?.data?.targetSessionHash,
+    ).toBe(canonicalTargetHash);
     expect(exportedPrompts[0]?.data?.origin).toEqual({
       kind: "inter_session",
       sourceSessionHash: expectedSessionHash(SOURCE_SESSION_HASH_DOMAIN, rawSessionKey),

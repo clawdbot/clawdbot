@@ -1678,6 +1678,9 @@ describe("runCodexAppServerAttempt", () => {
         recordEvent: (type: string, data?: { prompt?: string; systemPrompt?: string }) => {
           trajectoryEvents.push({ type, data });
         },
+        recordToolResult: (data: { prompt?: string; systemPrompt?: string }) => {
+          trajectoryEvents.push({ type: "tool.result", data });
+        },
         flush: async () => undefined,
       },
     });
@@ -1746,6 +1749,9 @@ describe("runCodexAppServerAttempt", () => {
       trajectoryRecorder: {
         recordEvent: (type: string, data?: Record<string, unknown>) => {
           trajectoryEvents.push({ type, data });
+        },
+        recordToolResult: (data: Record<string, unknown>) => {
+          trajectoryEvents.push({ type: "tool.result", data });
         },
         flush: async () => undefined,
       },

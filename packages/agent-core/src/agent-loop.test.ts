@@ -17,6 +17,10 @@ import {
   getAgentToolExecutionContext,
   type AgentToolExecutionContext,
 } from "./tool-execution-context.js";
+import {
+  consumeAgentToolTargetSessionKey,
+  recordAgentToolTargetSessionKey,
+} from "./tool-execution-private-state.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -1998,6 +2002,55 @@ describe("agentLoop tool termination", () => {
       extra,
       terminate: true,
     });
+  });
+
+  it("carries private execution state through result replacement without serializing it", async () => {
+    const tool: AgentTool = {
+      ...makeTool("sessions_send", []),
+      execute: async () => {
+        recordAgentToolTargetSessionKey("agent:worker:main");
+        return { content: [{ type: "text", text: "sent" }] };
+      },
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "toolUse",
+          message: makeAssistantMessage([
+            { type: "toolCall", id: "call-private", name: tool.name, arguments: {} },
+          ]),
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "send", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          afterToolCall: async () => ({
+            content: [{ type: "text", text: "middleware replacement" }],
+            terminate: true,
+          }),
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+    const event = events.find((entry) => entry.type === "tool_execution_end") as
+      | (Extract<AgentEvent, { type: "tool_execution_end" }> & {
+          privateState?: Parameters<typeof consumeAgentToolTargetSessionKey>[0];
+        })
+      | undefined;
+
+    expect(event?.result.content).toEqual([{ type: "text", text: "middleware replacement" }]);
+    expect(JSON.stringify(event)).not.toContain("agent:worker:main");
+    expect(Object.keys(event ?? {})).not.toContain("privateState");
+    expect(consumeAgentToolTargetSessionKey(event?.privateState)).toBe("agent:worker:main");
   });
 
   it("marks policy-blocked tool calls as not executed", async () => {

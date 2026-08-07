@@ -50,6 +50,7 @@ function createMemoryHostTrajectoryRecorder(): {
     events,
     recorder: {
       recordEvent: (type, data) => events.push({ type, data }),
+      recordToolResult: (data) => events.push({ type: "tool.result", data }),
       flush: async () => undefined,
     },
   };
@@ -103,6 +104,20 @@ function createSqliteHostTrajectoryRecorder(params: {
         seq,
         sessionId: params.sessionId,
         ...(data === undefined ? {} : { data }),
+      });
+      seq += 1;
+    },
+    recordToolResult: (data) => {
+      events.push({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: `${params.sessionId}:test`,
+        source: "runtime",
+        type: "tool.result",
+        ts: new Date(0).toISOString(),
+        seq,
+        sessionId: params.sessionId,
+        data,
       });
       seq += 1;
     },
@@ -293,6 +308,58 @@ describe("Codex trajectory recorder", () => {
     });
     expect(events[0]?.data?.messagesSnapshot).toBeUndefined();
     expect(events[0]?.data?.droppedFields).toContain("messagesSnapshot");
+  });
+
+  it("preserves tool identity and forwards private state through oversized results", () => {
+    const recorded: Array<{
+      data: Record<string, unknown>;
+      privateState?: unknown;
+    }> = [];
+    const privateState = Object.freeze({}) as never;
+    const recorder = expectTrajectoryRecorder(
+      createCodexTrajectoryRecorder({
+        cwd: makeTempDir(),
+        attempt: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          runId: "run-1",
+          provider: "codex",
+          modelId: "gpt-5.4",
+          model: { api: "responses" },
+        } as never,
+        trajectoryRecorder: {
+          recordEvent: vi.fn(),
+          recordToolResult: (data, state) => recorded.push({ data, privateState: state }),
+          flush: async () => undefined,
+        },
+        env: {},
+      }),
+    );
+
+    recorder.recordToolResult(
+      {
+        name: "sessions_send",
+        toolCallId: "call-oversized",
+        isError: true,
+        success: false,
+        contentItems: Array.from({ length: 64 }, () => ({
+          type: "inputText",
+          text: "x".repeat(8_000),
+        })),
+      },
+      privateState,
+    );
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.data).toMatchObject({
+      truncated: true,
+      name: "sessions_send",
+      toolCallId: "call-oversized",
+      isError: true,
+      success: false,
+    });
+    expect(recorded[0]?.data.contentItems).toBeUndefined();
+    expect(recorded[0]?.privateState).toBe(privateState);
   });
 
   it("projects trusted prompt origin for the host when truncating an oversized prompt event", async () => {

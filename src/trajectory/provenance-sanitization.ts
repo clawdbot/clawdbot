@@ -16,7 +16,7 @@ import {
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 const ORIGIN_KINDS = new Set(["external_user", "inter_session", "internal_system"]);
-const SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
+export const TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN = "openclaw:trajectory:source-session-key:v1";
 const ORIGIN_SESSION_HASH_DOMAIN = "openclaw:trajectory:origin-session-id:v1";
 const PROVENANCE_TEXT_HASH_DOMAIN = "openclaw:trajectory:provenance-text:v1";
 const CANONICAL_SESSION_HASH_RE = /^sha256:v1:[0-9a-f]{64}$/u;
@@ -31,6 +31,10 @@ const TRAJECTORY_LIMITS = {
   maxObjectKeys: 64,
   maxStringChars: 32_768,
 };
+
+export function hashTrajectoryIdentifier(domain: string, value: string): string {
+  return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
+}
 
 type OriginKind = "external_user" | "inter_session" | "internal_system";
 type PersistedOrigin = {
@@ -57,10 +61,6 @@ type Scope =
 
 function normalizeKind(value: unknown): OriginKind | undefined {
   return typeof value === "string" && ORIGIN_KINDS.has(value) ? (value as OriginKind) : undefined;
-}
-
-function hashIdentifier(domain: string, value: string): string {
-  return `sha256:v1:${sha256Hex(JSON.stringify([domain, value]))}`;
 }
 
 function canonicalHash(value: unknown): string | undefined {
@@ -310,7 +310,10 @@ export class TrajectoryProvenanceSanitizer {
       this.unsafe ??= identity.length < MIN_IDENTITY_CHARS ? "short" : "long";
       return;
     }
-    this.replacements.set(identity, hashIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, identity));
+    this.replacements.set(
+      identity,
+      hashTrajectoryIdentifier(PROVENANCE_TEXT_HASH_DOMAIN, identity),
+    );
     this.pattern = undefined;
   }
 
@@ -325,7 +328,7 @@ export class TrajectoryProvenanceSanitizer {
     const projectId = (rawValue: unknown, hashValue: unknown, domain: string) => {
       const raw = normalizeOptionalString(rawValue);
       return raw
-        ? hashIdentifier(domain, raw)
+        ? hashTrajectoryIdentifier(domain, raw)
         : this.params.mode === "export"
           ? canonicalHash(hashValue)
           : undefined;
@@ -333,7 +336,7 @@ export class TrajectoryProvenanceSanitizer {
     const sourceSessionHash = projectId(
       value.sourceSessionKey,
       value.sourceSessionHash,
-      SOURCE_SESSION_HASH_DOMAIN,
+      TRAJECTORY_SOURCE_SESSION_HASH_DOMAIN,
     );
     const originSessionHash = projectId(
       value.originSessionId,
@@ -361,6 +364,9 @@ export class TrajectoryProvenanceSanitizer {
         : undefined;
     return projectTrajectoryValue(value, scope, {
       omitField: (key, record, context) => {
+        if (key === "targetSessionHash" && isDiagnosticContext(context, scope)) {
+          return this.params.mode === "live" || canonicalHash(record[key]) === undefined;
+        }
         if (isSessionKeyField(key) && isDiagnosticContext(context, scope)) {
           return true;
         }

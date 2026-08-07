@@ -2,6 +2,7 @@
  * Records optional Codex runtime trajectory events with bounded, redacted
  * context and completion payloads.
  */
+import type { AgentToolExecutionPrivateState } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -18,6 +19,10 @@ type CodexPromptSubmittedData = {
 /** Runtime trajectory recorder used by Codex run attempts and event projectors. */
 export type CodexTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  recordToolResult: (
+    data: Record<string, unknown>,
+    privateState?: AgentToolExecutionPrivateState,
+  ) => void;
   recordPromptSubmitted: (
     data: CodexPromptSubmittedData,
     origin?: NonNullable<EmbeddedRunAttemptParams["inputProvenance"]>,
@@ -44,14 +49,30 @@ const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16
 const INPUT_PROVENANCE_KINDS = new Set(["external_user", "inter_session", "internal_system"]);
 const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
 const TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS = ["usage", "promptCache"] as const;
+const TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS = [
+  "name",
+  "toolCallId",
+  "isError",
+  "success",
+  "targetSessionHash",
+  ...TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS,
+] as const;
 
 type CodexTrajectorySink = {
   flush: () => Promise<void>;
+  recordToolResult: (
+    data: Record<string, unknown>,
+    privateState?: AgentToolExecutionPrivateState,
+  ) => void;
   write: (event: CodexTrajectoryEvent) => void;
 };
 
 export type CodexHostTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  recordToolResult: (
+    data: Record<string, unknown>,
+    privateState?: AgentToolExecutionPrivateState,
+  ) => void;
   flush: () => Promise<void>;
 };
 
@@ -133,6 +154,9 @@ function createCodexHostTrajectorySink(params: {
     flush: async () => {
       await params.recorder.flush();
     },
+    recordToolResult: (data, privateState) => {
+      params.recorder.recordToolResult(data, privateState);
+    },
   };
 }
 
@@ -161,12 +185,12 @@ export function createCodexTrajectoryRecorder(
   let seq = 0;
   const attribution = resolveCodexLocalRuntimeAttribution(params.attempt);
 
-  const recordSanitizedEvent = (
+  const buildSanitizedEvent = (
     type: string,
     data: Record<string, unknown> | undefined,
     preservedDataKeys?: readonly string[],
-  ) => {
-    const event = boundedTrajectoryEvent(
+  ) =>
+    boundedTrajectoryEvent(
       {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
@@ -187,17 +211,26 @@ export function createCodexTrajectoryRecorder(
       },
       preservedDataKeys,
     );
-    if (event) {
-      sink.write(event);
-    }
-  };
 
   return {
     recordEvent: (type, data) => {
-      recordSanitizedEvent(
+      const event = buildSanitizedEvent(
         type,
         data ? (sanitizeValue(data) as Record<string, unknown>) : undefined,
       );
+      if (event) {
+        sink.write(event);
+      }
+    },
+    recordToolResult: (data, privateState) => {
+      const event = buildSanitizedEvent(
+        "tool.result",
+        sanitizeValue(data) as Record<string, unknown>,
+        TRAJECTORY_RUNTIME_OVERSIZE_TOOL_RESULT_KEYS,
+      );
+      if (event?.data) {
+        sink.recordToolResult(event.data, privateState);
+      }
     },
     recordPromptSubmitted: (data, origin) => {
       const sanitizedData = sanitizeValue(data) as Record<string, unknown>;
@@ -205,7 +238,10 @@ export function createCodexTrajectoryRecorder(
       if (projectedOrigin) {
         sanitizedData.origin = projectedOrigin;
       }
-      recordSanitizedEvent("prompt.submitted", sanitizedData, ["origin"]);
+      const event = buildSanitizedEvent("prompt.submitted", sanitizedData, ["origin"]);
+      if (event) {
+        sink.write(event);
+      }
     },
     flush: sink.flush,
   };
