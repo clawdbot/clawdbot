@@ -2549,6 +2549,56 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
   });
 });
 
+describe("feishuOutbound.sendMedia SecretRef visibility", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("propagates FeishuSecretRefUnavailableError from sendMedia instead of silently falling back", async () => {
+    const secretRefError = new FeishuSecretRefUnavailableError("channels.feishu.appSecret", {
+      source: "exec",
+      provider: "shell",
+      id: "echo-secret",
+    } as any);
+    sendMediaFeishuMock.mockRejectedValueOnce(secretRefError);
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+      }),
+    ).rejects.toBeInstanceOf(FeishuSecretRefUnavailableError);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates wrapped FeishuSecretRefUnavailableError cause from sendMedia instead of silently falling back", async () => {
+    const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
+    const secretRefError = new FeishuSecretRefUnavailableError("channels.feishu.appSecret", {
+      source: "exec",
+      provider: "shell",
+      id: "echo-secret",
+    } as any);
+    sendMediaFeishuMock.mockRejectedValueOnce(
+      new PlatformMessageNotDispatchedError("wrapped", { cause: secretRefError }),
+    );
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+      }),
+    ).rejects.toSatisfy((err: unknown) => {
+      if (err instanceof FeishuSecretRefUnavailableError) return true;
+      return err instanceof Error && err.cause instanceof FeishuSecretRefUnavailableError;
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
   beforeEach(() => {
     resetOutboundMocks();

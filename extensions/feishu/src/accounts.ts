@@ -56,7 +56,14 @@ export class FeishuSecretRefUnavailableError extends Error {
 export function isFeishuSecretRefUnavailableError(
   err: unknown,
 ): err is FeishuSecretRefUnavailableError {
-  return err instanceof FeishuSecretRefUnavailableError;
+  if (err instanceof FeishuSecretRefUnavailableError) {
+    return true;
+  }
+  // Defensive: if a caller wraps the config error, still treat it as unavailable.
+  if (err instanceof Error && err.cause != null) {
+    return isFeishuSecretRefUnavailableError(err.cause);
+  }
+  return false;
 }
 
 function resolveFeishuSecretLike(params: {

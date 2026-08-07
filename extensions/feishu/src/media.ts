@@ -21,7 +21,7 @@ import {
   withTempDownloadPath,
 } from "openclaw/plugin-sdk/temp-path";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { isFeishuSecretRefUnavailableError, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -78,6 +78,11 @@ async function runBeforeFeishuMessageDispatch<T>(operation: () => Promise<T> | T
   try {
     return await operation();
   } catch (error: unknown) {
+    // Configuration errors must stay typed through the media owner boundary so
+    // outbound fallbacks can rethrow instead of silently degrading to text/URL.
+    if (isFeishuSecretRefUnavailableError(error)) {
+      throw error;
+    }
     if (error instanceof PlatformMessageNotDispatchedError) {
       throw error;
     }

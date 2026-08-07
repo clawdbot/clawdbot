@@ -31,10 +31,14 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-vi.mock("./accounts.js", () => ({
-  resolveFeishuAccount: resolveFeishuAccountMock,
-  resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
-}));
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
+  return {
+    ...actual,
+    resolveFeishuAccount: resolveFeishuAccountMock,
+    resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
+  };
+});
 
 vi.mock("./targets.js", () => ({
   normalizeFeishuTarget: normalizeFeishuTargetMock,
@@ -570,6 +574,37 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(result.messageId).toBe("msg_file_fallback");
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
+  });
+
+  it("propagates FeishuSecretRefUnavailableError without wrapping as PlatformMessageNotDispatchedError", async () => {
+    const { FeishuSecretRefUnavailableError } = await import("./accounts.js");
+    const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
+    const secretRefError = new FeishuSecretRefUnavailableError("channels.feishu.appSecret", {
+      source: "exec",
+      provider: "shell",
+      id: "echo-secret",
+    } as any);
+    resolveFeishuAccountMock.mockImplementation(() => {
+      throw secretRefError;
+    });
+
+    await expect(
+      sendMediaFeishu({
+        cfg: emptyConfig,
+        to: "user:ou_target",
+        mediaBuffer: Buffer.from("image"),
+        fileName: "x.png",
+      }),
+    ).rejects.toBe(secretRefError);
+
+    await expect(
+      sendMediaFeishu({
+        cfg: emptyConfig,
+        to: "user:ou_target",
+        mediaBuffer: Buffer.from("image"),
+        fileName: "x.png",
+      }),
+    ).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
   });
 
   it("keeps thread reply failures top-level safe when fallback is disallowed", async () => {
