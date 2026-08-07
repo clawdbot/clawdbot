@@ -9,11 +9,6 @@ import type { MediaUnderstandingSkipError } from "../../../packages/media-unders
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  getAgentEventLifecycleGeneration,
-  rotateAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
-import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
@@ -573,54 +568,6 @@ describe("tryDispatchAcpReply", () => {
       expect.objectContaining({ runId: expect.any(String), sessionKey, auditOnly: true }),
     );
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
-  });
-
-  it("owns generated audit runs until the ACP turn settles", async () => {
-    setReadyAcpResolution();
-    let observedRunId: string | undefined;
-    let observedContext: ReturnType<typeof getAgentRunContext>;
-    managerMocks.runTurn.mockImplementationOnce(
-      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
-        observedRunId = (
-          mockArg(auditMocks.emitAcpLifecycleStart, 0, 0, "audit start") as { runId: string }
-        ).runId;
-        observedContext = getAgentRunContext(observedRunId);
-        await onEvent?.({ type: "done", status: "completed" });
-      },
-    );
-
-    await runDispatch({ bodyForAgent: "audit owned turn" });
-
-    expect(observedContext).toMatchObject({
-      agentId: "codex-acp",
-      isControlUiVisible: false,
-      projectSessionActive: false,
-      projectSessionLifecycle: false,
-      sessionKey,
-      attribution: {
-        runId: observedRunId,
-        agentId: "codex-acp",
-        sessionKey,
-      },
-    });
-    expect(observedRunId).toBeTypeOf("string");
-    expect(getAgentRunContext(observedRunId ?? "")).toBeUndefined();
-  });
-
-  it("captures generated audit ownership after asynchronous runtime loading", async () => {
-    setReadyAcpResolution();
-
-    const dispatch = runDispatch({ bodyForAgent: "audit rotation turn" });
-    const lifecycleGeneration = rotateAgentEventLifecycleGeneration();
-    await dispatch;
-
-    expect(lifecycleGeneration).toBe(getAgentEventLifecycleGeneration());
-    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycleGeneration }),
-    );
-    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycleGeneration }),
-    );
   });
 
   it("keeps caller-owned run ids on the shared lifecycle path", async () => {

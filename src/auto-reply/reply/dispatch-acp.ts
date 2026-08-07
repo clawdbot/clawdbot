@@ -18,12 +18,6 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
-import { captureAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
-import {
-  claimAgentRunContext,
-  releaseAgentRunContext,
-  retainActiveAgentRunContext,
-} from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -43,7 +37,6 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
-import { admitAutoReplyExecutionAttribution } from "./agent-runner-execution-identity.js";
 import {
   loadAgentTurnMediaRuntime,
   resolveAgentTurnAttachments,
@@ -585,74 +578,20 @@ export async function tryDispatchAcpReply(params: {
   const auditToolTracker = auditRuntime.createAcpToolLifecycleTracker();
   let auditStarted = false;
   let auditFinished = false;
-  let auditLifecycleGeneration: string | undefined;
-  let auditContextOwnerToken: string | undefined;
-  let releaseAuditContextLease: (() => void) | undefined;
   let auditTerminalOutcome: "blocked" | undefined;
   let auditStopReason: string | undefined;
   let auditResultStatus: "completed" | "cancelled" | undefined;
   let runtimeTurnWasCancelled = false;
-  const claimAuditContext = () => {
-    if (!auditOnly || auditContextOwnerToken) {
-      return;
-    }
-    auditLifecycleGeneration ??= captureAgentRunLifecycleGeneration(auditRunId);
-    const attribution = admitAutoReplyExecutionAttribution({
-      config: params.cfg,
-      lifecycleGeneration: auditLifecycleGeneration,
-      runId: auditRunId,
-      context: {
-        accountId: effectiveDispatchAccountId,
-        agentId: acpAgentId,
-        chatId: params.ctx.ChatId ?? params.ctx.NativeChannelId,
-        channel: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-        inputProvenance: params.ctx.InputProvenance,
-        isHeartbeat: false,
-        messageId: params.ctx.MessageSidFull ?? params.ctx.MessageSid,
-        senderId: params.ctx.SenderId,
-        senderIsBot: params.ctx.SenderIsBot,
-        senderLabel: params.ctx.SenderName ?? params.ctx.SenderUsername,
-        sessionKey: canonicalSessionKey,
-        threadId: params.ctx.MessageThreadId ?? params.ctx.TransportThreadId,
-      },
-    });
-    auditContextOwnerToken = claimAgentRunContext(
-      auditRunId,
-      {
-        attribution,
-        agentId: acpAgentId,
-        isControlUiVisible: false,
-        lifecycleGeneration: auditLifecycleGeneration,
-        projectSessionActive: false,
-        projectSessionLifecycle: false,
-        sessionKey: canonicalSessionKey,
-      },
-      { ownsContext: true, trackOwner: true },
-    );
-    if (auditContextOwnerToken) {
-      releaseAuditContextLease = retainActiveAgentRunContext(auditRunId, auditLifecycleGeneration);
-    }
-  };
-  const releaseAuditContext = () => {
-    releaseAuditContextLease?.();
-    releaseAuditContextLease = undefined;
-    if (auditContextOwnerToken) {
-      releaseAgentRunContext(auditRunId, auditContextOwnerToken);
-      auditContextOwnerToken = undefined;
-    }
-  };
   const emitAuditStart = () => {
     if (auditStarted) {
       return;
     }
-    claimAuditContext();
     auditStarted = true;
     auditRuntime.emitAcpLifecycleStart({
       runId: auditRunId,
       sessionKey: canonicalSessionKey,
       agentId: acpAgentId,
       startedAt: Date.now(),
-      ...(auditLifecycleGeneration ? { lifecycleGeneration: auditLifecycleGeneration } : {}),
       auditOnly,
     });
   };
@@ -662,21 +601,16 @@ export async function tryDispatchAcpReply(params: {
     }
     emitAuditStart();
     auditFinished = true;
-    try {
-      auditRuntime.emitAcpLifecycleEnd({
-        runId: auditRunId,
-        toolTracker: auditToolTracker,
-        sessionKey: canonicalSessionKey,
-        agentId: acpAgentId,
-        ...(auditLifecycleGeneration ? { lifecycleGeneration: auditLifecycleGeneration } : {}),
-        ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-        ...(auditStopReason ? { stopReason: auditStopReason } : {}),
-        ...(auditResultStatus ? { resultStatus: auditResultStatus } : {}),
-        auditOnly,
-      });
-    } finally {
-      releaseAuditContext();
-    }
+    auditRuntime.emitAcpLifecycleEnd({
+      runId: auditRunId,
+      toolTracker: auditToolTracker,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      ...(auditStopReason ? { stopReason: auditStopReason } : {}),
+      ...(auditResultStatus ? { resultStatus: auditResultStatus } : {}),
+      auditOnly,
+    });
   };
   const emitAuditError = (error: unknown) => {
     if (auditFinished) {
@@ -684,21 +618,16 @@ export async function tryDispatchAcpReply(params: {
     }
     emitAuditStart();
     auditFinished = true;
-    try {
-      auditRuntime.emitAcpLifecycleError({
-        runId: auditRunId,
-        toolTracker: auditToolTracker,
-        sessionKey: canonicalSessionKey,
-        agentId: acpAgentId,
-        ...(auditLifecycleGeneration ? { lifecycleGeneration: auditLifecycleGeneration } : {}),
-        ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-        ...(auditTerminalOutcome ? { terminalOutcome: auditTerminalOutcome } : {}),
-        auditOnly,
-        error,
-      });
-    } finally {
-      releaseAuditContext();
-    }
+    auditRuntime.emitAcpLifecycleError({
+      runId: auditRunId,
+      toolTracker: auditToolTracker,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      ...(auditTerminalOutcome ? { terminalOutcome: auditTerminalOutcome } : {}),
+      auditOnly,
+      error,
+    });
   };
   // Hoisted so the failure path can persist the same user turn the success path
   // records: a bound ACP session must not silently diverge from the channel.
