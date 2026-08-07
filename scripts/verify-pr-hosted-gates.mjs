@@ -328,8 +328,8 @@ function preferredCiRun(runs, nowMs) {
   if (latestDecisiveScheduledRun && latestDecisiveScheduledRun.conclusion !== "success") {
     return latestDecisiveScheduledRun;
   }
-  if (isSuccessfulRecentRun(latestScheduledRun, nowMs)) {
-    return latestScheduledRun;
+  if (isSuccessfulRecentRun(latestDecisiveScheduledRun, nowMs)) {
+    return latestDecisiveScheduledRun;
   }
   return latestManualRun ?? latestScheduledRun;
 }

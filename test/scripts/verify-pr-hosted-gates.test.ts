@@ -1015,6 +1015,18 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow("Missing successful recent CI workflow");
   });
 
+  it.each(["cancelled", "skipped"])(
+    "retains a recent scheduled success after a newer neutral run (%s)",
+    (conclusion) => {
+      const success = successfulRun("CI", 1, "2026-06-17T10:47:00Z");
+      const neutral = { ...successfulRun("CI", 2, "2026-06-17T10:48:00Z"), conclusion };
+      expect(collectHostedGateEvidence({ sha, workflowRuns: [success, neutral] })).toEqual({
+        headSha: sha,
+        workflows: [expect.objectContaining({ name: "CI", id: 1 })],
+      });
+    },
+  );
+
   it("rejects a completed scheduled CI failure even when a fallback passed", () => {
     expect(() =>
       collectHostedGateEvidence({
