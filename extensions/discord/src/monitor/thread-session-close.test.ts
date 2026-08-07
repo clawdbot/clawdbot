@@ -272,4 +272,38 @@ describe("closeDiscordThreadSessions", () => {
     expect(Object.keys(mainStore)).toHaveLength(0);
     expect(Object.keys(workStore)).toHaveLength(0);
   });
+
+  it("scopes each read by agent id and never opens agent databases writably", async () => {
+    // With a fixed custom store every agent resolves the same storePath, so the
+    // agentId is what selects the owner DB — without it the scan re-reads the
+    // default owner and leaves the other agent's thread session open.
+    const fixedStorePath = "/custom/path/sessions.json";
+    const entriesByAgent: Record<string, Record<string, { updatedAt: number }>> = {
+      main: { [`agent:main:discord:channel:${THREAD_ID}`]: { updatedAt: 1_000 } },
+      work: { [`agent:work:discord:channel:${THREAD_ID}`]: { updatedAt: 2_000 } },
+    };
+    hoisted.resolveStorePath.mockReturnValue(fixedStorePath);
+    hoisted.listSessionEntries.mockImplementation(({ agentId }: { agentId?: string }) =>
+      Object.entries(agentId ? (entriesByAgent[agentId] ?? {}) : {}).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry,
+      })),
+    );
+    hoisted.deleteSessionEntry.mockResolvedValue(true);
+
+    const count = await closeDiscordThreadSessions({
+      cfg: {
+        session: { store: fixedStorePath },
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      },
+      threadId: THREAD_ID,
+    });
+
+    expect(count).toBe(2);
+    for (const agentId of ["main", "work"]) {
+      expect(hoisted.listSessionEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId, storePath: fixedStorePath, readOnly: true }),
+      );
+    }
+  });
 });

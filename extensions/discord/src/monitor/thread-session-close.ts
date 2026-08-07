@@ -45,7 +45,15 @@ export async function closeDiscordThreadSessions(params: {
 
   for (const agentId of listAgentIds(cfg)) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
+    // agentId selects the owner DB: with a fixed custom store every agent
+    // resolves the same storePath, so storePath alone re-reads the default
+    // owner. readOnly keeps this fleet-wide scan from creating or registering
+    // agent databases while handling a thread archive/delete event.
+    for (const { sessionKey, entry } of listSessionEntries({
+      agentId,
+      storePath,
+      readOnly: true,
+    })) {
       if (!sessionKeyContainsThreadId(sessionKey)) {
         continue;
       }
