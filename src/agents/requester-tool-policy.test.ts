@@ -101,6 +101,29 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.subagentPolicy).toBeDefined();
   });
 
+  it("returns persisted runtime tool policy for delegated senderless child runs", async () => {
+    const childSessionKey = "agent:main:subagent:runtime-tools";
+    await writeSession(childSessionKey, {
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "exec"],
+      runtimeToolPolicy: { allow: ["read"] },
+    });
+
+    const result = resolveRequesterToolPolicies({
+      config: config(),
+      agentId: "main",
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe("persisted-child");
+    expect(result.sessionRuntimeToolPolicy).toEqual({ allow: ["read"] });
+  });
+
   it("uses a persisted projection for a spawn-owned dashboard child", async () => {
     const parentSessionKey = "agent:main:main";
     const childSessionKey = "agent:main:dashboard:visible-child";

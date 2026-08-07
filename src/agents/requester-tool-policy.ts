@@ -209,11 +209,18 @@ export function resolveRequesterToolPolicies(
   if (delegatedPolicy.delegated) {
     // The persisted projection already includes both global and group sender policy.
     // Re-resolving either without external identity would incorrectly select its wildcard.
+    // Still attach the child session's immutable runtime tool policy so senderless native
+    // child launches cannot skip the spawn-time tools boundary.
     return {
       delegated: true,
       requesterPolicySource: delegatedPolicy.source,
       subagentPolicy,
       inheritedToolPolicy: delegatedPolicy.policy,
+      sessionRuntimeToolPolicy: resolveRuntimeToolPolicyForSession(
+        params.config,
+        subagentSessionKey,
+        { store: subagentStore },
+      ),
       subagentStore,
     };
   }
