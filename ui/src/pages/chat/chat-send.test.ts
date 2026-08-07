@@ -7365,6 +7365,88 @@ describe("handleSendChat", () => {
     });
   });
 
+  it("rebinds a failed pre-clear retry to the authoritative empty transcript", async () => {
+    let historyRequests = 0;
+    let sendAttempts = 0;
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          sendAttempts += 1;
+          if (sendAttempts === 1) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "active branch changed; review and resend",
+              details: { reason: "active-leaf-changed" },
+            });
+          }
+          const payload = requireRecord(params, "post-clear retry payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+        "chat.history": () => {
+          historyRequests += 1;
+          const cleared = historyRequests > 1;
+          return {
+            messages: [],
+            sessionInfo: row("agent:main", {
+              activeLeafEntryId: cleared ? null : "leaf-before-clear",
+              sessionId: cleared ? "session-after-clear" : "session-before-clear",
+            }),
+          };
+        },
+        "sessions.branches.list": { branches: [] },
+        "sessions.reset": { ok: true },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-clear",
+      chatMessage: "retry after clear",
+      currentSessionId: "session-before-clear",
+    });
+
+    await handleSendChat(host);
+    await waitForFast(() => expect(historyRequests).toBe(1));
+    await waitForFast(() => expect(host.chatLoading).toBe(false));
+    const failedId = host.chatQueue[0]?.id ?? "missing-failed-pre-clear-send";
+    expect(host.chatQueue[0]).toMatchObject({
+      id: failedId,
+      sendState: "failed",
+      transcriptRevision: {
+        expectedLeafEntryId: "leaf-before-clear",
+        sessionId: "session-before-clear",
+      },
+    });
+
+    host.chatMessage = "/clear";
+    await handleSendChat(host);
+
+    expect(historyRequests).toBe(2);
+    expect(host.chatDisplayedLeafEntryId).toBeNull();
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ id: failedId, sendState: "failed" }),
+    ]);
+
+    await retryQueuedChatMessage(host, failedId);
+
+    expect(historyRequests).toBe(2);
+    const sends = host.request.mock.calls
+      .filter(([method]) => method === "chat.send")
+      .map(([, params]) => requireRecord(params, "post-clear send payload"));
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toMatchObject({
+      expectedLeafEntryId: null,
+      sessionId: "session-after-clear",
+    });
+    expect(sends[1]).not.toMatchObject({
+      expectedLeafEntryId: "leaf-before-clear",
+      sessionId: "session-before-clear",
+    });
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+      id: failedId,
+      transcriptRevision: {
+        expectedLeafEntryId: null,
+        sessionId: "session-after-clear",
+      },
+    });
+  });
+
   it("clears chat state when /clear resets chat history", async () => {
     const host = makeChatHost({
       requestHandlers: {
@@ -7372,7 +7454,7 @@ describe("handleSendChat", () => {
         "chat.history": {
           messages: [],
           thinkingLevel: null,
-          sessionInfo: { activeLeafEntryId: null },
+          sessionInfo: { activeLeafEntryId: null, sessionId: "session-after-clear" },
         },
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "post-clear send payload");
@@ -7393,14 +7475,17 @@ describe("handleSendChat", () => {
     expect(host.chatRunError).toBeNull();
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
-    expect(host.chatDisplayedLeafEntryId).toBeUndefined();
+    expect(host.chatDisplayedLeafEntryId).toBeNull();
 
     host.chatMessage = "after clear";
     await handleSendChat(host);
 
     expect(
       findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "post-clear send"),
-    ).not.toHaveProperty("expectedLeafEntryId");
+    ).toMatchObject({
+      expectedLeafEntryId: null,
+      sessionId: "session-after-clear",
+    });
   });
 
   it("preserves the replacement route leaf when post-clear history resolves late", async () => {
