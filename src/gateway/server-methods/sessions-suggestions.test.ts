@@ -70,6 +70,17 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
 
 const sessionKey = "agent:main:main";
 
+const defaultSuggestionSession = {
+  sessionId: "session-main",
+  updatedAt: 1,
+  createdActor: { type: "human", id: "owner" },
+  visibility: "suggest",
+} as const;
+
+function upsertDefaultSuggestionSession() {
+  return upsertSessionEntry({ agentId: "main", sessionKey }, defaultSuggestionSession);
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((nextResolve) => {
@@ -163,15 +174,7 @@ afterEach(() => {
 describe("session suggestion handlers", () => {
   it("lets a suggest viewer add and list only their own suggestion", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const alice = client("alice", "Alice");
       const add = await call(
         "session.suggestions.add",
@@ -418,15 +421,7 @@ describe("session suggestion handlers", () => {
     "dispatches %s through chat.send with suggested-by attribution",
     async (resolution, queueMode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await upsertSessionEntry(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: "session-main",
-            updatedAt: 1,
-            createdActor: { type: "human", id: "owner" },
-            visibility: "suggest",
-          },
-        );
+        await upsertDefaultSuggestionSession();
         const added = await call(
           "session.suggestions.add",
           { sessionKey, text: "Ship the focused change" },
@@ -475,15 +470,7 @@ describe("session suggestion handlers", () => {
 
   it("sends immediately without a steer override when the session is idle", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "send while idle" },
@@ -510,15 +497,7 @@ describe("session suggestion handlers", () => {
 
   it("keeps a suggestion pending when multiple active runs make send-now ambiguous", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "ambiguous send" },
@@ -545,10 +524,7 @@ describe("session suggestion handlers", () => {
       expect(resolved.responses[0]?.[2]).toMatchObject({
         message:
           "session has multiple active runs; choose the target run before sending the suggestion",
-        details: {
-          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-          sessionKey,
-        },
+        details: { code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS", sessionKey },
       });
       expect(mocks.handleChatSend).not.toHaveBeenCalled();
       expect(listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([
@@ -559,15 +535,7 @@ describe("session suggestion handlers", () => {
 
   it("rejects send-now when active work has no exact gateway run identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "hidden active run" },
@@ -576,8 +544,6 @@ describe("session suggestion handlers", () => {
       const id = responseSuggestionId(added);
       const hiddenHandle = {
         runId: "embedded-only-run",
-        sessionId: "session-main",
-        sessionKey,
         abort: () => {},
         queueMessage: async () => {},
       } as never;
@@ -593,10 +559,7 @@ describe("session suggestion handlers", () => {
         expect(resolved.responses[0]?.[0]).toBe(false);
         expect(resolved.responses[0]?.[2]).toMatchObject({
           message: "active session run has no exact dispatch identity; refresh and retry",
-          details: {
-            code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-            sessionKey,
-          },
+          details: { code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS", sessionKey },
         });
         expect(mocks.handleChatSend).not.toHaveBeenCalled();
       } finally {
@@ -607,15 +570,7 @@ describe("session suggestion handlers", () => {
 
   it("allows only owners and admins to resolve suggestions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "Edit me" },
@@ -657,15 +612,7 @@ describe("session suggestion handlers", () => {
 
   it("publishes a fenced resolution before awaiting the transcript audit", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "resolve before audit" },
@@ -697,15 +644,7 @@ describe("session suggestion handlers", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const broadcast = vi.fn();
       const requestContext = context(broadcast);
       mocks.presence = [{ user: { id: "alice" }, watchedSessions: [sessionKey] }];
@@ -801,15 +740,7 @@ describe("session suggestion handlers", () => {
 
   it("returns structured errors for blank text and clientless dispatch", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const blank = await call(
         "session.suggestions.add",
         { sessionKey, text: "   " },
@@ -863,15 +794,7 @@ describe("session suggestion handlers", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let now = 1_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "retry me" },
@@ -921,15 +844,7 @@ describe("session suggestion handlers", () => {
 
   it("claims a pending suggestion before dispatching it", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "only once" },
@@ -1116,15 +1031,7 @@ describe("session suggestion handlers", () => {
 
   it("releases a durable claim after a definite dispatch rejection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", id: "owner" },
-          visibility: "suggest",
-        },
-      );
+      await upsertDefaultSuggestionSession();
       const added = await call(
         "session.suggestions.add",
         { sessionKey, text: "try again" },

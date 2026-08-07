@@ -48,11 +48,7 @@ import type {
 import { assertValidParams } from "./validation.js";
 
 function suggestionScope(target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>) {
-  return {
-    agentId: target.agentId,
-    sessionKey: target.storeKey,
-    storePath: target.storePath,
-  };
+  return { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath };
 }
 
 function protocolSuggestion(

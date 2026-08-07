@@ -379,11 +379,10 @@ function resolveEmbeddedQueueMessage(
         ? (text, options) => injection.queueMessage(text, options)
         : undefined;
     }
-    // Queue-first compatibility for shipped handles. A stopped probe can reject
-    // synchronously; otherwise the queue operation is the authoritative gate.
-    return handle.isStopped?.() === true
-      ? undefined
-      : (text, options) => handle.queueMessage(text, options);
+    // Legacy handles predate explicit injection capability. Preserve their
+    // shipped eligibility probe while modern backends use messageInjection.
+    const isAvailable = handle.isStopped ? !handle.isStopped() : handle.isStreaming();
+    return isAvailable ? (text, options) => handle.queueMessage(text, options) : undefined;
   } catch (err) {
     diag.warn(
       `queue message failed: sessionId=${sessionId} reason=injectable_check_failed err=${String(err)}`,

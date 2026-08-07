@@ -20,9 +20,11 @@ export async function prepareAndAdmitChatSend(
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, normalizedRequest.error, {
-        ...(normalizedRequest.reason ? { details: { reason: normalizedRequest.reason } } : {}),
-      }),
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        normalizedRequest.error,
+        normalizedRequest.reason ? { details: { reason: normalizedRequest.reason } } : undefined,
+      ),
     );
     return undefined;
   }

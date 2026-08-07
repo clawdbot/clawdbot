@@ -1390,7 +1390,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     operation.attachBackend({
       kind: "embedded",
       runId: "active-run",
-      runId: "active-run",
       supportsQueueMessageImages: true,
       cancel: () => {},
       messageInjection: { isAvailable: () => true, queueMessage },
@@ -1430,7 +1429,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("starts exact-run injection before ACK and does not dispatch after the owner clears", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-before-ack-");
     const { context, respond, send } = createChatRequestFixture();
-    const delivery = createDeferred<void>();
+    const delivery = createDeferred();
     const operation = replyRunRegistry.begin({
       sessionKey: "main",
       sessionId: mockState.sessionId,
@@ -1555,7 +1554,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalText = "fallback reply";
     const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
-    const delivery = createDeferred<void>();
+    const delivery = createDeferred();
     const operation = replyRunRegistry.begin({
       sessionKey: "main",
       sessionId: mockState.sessionId,
@@ -1656,7 +1655,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("ACKs and dispatches once when exact-run injection throws synchronously", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-steer-sync-reject-");
-    const { context, respond, send } = createChatRequestFixture();
+    const { respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const operation = replyRunRegistry.begin({
       sessionKey: "main",

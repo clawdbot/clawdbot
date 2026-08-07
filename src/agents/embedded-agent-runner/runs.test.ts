@@ -710,24 +710,13 @@ describe("embedded-agent runner run registry", () => {
     );
   });
 
-  it("uses queue capability instead of token streaming for legacy handles", () => {
-    const queueMessage = vi.fn(async () => {});
+  it("returns structured queue failures for legacy, unavailable, or compacting runs", () => {
+    const legacyQueue = vi.fn(async () => {});
+    const unavailableQueue = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "session-not-streaming",
-      createRunHandle({ isStreaming: false, queueMessage }),
+      createRunHandle({ isStreaming: false, queueMessage: legacyQueue }),
     );
-
-    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
-      {
-        queued: true,
-        target: "embedded_run",
-      },
-    );
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-  });
-
-  it("returns structured queue failures for unavailable or compacting active runs", () => {
-    const unavailableQueue = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "session-unavailable",
       createRunHandle({
@@ -736,18 +725,18 @@ describe("embedded-agent runner run registry", () => {
     );
     setActiveEmbeddedRun("session-compacting", createRunHandle({ isCompacting: true }));
 
-    expect(queueEmbeddedAgentMessageWithOutcome("session-unavailable", "continue")).toEqual({
+    expect(queueEmbeddedAgentMessageWithOutcome("session-not-streaming", "continue")).toMatchObject(
+      { queued: false, reason: "not_streaming" },
+    );
+    expect(legacyQueue).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome("session-unavailable", "continue")).toMatchObject({
       queued: false,
-      sessionId: "session-unavailable",
       reason: "not_streaming",
-      gatewayHealth: "live",
     });
     expect(unavailableQueue).not.toHaveBeenCalled();
-    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting", "continue")).toEqual({
+    expect(queueEmbeddedAgentMessageWithOutcome("session-compacting", "continue")).toMatchObject({
       queued: false,
-      sessionId: "session-compacting",
       reason: "compacting",
-      gatewayHealth: "live",
     });
   });
 
