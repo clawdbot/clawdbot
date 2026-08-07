@@ -305,8 +305,8 @@ unreadable but not yet erased from the underlying database file. A vote
 arriving after the retention window (or an unrelated poll's leftover state)
 is not decodable and the hook simply does not fire for it — no error is
 raised. `pollVoteRetentionMs` accepts any positive value up to a hard
-maximum of `86400000` (24 hours); larger configured values are clamped, not
-rejected. Configure the window channel-wide or per account:
+maximum of `86400000` (24 hours); larger configured values are rejected by
+config validation. Configure the window channel-wide or per account:
 
 ```json5
 {
