@@ -1654,7 +1654,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
   it("derives prerelease npm companions from selected survivor recipes", () => {
     const basePlan = planFor({ selectedLaneNames: ["published-upgrade-survivor"] });
-    expect(basePlan.requiredPrepublishPluginPackages).toEqual(["@openclaw/discord"]);
+    expect(basePlan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/codex",
+      "@openclaw/discord",
+    ]);
     expect(basePlan.needs.prepublishPluginRegistry).toBe(true);
 
     const feishuPlan = planFor({
@@ -1663,21 +1666,28 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorScenarios: "base feishu-channel",
     });
     expect(feishuPlan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/codex",
       "@openclaw/discord",
       "@openclaw/feishu",
     ]);
     expect(
       planFor({ selectedLaneNames: ["root-managed-vps-upgrade"] }).requiredPrepublishPluginPackages,
-    ).toEqual(["@openclaw/discord"]);
+    ).toEqual(["@openclaw/codex", "@openclaw/discord"]);
     expect(
       planFor({ selectedLaneNames: ["update-migration"] }).requiredPrepublishPluginPackages,
-    ).toEqual(["@openclaw/discord"]);
+    ).toEqual(["@openclaw/codex", "@openclaw/discord"]);
+    expect(
+      planFor({ selectedLaneNames: ["update-restart-auth"] }).requiredPrepublishPluginPackages,
+    ).toEqual(["@openclaw/codex", "@openclaw/discord"]);
     const legacyFeishuPlan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
       upgradeSurvivorBaselines: "2026.3.13",
       upgradeSurvivorScenarios: "feishu-channel",
     });
-    expect(legacyFeishuPlan.requiredPrepublishPluginPackages).toEqual(["@openclaw/discord"]);
+    expect(legacyFeishuPlan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/codex",
+      "@openclaw/discord",
+    ]);
     const selfUpgradeLane = findLaneByName("update-run-package-self-upgrade");
     expect(selfUpgradeLane).toBeDefined();
     expect(requiredPrepublishPluginPackagesForLanes([selfUpgradeLane!])).toEqual([]);
