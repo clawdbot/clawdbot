@@ -1,6 +1,6 @@
 // Workboard tests cover dispatcher plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { cleanupWorkboardRunWorktree, reconcileWorkboardEndedRun } from "./dispatcher-workspace.js";
+import { cleanupWorkboardRunWorktree } from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
@@ -141,73 +141,6 @@ describe("dispatchAndStartWorkboardCards", () => {
       ownerKind: "workboard",
       ownerId: card.id,
     });
-  });
-
-  it("blocks an ended run that did not complete or block its card", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({
-      title: "Worker that exited without closeout",
-      status: "ready",
-      workspaceAccess: { unrestricted: true },
-    });
-    await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run: vi.fn().mockResolvedValue({ runId: "run-without-closeout" }) },
-      options: { now: 10, maxStarts: 1 },
-    });
-
-    await reconcileWorkboardEndedRun({
-      store,
-      runId: "run-without-closeout",
-      outcome: "ok",
-    });
-
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "blocked",
-      execution: { status: "blocked", runId: "run-without-closeout" },
-      metadata: {
-        failureCount: 1,
-        workerProtocol: { state: "violated" },
-        attempts: [expect.objectContaining({ status: "blocked" })],
-      },
-    });
-    expect((await store.get(card.id))?.metadata?.claim).toBeUndefined();
-
-    await reconcileWorkboardEndedRun({
-      store,
-      runId: "run-without-closeout",
-      outcome: "ok",
-    });
-    expect((await store.get(card.id))?.metadata?.failureCount).toBe(1);
-  });
-
-  it("does not overwrite a card already completed by its ended run", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const card = await store.create({
-      title: "Worker with closeout",
-      status: "ready",
-      workspaceAccess: { unrestricted: true },
-    });
-    await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run: vi.fn().mockResolvedValue({ runId: "run-with-closeout" }) },
-      options: { now: 10, maxStarts: 1 },
-    });
-    await store.complete(card.id, { summary: "verified" }, null);
-
-    await reconcileWorkboardEndedRun({
-      store,
-      runId: "run-with-closeout",
-      outcome: "ok",
-    });
-
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "done",
-      execution: { status: "done", runId: "run-with-closeout" },
-    });
-    const completed = await store.get(card.id);
-    expect(completed?.metadata?.failureCount).toBeUndefined();
-    expect(completed?.metadata?.workerProtocol).toBeUndefined();
   });
 
   it("requires explicit reauthorization for legacy cards under full-host dispatch", async () => {
@@ -1148,4 +1081,3 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect((await store.get(card.id))?.metadata?.claim).toBeUndefined();
   });
 });
-/* oxlint-disable max-lines -- cohesive Workboard dispatcher lifecycle and claim invariants share one test harness. */

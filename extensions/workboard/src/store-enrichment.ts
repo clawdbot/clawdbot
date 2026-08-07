@@ -12,6 +12,7 @@ import {
   cardRunId,
   cardSessionKey,
   closeRunningAttempts,
+  latestRunningAttempt,
 } from "./store-card-helpers.js";
 import {
   MAX_CARD_ARTIFACTS,
@@ -219,6 +220,66 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     });
   }
 
+  async cleanupEndedRunWorktree(input: {
+    runId: string;
+    removeIfLossless: (params: {
+      path: string;
+      ownerKind: "workboard";
+      ownerId: string;
+    }) => Promise<unknown>;
+  }): Promise<void> {
+    const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
+    if (!runId) {
+      return;
+    }
+    await this.enqueueMutation(async () => {
+      const card = (await this.list()).find((entry) => cardRunId(entry) === runId);
+      const workspace = card?.metadata?.automation?.workspace;
+      if (!card || workspace?.kind !== "worktree" || !workspace.path) {
+        return;
+      }
+      const activeRunIds = [
+        card.execution?.status === "running" ? card.execution.runId : undefined,
+        latestRunningAttempt(card)?.runId,
+      ].filter((value): value is string => Boolean(value));
+      if (
+        activeRunIds.some((activeRunId) => activeRunId !== runId) ||
+        (card.metadata?.claim && !activeRunIds.includes(runId))
+      ) {
+        return;
+      }
+      await input.removeIfLossless({
+        path: workspace.path,
+        ownerKind: "workboard",
+        ownerId: card.id,
+      });
+    });
+  }
+
+  async reconcileEndedRun(
+    input: WorkboardProtocolViolationInput & { runId: string },
+  ): Promise<WorkboardCard | undefined> {
+    const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
+    if (!runId) {
+      return undefined;
+    }
+    return await this.enqueueMutation(async () => {
+      const card = (await this.list()).find((entry) => {
+        const executionMatches =
+          entry.execution?.status === "running" && entry.execution.runId === runId;
+        return executionMatches || latestRunningAttempt(entry)?.runId === runId;
+      });
+      if (!card || card.status === "done" || card.status === "blocked") {
+        return card;
+      }
+      const sessionKey = cardSessionKey(card);
+      return await this.recordProtocolViolationDirect(card, {
+        ...input,
+        ...(sessionKey ? { sessionKey } : {}),
+      });
+    });
+  }
+
   async recordProtocolViolation(
     id: string,
     input: WorkboardProtocolViolationInput = {},
@@ -230,55 +291,62 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
         throw new Error(`card not found: ${id}`);
       }
       assertCanMutateClaimedCard(card, scope);
-      const now = Date.now();
-      const detail =
-        normalizeBoundedString(input.detail, undefined, 800, "protocol violation detail") ??
-        "Worker stopped without completing or blocking the card.";
-      const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
-      const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
-      const log: WorkboardWorkerLog = {
-        id: randomUUID(),
-        level: "error",
-        message: detail,
-        createdAt: now,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(runId ? { runId } : {}),
-      };
-      const execution =
-        card.execution?.status === "running"
-          ? { ...card.execution, status: "blocked" as const, updatedAt: now }
-          : card.execution;
-      const attempts = closeRunningAttempts(card.metadata?.attempts, now, "blocked", detail);
-      const notification: WorkboardNotification = {
-        id: randomUUID(),
-        kind: "failed",
-        createdAt: now,
-        sequence: this.nextNotificationSequence(now),
-        message: capText(detail, 240) ?? "Worker protocol violation.",
-        ...(sessionKey || cardSessionKey(card)
-          ? { sessionKey: sessionKey ?? cardSessionKey(card) }
-          : {}),
-        ...(runId || cardRunId(card) ? { runId: runId ?? cardRunId(card) } : {}),
-      };
-      return await this.updateCard(card.id, {
-        status: card.status === "done" ? card.status : "blocked",
-        ...(execution ? { execution } : {}),
-        metadata: {
-          ...card.metadata,
-          workerLogs: [...(card.metadata?.workerLogs ?? []), log].slice(-MAX_CARD_WORKER_LOGS),
-          workerProtocol: {
-            state: "violated",
-            updatedAt: now,
-            detail,
-          },
-          claim: undefined,
-          ...(attempts ? { attempts } : {}),
-          failureCount: (card.metadata?.failureCount ?? 0) + 1,
-          notifications: [...(card.metadata?.notifications ?? []), notification].slice(
-            -MAX_CARD_NOTIFICATIONS,
-          ),
+      return await this.recordProtocolViolationDirect(card, input);
+    });
+  }
+
+  private async recordProtocolViolationDirect(
+    card: WorkboardCard,
+    input: WorkboardProtocolViolationInput,
+  ): Promise<WorkboardCard> {
+    const now = Date.now();
+    const detail =
+      normalizeBoundedString(input.detail, undefined, 800, "protocol violation detail") ??
+      "Worker stopped without completing or blocking the card.";
+    const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
+    const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
+    const log: WorkboardWorkerLog = {
+      id: randomUUID(),
+      level: "error",
+      message: detail,
+      createdAt: now,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(runId ? { runId } : {}),
+    };
+    const execution =
+      card.execution?.status === "running"
+        ? { ...card.execution, status: "blocked" as const, updatedAt: now }
+        : card.execution;
+    const attempts = closeRunningAttempts(card.metadata?.attempts, now, "blocked", detail);
+    const notification: WorkboardNotification = {
+      id: randomUUID(),
+      kind: "failed",
+      createdAt: now,
+      sequence: this.nextNotificationSequence(now),
+      message: capText(detail, 240) ?? "Worker protocol violation.",
+      ...(sessionKey || cardSessionKey(card)
+        ? { sessionKey: sessionKey ?? cardSessionKey(card) }
+        : {}),
+      ...(runId || cardRunId(card) ? { runId: runId ?? cardRunId(card) } : {}),
+    };
+    return await this.updateCard(card.id, {
+      status: card.status === "done" ? card.status : "blocked",
+      ...(execution ? { execution } : {}),
+      metadata: {
+        ...card.metadata,
+        workerLogs: [...(card.metadata?.workerLogs ?? []), log].slice(-MAX_CARD_WORKER_LOGS),
+        workerProtocol: {
+          state: "violated",
+          updatedAt: now,
+          detail,
         },
-      });
+        claim: undefined,
+        ...(attempts ? { attempts } : {}),
+        failureCount: (card.metadata?.failureCount ?? 0) + 1,
+        notifications: [...(card.metadata?.notifications ?? []), notification].slice(
+          -MAX_CARD_NOTIFICATIONS,
+        ),
+      },
     });
   }
 }
