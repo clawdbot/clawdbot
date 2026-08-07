@@ -258,6 +258,7 @@ async function executeAgentTurnInternalWithRetryState(
   let terminalRunFailed = false;
   let continueWorkRequests: ContinueWorkRequest[] = [];
   let compactionTraceparent: string | undefined;
+  let rawContinuationText: string | undefined;
   const modelPatch = createAgentPatchedSessionModelRunGuard({
     cfg: runtimeConfig,
     agentId: params.followupRun.run.agentId,
@@ -339,6 +340,7 @@ async function executeAgentTurnInternalWithRetryState(
       terminalRunFailed = cycle.terminalRunFailed;
       continueWorkRequests = cycle.continueWorkRequests;
       compactionTraceparent = cycle.compactionTraceparent;
+      rawContinuationText = cycle.rawContinuationText;
       break;
     } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
@@ -468,6 +470,7 @@ async function executeAgentTurnInternalWithRetryState(
     autoCompactionCount,
     compactionTraceparent,
     continueWorkRequests,
+    rawContinuationText,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,
@@ -589,6 +592,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
         result: internal.result,
         continueWorkRequests: internal.continueWorkRequests,
         compactionTraceparent: internal.compactionTraceparent,
+        rawContinuationText: internal.rawContinuationText,
         resolved: { provider, model },
         fallback: {
           exhausted: internal.fallbackExhausted === true,

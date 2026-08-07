@@ -20,6 +20,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
+import { sanitizeAssistantFinalAnswerText } from "../../shared/text/assistant-visible-text.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -102,6 +103,7 @@ export async function runEmbeddedFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
   continueWorkRequests: ContinueWorkRequest[];
   compactionTraceparent?: string;
+  rawContinuationText?: string;
 }> {
   const turn = params.turn;
   const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
@@ -478,6 +480,14 @@ export async function runEmbeddedFallbackCandidate(params: {
       ),
       continueWorkRequests: attemptContinueWorkRequests,
       compactionTraceparent: attemptCompactionTraceparent,
+      ...(!(result.meta?.error?.kind === "incomplete_turn" && result.meta.replayInvalid === true) &&
+      result.meta?.finalAssistantRawText
+        ? {
+            rawContinuationText: normalizeOptionalString(
+              sanitizeAssistantFinalAnswerText(result.meta.finalAssistantRawText),
+            ),
+          }
+        : {}),
     };
   } finally {
     params.onCompactionCount(attemptCompactionCount);

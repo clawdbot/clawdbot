@@ -218,6 +218,121 @@ describe("accountFollowupTurn", () => {
     );
   });
 
+  it("prefers a delegate token retained only in raw terminal text over typed continue_work", async () => {
+    const turn = createTurn();
+    const defaults = {
+      typing: {} as FollowupRunnerParams["typing"],
+      typingMode: "never",
+      defaultModel: "anthropic/claude",
+      opts: { isHeartbeat: true },
+    } satisfies FollowupRunnerParams;
+    const execution = createExecution();
+    if (execution.execution.outcome.kind !== "settled") {
+      throw new Error("expected settled execution");
+    }
+    execution.execution.outcome.result.payloads = [{ text: "handoff queued" }];
+    execution.execution.outcome.rawContinuationText =
+      "handoff queued\n[[CONTINUE_DELEGATE: inspect followup state]]";
+
+    await accountFollowupTurn({ turn, defaults, execution });
+
+    expect(state.scheduleContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectiveContinuationSignal: expect.objectContaining({
+          kind: "delegate",
+          task: "inspect followup state",
+        }),
+        continuationExtractionFromBracket: true,
+        effectiveContinueWorkRequests: [{ reason: "finish queued work", delaySeconds: 30 }],
+        continuationWorkReason: undefined,
+      }),
+    );
+  });
+
+  it("forwards a work token retained only in raw terminal text", async () => {
+    const turn = createTurn();
+    const defaults = {
+      typing: {} as FollowupRunnerParams["typing"],
+      typingMode: "never",
+      defaultModel: "anthropic/claude",
+      opts: { isHeartbeat: true },
+    } satisfies FollowupRunnerParams;
+    const execution = createExecution({ continueWorkRequests: [] });
+    if (execution.execution.outcome.kind !== "settled") {
+      throw new Error("expected settled execution");
+    }
+    execution.execution.outcome.result.payloads = [{ text: "more remains" }];
+    execution.execution.outcome.rawContinuationText = "more remains\n[[CONTINUE_WORK:45]]";
+
+    await accountFollowupTurn({ turn, defaults, execution });
+
+    expect(state.scheduleContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectiveContinuationSignal: { kind: "work", delayMs: 45_000 },
+        continuationExtractionFromBracket: true,
+        continuationWorkReason: undefined,
+      }),
+    );
+  });
+
+  it("does not recover a non-terminal delegate token from raw text", async () => {
+    const turn = createTurn();
+    const defaults = {
+      typing: {} as FollowupRunnerParams["typing"],
+      typingMode: "never",
+      defaultModel: "anthropic/claude",
+      opts: { isHeartbeat: true },
+    } satisfies FollowupRunnerParams;
+    const execution = createExecution({ continueWorkRequests: [] });
+    if (execution.execution.outcome.kind !== "settled") {
+      throw new Error("expected settled execution");
+    }
+    execution.execution.outcome.result.payloads = [{ text: "final answer" }];
+    execution.execution.outcome.rawContinuationText =
+      "[[CONTINUE_DELEGATE: stale task]]\nfinal answer";
+
+    await accountFollowupTurn({ turn, defaults, execution });
+
+    expect(state.scheduleContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectiveContinuationSignal: null,
+        continuationExtractionFromBracket: false,
+      }),
+    );
+  });
+
+  it("does not recover selected raw text when the settled fallback result is replay-unsafe", async () => {
+    const turn = createTurn();
+    const defaults = {
+      typing: {} as FollowupRunnerParams["typing"],
+      typingMode: "never",
+      defaultModel: "anthropic/claude",
+      opts: { isHeartbeat: true },
+    } satisfies FollowupRunnerParams;
+    const execution = createExecution({ continueWorkRequests: [] });
+    if (execution.execution.outcome.kind !== "settled") {
+      throw new Error("expected settled execution");
+    }
+    execution.execution.outcome.result.payloads = [{ text: "partial" }];
+    execution.execution.outcome.result.meta.error = {
+      kind: "incomplete_turn",
+      message: "latest fallback interrupted",
+    };
+    execution.execution.outcome.result.meta.replayInvalid = true;
+    execution.execution.outcome.rawContinuationText =
+      "preferred\n[[CONTINUE_DELEGATE: stale selected task]]";
+
+    await accountFollowupTurn({ turn, defaults, execution });
+
+    expect(state.scheduleContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectiveContinuationSignal: null,
+        continuationExtractionFromBracket: false,
+        effectiveContinueWorkRequests: [],
+      }),
+    );
+  });
+
   it("releases staged delegates before scheduling same-turn post-compaction work", async () => {
     const turn = createTurn();
     const defaults = {

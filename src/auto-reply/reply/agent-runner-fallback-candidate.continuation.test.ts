@@ -34,16 +34,19 @@ describe("selectFallbackContinuationMetadata", () => {
           result: preferredResult,
           continueWorkRequests: [{ reason: "continue preferred", delaySeconds: 5 }],
           compactionTraceparent: "00-preferred",
+          rawContinuationText: "preferred\n[[CONTINUE_DELEGATE: preferred task]]",
         },
         {
           result: latestResult,
           continueWorkRequests: [{ reason: "continue latest", delaySeconds: 10 }],
           compactionTraceparent: "00-latest",
+          rawContinuationText: "latest\n[[CONTINUE_DELEGATE: latest task]]",
         },
       ]),
     ).toEqual({
       continueWorkRequests: [{ reason: "continue preferred", delaySeconds: 5 }],
       compactionTraceparent: "00-preferred",
+      rawContinuationText: "preferred\n[[CONTINUE_DELEGATE: preferred task]]",
     });
   });
 });

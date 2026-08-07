@@ -193,7 +193,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   // stale depth, cost, or chain identity at the next enforcement point.
   await continuation.resetContinuationChainForFreshTurn();
   activeSessionEntry = getActiveSessionEntry() ?? activeSessionEntry;
-  const continuationExtraction = extractContinuationSignal({
+  let continuationExtraction = extractContinuationSignal({
     payloads: payloadArray,
     continueWorkRequest: firstWorkRequest
       ? {
@@ -204,6 +204,22 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     enabled: resolveLiveContinuationRuntimeConfig(cfg).enabled,
     sessionKey,
   });
+  // Display payloads intentionally strip continuation tokens. Recover a raw
+  // terminal bracket signal before accepting the typed continue_work fallback.
+  if (
+    !suppressToolContinuationAfterIncompleteTurn &&
+    !continuationExtraction.fromBracket &&
+    execution.rawContinuationText
+  ) {
+    const rawExtraction = extractContinuationSignal({
+      payloads: [{ text: execution.rawContinuationText }],
+      enabled: resolveLiveContinuationRuntimeConfig(cfg).enabled,
+      sessionKey,
+    });
+    if (rawExtraction.fromBracket) {
+      continuationExtraction = rawExtraction;
+    }
+  }
   const effectiveContinuationSignal = continuationExtraction.signal;
   const continuationWorkReason = continuationExtraction.workReason;
   const internalBracketTraceparent = continuationExtraction.fromBracket

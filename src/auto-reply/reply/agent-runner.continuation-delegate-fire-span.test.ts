@@ -510,6 +510,27 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
     expect(pendingDelegateCount(sessionKey)).toBe(1);
   });
 
+  it("dispatches a delegate retained only in raw terminal text after display sanitization", async () => {
+    const sessionKey = "continuation-delegate-raw-terminal";
+    const run = createContinuationRun({ sessionKey });
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Reply" }],
+      meta: {
+        finalAssistantVisibleText: "Reply",
+        finalAssistantRawText: "Reply\n[[CONTINUE_DELEGATE: inspect sanitized followup]]",
+        agentMeta: { usage: { input: 1, output: 1 } },
+      },
+    });
+
+    await runDelegateTurn(run, { [sessionKey]: run.sessionEntry });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledOnce();
+    const spawnArgs = spawnSubagentDirectMock.mock.calls[0]?.[0] as { task?: string };
+    expect(spawnArgs.task).toContain("[continuation:chain-hop:1]");
+    expect(spawnArgs.task).toContain("inspect sanitized followup");
+    expect(pendingDelegateCount(sessionKey)).toBe(0);
+  });
+
   it("immediate bracket delegate preserves raw spawn task and trusted spawn echo", async () => {
     const sessionKey = "continuation-delegate-immediate-raw-echo";
     const run = createContinuationRun({ sessionKey });

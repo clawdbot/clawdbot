@@ -129,6 +129,50 @@ function createTurn(config: AgentTurnParams["followupRun"]["run"]["config"]): Ag
   } as AgentTurnParams;
 }
 
+function runCandidate(
+  config: AgentTurnParams["followupRun"]["run"]["config"],
+  onCompactionCount = vi.fn(),
+) {
+  return runEmbeddedFallbackCandidate({
+    turn: createTurn(config),
+    effectiveRun: createTurn(config).followupRun.run,
+    candidateRun: createTurn(config).followupRun.run,
+    runtimeConfig: config,
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    candidateFastMode: {},
+    runId: "run-fallback",
+    getLifecycleGeneration: () => "generation-1",
+    onLifecycleGeneration: vi.fn(),
+    suppressQueuedUserPersistenceForCandidate: false,
+    suppressAssistantErrorPersistenceForCandidate: false,
+    onAssistantErrorMessagePersisted: vi.fn(),
+    userTurnTranscriptRecorder: undefined,
+    notifyUserMessagePersisted: vi.fn(),
+    fastModeStartedAtMs: Date.now(),
+    fastModeAutoProgressState: { offAnnounced: false, resetAnnounced: false },
+    bootstrapContextRunKind: "default",
+    bootstrapPromptWarningSignaturesSeen: [],
+    currentTurnImages: { images: undefined, imageOrder: undefined },
+    signalExecutionPhaseForTyping: vi.fn(),
+    notifyAgentRunStart: vi.fn(),
+    notifyUserAboutCompaction: false,
+    sourceRepliesAreToolOnly: false,
+    messageToolDeliveryState: { toolCallIds: new Set(), completed: false },
+    preserveProgressCallbackStartOrder: false,
+    presentation: {
+      classifyStreamingPartial: () => ({ skip: true }),
+      sanitizeStreamingText: () => ({ skip: true }),
+      normalizeStreamingText: () => ({ skip: true }),
+      startPresentationWhileTyping: async () => undefined,
+      blockReplyHandler: undefined,
+    },
+    timing: createAgentTurnTimingTracker(),
+    onLifecycleBackstop: vi.fn(),
+    onCompactionCount,
+  });
+}
+
 describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
   it("binds callbacks to the selected fallback provider, model, and auth profile", async () => {
     const config = {
@@ -164,48 +208,13 @@ describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
             compactionCount: 7,
           },
           contextManagement: { lastTurnCompactions: 1 },
+          finalAssistantRawText:
+            "<final>done\n[[CONTINUE_DELEGATE: inspect wrapped fallback]]</final>",
         },
       };
     });
 
-    const result = await runEmbeddedFallbackCandidate({
-      turn: createTurn(config),
-      effectiveRun: createTurn(config).followupRun.run,
-      candidateRun: createTurn(config).followupRun.run,
-      runtimeConfig: config,
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      candidateFastMode: {},
-      runId: "run-fallback",
-      getLifecycleGeneration: () => "generation-1",
-      onLifecycleGeneration: vi.fn(),
-      suppressQueuedUserPersistenceForCandidate: false,
-      suppressAssistantErrorPersistenceForCandidate: false,
-      onAssistantErrorMessagePersisted: vi.fn(),
-      userTurnTranscriptRecorder: undefined,
-      notifyUserMessagePersisted: vi.fn(),
-      fastModeStartedAtMs: Date.now(),
-      fastModeAutoProgressState: { offAnnounced: false, resetAnnounced: false },
-      bootstrapContextRunKind: "default",
-      bootstrapPromptWarningSignaturesSeen: [],
-      currentTurnImages: { images: undefined, imageOrder: undefined },
-      signalExecutionPhaseForTyping: vi.fn(),
-      notifyAgentRunStart: vi.fn(),
-      notifyUserAboutCompaction: false,
-      sourceRepliesAreToolOnly: false,
-      messageToolDeliveryState: { toolCallIds: new Set(), completed: false },
-      preserveProgressCallbackStartOrder: false,
-      presentation: {
-        classifyStreamingPartial: () => ({ skip: true }),
-        sanitizeStreamingText: () => ({ skip: true }),
-        normalizeStreamingText: () => ({ skip: true }),
-        startPresentationWhileTyping: async () => undefined,
-        blockReplyHandler: undefined,
-      },
-      timing: createAgentTurnTimingTracker(),
-      onLifecycleBackstop: vi.fn(),
-      onCompactionCount,
-    });
+    const result = await runCandidate(config, onCompactionCount);
 
     expect(mocks.compactEmbeddedAgentSession).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -220,5 +229,30 @@ describe("runEmbeddedFallbackCandidate continuation callbacks", () => {
     expect(result.continueWorkRequests).toEqual([
       { reason: "continue after fallback", delaySeconds: 5 },
     ]);
+    expect(result.rawContinuationText).toBe(
+      "done\n[[CONTINUE_DELEGATE: inspect wrapped fallback]]",
+    );
+  });
+
+  it("does not retain raw continuation text from replay-unsafe incomplete turns", async () => {
+    const config = {
+      agents: { defaults: { continuation: { enabled: true } } },
+    };
+    mocks.runEmbeddedAgent.mockResolvedValueOnce({
+      payloads: [{ text: "partial" }],
+      meta: {
+        durationMs: 1,
+        finalAssistantRawText: "partial\n[[CONTINUE_DELEGATE: unsafe task]]",
+        replayInvalid: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "stream interrupted",
+        },
+      },
+    });
+
+    const result = await runCandidate(config);
+
+    expect(result.rawContinuationText).toBeUndefined();
   });
 });

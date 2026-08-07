@@ -45,6 +45,7 @@ export function selectFallbackContinuationMetadata(
   return {
     continueWorkRequests: selectedRecord?.continueWorkRequests,
     compactionTraceparent: selectedRecord?.compactionTraceparent,
+    rawContinuationText: selectedRecord?.rawContinuationText,
   };
 }
 
@@ -265,6 +266,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           result: candidate.result,
           continueWorkRequests: candidate.continueWorkRequests,
           compactionTraceparent: candidate.compactionTraceparent,
+          rawContinuationText: candidate.rawContinuationText,
         });
         return candidate.result;
       },
@@ -277,6 +279,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       result: entryResult.result,
       continueWorkRequests: continuation.continueWorkRequests,
       compactionTraceparent: continuation.compactionTraceparent,
+      rawContinuationText: continuation.rawContinuationText,
     } satisfies ContinuationWrappedRunResult,
   };
 }

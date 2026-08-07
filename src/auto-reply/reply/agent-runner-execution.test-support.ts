@@ -293,6 +293,7 @@ export async function getExecuteAgentTurnForTest() {
         autoCompactionCount: outcome.autoCompactionCount,
         compactionTraceparent: outcome.compactionTraceparent,
         continueWorkRequests: outcome.continueWorkRequests,
+        rawContinuationText: outcome.rawContinuationText,
         directlySentBlockKeys: outcome.directlySentBlockKeys,
         directlySentBlockPayloads: outcome.directlySentBlockPayloads,
         terminalFailurePayload: outcome.terminalFailurePayload,

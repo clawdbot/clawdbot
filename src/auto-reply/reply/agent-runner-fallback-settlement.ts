@@ -44,6 +44,9 @@ export async function settleAgentFallbackCycle(params: {
   const compactionTraceparent = isContinuationWrappedRunResult(wrappedRunResult)
     ? wrappedRunResult.compactionTraceparent
     : undefined;
+  const rawContinuationText = isContinuationWrappedRunResult(wrappedRunResult)
+    ? wrappedRunResult.rawContinuationText
+    : undefined;
   const fallbackProvider = fallbackResult.provider;
   const fallbackModel = fallbackResult.model;
   const fallbackExhausted = fallbackResult.outcome === "exhausted";
@@ -172,5 +175,6 @@ export async function settleAgentFallbackCycle(params: {
     terminalRunFailed,
     continueWorkRequests,
     compactionTraceparent,
+    rawContinuationText,
   };
 }

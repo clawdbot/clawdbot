@@ -25,6 +25,7 @@ export type ContinuationWrappedRunResult = {
   result: EmbeddedAgentRunResult;
   continueWorkRequests?: ContinueWorkRequest[];
   compactionTraceparent?: string;
+  rawContinuationText?: string;
 };
 
 export function isContinuationWrappedRunResult(
@@ -51,6 +52,7 @@ export type AgentTurnInternalResult =
       autoCompactionCount: number;
       compactionTraceparent?: string;
       continueWorkRequests?: ContinueWorkRequest[];
+      rawContinuationText?: string;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
       /** Payloads successfully sent directly during tool flush. */
@@ -71,6 +73,7 @@ export type SettledAgentTurn = {
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   continueWorkRequests?: ContinueWorkRequest[];
   compactionTraceparent?: string;
+  rawContinuationText?: string;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
   autoCompactionCount: number;
