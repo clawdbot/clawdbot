@@ -81,6 +81,25 @@ function attachAgentExecutionAttribution(
   });
 }
 
+/** Rejects a same-generation run id that is already bound to different private identity. */
+export function assertAgentRunAttributionCompatible(
+  existingAttribution: AgentExecutionAttribution | undefined,
+  attribution: AgentExecutionAttribution | undefined,
+): void {
+  if (existingAttribution && !attribution) {
+    throw new TypeError("Agent run ID is already bound to host-owned execution attribution.");
+  }
+  if (
+    existingAttribution &&
+    attribution &&
+    (existingAttribution.contextId !== attribution.contextId ||
+      existingAttribution.executionId !== attribution.executionId ||
+      existingAttribution.createdAt !== attribution.createdAt)
+  ) {
+    throw new TypeError("Agent run ID is already bound to different execution attribution.");
+  }
+}
+
 function createAgentRunContext(
   context: AgentRunContext,
   lifecycleGeneration: string,

@@ -19,7 +19,11 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  assertAgentRunAttributionCompatible,
+  claimAgentRunContext,
+  getAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -193,11 +197,20 @@ export async function runCliFallbackCandidate(params: {
         if (lifecycleGeneration !== params.getLifecycleGeneration()) {
           params.onLifecycleGeneration(lifecycleGeneration);
         }
+        const existingContext = getAgentRunContext(params.runId);
+        const existingAttribution =
+          existingContext?.lifecycleGeneration === lifecycleGeneration
+            ? existingContext.attribution
+            : undefined;
+        assertAgentRunAttributionCompatible(existingAttribution, attribution);
         if (attribution !== turn.attribution) {
           turn.attribution = attribution;
         }
-        const { registeredAt: _registeredAt, ...reboundRunContext } =
-          getAgentRunContext(params.runId) ?? {};
+        const {
+          attribution: _existingAttribution,
+          registeredAt: _registeredAt,
+          ...reboundRunContext
+        } = existingContext ?? {};
         claimAgentRunContext(params.runId, {
           // Re-admission starts a new TTL window after placement waits or rotation.
           ...reboundRunContext,
