@@ -431,6 +431,24 @@ const adapter: ChannelOutboundAdapter = {
 };
 ```
 
+When a capability depends on per-account configuration — for example Telegram
+only renders native tables on accounts with `richMessages` enabled — declare
+the optional `resolvePresentationCapabilities({ cfg, accountId })` hook next to
+the static object. Core resolves capabilities once per delivery and the hook
+takes precedence over the static declaration; keep the static object as the
+account-independent baseline.
+
+```ts
+const adapter: ChannelOutboundAdapter = {
+  presentationCapabilities: BASE_CAPABILITIES,
+  resolvePresentationCapabilities: ({ cfg, accountId }) => ({
+    ...BASE_CAPABILITIES,
+    tables: isRichAccount(cfg, accountId),
+  }),
+  // ...
+};
+```
+
 Capability booleans describe what the renderer can make interactive. Optional
 `limits` describe the generic envelope core can adapt before calling the
 renderer:
@@ -504,6 +522,12 @@ plugins own native rendering and interaction handling.
 ## Degradation rules
 
 Presentation must be safe to send on limited channels.
+
+Producers that hand-author the plain rendering of the same facts can mark it
+with `presentationTextMode: "fallback"` on the reply payload. Channels that
+render the presentation's data blocks natively drop that text; when every
+`table` and `chart` block degrades and no interactive block remains, the
+authored text ships verbatim instead of the generic flatten below.
 
 Fallback text includes:
 

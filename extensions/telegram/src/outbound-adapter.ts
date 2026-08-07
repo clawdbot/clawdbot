@@ -127,6 +127,24 @@ async function resolveTelegramOutboundSendContext(
   return { outboundTo, send, baseOpts };
 }
 
+// Native table rendering requires the account's rich markdown funnel; HTML-mode
+// text stays on the legacy parse_mode sender where table islands never convert.
+function telegramRichTablesEnabled(params: {
+  cfg: NonNullable<TelegramSendOpts>["cfg"];
+  accountId?: string | null;
+  htmlTextMode: boolean;
+}): boolean {
+  if (params.htmlTextMode) {
+    return false;
+  }
+  return (
+    mergeTelegramAccountConfig(
+      params.cfg,
+      params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+    ).richMessages === true
+  );
+}
+
 type CreateTelegramOutboundAdapterOptions = {
   resolveSend?: ResolveTelegramSendFn;
   loadSendModule?: LoadTelegramSendModuleFn;
@@ -274,6 +292,11 @@ export async function sendTelegramPayloadMessages(params: {
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const payload = canonicalizeTelegramPresentationPayload(params.payload, {
     allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
+    richTables: telegramRichTablesEnabled({
+      cfg: params.baseOpts.cfg,
+      accountId: params.baseOpts.accountId,
+      htmlTextMode: params.baseOpts.textMode === "html",
+    }),
   });
   const telegramData = payload.channelData?.telegram as
     | {
@@ -437,9 +460,7 @@ export function createTelegramOutboundAdapter(
     presentationCapabilities: resolveTelegramPresentationCapabilities({ richMessages: false }),
     resolvePresentationCapabilities: ({ cfg, accountId }) =>
       resolveTelegramPresentationCapabilities({
-        richMessages:
-          mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
-            .richMessages === true,
+        richMessages: telegramRichTablesEnabled({ cfg, accountId, htmlTextMode: false }),
       }),
     deliveryCapabilities: {
       pin: true,
@@ -460,11 +481,11 @@ export function createTelegramOutboundAdapter(
         { ...payload, presentation },
         {
           allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct",
-          richTables:
-            mergeTelegramAccountConfig(
-              ctx.cfg,
-              ctx.accountId ?? resolveDefaultTelegramAccountId(ctx.cfg),
-            ).richMessages === true,
+          richTables: telegramRichTablesEnabled({
+            cfg: ctx.cfg,
+            accountId: ctx.accountId,
+            htmlTextMode: ctx.formatting?.parseMode === "HTML",
+          }),
         },
       ),
     afterDeliverPayload: ({ cfg, target, payload, results }) => {

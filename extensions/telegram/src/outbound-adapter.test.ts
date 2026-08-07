@@ -488,6 +488,84 @@ describe("telegramOutbound", () => {
     });
   });
 
+  it("renders presentation tables as native islands for payload sends on rich accounts", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-rich-table", chatId: "12345" });
+    await telegramOutbound.sendPayload!({
+      cfg: { channels: { telegram: { richMessages: true } } } as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "plain fallback",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "table" as const,
+              caption: "Pipeline",
+              headers: ["Account", "Stage"],
+              rows: [["Acme", "Won"]],
+            },
+          ],
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const sentText = String(sendMessageTelegramMock.mock.calls[0]?.[1]);
+    expect(sentText).toContain("<table><caption>Pipeline</caption>");
+    expect(sentText).not.toContain("plain fallback");
+  });
+
+  it("keeps authored fallback text for payload sends on plain accounts", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-plain-table", chatId: "12345" });
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "plain fallback",
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            {
+              type: "table" as const,
+              caption: "Pipeline",
+              headers: ["Account"],
+              rows: [["Acme"]],
+            },
+          ],
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(String(sendMessageTelegramMock.mock.calls[0]?.[1])).toBe("plain fallback");
+  });
+
+  it("keeps table islands off legacy HTML-mode presentation renders", async () => {
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: { text: "plain fallback", presentationTextMode: "fallback" },
+      presentation: {
+        blocks: [
+          {
+            type: "table" as const,
+            caption: "Pipeline",
+            headers: ["Account"],
+            rows: [["Acme"]],
+          },
+        ],
+      },
+      ctx: {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        formatting: { parseMode: "HTML" },
+        to: "12345",
+      } as never,
+    });
+
+    expect(rendered?.text).toBe("plain fallback");
+    expect(rendered?.text).not.toContain("<table");
+  });
+
   it("renders presentation web app buttons for payload sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-web-app", chatId: "12345" });
     const presentation = {
