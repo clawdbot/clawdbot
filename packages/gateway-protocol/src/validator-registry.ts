@@ -1,4 +1,5 @@
 import { lazyCompile as compile } from "./protocol-validator.js";
+import { validateCronModelFields } from "./schema/cron-model-resolver.js";
 import * as S from "./schema-modules.js";
 import type {
   AuditActivityListParams,
@@ -345,8 +346,47 @@ export const validateSkillsSkillCardParams = compile(S.SkillsSkillCardParamsSche
 export const validateCronListParams = compile(S.CronListParamsSchema);
 export const validateCronStatusParams = compile(S.CronStatusParamsSchema);
 export const validateCronGetParams = compile(S.CronGetParamsSchema);
-export const validateCronAddParams = compile(S.CronAddParamsSchema);
-export const validateCronUpdateParams = compile(S.CronUpdateParamsSchema);
+function cronModelPrecheck(data: unknown) {
+  if (data && typeof data === "object" && "payload" in data) {
+    const payload = (data as Record<string, unknown>).payload;
+    if (payload && typeof payload === "object" && (payload as Record<string, unknown>).kind === "agentTurn") {
+      const p = payload as Record<string, unknown>;
+      const model = typeof p.model === "string" ? p.model : undefined;
+      const fallbacks = Array.isArray(p.fallbacks) ? p.fallbacks.filter((f): f is string => typeof f === "string") : undefined;
+      const thinking = typeof p.thinking === "string" ? p.thinking : undefined;
+      if (model) {
+        const errors = validateCronModelFields(model, fallbacks, thinking);
+        if (errors.length > 0) {
+          return { message: errors.join("; "), instancePath: "/payload/model" };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+export const validateCronAddParams = compile(S.CronAddParamsSchema, cronModelPrecheck);
+export const validateCronUpdateParams = compile(S.CronUpdateParamsSchema, (data) => {
+  if (data && typeof data === "object" && "patch" in data) {
+    const patch = (data as Record<string, unknown>).patch;
+    if (patch && typeof patch === "object" && "payload" in patch) {
+      const payload = (patch as Record<string, unknown>).payload;
+      if (payload && typeof payload === "object") {
+        const p = payload as Record<string, unknown>;
+        const model = typeof p.model === "string" ? p.model : undefined;
+        const fallbacks = Array.isArray(p.fallbacks) ? p.fallbacks.filter((f): f is string => typeof f === "string") : undefined;
+        const thinking = typeof p.thinking === "string" ? p.thinking : undefined;
+        if (model) {
+          const errors = validateCronModelFields(model, fallbacks, thinking);
+          if (errors.length > 0) {
+            return { message: errors.join("; "), instancePath: "/patch/payload/model" };
+          }
+        }
+      }
+    }
+  }
+  return undefined;
+});
 export const validateCronRemoveParams = compile(S.CronRemoveParamsSchema);
 export const validateCronRunParams = compile(S.CronRunParamsSchema);
 export const validateCronRunsParams = compile(S.CronRunsParamsSchema);
