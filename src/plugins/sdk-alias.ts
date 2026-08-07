@@ -449,17 +449,14 @@ const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
 type PrivatePluginSdkSubpathOwner = {
   bundledPluginId: string;
   officialInstalledPackageName?: string;
-  privateQaCliSubpaths?: readonly string[];
+  allowPrivateQaCli: boolean;
   subpaths: readonly string[];
 };
 const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[] = [
   {
     bundledPluginId: "codex",
     officialInstalledPackageName: "@openclaw/codex",
-    privateQaCliSubpaths: [
-      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-      CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
-    ],
+    allowPrivateQaCli: true,
     subpaths: [
       AGENT_HARNESS_TOOL_AUTHORITY_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
@@ -469,14 +466,17 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
   {
     bundledPluginId: "copilot",
     officialInstalledPackageName: "@openclaw/copilot",
+    allowPrivateQaCli: false,
     subpaths: [AGENT_HARNESS_TOOL_AUTHORITY_PLUGIN_SDK_SUBPATH],
   },
   {
     bundledPluginId: "ollama",
+    allowPrivateQaCli: false,
     subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
   {
     bundledPluginId: "browser",
+    allowPrivateQaCli: false,
     subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
 ];
@@ -1094,8 +1094,7 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   return owners.some(
     (owner) =>
       isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }) ||
-      (owner.privateQaCliSubpaths?.includes(params.subpath) === true &&
-        shouldIncludePrivateLocalOnlyPluginSdkSubpaths()),
+      (owner.allowPrivateQaCli && shouldIncludePrivateLocalOnlyPluginSdkSubpaths()),
   );
 }
 
