@@ -2851,6 +2851,83 @@ describe("runMemoryFlushIfNeeded", () => {
     });
   });
 
+  it("dispatches past preflight after reset of an oversized physical Codex transcript", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-reset-byte-guard.json");
+    const sessionKey = "agent:main:discord:direct:test-user";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        id: "oversized-history",
+        parentId: null,
+        message: { role: "user", content: "x".repeat(4_300_000) },
+        type: "message",
+      },
+      {
+        id: "kept-user",
+        parentId: "oversized-history",
+        message: { role: "user", content: "kept question" },
+        type: "message",
+      },
+      {
+        id: "kept-assistant",
+        parentId: "kept-user",
+        message: { role: "assistant", content: "kept answer" },
+        type: "message",
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "kept-assistant",
+        timestamp: "2026-08-06T14:20:01.969Z",
+        reason: "new",
+        firstKeptEntryId: "kept-user",
+      },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(4 * 1024 * 1024);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 0,
+      totalTokensFresh: true,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { maxActiveTranscriptBytes: "4mb" },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "gpt-5.5",
+      agentCfgContextTokens: 1_000_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(replyOperation.setPhase).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
   it("leaves an under-limit SQLite Codex session to native token compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
     const sessionKey = "agent:main:main";

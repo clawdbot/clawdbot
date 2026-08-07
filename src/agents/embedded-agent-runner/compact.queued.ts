@@ -35,7 +35,10 @@ import {
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { SessionManager } from "../sessions/index.js";
-import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
+import {
+  DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+  isAutomaticCompactionOwnershipResult,
+} from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -69,8 +72,12 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
+  allowAutomaticOwnershipHandoff: boolean,
 ): boolean {
-  return isRecoverableNativeHarnessBindingFailure(result);
+  return (
+    isRecoverableNativeHarnessBindingFailure(result) ||
+    (allowAutomaticOwnershipHandoff && isAutomaticCompactionOwnershipResult(result))
+  );
 }
 
 function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
@@ -567,15 +574,23 @@ async function compactResolvedContextEngine(
           contextEngineRuntimeContext,
         })
       : undefined;
-  if (lockedNativeHarness) {
+  const allowAutomaticOwnershipHandoff =
+    params.preflightRequired === true && params.preflightCompactionTrigger === "transcript_bytes";
+  const shouldFallbackFromHarness = shouldFallbackAfterHarnessCompaction(
+    harnessResult,
+    allowAutomaticOwnershipHandoff,
+  );
+  const allowLockedHarnessFallback =
+    allowAutomaticOwnershipHandoff && isAutomaticCompactionOwnershipResult(harnessResult);
+  if (lockedNativeHarness && !allowLockedHarnessFallback) {
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
-    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+    if (!shouldFallbackFromHarness) {
       return harnessResult;
     }
     log.warn(
-      `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
+      `native harness compaction could not complete; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
     );
   }
   if (

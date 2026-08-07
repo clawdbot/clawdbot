@@ -14,6 +14,7 @@ import {
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
+  readSessionTranscriptContextByteSize,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -224,6 +225,59 @@ describe("SQLite active transcript event projection", () => {
     expect(page.scannedMessages).toBe(2);
     expect(page.serializedBytes).toBeLessThanOrEqual(512);
     expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual(["small"]);
+  });
+
+  it("sizes only the reset-bounded replay window while retaining oversized history", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "oversized-history",
+          parentId: null,
+          message: { role: "user", content: "x".repeat(4_300_000) },
+        },
+        {
+          eventId: "kept-user",
+          parentId: "oversized-history",
+          message: { role: "user", content: "kept question" },
+        },
+        {
+          eventId: "kept-assistant",
+          parentId: "kept-user",
+          message: { role: "assistant", content: "kept answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept-assistant",
+      timestamp: "2026-08-06T14:20:01.969Z",
+      reason: "new",
+      firstKeptEntryId: "kept-user",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "ordinary next turn" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeGreaterThan(4 * 1024 * 1024);
+    expect(readSessionTranscriptContextByteSize(scope)).toBeLessThan(4 * 1024);
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
+    expect(readSessionTranscriptMessageEventById(scope, "oversized-history")).toBeUndefined();
+
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+        .get(scope.sessionId),
+    ).toEqual({ count: 6 });
   });
 
   it("fails fast and schedules maintenance when out-of-band state is dirty", async () => {
