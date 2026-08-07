@@ -23,5 +23,14 @@ export default definePluginEntry({
     for (const command of createCuaComputerCommands()) {
       api.registerNodeHostCommand(command);
     }
+    // computer.act is dangerous-by-default and therefore also requires the
+    // operator's explicit gateway.nodes.commands.allow entry. The plugin
+    // policy is the final Gateway guard and the only path that may forward the
+    // already-allowlisted invocation to the paired node.
+    api.registerNodeInvokePolicy({
+      commands: ["computer.act"],
+      dangerous: true,
+      handle: async (ctx) => await ctx.invokeNode(),
+    });
   },
 });

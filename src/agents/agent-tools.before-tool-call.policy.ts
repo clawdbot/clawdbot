@@ -34,6 +34,7 @@ import {
   resolveBeforeToolCallApprovalOutcome,
   resolveSkillWorkshopApprovalForFinalParams,
 } from "./agent-tools.before-tool-call.approval.js";
+import { resolveToolExecutionCorrelation } from "./agent-tools.before-tool-call.attribution.js";
 import {
   beforeToolCallLog as log,
   loadBeforeToolCallRuntime,
@@ -76,11 +77,12 @@ export function consumeFinalClientVoiceToolConfirmation(args: {
   params: unknown;
   ctx?: HookContext;
 }) {
-  const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
+  const correlation = resolveToolExecutionCorrelation(args.ctx);
+  const voiceRun = resolveClientVoiceRunBinding(correlation.runId);
   return consumeClientVoiceToolConfirmationPolicy({
     agentId: voiceRun?.agentId,
     voiceSessionId: voiceRun?.voiceSessionId,
-    runId: args.ctx?.runId,
+    runId: correlation.runId,
     toolName: normalizeToolName(args.toolName || "tool"),
     toolParams: args.params,
     ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
@@ -99,19 +101,32 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  const correlation = resolveToolExecutionCorrelation(args.ctx);
   let releaseArgumentChurnPolicyWait: (() => void) | undefined;
 
   try {
-    if (args.ctx?.sessionKey) {
-      if (args.ctx.loopDetection?.enabled === true) {
+    if (correlation.sessionKey) {
+      const {
+        sessionKey: _flatSessionKey,
+        sessionId: _flatSessionId,
+        runId: _flatRunId,
+        ...loopContextBase
+      } = args.ctx ?? {};
+      const loopContext: HookContext = {
+        ...loopContextBase,
+        sessionKey: correlation.sessionKey,
+        ...(correlation.sessionId ? { sessionId: correlation.sessionId } : {}),
+        ...(correlation.runId ? { runId: correlation.runId } : {}),
+      };
+      if (loopContext.loopDetection?.enabled === true) {
         const { markDiagnosticArgumentChurnObservation } = await loadBeforeToolCallRuntime();
         // Each concurrent policy/approval wait owns a token. Releasing one call
         // must not expose the churn clock while a sibling is still pending.
         const policyWaitToken = Symbol("before-tool-call-policy-wait");
         const policyWaitRef = {
-          sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx.sessionId,
-          runId: args.ctx.runId,
+          sessionKey: loopContext.sessionKey,
+          sessionId: loopContext.sessionId,
+          runId: loopContext.runId,
           policyWaitToken,
         };
         markDiagnosticArgumentChurnObservation({
@@ -126,11 +141,11 @@ export async function runBeforeToolCallHook(args: {
       }
       const batchAdmitted =
         args.toolCallId !== undefined &&
-        consumeBatchAdmittedToolCall(args.toolCallId, args.ctx.runId);
+        consumeBatchAdmittedToolCall(args.toolCallId, correlation.runId);
       if (!batchAdmitted) {
         const intervention = await admitSingleToolCallLoop(
           { toolName, params, toolCallId: args.toolCallId },
-          args.ctx,
+          loopContext,
         );
         if (intervention) {
           return {
@@ -155,11 +170,11 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
       ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
-    const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
+    const voiceRun = resolveClientVoiceRunBinding(correlation.runId);
     const voiceConfirmation = checkClientVoiceToolConfirmationPolicy({
       agentId: voiceRun?.agentId,
       voiceSessionId: voiceRun?.voiceSessionId,
-      runId: args.ctx?.runId,
+      runId: correlation.runId,
       toolName,
       toolParams: normalizedParams,
       ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
@@ -195,10 +210,10 @@ export async function runBeforeToolCallHook(args: {
     const buildToolContext = (identity: typeof toolIdentity) => ({
       toolName,
       ...identity,
-      ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
-      ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
-      ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
-      ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(correlation.agentId && { agentId: correlation.agentId }),
+      ...(correlation.sessionKey && { sessionKey: correlation.sessionKey }),
+      ...(correlation.sessionId && { sessionId: correlation.sessionId }),
+      ...(correlation.runId && { runId: correlation.runId }),
       ...(args.signal ? { abortSignal: args.signal } : {}),
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
@@ -212,7 +227,7 @@ export async function runBeforeToolCallHook(args: {
             toolName,
             params: normalizedParams,
             ...toolIdentity,
-            ...(args.ctx?.runId && { runId: args.ctx.runId }),
+            ...(correlation.runId && { runId: correlation.runId }),
             ...(args.toolCallId && { toolCallId: args.toolCallId }),
             ...(derivedToolParams.derivedPaths
               ? { derivedPaths: derivedToolParams.derivedPaths }
@@ -319,7 +334,7 @@ export async function runBeforeToolCallHook(args: {
         toolName,
         params: hookEventParams,
         ...policyAdjustedToolIdentity,
-        ...(args.ctx?.runId && { runId: args.ctx.runId }),
+        ...(correlation.runId && { runId: correlation.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
         ...(policyAdjustedDerivedToolParams.derivedPaths
           ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
