@@ -442,14 +442,19 @@ async function resolveMemoryManagerStatusSnapshot(
   }
   try {
     const currentStatus = manager.status();
-    const isStoreProbe =
-      currentStatus.backend === "builtin" && manager.probeVectorStoreAvailability;
+    // Capture the optional store probe bound to manager so TS can narrow
+    // the call and `this` context is preserved.
+    const storeProbeFn =
+      currentStatus.backend === "builtin"
+        ? manager.probeVectorStoreAvailability?.bind(manager)
+        : undefined;
+    const isStoreProbe = storeProbeFn != null;
     // Store the probe result so the status can reflect a real failure
     // Even when internal state was not updated.
     let probeAvailable: boolean | undefined;
     try {
-      probeAvailable = isStoreProbe
-        ? await manager.probeVectorStoreAvailability()
+      probeAvailable = storeProbeFn
+        ? await storeProbeFn()
         : await manager.probeVectorAvailability();
     } catch {
       probeAvailable = false;
@@ -457,7 +462,7 @@ async function resolveMemoryManagerStatusSnapshot(
     const status = manager.status();
     // Harden vector fields when the probe is authoritative and negative,
     // So the operator sees the degraded state.
-    if (probeAvailable === false && status.vector) {
+    if (!probeAvailable && status.vector) {
       const isBuiltin = currentStatus.backend === "builtin";
       status.vector = {
         ...status.vector,
