@@ -3413,12 +3413,7 @@ describe("deriveSessionTitle", () => {
       sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
       updatedAt: 0,
     } as SessionEntry;
-    const result = deriveSessionTitle(
-      entry,
-      undefined,
-      undefined,
-      "agent:main:telegram:direct:42",
-    );
+    const result = deriveSessionTitle(entry, undefined, undefined, "agent:main:telegram:direct:42");
     expect(result).toBe("abcd1234");
   });
 
