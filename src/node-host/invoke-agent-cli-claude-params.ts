@@ -52,6 +52,7 @@ const VALUE_ARGS = new Set([
 ]);
 
 const ENV_ALLOWLIST = new Set([
+  "AI_AGENT",
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_OAUTH_TOKEN",
@@ -63,6 +64,7 @@ const ENV_ALLOWLIST = new Set([
   "TERM",
 ]);
 const CLEAR_ENV_ALLOWLIST = new Set([
+  "AI_AGENT",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
   "ANTHROPIC_API_TOKEN",

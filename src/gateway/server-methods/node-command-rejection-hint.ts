@@ -1,6 +1,7 @@
 // Human-readable hint for why a node command was rejected, kept out of the
 // oversized nodes.ts server-methods file.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { expandNodeAgentCliClaudeRunCommands } from "../../infra/node-commands.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../node-command-policy.js";
 
 export function buildNodeCommandRejectionHint(
@@ -17,8 +18,10 @@ export function buildNodeCommandRejectionHint(
     if (command.startsWith("talk.")) {
       return `node command not allowed: "${command}" requires a trusted Talk-capable node`;
     }
-    const denyCommands = cfg.gateway?.nodes?.commands?.deny ?? [];
-    if (denyCommands.some((entry) => entry.trim() === command)) {
+    const denyCommands = expandNodeAgentCliClaudeRunCommands(
+      (cfg.gateway?.nodes?.commands?.deny ?? []).map((entry) => entry.trim()),
+    );
+    if (denyCommands.includes(command)) {
       return `node command not allowed: "${command}" is blocked by gateway.nodes.commands.deny`;
     }
     if (DEFAULT_DANGEROUS_NODE_COMMANDS.includes(command)) {

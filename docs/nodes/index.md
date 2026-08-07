@@ -376,17 +376,21 @@ A headless node host can opt into the same continuation flow:
 }
 ```
 
-The node advertises `agent.cli.claude.run.v1` only when this node-local setting
-is enabled and the `claude` executable resolves on that node. The Gateway cannot
-enable it remotely. The command also passes through the node's existing exec
-approval policy. When all three Claude commands are advertised and permitted by
-the Gateway's node command policy, a Claude CLI
+The node advertises `agent.cli.claude.run.v1` and `agent.cli.claude.run.v2` only
+when this node-local setting is enabled and the `claude` executable resolves on
+that node. Current Gateways use v2 for bounded execution-marker metadata such as
+`AI_AGENT`; v1 remains the rolling-upgrade fallback. Both IDs are versions of one
+capability: allowing or approving either version covers both, while denying either
+ID with `gateway.nodes.commands.deny` denies both.
+The Gateway cannot enable the capability remotely. It also passes through the
+node's existing exec approval policy. When the Claude commands are advertised
+and permitted by the Gateway's node command policy, a Claude CLI
 row on that node becomes continuable: OpenClaw imports bounded history, binds
 the adopted session to the node and its catalog-reported working directory, and
 runs each one-shot `claude -p` turn there. The first turn still uses
 `--fork-session`, preserving the source transcript.
 
-Node-placed turns use the node's Claude defaults. In v1 they do not receive the
+Node-placed turns use the node's Claude defaults. They do not receive the
 Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
 Gateway transcript, and reject attachments and images. Claude Desktop rows and
 nodes that do not advertise the run command remain view-only. The macOS app
@@ -518,7 +522,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
 }
 ```
 
-Use exact node command names. `commands.deny` removes a command even when a platform default or `commands.allow` entry would otherwise allow it. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
+Use exact node command names. `commands.deny` removes a command even when a platform default or `commands.allow` entry would otherwise allow it. Versioned IDs that represent the same capability, such as the Claude-run v1/v2 pair, are authorized and revoked together. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
 
 Per-agent exec node override:
 

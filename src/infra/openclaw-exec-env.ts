@@ -5,7 +5,7 @@ export const OPENCLAW_CLI_ENV_VAR = "OPENCLAW_CLI";
 const OPENCLAW_CLI_ENV_VALUE = "1";
 /** Universal advisory marker for tools that adapt behavior under AI agents. */
 const AI_AGENT_ENV_VAR = "AI_AGENT";
-const AI_AGENT_ENV_VALUE = "openclaw";
+export const AI_AGENT_ENV_VALUE = "openclaw";
 
 function normalizeAiAgentEnvValue(value: string | undefined): string {
   return value?.trim() ? value : AI_AGENT_ENV_VALUE;

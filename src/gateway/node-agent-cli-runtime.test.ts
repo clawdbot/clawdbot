@@ -20,7 +20,20 @@ vi.mock("./node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
 }));
 
-import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
+import { invokeNodeClaudeCliRun, type NodeClaudeAiAgentEnv } from "./node-agent-cli-runtime.js";
+
+function buildAiAgentEnv(overrides: Partial<NodeClaudeAiAgentEnv> = {}): NodeClaudeAiAgentEnv {
+  return {
+    baseEnv: {},
+    configuredEnv: {},
+    preparedEnv: {},
+    captureEnv: {},
+    clearEnv: [],
+    preserveEnv: [],
+    selectedAuth: false,
+    ...overrides,
+  };
+}
 
 describe("invokeNodeClaudeCliRun", () => {
   beforeEach(() => {
@@ -33,6 +46,7 @@ describe("invokeNodeClaudeCliRun", () => {
       connId: "conn-1",
       nodeId: "node-1",
       pairingGeneration: "generation-1",
+      platform: "linux",
       commands: ["agent.cli.claude.run.v1"],
     });
   });
@@ -87,6 +101,107 @@ describe("invokeNodeClaudeCliRun", () => {
           clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         }),
       }),
+    );
+  });
+
+  it.each([
+    {
+      name: "omits the default marker on Linux",
+      platform: "linux",
+      aiAgentEnv: buildAiAgentEnv({ baseEnv: { AI_AGENT: "openclaw" } }),
+      expectedEnv: undefined,
+      expectedClearEnv: undefined,
+    },
+    {
+      name: "forwards a canonical wrapper on Linux",
+      platform: "linux",
+      aiAgentEnv: buildAiAgentEnv({ configuredEnv: { AI_AGENT: "wrapper" } }),
+      expectedEnv: { AI_AGENT: "wrapper" },
+      expectedClearEnv: undefined,
+    },
+    {
+      name: "forwards an explicit reset over the node ambient marker",
+      platform: "linux",
+      aiAgentEnv: buildAiAgentEnv({
+        baseEnv: { AI_AGENT: "wrapper" },
+        configuredEnv: { AI_AGENT: "   " },
+      }),
+      expectedEnv: { AI_AGENT: "openclaw" },
+      expectedClearEnv: undefined,
+    },
+    {
+      name: "ignores a lowercase marker on Linux",
+      platform: "linux",
+      aiAgentEnv: buildAiAgentEnv({ configuredEnv: { ai_agent: "wrapper" } }),
+      expectedEnv: undefined,
+      expectedClearEnv: undefined,
+    },
+    {
+      name: "canonicalizes a lowercase wrapper for a Windows node",
+      platform: "windows",
+      aiAgentEnv: buildAiAgentEnv({ configuredEnv: { ai_agent: "wrapper" } }),
+      expectedEnv: { AI_AGENT: "wrapper" },
+      expectedClearEnv: undefined,
+    },
+    {
+      name: "canonicalizes a lowercase clear for a Windows node",
+      platform: "windows",
+      aiAgentEnv: buildAiAgentEnv({
+        baseEnv: { AI_AGENT: "wrapper" },
+        clearEnv: ["ai_agent"],
+      }),
+      expectedEnv: undefined,
+      expectedClearEnv: ["AI_AGENT"],
+    },
+    {
+      name: "lets an explicit Windows wrapper override a configured clear",
+      platform: "windows",
+      aiAgentEnv: buildAiAgentEnv({
+        configuredEnv: { ai_agent: "wrapper" },
+        clearEnv: ["ai_agent"],
+      }),
+      expectedEnv: { AI_AGENT: "wrapper" },
+      expectedClearEnv: ["AI_AGENT"],
+    },
+    {
+      name: "keeps the legacy payload for a v1-only node",
+      platform: "windows",
+      v1Only: true,
+      aiAgentEnv: buildAiAgentEnv({
+        configuredEnv: { ai_agent: "wrapper" },
+        clearEnv: ["ai_agent"],
+      }),
+      expectedEnv: undefined,
+      expectedClearEnv: undefined,
+    },
+  ])("$name", async (testCase) => {
+    mocks.get.mockReturnValue({
+      connId: "conn-1",
+      nodeId: "node-1",
+      pairingGeneration: "generation-1",
+      platform: testCase.platform,
+      commands: testCase.v1Only
+        ? ["agent.cli.claude.run.v1"]
+        : ["agent.cli.claude.run.v1", "agent.cli.claude.run.v2"],
+    });
+    mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+    mocks.invoke.mockResolvedValue({ ok: true });
+
+    await invokeNodeClaudeCliRun({
+      nodeId: "node-1",
+      argv: ["-p"],
+      stdin: "hello",
+      aiAgentEnv: testCase.aiAgentEnv,
+      timeoutMs: 10_000,
+      idleTimeoutMs: 1_000,
+      onProgress: () => {},
+    });
+
+    const invokeParams = mocks.invoke.mock.calls[0]?.[0]?.params;
+    expect(invokeParams?.env).toEqual(testCase.expectedEnv);
+    expect(invokeParams?.clearEnv).toEqual(testCase.expectedClearEnv);
+    expect(mocks.invoke.mock.calls[0]?.[0]?.command).toBe(
+      testCase.v1Only ? "agent.cli.claude.run.v1" : "agent.cli.claude.run.v2",
     );
   });
 

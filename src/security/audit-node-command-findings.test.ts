@@ -1,6 +1,7 @@
 // Verifies node command security audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS } from "../infra/node-commands.js";
 import {
   collectNodeDangerousAllowCommandFindings,
   collectNodeDenyCommandPatternFindings,
@@ -113,6 +114,14 @@ describe("security audit node command findings", () => {
           },
         },
       },
+    } satisfies OpenClawConfig);
+
+    expect(findings).toStrictEqual([]);
+  });
+
+  it("recognizes every Claude run wire version without an active plugin registry", () => {
+    const findings = collectNodeDenyCommandPatternFindings({
+      gateway: { nodes: { commands: { deny: [...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS] } } },
     } satisfies OpenClawConfig);
 
     expect(findings).toStrictEqual([]);

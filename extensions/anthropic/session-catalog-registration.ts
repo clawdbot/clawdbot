@@ -15,7 +15,7 @@ import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS } from "./cli-constants.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
 import {
-  CLAUDE_CLI_NODE_RUN_COMMAND,
+  CLAUDE_CLI_NODE_RUN_COMMANDS,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
@@ -117,7 +117,7 @@ export function createClaudeSessionNodeInvokePolicies(): OpenClawPluginNodeInvok
       commands: [
         CLAUDE_SESSIONS_LIST_COMMAND,
         CLAUDE_SESSION_READ_COMMAND,
-        CLAUDE_CLI_NODE_RUN_COMMAND,
+        ...CLAUDE_CLI_NODE_RUN_COMMANDS,
         CLAUDE_TERMINAL_RESUME_COMMAND,
       ],
       defaultPlatforms: ["macos", "linux", "windows"],

@@ -23,6 +23,7 @@ import {
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import { NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS } from "../infra/node-commands.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
@@ -283,6 +284,9 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     if (normalized) {
       out.add(normalized);
     }
+  }
+  for (const command of NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS) {
+    out.add(command);
   }
   return out;
 }

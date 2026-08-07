@@ -7,6 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
+import { NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS } from "../infra/node-commands.js";
 import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -204,6 +205,32 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(approvedReconnect.effectiveCommands).toEqual(commands);
     expect(approvedPairingRequest).not.toHaveBeenCalled();
   });
+
+  it.each(NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS)(
+    "treats an existing %s Claude-run approval as covering every wire version",
+    async (approvedCommand) => {
+      const requestPairing = vi.fn();
+      const result = await reconcileNodePairingOnConnect({
+        cfg: {} as never,
+        connectParams: makeNodeConnectParams({
+          client: {
+            id: GATEWAY_CLIENT_IDS.NODE_HOST,
+            version: "test",
+            platform: "linux",
+            deviceFamily: "Linux",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+          caps: ["system"],
+          commands: [...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS],
+        }),
+        pairedNode: makePairedNode({ caps: ["system"], commands: [approvedCommand] }),
+        requestPairing,
+      });
+
+      expect(result.effectiveCommands).toEqual([...NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS]);
+      expect(requestPairing).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps an approved computer.act surface effective without re-pairing", async () => {
     const connectParams = makeNodeConnectParams({

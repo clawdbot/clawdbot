@@ -499,6 +499,7 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.caps).toContain("mcp");
     expect(lastCapturedOptions()?.commands).toContain("mcp.tools.call.v1");
     expect(lastCapturedOptions()?.commands).not.toContain("agent.cli.claude.run.v1");
+    expect(lastCapturedOptions()?.commands).not.toContain("agent.cli.claude.run.v2");
   });
 
   it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
@@ -513,6 +514,7 @@ describe("runNodeHost", () => {
     );
 
     expect(lastCapturedOptions()?.commands).toContain("agent.cli.claude.run.v1");
+    expect(lastCapturedOptions()?.commands).toContain("agent.cli.claude.run.v2");
   });
 
   it("publishes node plugin tools only after gateway hello succeeds", async () => {

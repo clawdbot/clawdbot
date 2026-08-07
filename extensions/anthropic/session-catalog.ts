@@ -29,10 +29,10 @@ import {
   resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
 import {
-  CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
   ClaudeCatalogParamsError,
+  hasClaudeCliNodeRunCommand,
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
 import * as catalogTerminal from "./session-catalog-terminal.js";
@@ -1513,10 +1513,10 @@ async function listClaudeSessionCatalog(params: {
         nodeId: node.nodeId,
         canContinueClaude:
           node.commands?.includes(CLAUDE_SESSION_READ_COMMAND) === true &&
-          node.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
+          hasClaudeCliNodeRunCommand(node.commands) &&
           node.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           node.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          node.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+          hasClaudeCliNodeRunCommand(node.invocableCommands),
         ...catalogTerminal.claudeNodeTerminalCapability(node),
       };
       if (node.connected !== true) {
@@ -1743,10 +1743,10 @@ async function continueClaudeSession(
           candidate.connected === true &&
           candidate.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
           candidate.commands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
+          hasClaudeCliNodeRunCommand(candidate.commands) &&
           candidate.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
           candidate.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+          hasClaudeCliNodeRunCommand(candidate.invocableCommands),
       );
       if (!node) {
         throw new ClaudeCatalogParamsError(

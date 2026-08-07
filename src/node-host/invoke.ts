@@ -37,7 +37,7 @@ import {
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
 import {
-  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS,
   NODE_DEVICE_APPS_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
@@ -747,7 +747,7 @@ async function dispatchInvoke(
     return;
   }
 
-  if (command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) {
+  if ((NODE_AGENT_CLI_CLAUDE_RUN_COMMANDS as readonly string[]).includes(command)) {
     await handleClaudeCliNodeInvoke({
       frame,
       client,

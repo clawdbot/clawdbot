@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { NodeClaudeAiAgentEnv } from "../../gateway/node-agent-cli-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
 import {
   resolveEventSessionKeyForPolicy,
@@ -73,6 +74,7 @@ export async function executeCliProcess(params: {
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
+  nodeAiAgentEnv?: NodeClaudeAiAgentEnv;
   useManagedClaudeLiveSession: boolean;
   useResume: boolean;
   cliSessionIdToUse?: string;
@@ -242,6 +244,7 @@ export async function executeCliProcess(params: {
         : {}),
       ...(params.nodeEnv ? { nodeEnv: params.nodeEnv } : {}),
       ...(params.nodeClearEnv ? { nodeClearEnv: params.nodeClearEnv } : {}),
+      ...(params.nodeAiAgentEnv ? { nodeAiAgentEnv: params.nodeAiAgentEnv } : {}),
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       consumeStdout,
       consumeStderr,

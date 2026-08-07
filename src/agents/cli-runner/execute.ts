@@ -80,6 +80,15 @@ function normalizeCliEnvKey(key: string): string {
   return process.platform === "win32" ? key.toUpperCase() : key;
 }
 
+function pickAiAgentEnvAliases(env: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (entry): entry is [string, string] =>
+        entry[0].toUpperCase() === "AI_AGENT" && entry[1] !== undefined,
+    ),
+  );
+}
+
 function exactToolAvailabilityError(params: {
   code: "unsupported" | "runtime-unavailable";
   isolatedCompletion: boolean;
@@ -416,21 +425,11 @@ export async function executePreparedCliRun(
         ),
       );
       const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
-      const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
-        NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
-      );
-      const nodeEnv = nodePlacement
-        ? {
-            ...Object.fromEntries(nodeEnvEntries),
-            ...resolveNodeClaudeAuthEnv(context),
-          }
-        : undefined;
       const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
-      const preservedEnv = new Set(
-        [...parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV])].map(
-          normalizeCliEnvKey,
-        ),
-      );
+      const preservedEnvKeys = [
+        ...parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]),
+      ];
+      const preservedEnv = new Set(preservedEnvKeys.map(normalizeCliEnvKey));
       const clearEnv = new Set((backend.clearEnv ?? []).map(normalizeCliEnvKey));
       for (const key of Object.keys(env)) {
         const normalizedKey = normalizeCliEnvKey(key);
@@ -441,21 +440,48 @@ export async function executePreparedCliRun(
           delete env[key];
         }
       }
-      if (Object.keys(backendEnv).length > 0) {
-        Object.assign(
-          env,
-          canonicalizeAiAgentEnvOverrides(
-            sanitizeHostExecEnvOverrides({
+      const sanitizedBackendEnv =
+        Object.keys(backendEnv).length > 0
+          ? sanitizeHostExecEnvOverrides({
               overrides: backendEnv,
               blockPathOverrides: true,
-            }),
-          ),
-        );
+            })
+          : {};
+      if (Object.keys(sanitizedBackendEnv).length > 0) {
+        Object.assign(env, canonicalizeAiAgentEnvOverrides(sanitizedBackendEnv));
       }
-      Object.assign(env, canonicalizeAiAgentEnvOverrides(mcpCaptureAttempt.env ?? {}));
+      const captureEnv = mcpCaptureAttempt.env ?? {};
+      Object.assign(env, canonicalizeAiAgentEnvOverrides(captureEnv));
       // Never mark Claude CLI as host-managed. That marker routes runs into
       // Anthropic's separate host-managed usage tier instead of normal CLI use.
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+      const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
+        NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
+      );
+      const nodeEnv = nodePlacement
+        ? {
+            ...Object.fromEntries(nodeEnvEntries),
+            ...resolveNodeClaudeAuthEnv(context),
+          }
+        : undefined;
+      const nodeClearEnv = nodePlacement
+        ? new Set(
+            [...(selectedClaudeClearEnv ?? [])].filter((key) => key.toUpperCase() !== "AI_AGENT"),
+          )
+        : undefined;
+      // The Gateway transport resolves these aliases against the paired node's
+      // platform, then emits only the canonical uppercase protocol key.
+      const nodeAiAgentEnv = nodePlacement
+        ? {
+            baseEnv: pickAiAgentEnvAliases(process.env),
+            configuredEnv: pickAiAgentEnvAliases(backend.env ?? {}),
+            preparedEnv: pickAiAgentEnvAliases(preparedBackendEnv),
+            captureEnv: pickAiAgentEnvAliases(captureEnv),
+            clearEnv: [...(backend.clearEnv ?? [])],
+            preserveEnv: preservedEnvKeys,
+            selectedAuth: hasSelectedClaudeAuth,
+          }
+        : undefined;
 
       let executionCommand = backend.command;
       let executionLeadingArgv: readonly string[] = [];
@@ -558,7 +584,8 @@ export async function executePreparedCliRun(
         nodePlacement,
         nodeSystemPrompt,
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
-        nodeClearEnv: selectedClaudeClearEnv ? [...selectedClaudeClearEnv] : undefined,
+        nodeClearEnv: nodeClearEnv && nodeClearEnv.size > 0 ? [...nodeClearEnv] : undefined,
+        nodeAiAgentEnv,
         useManagedClaudeLiveSession,
         useResume,
         cliSessionIdToUse,

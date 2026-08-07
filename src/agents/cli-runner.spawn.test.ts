@@ -363,6 +363,57 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it.each([
+    {
+      name: "leaves a missing marker for the node execution boundary to default",
+      backend: {},
+      expectedConfiguredEnv: {},
+      expectedMarkerClearEnv: [],
+    },
+    {
+      name: "forwards an explicit agent marker",
+      backend: { env: { AI_AGENT: "wrapper" } },
+      expectedConfiguredEnv: { AI_AGENT: "wrapper" },
+      expectedMarkerClearEnv: [],
+    },
+    {
+      name: "forwards an explicit agent marker clear",
+      backend: { clearEnv: ["AI_AGENT"] },
+      expectedConfiguredEnv: {},
+      expectedMarkerClearEnv: ["AI_AGENT"],
+    },
+  ])("$name for a node-placed Claude run", async (testCase) => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(`${JSON.stringify({ type: "result", result: "node answer" })}\n`);
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildClaudeLiveRunContext({
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+      backend: testCase.backend,
+    });
+
+    await executePreparedCliRun(context);
+
+    const request = invokeNode.mock.calls[0]?.[0];
+    expect(request?.env).toBeUndefined();
+    expect(request?.clearEnv).toBeUndefined();
+    expect(request?.aiAgentEnv).toEqual(
+      expect.objectContaining({
+        configuredEnv: testCase.expectedConfiguredEnv,
+        clearEnv: testCase.expectedMarkerClearEnv,
+      }),
+    );
+  });
+
   it("rejects a truncated node stream that lost the terminal result", async () => {
     const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
       params.onProgress(
