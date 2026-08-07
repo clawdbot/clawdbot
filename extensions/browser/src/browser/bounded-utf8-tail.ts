@@ -2,7 +2,7 @@
 
 function decodeUtf8Tail(buffer: Buffer): string {
   let start = 0;
-  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
+  while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
     start += 1;
   }
   return buffer.subarray(start).toString("utf8");

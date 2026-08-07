@@ -145,42 +145,6 @@ describe("TwilioProvider", () => {
     }
   });
 
-  it("uses the derived regional hostname for call status", async () => {
-    guardedJsonApiRequestMock.mockResolvedValue({ status: "completed" });
-    const provider = new TwilioProvider({
-      accountSid: "AC123",
-      authToken: "secret",
-      region: "ie1",
-    });
-
-    try {
-      const result = verifyTwilioProviderWebhook({
-        ctx: {
-          headers: {
-            host: "example.com",
-            "x-twilio-signature": "invalid",
-          },
-          rawBody: "CallSid=CS123&CallStatus=completed&From=%2B15550000000",
-          url: "https://example.com/voice/twilio?callId=call-1&turnToken=secret-turn-token",
-          method: "POST",
-          query: { callId: "call-1", turnToken: "secret-turn-token" },
-        },
-        authToken: "test-auth-token",
-        currentPublicUrl: null,
-        options: {},
-      });
-
-      const messages = warn.mock.calls.map((call) => call.join(" ")).join("\n");
-      expect(result.ok).toBe(false);
-      expect(messages).toContain("turnToken=***");
-      expect(messages).toContain("callId=***");
-      expect(messages).not.toContain("secret-turn-token");
-      expect(warn).toHaveBeenCalledOnce();
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   it("sends direct initial TwiML for notify-mode outbound calls", async () => {
     const provider = createProvider();
     const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));

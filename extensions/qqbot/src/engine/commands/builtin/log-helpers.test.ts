@@ -72,7 +72,7 @@ describe("buildBotLogsResult", () => {
     const contents = `${lines.join("\n")}\n`;
     fs.writeFileSync(logFile, contents, "utf8");
 
-    const realReadSync = fs.readSync.bind(fs) as typeof fs.readSync;
+    const realReadSync = fs.readSync.bind(fs);
     const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
       fd: number,
       buffer: NodeJS.ArrayBufferView,
