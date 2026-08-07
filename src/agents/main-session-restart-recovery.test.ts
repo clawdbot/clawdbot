@@ -268,7 +268,7 @@ function makeUserMessage(content = "do the thing", overrides: Record<string, unk
   return { role: "user", content, ...overrides };
 }
 
-function makeToolResultMessage(content = "done", overrides: Record<string, unknown> = {}) {
+function makeToolResultMessage(content: unknown = "done", overrides: Record<string, unknown> = {}) {
   return { role: "toolResult", content, ...overrides };
 }
 
