@@ -19,7 +19,7 @@ import {
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
-import { makeChatHost, makeRequestMock } from "./chat-host.test-fixture.ts";
+import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   getPendingChatPickerPatch,

@@ -889,7 +889,6 @@ src/plugins/update.test.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/resolve-route.test.ts
 src/routing/resolve-route.ts
-src/scripts/test-projects.test.ts
 src/secrets/apply.test.ts
 src/secrets/apply.ts
 src/secrets/configure.ts

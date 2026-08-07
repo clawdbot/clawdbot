@@ -2048,11 +2048,20 @@ describe("buildGuardedModelFetch", () => {
       },
     );
 
-    it("ignores invalid obsolete asctime retry-after values", async () => {
+    it.each([
+      {
+        title: "ignores invalid obsolete asctime retry-after values",
+        status: 503,
+        retryAfter: "Sun Nov 99 99:99:99 9999",
+      },
+      { title: "keeps short retry-after 429 responses retryable", status: 429, retryAfter: "30" },
+      { title: "leaves short retry-after values untouched", status: 429, retryAfter: "30" },
+      { title: "ignores retry-after on non-retryable responses", status: 400, retryAfter: "239" },
+    ])("$title", async ({ status, retryAfter }) => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, {
-          status: 503,
-          headers: { "retry-after": "Sun Nov 99 99:99:99 9999" },
+          status,
+          headers: { "retry-after": retryAfter },
         }),
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
@@ -2203,46 +2212,12 @@ describe("buildGuardedModelFetch", () => {
       await expect(response.text()).resolves.toContain("weekly rate limit");
     });
 
-    it("keeps short retry-after 429 responses retryable", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(null, {
-          status: 429,
-          headers: { "retry-after": "30" },
-        }),
-        finalUrl: "https://api.anthropic.com/v1/messages",
-        release: vi.fn(async () => undefined),
-      });
-      const response = await buildGuardedModelFetch(anthropicModel)(
-        "https://api.anthropic.com/v1/messages",
-        { method: "POST" },
-      );
-
-      expect(response.headers.get("x-should-retry")).toBeNull();
-    });
-
     it("can be disabled with OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS=0", async () => {
       process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "0";
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, {
           status: 429,
           headers: { "retry-after": "239" },
-        }),
-        finalUrl: "https://api.anthropic.com/v1/messages",
-        release: vi.fn(async () => undefined),
-      });
-      const response = await buildGuardedModelFetch(anthropicModel)(
-        "https://api.anthropic.com/v1/messages",
-        { method: "POST" },
-      );
-
-      expect(response.headers.get("x-should-retry")).toBeNull();
-    });
-
-    it("leaves short retry-after values untouched", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(null, {
-          status: 429,
-          headers: { "retry-after": "30" },
         }),
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
@@ -2274,23 +2249,6 @@ describe("buildGuardedModelFetch", () => {
         expect(response.headers.get("x-should-retry")).toBe("false");
       },
     );
-
-    it("ignores retry-after on non-retryable responses", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(null, {
-          status: 400,
-          headers: { "retry-after": "239" },
-        }),
-        finalUrl: "https://api.anthropic.com/v1/messages",
-        release: vi.fn(async () => undefined),
-      });
-      const response = await buildGuardedModelFetch(anthropicModel)(
-        "https://api.anthropic.com/v1/messages",
-        { method: "POST" },
-      );
-
-      expect(response.headers.get("x-should-retry")).toBeNull();
-    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
