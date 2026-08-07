@@ -17,7 +17,12 @@ import type {
   HelloOk,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
-import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "@openclaw/gateway-protocol/version";
 import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
 import { isWssUrl } from "@openclaw/net-policy/url-protocol";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
@@ -771,10 +776,20 @@ export class GatewayClient {
       defaultScopes: ["operator.admin"],
     });
     const platform = this.opts.platform ?? process.platform;
+    const clientMode = this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
+    // Match server admission: only probes and exact node role+mode identities
+    // may advertise specialized floors; every other client stays current-only.
+    const minProtocol =
+      this.opts.minProtocol ??
+      (clientMode === GATEWAY_CLIENT_MODES.PROBE
+        ? MIN_PROBE_PROTOCOL_VERSION
+        : role === "node" && clientMode === GATEWAY_CLIENT_MODES.NODE
+          ? MIN_NODE_PROTOCOL_VERSION
+          : MIN_CLIENT_PROTOCOL_VERSION);
 
     return {
       params: {
-        minProtocol: this.opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
+        minProtocol,
         maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
         client: {
           id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -782,7 +797,7 @@ export class GatewayClient {
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
           platform,
           deviceFamily: this.opts.deviceFamily,
-          mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+          mode: clientMode,
           instanceId: this.opts.instanceId,
         },
         caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
@@ -802,6 +817,7 @@ export class GatewayClient {
           signatureToken,
           signedAtMs,
           platform,
+          clientMode,
         }),
       },
       authApprovalRuntimeToken,
@@ -819,17 +835,18 @@ export class GatewayClient {
     signatureToken: string | undefined;
     signedAtMs: number;
     platform: string;
+    clientMode: GatewayClientMode;
   }): ConnectParams["device"] {
     if (!this.opts.deviceIdentity) {
       return undefined;
     }
-    const { nonce, role, scopes, signatureToken, signedAtMs, platform } = params;
+    const { nonce, role, scopes, signatureToken, signedAtMs, platform, clientMode } = params;
     // The signed payload mirrors server verification exactly; keep metadata
     // normalized here so different hosts sign the same logical device facts.
     const payload = buildDeviceAuthPayloadV3({
       deviceId: this.opts.deviceIdentity.deviceId,
       clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+      clientMode,
       role,
       scopes,
       signedAtMs,

@@ -24,7 +24,7 @@ Wire contract:
   client identity, `caps`, `commands`, `permissions`, `role`/`scopes`, optional signed
   `device` identity, and an `auth` bag: token / bootstrapToken / deviceToken / password /
   approvalRuntimeToken / agentRuntimeIdentityToken).
-- Server replies `hello-ok` with the negotiated `protocol`, server identity, the live
+- Server replies `hello-ok` with its current `protocol`, server identity, the live
   `features` map (`methods`, `events`, `capabilities`), initial `snapshot`, minted `auth`
   device tokens, and connection `policy` (maxPayload / maxBufferedBytes / tickIntervalMs).
 - Server events: `tick` heartbeat and `shutdown` notice; event frames may carry `seq`
