@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import {
   foreignSessionIngestionSource,
   scanSessionIngestionSource,
   sessionIngestionSourceFromCorpus,
 } from "./session-ingestion.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("session ingestion", () => {
   it("preserves file-backed scope identity when a session id ends in .jsonl", () => {
@@ -25,7 +22,7 @@ describe("session ingestion", () => {
   });
 
   it("filters assistant process chatter while preserving durable lines and scan progress", async () => {
-    const dir = tempDirs.make("openclaw-session-ingestion-");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
     const archiveFile = path.join(dir, "archive.jsonl");
     const messages = [
       { role: "assistant", content: "Need commit PR.", timestamp: "2026-04-05T18:00:00.000Z" },
@@ -71,7 +68,7 @@ describe("session ingestion", () => {
   });
 
   it("verifies backfill content despite an unchanged size and mtime", async () => {
-    const dir = tempDirs.make("openclaw-session-ingestion-");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
     const archiveFile = path.join(dir, "archive.jsonl");
     const record = (content: string) =>
       `${JSON.stringify({
