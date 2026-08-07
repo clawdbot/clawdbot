@@ -268,16 +268,16 @@ export function createDiscordDraftPreviewController(params: {
       line?: string | ChannelProgressDraftLine,
       options?: { toolName?: string },
     ) {
-      await progressDraft.pushToolProgress(line, options);
+      return await progressDraft.pushToolProgress(line, options);
     },
     async pushPlanProgress(steps?: AgentPlanStep[], options?: { explanation?: string }) {
-      await progressDraft.pushPlanProgress(steps, options);
+      return await progressDraft.pushPlanProgress(steps, options);
     },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
-      await progressDraft.pushReasoningProgress(text, options);
+      return await progressDraft.pushReasoningProgress(text, options);
     },
     async pushNarrationProgress(text?: string) {
-      await progressDraft.pushNarrationProgress(text);
+      return await progressDraft.pushNarrationProgress(text);
     },
     pushPreambleHeadline,
     async pushPreambleItemEvent(
@@ -297,7 +297,7 @@ export function createDiscordDraftPreviewController(params: {
       }
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
-      await progressDraft.pushCommentaryProgress(text, options);
+      return await progressDraft.pushCommentaryProgress(text, options);
     },
     resolvePreviewFinalText(text?: string) {
       if (typeof text !== "string") {

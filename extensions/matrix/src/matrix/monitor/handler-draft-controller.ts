@@ -129,21 +129,22 @@ export async function createMatrixDraftController(params: {
     return {
       ...options,
       onToolStart: async (payload) => {
-        await progressDraft.pushToolEvent(payload);
+        return await progressDraft.pushToolEvent(payload);
       },
       onItemEvent: async (payload) => {
-        await progressDraft.pushItemEvent(payload);
+        return await progressDraft.pushItemEvent(payload);
       },
       onPlanUpdate: async (payload) => {
         if (payload.phase !== "update") {
-          return;
+          return false;
         }
         if (progressDraftStreaming) {
-          await progressDraft.pushPlanProgress(payload.steps, { explanation: payload.explanation });
-          return;
+          return await progressDraft.pushPlanProgress(payload.steps, {
+            explanation: payload.explanation,
+          });
         }
         if (!draftStream || previewPlanSuppressed) {
-          return;
+          return false;
         }
         previewPlan = payload.steps?.length
           ? payload.steps.map((step) => ({ ...step }))
@@ -153,15 +154,16 @@ export async function createMatrixDraftController(params: {
         if (text) {
           draftStream.update(text);
         }
+        return false;
       },
       onApprovalEvent: async (payload) => {
-        await progressDraft.pushApprovalEvent(payload);
+        return await progressDraft.pushApprovalEvent(payload);
       },
       onCommandOutput: async (payload) => {
-        await progressDraft.pushCommandOutputEvent(payload);
+        return await progressDraft.pushCommandOutputEvent(payload);
       },
       onPatchSummary: async (payload) => {
-        await progressDraft.pushPatchEvent(payload);
+        return await progressDraft.pushPatchEvent(payload);
       },
     };
   };
@@ -265,7 +267,7 @@ export async function createMatrixDraftController(params: {
     },
     onPartialReply: (text: string) => {
       if (progressDraftStreaming) {
-        return;
+        return false;
       }
       latestDraftFullText = text;
       if (text.trim()) {
@@ -275,6 +277,7 @@ export async function createMatrixDraftController(params: {
         progressDraft.suppress();
       }
       updateDraftFromLatestFullText();
+      return false;
     },
   };
 }
