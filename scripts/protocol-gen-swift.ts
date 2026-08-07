@@ -394,10 +394,9 @@ function emitStruct(name: string, schema: JsonSchema): string {
           const propName = swiftStoredPropertyName(name, key);
           const req = required.has(key);
           if (name === "AgentsUpdateParams" && agentsUpdateNullableStringKeys.has(key)) {
-            // Keep the raw nullable value explicit so the source-compatible initializer stays
-            // unambiguous when callers omit the field. Default nil so raw clears can name
-            // only the field being cleared (e.g. modelvalue: AnyCodable(NSNull())).
-            return `        ${swiftStoredPropertyName(name, key)}: AnyCodable? = nil`;
+            // No default: otherwise AgentsUpdateParams(agentid:) is ambiguous with the
+            // String?-facing compatibility initializer (same as model-only pattern).
+            return `        ${swiftStoredPropertyName(name, key)}: AnyCodable?`;
           }
           return `        ${swiftInitializerParam({
             name: propName,
