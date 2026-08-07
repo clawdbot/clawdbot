@@ -172,7 +172,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         if (options.streamingBehavior === "followUp") {
           await this.queueFollowUp(expandedText, currentImages);
         } else {
-          await this.queueSteer(expandedText, currentImages);
+          const message = this.createUserMessage(expandedText, currentImages);
+          this.enqueuePreparedSteer({ text: expandedText, message });
         }
         preflightResult?.(true);
         return;
@@ -350,8 +351,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       imageOrder,
       inputProvenance,
     );
-    this.agent.steer(prepared.message);
-    this.trackSteeringMessage(prepared.text, prepared.message);
+    this.enqueuePreparedSteer(prepared);
   }
 
   /** Queue steering with exact cancellation and durable transcript acknowledgment. */
@@ -377,6 +377,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       throw new Error("failed to create steering receipt");
     }
     return receipt;
+  }
+
+  private enqueuePreparedSteer(prepared: { text: string; message: AgentMessage }): void {
+    this.agent.steer(prepared.message);
+    this.trackSteeringMessage(prepared.text, prepared.message);
   }
 
   /**

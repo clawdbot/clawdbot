@@ -22,6 +22,17 @@ type AgentSessionSteerReceipt = {
   cancel(): boolean;
 };
 
+type ReceiptAwareSteerTarget = {
+  steerWithReceipt(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
+    imageOrder?: PromptImageOrderEntry[],
+    inputProvenance?: InputProvenance,
+  ): Promise<AgentSessionSteerReceipt>;
+};
+
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
  * whether the queued user message reached the transcript.
@@ -35,16 +46,17 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     imageOrder?: PromptImageOrderEntry[],
     inputProvenance?: InputProvenance,
   ): Promise<void>;
-  steerWithReceipt(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    inputProvenance?: InputProvenance,
-  ): Promise<AgentSessionSteerReceipt>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
+
+function isReceiptAwareSteerTarget(
+  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+): activeSession is EmbeddedAgentActiveSessionSteerTarget & ReceiptAwareSteerTarget {
+  return (
+    "steerWithReceipt" in activeSession &&
+    typeof (activeSession as { steerWithReceipt?: unknown }).steerWithReceipt === "function"
+  );
+}
 
 /** Default wait for a steered user message to appear in the active transcript. */
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
@@ -65,14 +77,22 @@ function steerActiveSession(
   imageOrder?: PromptImageOrderEntry[],
   inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
 ): Promise<void> {
-  return activeSession.steer(
-    text,
-    images,
-    userTurnTranscriptRecorder,
-    media,
-    imageOrder,
-    inputProvenance,
-  );
+  if (inputProvenance) {
+    return activeSession.steer(
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+      imageOrder,
+      inputProvenance,
+    );
+  }
+  if (media?.length) {
+    return activeSession.steer(text, images, userTurnTranscriptRecorder, media, imageOrder);
+  }
+  return userTurnTranscriptRecorder
+    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
+    : activeSession.steer(text, images);
 }
 
 function isTerminalActiveSessionEvent(event: unknown): boolean {
@@ -107,6 +127,9 @@ async function steerAndWaitForTranscriptCommit(
   imageOrder?: PromptImageOrderEntry[],
   inputProvenance?: EmbeddedAgentQueueMessageOptions["inputProvenance"],
 ): Promise<void> {
+  if (!isReceiptAwareSteerTarget(activeSession)) {
+    throw new Error("active session does not support transcript commit receipts");
+  }
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let receipt: AgentSessionSteerReceipt | undefined;

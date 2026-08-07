@@ -8,9 +8,16 @@ type EmbeddedAgentActiveSessionSteerTarget = Parameters<
   typeof steerActiveSessionWithOptionalDeliveryWait
 >[0];
 
-type AgentSessionSteerReceipt = Awaited<
-  ReturnType<EmbeddedAgentActiveSessionSteerTarget["steerWithReceipt"]>
->;
+type AgentSessionSteerReceipt = {
+  committed: Promise<void>;
+  cancel(): boolean;
+};
+
+type ReceiptAwareSteerTarget = EmbeddedAgentActiveSessionSteerTarget & {
+  steerWithReceipt: (
+    ...args: Parameters<EmbeddedAgentActiveSessionSteerTarget["steer"]>
+  ) => Promise<AgentSessionSteerReceipt>;
+};
 
 function createDeferredReceipt(cancel: () => boolean = () => false): {
   receipt: AgentSessionSteerReceipt;
@@ -31,11 +38,8 @@ function createDeferredReceipt(cancel: () => boolean = () => false): {
   };
 }
 
-const unusedReceipt = (): Promise<AgentSessionSteerReceipt> =>
-  Promise.resolve(createDeferredReceipt().receipt);
-
 function steerWithDeliveryWait(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+  activeSession: ReceiptAwareSteerTarget,
   text: string,
   deliveryTimeoutMs = 10_000,
 ): ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait> {
@@ -54,7 +58,6 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     });
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       steer,
-      steerWithReceipt: unusedReceipt,
       subscribe: () => () => {},
     };
 
@@ -62,14 +65,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       userTurnTranscriptRecorder: recorder,
     });
 
-    expect(steer).toHaveBeenCalledWith(
-      "runtime prompt",
-      undefined,
-      recorder,
-      undefined,
-      undefined,
-      undefined,
-    );
+    expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
   });
 
   it("forwards ordered images with a queued steering message", async () => {
@@ -80,20 +76,12 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     ];
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       steer,
-      steerWithReceipt: unusedReceipt,
       subscribe: () => () => {},
     };
 
     await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", { images });
 
-    expect(steer).toHaveBeenCalledWith(
-      "compare these",
-      images,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
+    expect(steer).toHaveBeenCalledWith("compare these", images);
   });
 
   it("forwards ordered prompt facts with a queued steering message", async () => {
@@ -105,7 +93,6 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const imageOrder = ["offloaded", "inline"] as const;
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       steer,
-      steerWithReceipt: unusedReceipt,
       subscribe: () => () => {},
     };
 
@@ -114,19 +101,12 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       imageOrder: [...imageOrder],
     });
 
-    expect(steer).toHaveBeenCalledWith(
-      "inspect both",
-      undefined,
-      undefined,
-      media,
-      imageOrder,
-      undefined,
-    );
+    expect(steer).toHaveBeenCalledWith("inspect both", undefined, undefined, media, imageOrder);
   });
 
   it("waits for the session-owned transcript commit receipt", async () => {
     const deferred = createDeferredReceipt();
-    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+    const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
       steerWithReceipt: async () => deferred.receipt,
       subscribe: () => () => {},
@@ -145,11 +125,24 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(settled).toBe(true);
   });
 
+  it("rejects commit waits when the active session lacks receipt support", async () => {
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer: async () => undefined,
+      subscribe: () => () => {},
+    };
+
+    await expect(
+      steerActiveSessionWithOptionalDeliveryWait(activeSession, "queued completion", {
+        waitForTranscriptCommit: true,
+      }),
+    ).rejects.toThrow("active session does not support transcript commit receipts");
+  });
+
   it("correlates concurrent identical text by exact queue receipt", async () => {
     const first = createDeferredReceipt();
     const second = createDeferredReceipt();
     const receipts = [first.receipt, second.receipt];
-    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+    const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
       steerWithReceipt: async () => receipts.shift()!,
       subscribe: () => () => {},
@@ -192,7 +185,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         return true;
       });
       const receipts = [first.receipt, second.receipt];
-      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
         steerWithReceipt: async () => receipts.shift()!,
         subscribe: () => () => {},
@@ -245,7 +238,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       steeringUiMessages.splice(1, 1);
       return true;
     });
-    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+    const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
       steerWithReceipt: async () => deferred.receipt,
       subscribe: () => () => {},
@@ -291,7 +284,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       steeringUiMessages.splice(index, 1);
       return true;
     });
-    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+    const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
       steerWithReceipt: async () => deferred.receipt,
       subscribe: (listener) => {
@@ -323,7 +316,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   it("marks a missing queued message as accepted without transcript confirmation", async () => {
     vi.useFakeTimers();
     const deferred = createDeferredReceipt(() => false);
-    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+    const activeSession: ReceiptAwareSteerTarget = {
       steer: async () => undefined,
       steerWithReceipt: async () => deferred.receipt,
       subscribe: () => () => {},
@@ -348,7 +341,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       const sibling = { id: "sibling" };
       const queued: unknown[] = [sibling];
       const consumed = createDeferredReceipt(() => false);
-      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
         steerWithReceipt: async () => consumed.receipt,
         subscribe: () => () => {},
@@ -372,7 +365,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     try {
       let emit!: (event: unknown) => void;
       const deferred = createDeferredReceipt();
-      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
         steerWithReceipt: async () => deferred.receipt,
         subscribe: (listener) => {
@@ -399,7 +392,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     try {
       let emit!: (event: unknown) => void;
       const deferred = createDeferredReceipt();
-      const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      const activeSession: ReceiptAwareSteerTarget = {
         steer: async () => undefined,
         steerWithReceipt: async () => deferred.receipt,
         subscribe: (listener) => {
