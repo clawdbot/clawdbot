@@ -138,7 +138,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const successfulToolNames = [
     ...new Set(
       attempt.toolMetas
-        .filter((entry) => entry.isError !== true)
+        .filter((entry) => entry.isError === false)
         .map((entry) => entry.toolName.trim())
         .filter(Boolean),
     ),

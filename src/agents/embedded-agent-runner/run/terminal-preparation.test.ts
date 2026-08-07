@@ -254,9 +254,11 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       attempt: {
         terminalTurnId: "turn-7",
         toolMetas: [
-          { toolName: "read" },
-          { toolName: "read" },
+          { toolName: "started" },
+          { toolName: "unknown" },
           { toolName: "write", isError: true },
+          { toolName: "read", isError: false },
+          { toolName: "read", isError: false },
         ],
       },
     });

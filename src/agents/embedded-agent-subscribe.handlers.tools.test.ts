@@ -1977,6 +1977,48 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {
+  it("marks every finalized built-in call with its explicit outcome", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-complete",
+      isError: false,
+      result: { content: "ok" },
+    });
+    await endTool(ctx, {
+      toolName: "process",
+      toolCallId: "tool-process-running",
+      isError: false,
+      result: { details: { status: "running" } },
+    });
+    await endTool(ctx, {
+      toolName: "image_generate",
+      toolCallId: "tool-image-async-started",
+      isError: false,
+      result: { details: { async: true, status: "started" } },
+    });
+    await endTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-failed",
+      isError: true,
+      result: { error: "failed" },
+    });
+
+    expect(
+      ctx.state.toolMetas.map(({ toolName, isError }) => ({
+        toolName,
+        isError,
+      })),
+    ).toEqual([
+      { toolName: "read", isError: false },
+      { toolName: "process", isError: false },
+      { toolName: "image_generate", isError: false },
+      { toolName: "write", isError: true },
+    ]);
+    expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
+  });
+
   it("retains every failed call after later successes change the last-error slot", async () => {
     const { ctx } = createTestContext();
 
@@ -1995,7 +2037,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
     expect(ctx.state.toolMetas.map(({ toolName, isError }) => ({ toolName, isError }))).toEqual([
       { toolName: "read", isError: true },
-      { toolName: "read", isError: undefined },
+      { toolName: "read", isError: false },
       { toolName: "exec", isError: true },
     ]);
   });
