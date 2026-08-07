@@ -355,6 +355,20 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
+  it("captures the child exit status without weakening fail-fast readiness", () => {
+    const result = runBashWithHelper([
+      "bash -c 'exit 23' &",
+      'gateway_pid="$!"',
+      'child_status=""',
+      `if openclaw_e2e_wait_gateway_ready "$gateway_pid" /dev/null 2 child_status 23456; then exit 90; fi`,
+      'printf "status=%s\\n" "$child_status"',
+    ]);
+
+    expectShellSuccess(result);
+    expect(result.stdout).toContain("Gateway exited before becoming ready");
+    expect(result.stdout).toContain("status=23");
+  });
+
   it("wraps package installs with the configured timeout", () => {
     withTempDir("openclaw-e2e-instance-", (tempDir) => {
       const fixture = createPackageInstallFixture(tempDir);

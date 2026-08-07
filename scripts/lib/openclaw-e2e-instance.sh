@@ -392,12 +392,19 @@ openclaw_e2e_gateway_log_port_from_text() {
   sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
 }
 openclaw_e2e_wait_gateway_ready() {
-  local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
+  local pid="$1" log="$2" attempts="${3:-300}" exit_status_out="" ready_port readiness_mode _ saw_ready_log=false
+  if [[ "${4:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    exit_status_out="$4"; ready_port="${5:-}"; readiness_mode="${6:-strict}"
+  else
+    ready_port="${4:-}"; readiness_mode="${5:-strict}"
+  fi
   local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
   for _ in $(seq 1 "$attempts"); do
     ! kill -0 "$pid" >/dev/null 2>&1 && {
       echo "Gateway exited before becoming ready"
-      wait "$pid" || true
+      local waited_status
+      if wait "$pid"; then waited_status=0; else waited_status=$?; fi
+      [ -z "$exit_status_out" ] || printf -v "$exit_status_out" '%s' "$waited_status"
       tail -n 120 "$log" 2>/dev/null || true
       return 1
     }
