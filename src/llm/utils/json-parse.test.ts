@@ -116,9 +116,9 @@ describe("repairJsonChunk incremental/non-incremental equivalence (fuzz)", () =>
 
       const state = createRepairJsonState();
       let incremental = "";
-      for (let i = 0; i < chunks.length; i++) {
+      for (const [i, chunk] of chunks.entries()) {
         const isLastChunk = i === chunks.length - 1;
-        incremental += repairJsonChunk(chunks[i], state, isLastChunk);
+        incremental += repairJsonChunk(chunk, state, isLastChunk);
       }
 
       const expected = repairJson(fullJson);
@@ -146,7 +146,7 @@ describe("repairJsonChunk incremental/non-incremental equivalence (fuzz)", () =>
       const state = createRepairJsonState();
       let incremental = "";
       for (let i = 0; i < fullJson.length; i++) {
-        incremental += repairJsonChunk(fullJson[i], state, i === fullJson.length - 1);
+        incremental += repairJsonChunk(fullJson.charAt(i), state, i === fullJson.length - 1);
       }
       expect(incremental).toBe(repairJson(fullJson));
     }
