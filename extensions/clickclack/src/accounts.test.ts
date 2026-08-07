@@ -152,6 +152,7 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
+      nativeProgress: false,
       commandMenu: true,
       discussions: {
         enabled: false,
@@ -262,6 +263,7 @@ describe("ClickClack account resolution", () => {
       defaultTo: "channel:general",
       enabled: true,
       agentActivity: false,
+      nativeProgress: false,
       commandMenu: true,
       discussions: {
         enabled: false,
