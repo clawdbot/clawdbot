@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,21 +14,20 @@ import {
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
 describe("managed worktree path state migrations", () => {
-  let root: string | undefined;
-
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    if (root) {
-      await fs.rm(root, { recursive: true, force: true });
-      root = undefined;
-    }
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+    afterEach(() => {
+      closeOpenClawStateDatabaseForTest();
+      cleanup();
+    });
   });
 
   it.skipIf(process.platform === "win32")(
     "canonicalizes persisted paths from symlinked state directories",
+    { timeout: 240_000 },
     async () => {
-      root = await fs.mkdtemp(
-        path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-path-migration-"),
+      const root = tempDirs.make(
+        "openclaw-worktree-path-migration-",
+        await fs.realpath(os.tmpdir()),
       );
       const repo = await initializeManagedWorktreeTestRepository(root);
       const realStateDir = path.join(root, "real-state");
@@ -37,30 +37,45 @@ describe("managed worktree path state migrations", () => {
       const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: linkedStateDir };
       const service = new ManagedWorktreeService({ env });
       const live = await service.create({ repoRoot: repo, name: "live", baseRef: "HEAD" });
-      const removed = await service.create({ repoRoot: repo, name: "removed", baseRef: "HEAD" });
-      const canonical = await service.create({
-        repoRoot: repo,
-        name: "canonical",
-        baseRef: "HEAD",
-      });
-      const moved = await service.create({ repoRoot: repo, name: "moved", baseRef: "HEAD" });
-      await service.remove({ id: removed.id, reason: "migration-fixture" });
-
+      const canonicalRoot = path.dirname(path.dirname(live.path));
       const rawLivePath = path.join(linkedStateDir, "worktrees", live.repoFingerprint, live.name);
       const rawRemovedPath = path.join(
         linkedStateDir,
         "worktrees",
-        removed.repoFingerprint,
-        removed.name,
+        live.repoFingerprint,
+        "removed",
       );
       const db = openOpenClawStateDatabase({ env }).db;
       db.prepare("UPDATE worktrees SET path = ? WHERE id = ?").run(rawLivePath, live.id);
-      db.prepare("UPDATE worktrees SET path = ? WHERE id = ?").run(rawRemovedPath, removed.id);
-      const movedPath = path.join(root, "relocated-worktrees", moved.name);
-      db.prepare("UPDATE worktrees SET path = ? WHERE id = ?").run(movedPath, moved.id);
+      const removed = {
+        ...live,
+        id: "legacy-removed",
+        name: "removed",
+        path: rawRemovedPath,
+        branch: "openclaw/removed",
+        removedAt: 1,
+      };
+      const canonical = {
+        ...live,
+        id: "canonical-row",
+        name: "canonical",
+        path: path.join(canonicalRoot, live.repoFingerprint, "canonical"),
+        branch: "openclaw/canonical",
+      };
+      const movedPath = path.join(root, "relocated-worktrees", "moved");
+      const moved = {
+        ...live,
+        id: "moved-row",
+        name: "moved",
+        path: movedPath,
+        branch: "openclaw/moved",
+      };
+      insertRegistryWorktree(env, removed, { provisionedPaths: [] });
+      insertRegistryWorktree(env, canonical, { provisionedPaths: [] });
+      insertRegistryWorktree(env, moved, { provisionedPaths: [] });
 
       const cfg = {} as OpenClawConfig;
-      const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root! });
+      const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
       expect(detected.preview).toContain(
         "- Managed worktrees: canonicalize 2 persisted paths for symlinked state directories",
       );
@@ -70,14 +85,16 @@ describe("managed worktree path state migrations", () => {
         "Canonicalized 2 managed worktree paths for symlinked state directories",
       );
       expect(getRegistryWorktree(env, live.id)?.path).toBe(live.path);
-      expect(getRegistryWorktree(env, removed.id)?.path).toBe(removed.path);
+      expect(getRegistryWorktree(env, removed.id)?.path).toBe(
+        path.join(canonicalRoot, live.repoFingerprint, removed.name),
+      );
       expect(getRegistryWorktree(env, canonical.id)?.path).toBe(canonical.path);
       expect(getRegistryWorktree(env, moved.id)?.path).toBe(movedPath);
 
       const secondDetection = await detectLegacyStateMigrations({
         cfg,
         env,
-        homedir: () => root!,
+        homedir: () => root,
       });
       expect(secondDetection.worktrees.pathRewrites).toStrictEqual([]);
       const secondResult = await runLegacyStateMigrations({
