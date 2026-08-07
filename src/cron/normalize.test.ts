@@ -4,6 +4,7 @@ import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { MAX_CRON_COMMAND_OUTPUT_MAX_BYTES } from "./normalize-payload.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -286,6 +287,31 @@ describe("normalizeCronJobCreate", () => {
       outputMaxBytes: 4096,
     });
     expect(validateCronAddParams(normalized)).toBe(true);
+  });
+  it("clamps command outputMaxBytes above the hard cap instead of disabling output limits", () => {
+    const normalized = createDefaulted({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+      outputMaxBytes: 1_000_000_000_000,
+    });
+    expect(child(normalized, "payload").outputMaxBytes).toBe(MAX_CRON_COMMAND_OUTPUT_MAX_BYTES);
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+  it("passes through reasonable command outputMaxBytes values", () => {
+    const normalized = createDefaulted({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+      outputMaxBytes: 4096,
+    });
+    expect(child(normalized, "payload").outputMaxBytes).toBe(4096);
+  });
+  it.each([0, -5, Number.NaN])("drops invalid command outputMaxBytes value %s", (value) => {
+    const normalized = createDefaulted({
+      kind: "command",
+      argv: ["sh", "-lc", "echo ok"],
+      outputMaxBytes: value,
+    });
+    expect(normalized.payload).not.toHaveProperty("outputMaxBytes");
   });
   it("preserves command argv argument bytes", () => {
     const normalized = createDefaulted({
