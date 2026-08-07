@@ -151,8 +151,11 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     });
   });
 
-  it("rejects registry attribution recovery without explicit internal attribution", async () => {
+  it("rebinds admitted attribution with foreground work across lifecycle rotation", async () => {
     const queue = deferredTaskQueue();
+    const registeredAt = 1_000;
+    const reboundAt = 2_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const generation = getAgentEventLifecycleGeneration();
     const attribution = createAgentExecutionAttribution({
       runId: "attributed-across-restart",
@@ -167,6 +170,7 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
       ...(attribution.sessionId ? { sessionId: attribution.sessionId } : {}),
       ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
       lifecycleGeneration: generation,
+      registeredAt,
     });
     const state = createController({
       lifecycleGeneration: generation,
@@ -176,43 +180,23 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     });
     const run = state.controller.enqueueGlobal(async () => completedResult);
 
+    const currentGeneration = rotateAgentEventLifecycleGeneration();
+    clock.mockReturnValue(reboundAt);
     queue.release();
+    await run;
 
-    await expect(run).rejects.toThrow(
-      "Agent run ID is already bound to host-owned execution attribution.",
-    );
-    expect(state.getParams().attribution).toBeUndefined();
+    expect(state.getParams().attribution).toEqual({
+      ...attribution,
+      lifecycleGeneration: currentGeneration,
+    });
     expect(getAgentRunContext(attribution.runId)).toMatchObject({
-      attribution,
-      lifecycleGeneration: generation,
+      attribution: {
+        ...attribution,
+        lifecycleGeneration: currentGeneration,
+      },
+      lifecycleGeneration: currentGeneration,
+      registeredAt: reboundAt,
     });
-  });
-
-  it("rejects different explicit attribution for a live run ID", async () => {
-    const generation = getAgentEventLifecycleGeneration();
-    const existingAttribution = createAgentExecutionAttribution({
-      runId: "attribution-mismatch",
-      lifecycleGeneration: generation,
-    });
-    const replacementAttribution = createAgentExecutionAttribution({
-      runId: existingAttribution.runId,
-      lifecycleGeneration: generation,
-    });
-    claimAgentRunContext(existingAttribution.runId, {
-      attribution: existingAttribution,
-      lifecycleGeneration: generation,
-    });
-    const state = createController({
-      lifecycleGeneration: generation,
-      trigger: "user",
-      runId: existingAttribution.runId,
-      attribution: replacementAttribution,
-    });
-
-    await expect(state.controller.enqueueGlobal(async () => completedResult)).rejects.toThrow(
-      "Agent run ID is already bound to different execution attribution.",
-    );
-    expect(getAgentRunContext(existingAttribution.runId)?.attribution).toBe(existingAttribution);
   });
 
   it("preserves absent attribution identity when queued foreground work rebinds", async () => {

@@ -178,34 +178,19 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             releaseQueuedContext("admitted");
             // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
-            // A run ID is correlation, not authority. Only explicit internal
-            // attribution may retain a live generation's private identity.
-            const existingAttribution =
-              existingContext?.lifecycleGeneration === lifecycleGeneration
-                ? existingContext.attribution
-                : undefined;
-            if (existingAttribution && !params.attribution) {
-              throw new TypeError(
-                "Agent run ID is already bound to host-owned execution attribution.",
-              );
+            const attribution =
+              params.attribution ??
+              (existingContext?.attribution
+                ? rebindAgentExecutionAttribution(existingContext.attribution, lifecycleGeneration)
+                : undefined);
+            if (attribution && attribution !== params.attribution) {
+              params = { ...params, attribution };
+              options.setParams(params);
             }
-            if (
-              existingAttribution &&
-              params.attribution &&
-              (existingAttribution.contextId !== params.attribution.contextId ||
-                existingAttribution.executionId !== params.attribution.executionId ||
-                existingAttribution.createdAt !== params.attribution.createdAt)
-            ) {
-              throw new TypeError(
-                "Agent run ID is already bound to different execution attribution.",
-              );
-            }
-            const { attribution: _existingAttribution, ...existingContextFields } =
-              existingContext ?? {};
             const admittedAt = Date.now();
             claimAgentRunContext(params.runId, {
-              ...existingContextFields,
-              ...(params.attribution ? { attribution: params.attribution } : {}),
+              ...existingContext,
+              ...(attribution ? { attribution } : {}),
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,
