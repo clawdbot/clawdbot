@@ -16,6 +16,8 @@ import {
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
 
+const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+
 type BundlePluginManifest = Extract<
   ReturnType<typeof loadBundleManifest>,
   { ok: true }
@@ -177,7 +179,7 @@ describe("bundle manifest parsing", () => {
           },
           manifestRelativePath: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
           manifest: {
-            $schema: "https://wrong.example/plugin.schema.json",
+            $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
             name: "Portable.Bundle",
             description: "Agent Plugins fixture",
             version: "1.2.3",
@@ -414,7 +416,10 @@ describe("bundle manifest parsing", () => {
       dirs: [".claude-plugin"],
       jsonFiles: {
         [CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "Claude" },
-        [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "Agent" },
+        [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+          $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+          name: "Agent",
+        },
       },
     });
     expect(detectBundleManifestFormat(claudeRoot)).toBe("claude");
@@ -422,16 +427,68 @@ describe("bundle manifest parsing", () => {
     const nativeRoot = makeTempDir();
     writeBundleFixtureFiles(nativeRoot, {
       "openclaw.plugin.json": { id: "native", configSchema: { type: "object" } },
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "Agent" },
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+        $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+        name: "Agent",
+      },
     });
     expect(detectBundleManifestFormat(nativeRoot)).toBeNull();
 
     const entryRoot = makeTempDir();
     writeBundleFixtureFiles(entryRoot, {
       "index.ts": "export default {}",
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "Agent" },
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+        $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+        name: "Agent",
+      },
     });
     expect(detectBundleManifestFormat(entryRoot)).toBe("agent");
+  });
+
+  it.each([
+    {
+      name: "wrong schema falls through to native entry detection",
+      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
+      files: { "index.ts": "export default {}" },
+      expected: null,
+    },
+    {
+      name: "missing schema falls through to manifestless Claude markers",
+      manifest: { name: "not-agent" },
+      files: { "skills/example/SKILL.md": "---\ndescription: Example\n---\n" },
+      expected: "claude",
+    },
+    {
+      name: "wrong schema without fallback markers is not a bundle",
+      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
+      files: {},
+      expected: null,
+    },
+  ])("$name", ({ manifest, files, expected }) => {
+    const rootDir = makeTempDir();
+    writeBundleFixtureFiles(rootDir, {
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: manifest,
+      ...files,
+    });
+
+    expect(detectBundleManifestFormat(rootDir)).toBe(expected);
+  });
+
+  it.each([
+    { name: "missing schema", manifest: { name: "portable" } },
+    {
+      name: "wrong schema",
+      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "portable" },
+    },
+  ])("rejects Agent Plugins manifests with $name", ({ manifest }) => {
+    const rootDir = makeTempDir();
+    writeBundleManifest(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, manifest);
+
+    const result = loadBundleManifest({ rootDir, bundleFormat: "agent" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(`expected $schema ${AGENT_BUNDLE_MANIFEST_SCHEMA}`);
+    }
   });
 
   it("rejects Agent Plugins manifests with missing or empty names", () => {
@@ -467,7 +524,10 @@ describe("bundle manifest parsing", () => {
   it("does not expose Agent Plugins skills when skills is not a directory", () => {
     const rootDir = makeTempDir();
     writeBundleFixtureFiles(rootDir, {
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "portable" },
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: {
+        $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+        name: "portable",
+      },
       skills: "not a directory",
     });
 

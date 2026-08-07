@@ -165,8 +165,8 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
         "Agent Plugins injected environment",
       );
       const expectedPluginRoot = await fs.realpath(pluginRoot);
-      const expectedPluginData = await fs.realpath(path.join(stateDir, "plugin-data", pluginId));
-      expect((await fs.stat(expectedPluginData)).isDirectory()).toBe(true);
+      const expectedPluginData = path.join(stateDir, "plugin-data", pluginId);
+      await expect(fs.stat(expectedPluginData)).rejects.toMatchObject({ code: "ENOENT" });
       expect(loadedServer.args).toEqual([serverPath, expandedMarkerPath]);
       expect(loadedEnv).toMatchObject({
         PLUGIN_ROOT: expectedPluginRoot,
@@ -181,6 +181,8 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
       });
       const materialized = await materializeBundleMcpToolsForRun({ runtime });
       try {
+        expect(await fs.realpath(expectedPluginData)).toBe(expectedPluginData);
+        expect((await fs.stat(expectedPluginData)).isDirectory()).toBe(true);
         const tool = expectDefined(
           materialized.tools.find((entry) => entry.name === "weatherProbe__weather_probe"),
           "materialized Agent Plugins weather probe tool",

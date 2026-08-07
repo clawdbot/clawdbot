@@ -521,11 +521,10 @@ describe("loadEnabledBundleMcpConfig", () => {
         await expectResolvedPathEqual(localArgs?.[0], path.join(pluginRoot, "config.json"));
         expect(localArgs?.[1]).toBe(path.join(String(localEnv.PLUGIN_DATA), "cache"));
         await expectResolvedPathEqual(localEnv.PLUGIN_ROOT, pluginRoot);
-        await expectResolvedPathEqual(
-          localEnv.PLUGIN_DATA,
-          path.join(homeDir, ".openclaw", "plugin-data", "portable-mcp"),
-        );
-        await expectResolvedPathEqual(local.cwd, String(localEnv.PLUGIN_DATA));
+        const pluginDataPath = path.join(homeDir, ".openclaw", "plugin-data", "portable-mcp");
+        expect(localEnv.PLUGIN_DATA).toBe(pluginDataPath);
+        expect(local.cwd).toBe(pluginDataPath);
+        await expectPathMissing(pluginDataPath);
         expect(localEnv.ROOT_COPY).toBe(localEnv.PLUGIN_ROOT);
         expect(localEnv.DATA_COPY).toBe(localEnv.PLUGIN_DATA);
         expect(remote).toEqual({
@@ -549,6 +548,56 @@ describe("loadEnabledBundleMcpConfig", () => {
           stdioServerNames: ["local"],
           unsupportedServerNames: [],
         });
+      },
+    );
+  });
+
+  it("resolves Agent Plugins relative cwd from the plugin root and rejects traversal", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-agent-bundle-cwd",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeAgentBundle({
+          homeDir,
+          pluginId: "portable-cwd",
+          mcp: {
+            $schema: AGENT_MCP_SCHEMA,
+            mcpServers: {
+              valid: { type: "stdio", command: "node", cwd: "./child" },
+              relativeEscape: { type: "stdio", command: "node", cwd: "./../escape" },
+              placeholderEscape: {
+                type: "stdio",
+                command: "node",
+                cwd: "${PLUGIN_ROOT}/../escape",
+              },
+            },
+          },
+          textFiles: { "child/.keep": "" },
+        });
+        const rootRealPath = await fs.realpath(pluginRoot);
+        const relativeProcessCwd = path.relative(rootRealPath, await fs.realpath(process.cwd()));
+        expect(relativeProcessCwd === ".." || relativeProcessCwd.startsWith(`..${path.sep}`)).toBe(
+          true,
+        );
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["portable-cwd"]),
+        });
+
+        expect(Object.keys(loaded.config.mcpServers)).toEqual(["valid"]);
+        await expectResolvedPathEqual(
+          loaded.config.mcpServers.valid?.cwd,
+          path.join(pluginRoot, "child"),
+        );
+        expect(loaded.diagnostics).toHaveLength(2);
+        expect(loaded.diagnostics.map((entry) => entry.message)).toEqual([
+          expect.stringContaining('invalid MCP server "relativeEscape"'),
+          expect.stringContaining('invalid MCP server "placeholderEscape"'),
+        ]);
+        expect(loaded.diagnostics.every((entry) => entry.message.includes("cwd must remain"))).toBe(
+          true,
+        );
       },
     );
   });
@@ -586,7 +635,7 @@ describe("loadEnabledBundleMcpConfig", () => {
     );
   });
 
-  it("isolates Agent Plugins PLUGIN_DATA failures to stdio servers", async () => {
+  it("keeps Agent Plugins inspection pure when PLUGIN_DATA collides", async () => {
     await withBundleHomeEnv(
       tempHarness,
       "openclaw-agent-bundle-data-collision",
@@ -616,13 +665,28 @@ describe("loadEnabledBundleMcpConfig", () => {
         });
 
         expect(loaded.config.mcpServers).toEqual({
+          local: {
+            transport: "stdio",
+            command: "node",
+            cwd: await fs.realpath(pluginRoot),
+            env: {
+              PLUGIN_ROOT: await fs.realpath(pluginRoot),
+              PLUGIN_DATA: pluginDataPath,
+            },
+          },
           remote: { transport: "streamable-http", url: "https://example.test/mcp" },
         });
-        expect(loaded.diagnostics).toHaveLength(1);
-        expect(loaded.diagnostics[0]).toMatchObject({ pluginId });
-        expect(loaded.diagnostics[0]?.message).toContain("PLUGIN_DATA");
-        expect(loaded.diagnostics[0]?.message).toContain(pluginDataPath);
-        expect(loaded.diagnostics[0]?.message).toMatch(/EEXIST|file already exists/iu);
+        expect(loaded.diagnostics).toStrictEqual([]);
+        expect(
+          inspectBundleMcpRuntimeSupport({
+            pluginId,
+            rootDir: pluginRoot,
+            bundleFormat: "agent",
+          }),
+        ).toMatchObject({
+          supportedServerNames: ["local", "remote"],
+          unsupportedServerNames: [],
+        });
         expect((await fs.stat(pluginDataPath)).isFile()).toBe(true);
 
         const manifest = loadBundleManifest({ rootDir: pluginRoot, bundleFormat: "agent" });

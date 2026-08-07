@@ -24,6 +24,8 @@ export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
 export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
 export const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+const MAX_AGENT_BUNDLE_MANIFEST_BYTES = 256 * 1024;
 
 /** Normalized bundle manifest shape consumed by plugin discovery. */
 type BundlePluginManifest = {
@@ -98,6 +100,7 @@ function loadBundleManifestFile(params: {
   rejectHardlinks: boolean;
   allowMissing?: boolean;
   strictJson?: boolean;
+  maxBytes?: number;
 }): BundleManifestFileLoadResult {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
   const result = readRootStructuredFileSync<Record<string, unknown>>({
@@ -106,6 +109,7 @@ function loadBundleManifestFile(params: {
     relativePath: params.manifestRelativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
+    ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
     parse: (raw) => (params.strictJson ? JSON.parse(raw) : JSON5.parse(raw)),
     validate: isRecord,
   });
@@ -377,6 +381,7 @@ export function loadBundleManifest(params: {
     rejectHardlinks,
     allowMissing: params.bundleFormat === "claude",
     strictJson: params.bundleFormat === "agent",
+    ...(params.bundleFormat === "agent" ? { maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES } : {}),
   });
   if (!loaded.ok) {
     return loaded;
@@ -392,6 +397,13 @@ export function loadBundleManifest(params: {
   const version = normalizeOptionalString(raw.version);
 
   if (params.bundleFormat === "agent") {
+    if (raw.$schema !== AGENT_BUNDLE_MANIFEST_SCHEMA) {
+      return {
+        ok: false,
+        error: `root plugin.json is not an Agent Plugins manifest; expected $schema ${AGENT_BUNDLE_MANIFEST_SCHEMA}`,
+        manifestPath: loaded.manifestPath,
+      };
+    }
     if (!name) {
       return {
         ok: false,
@@ -490,7 +502,16 @@ export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat 
   // Client-specific bundle dirs and native OpenClaw manifests take precedence;
   // the portable root manifest is the fallback when neither is present.
   if (pluginScanExistsSync(path.join(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH))) {
-    return "agent";
+    const agentManifest = loadBundleManifestFile({
+      rootDir,
+      manifestRelativePath: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
+      rejectHardlinks: false,
+      strictJson: true,
+      maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES,
+    });
+    if (agentManifest.ok && agentManifest.raw.$schema === AGENT_BUNDLE_MANIFEST_SCHEMA) {
+      return "agent";
+    }
   }
   if (
     DEFAULT_PLUGIN_ENTRY_CANDIDATES.some((candidate) =>

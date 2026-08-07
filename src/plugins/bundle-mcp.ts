@@ -4,7 +4,6 @@ import path from "node:path";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
 import {
@@ -273,7 +272,7 @@ function isValidAgentCwd(cwd: unknown, rootDir: string, pluginDataDir: string): 
     return false;
   }
   const expanded = expandBundleRootPlaceholders({ value: cwd, rootDir, pluginDataDir });
-  return isPathWithin(baseDir, path.resolve(expanded));
+  return isPathWithin(baseDir, path.resolve(baseDir, expanded));
 }
 
 function validateAgentMcpServer(params: {
@@ -378,24 +377,9 @@ function extractAgentMcpServerMap(params: {
   if (!hasStdioServer) {
     return { servers, diagnostics };
   }
-  try {
-    fs.mkdirSync(pluginDataDir, { recursive: true });
-    return {
-      servers,
-      diagnostics,
-      pluginDataDir: fs.realpathSync(pluginDataDir),
-    };
-  } catch (error) {
-    for (const [serverName, server] of Object.entries(servers)) {
-      if (server.transport === "stdio") {
-        delete servers[serverName];
-      }
-    }
-    diagnostics.push(
-      `unable to prepare PLUGIN_DATA directory "${pluginDataDir}" for stdio MCP servers: ${formatErrorMessage(error)}`,
-    );
-    return { servers, diagnostics };
-  }
+  // The encoded install id makes this path stable before it exists. Creation belongs to
+  // stdio launch so read-only inspection never mutates plugin state.
+  return { servers, diagnostics, pluginDataDir };
 }
 
 function loadBundleFileBackedMcpConfig(params: {
