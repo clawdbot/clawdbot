@@ -1079,13 +1079,12 @@ function buildArtifactsCapture(params: {
   const cohortStart = params.runtimeEvents.findLastIndex(
     (event) => event.type === "session.started",
   );
-  const cohortStartEvent = params.runtimeEvents[cohortStart];
-  // The newest start owns the attempt cohort; delayed older terminals cannot move it backward.
+  const cohortRunId =
+    params.runtimeEvents[cohortStart]?.runId ?? params.runtimeEvents.at(-1)?.runId;
+  // The newest start, or latest terminal in a partial tail, owns the attempt cohort.
   const cohort = params.runtimeEvents
     .slice(Math.max(0, cohortStart))
-    .filter(
-      (event) => cohortStartEvent?.runId === undefined || event.runId === cohortStartEvent.runId,
-    );
+    .filter((event) => cohortRunId === undefined || event.runId === cohortRunId);
   const runtimeArtifacts = resolveLatestRuntimeEventData(cohort, "trace.artifacts");
   const runtimeCompletion = resolveLatestRuntimeEventData(cohort, "model.completed");
   const runtimeEnd = resolveLatestRuntimeEventData(cohort, "session.ended");
@@ -1120,7 +1119,8 @@ function buildArtifactsCapture(params: {
     promptCache: runtimeArtifacts?.promptCache ?? runtimeCompletion?.promptCache,
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,
     assistantTexts: runtimeArtifacts?.assistantTexts ?? runtimeCompletion?.assistantTexts,
-    stopReason: runtimeArtifacts?.stopReason ?? runtimeCompletion?.stopReason,
+    stopReason:
+      runtimeArtifacts?.stopReason ?? runtimeCompletion?.stopReason ?? runtimeEnd?.stopReason,
     finalPromptText: runtimeArtifacts?.finalPromptText ?? runtimeCompletion?.finalPromptText,
     finalPromptTextOriginalLength:
       runtimeArtifacts?.finalPromptTextOriginalLength ??

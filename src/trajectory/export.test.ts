@@ -671,14 +671,18 @@ describe("exportTrajectoryBundle", () => {
     expect(artifacts).not.toHaveProperty("lastToolError");
   });
 
-  it("exports a partial capture with one terminal event", async () => {
+  it("isolates a partial terminal tail by its latest run id", async () => {
     const artifacts = await exportRuntimeArtifacts(
-      runtimeAttemptEvents([["session.ended", "partial-run", { status: "interrupted" }]]),
+      runtimeAttemptEvents([
+        ["model.completed", "old-run", staleCompletion],
+        ["trace.artifacts", "old-run", staleArtifacts],
+        ["session.ended", "partial-run", { status: "interrupted", stopReason: "aborted" }],
+      ]),
     );
 
-    expect(artifacts).toMatchObject({ finalStatus: "interrupted" });
-    expect(artifacts).not.toHaveProperty("stopReason");
+    expect(artifacts).toMatchObject({ finalStatus: "interrupted", stopReason: "aborted" });
     expect(artifacts).not.toHaveProperty("usage");
+    expect(artifacts).not.toHaveProperty("itemLifecycle");
   });
 
   it("omits artifacts when the newest attempt has only started", async () => {
