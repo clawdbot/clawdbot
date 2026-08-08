@@ -132,26 +132,35 @@ describe("archiveSessionRows", () => {
     expect(harness.refreshReplacement).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "the method is unavailable",
-      harness: () => createHarness({ methods: [] }),
-      reason: "This Gateway does not support this thread action.",
-    },
-    {
-      name: "operator.write is missing",
-      harness: () => createHarness({ scopes: ["operator.read"] }),
-      reason: "This action requires operator.write access.",
-    },
-  ])("sends no requests and surfaces the access error when $name", async ({ harness, reason }) => {
-    const testHarness = harness();
+  it("uses the supplied fallback when the method is unavailable", async () => {
+    const harness = createHarness({ methods: [] });
+    const fallbackRows = [sessionRow(1)];
+    const fallback = vi.fn(async () => fallbackRows);
 
     await expect(
-      archiveSessionRows(testHarness.host, [sessionRow(0)], true, testHarness.scope),
+      archiveSessionRows(harness.host, [sessionRow(0)], true, harness.scope, { fallback }),
+    ).resolves.toBe(fallbackRows);
+
+    expect(fallback).toHaveBeenCalledOnce();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
+  });
+
+  it("does not fallback when operator.write is missing", async () => {
+    const harness = createHarness({ scopes: ["operator.read"] });
+    const fallback = vi.fn(async () => [sessionRow(1)]);
+
+    await expect(
+      archiveSessionRows(harness.host, [sessionRow(0)], true, harness.scope, { fallback }),
     ).resolves.toBeNull();
 
-    expect(testHarness.request).not.toHaveBeenCalled();
-    expect(testHarness.refreshReplacement).not.toHaveBeenCalled();
-    expect(testHarness.publishSessionMutationError).toHaveBeenCalledWith(testHarness.scope, reason);
+    expect(fallback).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      "This action requires operator.write access.",
+    );
   });
 });

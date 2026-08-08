@@ -45,8 +45,18 @@ function sessionMenuActionDisabledReasons(
     method: "sessions.patch",
     params: { key: session.key, label: null },
   });
-  const archiveReason = batchRows
-    ? reason({ method: "sessions.archiveMany", requiredScope: "operator.write" })
+  const archiveManyAccess = batchRows
+    ? readSessionMethodAccess(snapshot, {
+        method: "sessions.archiveMany",
+        requiredScope: "operator.write",
+      })
+    : null;
+  const archiveReason = archiveManyAccess
+    ? archiveManyAccess.allowed
+      ? undefined
+      : archiveManyAccess.cause === "method-unavailable"
+        ? patchReason
+        : archiveManyAccess.reason
     : patchReason;
   const groupReason = reason({
     method: "sessions.groups.put",

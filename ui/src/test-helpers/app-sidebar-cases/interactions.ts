@@ -87,24 +87,36 @@ describe("AppSidebar multi-select", () => {
     return menu;
   }
 
-  async function mountMultiSelect() {
+  async function mountMultiSelect(methods?: string[]) {
     const harness = createSessionsHarness("main", KEYS);
-    const gateway = createGateway({
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method !== "sessions.archiveMany") {
+        return Promise.reject(new Error(`unexpected request: ${method}`));
+      }
+      const archiveParams = params as {
+        targets: Array<{ key: string; agentId?: string }>;
+        archived: boolean;
+      };
+      return harness.archiveMany(archiveParams.targets, archiveParams.archived);
+    });
+    const gateway = createGatewayHarness({
       request: (method, params) => {
-        if (method !== "sessions.archiveMany") {
-          return Promise.reject(new Error(`unexpected request: ${method}`));
-        }
-        const request = params as {
-          targets: Array<{ key: string; agentId?: string }>;
-          archived: boolean;
-        };
-        return harness.archiveMany(request.targets, request.archived);
+        return request(method, params);
       },
     } as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    if (methods) {
+      gateway.publish({
+        phase: "connected",
+        hello: {
+          features: { methods },
+          auth: { role: "operator", scopes: ["operator.write"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+    }
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
-    return { sidebar, harness };
+    return { sidebar, harness, request };
   }
 
   it("names each session's pin and menu buttons after their owning session", async () => {
@@ -195,6 +207,39 @@ describe("AppSidebar multi-select", () => {
     );
     expect(harness.patch).not.toHaveBeenCalled();
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
+    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
+  it("archives serially when an older Gateway does not advertise archiveMany", async () => {
+    const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
+
+    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    await sidebar.updateComplete;
+    openContextMenu(sidebar, "agent:main:a");
+    await sidebar.updateComplete;
+
+    const menu = await sessionMenu(sidebar);
+    const archive = menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]');
+    expect(archive?.disabled).toBe(false);
+    archive?.click();
+
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    expect(harness.patch).toHaveBeenNthCalledWith(
+      1,
+      "agent:main:a",
+      { archived: true },
+      { agentId: "main", deferListRefresh: true },
+    );
+    expect(harness.patch).toHaveBeenNthCalledWith(
+      2,
+      "agent:main:b",
+      { archived: true },
+      { agentId: "main", deferListRefresh: true },
+    );
+    expect(harness.archiveMany).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.archiveMany")).toEqual([]);
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 

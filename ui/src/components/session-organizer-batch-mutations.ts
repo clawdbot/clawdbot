@@ -59,7 +59,10 @@ export async function archiveSessionRows(
   rows: readonly SidebarRecentSession[],
   archived: boolean,
   scope: SidebarSessionMutationScope,
-  deferListRefresh = false,
+  options: {
+    deferListRefresh?: boolean;
+    fallback?: () => Promise<SidebarRecentSession[] | null>;
+  } = {},
 ): Promise<SidebarRecentSession[] | null> {
   const dispatched: Array<{
     rows: readonly SidebarRecentSession[];
@@ -84,6 +87,9 @@ export async function archiveSessionRows(
       requiredScope: "operator.write",
     });
     if (!access.allowed) {
+      if (access.cause === "method-unavailable" && options.fallback) {
+        return options.fallback();
+      }
       terminalError = access.reason;
       host.sessionData.publishSessionMutationError(scope, access.reason);
       break;
@@ -106,7 +112,7 @@ export async function archiveSessionRows(
   if (dispatched.length === 0) {
     return null;
   }
-  if (!deferListRefresh) {
+  if (!options.deferListRefresh) {
     const refreshResult = await refreshSessionsAfterBatch(host, scope, rows);
     if (refreshResult === "stale") {
       return null;

@@ -125,6 +125,32 @@ export async function patchSessions(
   return refreshed === "completed" ? result : refreshed;
 }
 
+async function archiveSessionRowsSerial(
+  host: SessionOrganizerControllerHost,
+  rows: readonly SidebarRecentSession[],
+  archived: boolean,
+  scope: SidebarSessionMutationScope,
+  options: { deferListRefresh?: boolean } = {},
+): Promise<SidebarRecentSession[] | null> {
+  const completed: SidebarRecentSession[] = [];
+  for (const row of rows) {
+    const result = await patchSession(host, row, { archived }, scope, { deferListRefresh: true });
+    if (result === "stale") {
+      return null;
+    }
+    if (result === "completed") {
+      completed.push(row);
+    }
+  }
+  if (!options.deferListRefresh) {
+    const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
+    if (refreshed === "stale") {
+      return null;
+    }
+  }
+  return completed;
+}
+
 export async function archiveSessionWithUndo(
   host: SessionOrganizerControllerHost,
   session: SidebarRecentSession,
@@ -151,7 +177,9 @@ async function archiveSessionsWithUndo(
   if (rows.length === 0) {
     return;
   }
-  const archivedRows = await archiveSessionRows(host, rows, true, scope);
+  const archivedRows = await archiveSessionRows(host, rows, true, scope, {
+    fallback: () => archiveSessionRowsSerial(host, rows, true, scope),
+  });
   if (!archivedRows || archivedRows.length === 0) {
     return;
   }
@@ -171,13 +199,11 @@ async function restoreArchivedSessions(
   archived: readonly { session: SidebarRecentSession; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
 ) {
-  const restored = await archiveSessionRows(
-    host,
-    archived.map((entry) => entry.session),
-    false,
-    scope,
-    true,
-  );
+  const rows = archived.map((entry) => entry.session);
+  const restored = await archiveSessionRows(host, rows, false, scope, {
+    deferListRefresh: true,
+    fallback: () => archiveSessionRowsSerial(host, rows, false, scope, { deferListRefresh: true }),
+  });
   if (!restored) {
     return;
   }
@@ -195,11 +221,7 @@ async function restoreArchivedSessions(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  await refreshSessionsAfterBatch(
-    host,
-    scope,
-    archived.map((entry) => entry.session),
-  );
+  await refreshSessionsAfterBatch(host, scope, rows);
 }
 
 /** One confirm and one preserved-worktrees alert for the whole selection. */
@@ -291,7 +313,9 @@ export async function runBatchSessionAction(
       break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
-        await archiveSessionRows(host, rows, false, scope);
+        await archiveSessionRows(host, rows, false, scope, {
+          fallback: () => archiveSessionRowsSerial(host, rows, false, scope),
+        });
       } else {
         await archiveSessionsWithUndo(
           host,
