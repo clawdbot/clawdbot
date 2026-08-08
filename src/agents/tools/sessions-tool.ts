@@ -1,6 +1,5 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
@@ -12,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -49,54 +49,37 @@ const ACTIONS = [
 const GROUP_NAME_MAX_LENGTH = 512;
 const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
-// Bound protocol-owned catalog text before it becomes model-visible JSON.
-// Nine entries retain the complete built-in thinking catalog.
-const RESOLVED_MODEL_PROVIDER_MAX_LENGTH = 48;
-const RESOLVED_MODEL_MAX_LENGTH = 96;
-const RESOLVED_AGENT_RUNTIME_ID_MAX_LENGTH = 48;
-const RESOLVED_THINKING_LEVEL_MAX_LENGTH = 16;
-const RESOLVED_THINKING_LEVEL_ID_MAX_LENGTH = 12;
-const RESOLVED_THINKING_LEVEL_LABEL_MAX_LENGTH = 16;
-const RESOLVED_THINKING_LEVELS_MAX_ITEMS = 9;
+const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
+const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
 
-function normalizeSessionsToolResolved(resolved: SessionsResolved): SessionsResolved {
-  const normalized: SessionsResolved = {};
-  if (resolved.modelProvider !== undefined) {
-    normalized.modelProvider = truncateUtf16Safe(
-      resolved.modelProvider,
-      RESOLVED_MODEL_PROVIDER_MAX_LENGTH,
-    );
+function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
+  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  if (!compactSize.complete || compactSize.bytes > SESSIONS_TOOL_RESULT_MAX_BYTES) {
+    return false;
   }
-  if (resolved.model !== undefined) {
-    normalized.model = truncateUtf16Safe(resolved.model, RESOLVED_MODEL_MAX_LENGTH);
+  return (
+    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
+  );
+}
+
+function withBoundedSessionsResolved(
+  acknowledgement: Record<string, unknown>,
+  resolved: SessionsResolved | undefined,
+): Record<string, unknown> {
+  if (!resolved) {
+    return acknowledgement;
   }
-  if (resolved.agentRuntime) {
-    normalized.agentRuntime = {
-      id: truncateUtf16Safe(resolved.agentRuntime.id, RESOLVED_AGENT_RUNTIME_ID_MAX_LENGTH),
-      ...(resolved.agentRuntime.fallback !== undefined
-        ? { fallback: resolved.agentRuntime.fallback }
-        : {}),
-      source: resolved.agentRuntime.source,
-    };
+  const completeResult = { ...acknowledgement, resolved };
+  if (sessionsToolResultFitsBudget(completeResult)) {
+    return completeResult;
   }
-  if (resolved.thinkingLevel !== undefined) {
-    normalized.thinkingLevel = truncateUtf16Safe(
-      resolved.thinkingLevel,
-      RESOLVED_THINKING_LEVEL_MAX_LENGTH,
-    );
-  }
-  if (resolved.thinkingLevels !== undefined) {
-    normalized.thinkingLevels = resolved.thinkingLevels
-      .slice(0, RESOLVED_THINKING_LEVELS_MAX_ITEMS)
-      .map((level) => ({
-        id: truncateUtf16Safe(level.id, RESOLVED_THINKING_LEVEL_ID_MAX_LENGTH),
-        label: truncateUtf16Safe(level.label, RESOLVED_THINKING_LEVEL_LABEL_MAX_LENGTH),
-      }));
-  }
-  return normalized;
+  return {
+    ...acknowledgement,
+    resolvedOmitted: { reason: RESOLVED_OMITTED_REASON },
+  };
 }
 
 const SessionsToolSchema = Type.Object(
@@ -497,27 +480,31 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
               });
 
-            return jsonResult({
-              status: "scheduled",
-              sessionKey: key,
-              message: "Session will be archived after the current agent run finishes.",
-              ...(includeResolved && immediateResult?.resolved
-                ? { resolved: normalizeSessionsToolResolved(immediateResult.resolved) }
-                : {}),
-            });
+            return jsonResult(
+              withBoundedSessionsResolved(
+                {
+                  status: "scheduled",
+                  sessionKey: key,
+                  message: "Session will be archived after the current agent run finishes.",
+                },
+                includeResolved ? immediateResult?.resolved : undefined,
+              ),
+            );
           }
         }
       }
 
       const result = await callSessionPatch(patch);
-      return jsonResult({
-        status: "updated",
-        sessionKey: key,
-        updated: Object.keys(patch).filter((field) => field !== "key"),
-        ...(includeResolved && result.resolved
-          ? { resolved: normalizeSessionsToolResolved(result.resolved) }
-          : {}),
-      });
+      return jsonResult(
+        withBoundedSessionsResolved(
+          {
+            status: "updated",
+            sessionKey: key,
+            updated: Object.keys(patch).filter((field) => field !== "key"),
+          },
+          includeResolved ? result.resolved : undefined,
+        ),
+      );
     },
   };
 }

@@ -32,21 +32,6 @@ const adversarialResolved = {
   })),
 };
 
-const expectedAdversarialResolved = {
-  modelProvider: "界".repeat(47),
-  model: "模".repeat(95),
-  agentRuntime: {
-    id: "運".repeat(47),
-    fallback: "openclaw" as const,
-    source: "session-key" as const,
-  },
-  thinkingLevel: "考".repeat(15),
-  thinkingLevels: Array.from({ length: 9 }, (_, index) => ({
-    id: `${index}:${"識".repeat(10)}`,
-    label: `${index}:${"思".repeat(14)}`,
-  })),
-};
-
 const escapedControlText = "\0".repeat(10_000);
 const escapeHeavyResolved = {
   modelProvider: escapedControlText,
@@ -63,22 +48,11 @@ const escapeHeavyResolved = {
   })),
 };
 
-const expectedEscapeHeavyResolved = {
-  modelProvider: "\0".repeat(48),
-  model: "\0".repeat(96),
-  agentRuntime: {
-    id: "\0".repeat(48),
-    fallback: "none" as const,
-    source: "provider" as const,
-  },
-  thinkingLevel: "\0".repeat(16),
-  thinkingLevels: Array.from({ length: 9 }, (_, index) => ({
-    id: `${index}:${"\0".repeat(10)}`,
-    label: `${index}:${"\0".repeat(14)}`,
-  })),
-};
+const expectedResolvedOmission = {
+  reason: "response_budget_exceeded",
+} as const;
 
-function expectBoundedResolvedAcknowledgement(
+function expectExactResolvedAcknowledgement(
   result: {
     content: Array<{ type: string; text?: string }>;
     details: unknown;
@@ -91,7 +65,20 @@ function expectBoundedResolvedAcknowledgement(
   expect(text).not.toContain('"entry"');
   expect(text).not.toContain('"path"');
   expect(text).not.toContain("skillsSnapshot");
-  expect(text).not.toContain("🦞");
+  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
+}
+
+function expectOmittedResolvedAcknowledgement(result: {
+  content: Array<{ type: string; text?: string }>;
+  details: unknown;
+}) {
+  expect(result.details).toMatchObject({ resolvedOmitted: expectedResolvedOmission });
+  expect((result.details as { resolved?: unknown }).resolved).toBeUndefined();
+  const text = result.content[0]?.text ?? "";
+  expect(JSON.parse(text)).toEqual(result.details);
+  expect(text).not.toContain('"entry"');
+  expect(text).not.toContain('"path"');
+  expect(text).not.toContain("skillsSnapshot");
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
 }
 
@@ -764,39 +751,62 @@ describe("sessions tool", () => {
     });
   });
 
-  it.each([
-    ["surrogate-safe Unicode", adversarialResolved, expectedAdversarialResolved],
-    ["JSON-escaped control text", escapeHeavyResolved, expectedEscapeHeavyResolved],
-  ])(
-    "bounds every free-form resolved field and the thinking-level catalog for %s",
-    async (_caseName, resolved, expectedResolved) => {
-      const callGateway = vi.fn(async () => ({
-        ok: true as const,
-        path: `/sessions/${"p".repeat(10_000)}`,
-        key: "agent:main:main",
-        entry: { skillsSnapshot: "s".repeat(47_469) },
-        resolved,
-      }));
-      const tool = createSessionsTool({
-        agentSessionKey: "agent:main:main",
-        config: {},
-        callGateway: callGateway as never,
-      });
+  it("preserves long resolved identifiers and complete catalogs exactly when they fit", async () => {
+    const callGateway = vi.fn(async () => ({
+      ok: true as const,
+      path: `/sessions/${"p".repeat(10_000)}`,
+      key: "agent:main:main",
+      entry: { skillsSnapshot: "s".repeat(47_469) },
+      resolved: adversarialResolved,
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
 
-      const result = await tool.execute("patch-adversarial-model-thinking", {
-        action: "patch",
-        model: "openai/luna",
-        thinkingLevel: "med",
-      });
+    const result = await tool.execute("patch-adversarial-model-thinking", {
+      action: "patch",
+      model: "openai/luna",
+      thinkingLevel: "med",
+    });
 
-      expect(result.details).toMatchObject({
-        status: "updated",
-        sessionKey: "agent:main:main",
-        updated: ["model", "thinkingLevel"],
-      });
-      expectBoundedResolvedAcknowledgement(result, expectedResolved);
-    },
-  );
+    expect(result.details).toMatchObject({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["model", "thinkingLevel"],
+    });
+    expectExactResolvedAcknowledgement(result, adversarialResolved);
+  });
+
+  it("omits oversized resolved metadata instead of changing authoritative identifiers", async () => {
+    const callGateway = vi.fn(async () => ({
+      ok: true as const,
+      path: `/sessions/${"p".repeat(10_000)}`,
+      key: "agent:main:main",
+      entry: { skillsSnapshot: "s".repeat(47_469) },
+      resolved: escapeHeavyResolved,
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    const result = await tool.execute("patch-oversized-model-thinking", {
+      action: "patch",
+      model: "openai/luna",
+      thinkingLevel: "med",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "updated",
+      sessionKey: "agent:main:main",
+      updated: ["model", "thinkingLevel"],
+      resolvedOmitted: expectedResolvedOmission,
+    });
+    expectOmittedResolvedAcknowledgement(result);
+  });
 
   it("keeps resolved model and thinking metadata when self-archive is deferred", async () => {
     await withTempDir({ prefix: "openclaw-sessions-tool-archive-" }, async (dir) => {
@@ -839,9 +849,9 @@ describe("sessions tool", () => {
           status: "scheduled",
           sessionKey,
           message: "Session will be archived after the current agent run finishes.",
-          resolved: expectedAdversarialResolved,
+          resolved: adversarialResolved,
         });
-        expectBoundedResolvedAcknowledgement(result, expectedAdversarialResolved);
+        expectExactResolvedAcknowledgement(result, adversarialResolved);
         expect(callGateway).toHaveBeenCalledTimes(1);
       } finally {
         admission.release();
