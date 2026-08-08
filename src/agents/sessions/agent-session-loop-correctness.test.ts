@@ -363,6 +363,60 @@ describe("AgentSession loop correctness", () => {
     );
   });
 
+  it("does not pre-prompt compact from usage before a zero unavailable marker", async () => {
+    const model = { ...testModel, contextWindow: 1_000 };
+    const sessionManager = SessionManager.inMemory();
+    appendHistory(
+      sessionManager,
+      createAssistant(model, [{ type: "text", text: "old cumulative turn" }], "stop", 950),
+    );
+    sessionManager.appendMessage({ role: "user", content: "CLI prompt", timestamp: Date.now() });
+    sessionManager.appendMessage({
+      ...createAssistant(model, [{ type: "text", text: "usage unavailable" }]),
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        contextUsage: { state: "unavailable" },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 100, keepRecentTokens: 20 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 20),
+      ),
+    );
+    const { session } = await createTestSession({
+      model,
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_start" || event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      usage: { contextUsage: { state: "unavailable" } },
+    });
+    expect(session.getContextUsage()?.tokens).toBeLessThan(900);
+    await session.prompt("continue after CLI turn");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
+    expect(session.getLastAssistantText()).toBe("complete answer");
+  });
+
   it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false, reserveTokens: 0, keepRecentTokens: 1 },

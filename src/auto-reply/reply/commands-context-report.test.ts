@@ -306,6 +306,7 @@ describe("buildContextReply", () => {
       updatedAt: params.sessionEntry?.updatedAt ?? 1,
       totalTokens: 111,
       totalTokensFresh: true,
+      totalTokensVersion: 1,
       inputTokens: 100,
       outputTokens: 11,
     } satisfies SessionEntry;
@@ -315,6 +316,7 @@ describe("buildContextReply", () => {
         ...sessionEntry,
         totalTokens: 900,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         inputTokens: 700,
         outputTokens: 200,
       },
