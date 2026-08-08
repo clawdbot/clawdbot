@@ -144,7 +144,24 @@ function startPrepublishArtifactServer() {
       json(response, { package: packageRecord, version: versionRecord });
     } else if (match[3] === "security") {
       json(response, {
+        package: {
+          name: entry.name,
+          displayName: entry.name,
+          family: "code-plugin",
+        },
+        release: {
+          releaseId: `fixture:${entry.name}@${entry.version}`,
+          version: entry.version,
+          artifactKind: "npm-pack",
+          artifactSha256: entry.sha256,
+          npmIntegrity: entry.npmIntegrity,
+          npmShasum: entry.npmShasum,
+          npmTarballName: entry.tarball,
+          createdAt: 0,
+        },
         trust: {
+          scanStatus: "clean",
+          moderationState: null,
           blockedFromDownload: false,
           reasons: [],
           pending: false,
