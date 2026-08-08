@@ -6,7 +6,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
-import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import {
+  privateLocalOnlyPluginSdkEntrypoints,
+  privateQaPluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
@@ -324,7 +327,11 @@ describe("package Telegram live Docker E2E", () => {
     };
     expect(prepared.exports["./kept"]).toBe("./dist/kept.js");
     expect(prepared.exports["./plugin-sdk/gateway-runtime"]).toEqual(existingGatewayExport);
-    for (const subpath of privateLocalOnlyPluginSdkEntrypoints) {
+    const harnessEntrypoints = new Set([
+      ...privateLocalOnlyPluginSdkEntrypoints,
+      ...privateQaPluginSdkEntrypoints,
+    ]);
+    for (const subpath of harnessEntrypoints) {
       expect(prepared.exports[`./plugin-sdk/${subpath}`]).toEqual({
         default: `./dist/plugin-sdk/${subpath}.js`,
       });

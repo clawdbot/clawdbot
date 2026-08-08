@@ -30,6 +30,9 @@ export const privateLocalOnlyPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
   privateLocalOnlyPluginSdkSubpathSet.has(entry),
 );
 
+/** Private QA entrypoints emitted only when OPENCLAW_BUILD_PRIVATE_QA is enabled. */
+export const privateQaPluginSdkEntrypoints = ["qa-lab", "qa-runtime"];
+
 /** Typed public plugin SDK entrypoints. */
 export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => !privateLocalOnlyPluginSdkSubpathSet.has(entry),

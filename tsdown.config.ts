@@ -10,6 +10,7 @@ import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
+  privateQaPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
@@ -517,10 +518,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ),
     ),
     ...(shouldBuildPrivateQaEntries
-      ? {
-          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
-          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
-        }
+      ? Object.fromEntries(
+          Object.entries(buildPluginSdkEntrySources(privateQaPluginSdkEntrypoints)).map(
+            ([entry, source]) => [`plugin-sdk/${entry}`, source],
+          ),
+        )
       : {}),
     "memory-core-local-embedding-worker":
       "packages/memory-host-sdk/src/host/embeddings-worker-child.ts",
