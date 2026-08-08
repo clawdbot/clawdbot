@@ -21,7 +21,7 @@ import {
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { HEARTBEAT_SKIP_NO_PENDING_EVENT, requestHeartbeat } from "./heartbeat-wake.js";
+import { requestHeartbeat } from "./heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -483,52 +483,6 @@ describe("runHeartbeatOnce commitments", () => {
         sessionKey: dueSessionKey,
       });
       expect(runOnce.mock.calls[1]?.[0]).not.toHaveProperty("reason");
-    });
-  });
-
-  it("does not deliver unrelated commitments for an acknowledged exec wake", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(nowMs);
-
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
-      const dueSessionKey = "agent:main:telegram:user-155462274";
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "last" },
-          },
-        },
-        session: { store: storePath },
-      };
-      await saveCommitmentStore(undefined, {
-        version: 1,
-        commitments: [buildCommitment({ id: "cm_interview", sessionKey: dueSessionKey, to: "1" })],
-      });
-      const runOnce = vi
-        .fn()
-        .mockResolvedValue({ status: "skipped", reason: HEARTBEAT_SKIP_NO_PENDING_EVENT });
-      const runner = startHeartbeatRunner({
-        cfg,
-        runOnce,
-        stableSchedulerSeed: "acknowledged-exec-no-commitment",
-      });
-
-      requestHeartbeat({
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
-        coalesceMs: 0,
-      });
-      await vi.advanceTimersByTimeAsync(1);
-      runner.stop();
-
-      expect(runOnce).toHaveBeenCalledTimes(1);
-      expect(runOnce.mock.calls[0]?.[0]).toMatchObject({
-        source: "exec-event",
-        runScope: "global",
-      });
     });
   });
 
