@@ -17,10 +17,27 @@ import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 
+const lifecycleStateTestControl = vi.hoisted(() => ({
+  afterRead: undefined as (() => Promise<void>) | undefined,
+}));
+
+vi.mock("./lifecycle-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lifecycle-state.js")>();
+  return {
+    ...actual,
+    readClawStatus: async (...args: Parameters<typeof actual.readClawStatus>) => {
+      const status = await actual.readClawStatus(...args);
+      await lifecycleStateTestControl.afterRead?.();
+      return status;
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  lifecycleStateTestControl.afterRead = undefined;
   vi.unstubAllEnvs();
 });
 
@@ -497,6 +514,25 @@ describe("exportClawAgent", () => {
     await expect(stat(out)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects a pending package bootstrap that changes after status inspection", async () => {
+    const fixture = await installedFixture({ packageBootstrap: true });
+    const bootstrapPath = join(fixture.plan.agent.workspace, "BOOTSTRAP.md");
+    const out = join(fixture.root, "exported-raced-bootstrap");
+    lifecycleStateTestControl.afterRead = async () => {
+      await writeFile(bootstrapPath, "# Changed after inspection\n", "utf8");
+    };
+
+    await expect(
+      exportClawAgent("worker", out, {
+        env: fixture.env,
+        config: fixture.config,
+        packageDeps: fixture.packageDeps,
+        sourceMcpServers: fixture.sourceMcpServers,
+      }),
+    ).rejects.toMatchObject({ code: "bootstrap_drifted" });
+    await expect(stat(out)).rejects.toThrow();
+  });
+
   it("does not export native bootstrap content without package ownership", async () => {
     const fixture = await installedFixture();
     await writeFile(
@@ -579,6 +615,29 @@ describe("exportClawAgent", () => {
     expect(result.filesWritten).toContain("BOOTSTRAP.md");
     await expect(readFile(join(out, "BOOTSTRAP.md"), "utf8")).resolves.toContain(
       "operator's timezone",
+    );
+  });
+
+  it("does not reread a pending package bootstrap when an explicit replacement is supplied", async () => {
+    const fixture = await installedFixture({ packageBootstrap: true });
+    const bootstrapPath = join(fixture.root, "reviewed-race-replacement.md");
+    await writeFile(bootstrapPath, "# First run\n\nUse the reviewed replacement.\n", "utf8");
+    lifecycleStateTestControl.afterRead = async () => {
+      await rm(join(fixture.plan.agent.workspace, "BOOTSTRAP.md"));
+    };
+    const out = join(fixture.root, "exported-race-replacement");
+
+    const result = await exportClawAgent("worker", out, {
+      env: fixture.env,
+      config: fixture.config,
+      packageDeps: fixture.packageDeps,
+      sourceMcpServers: fixture.sourceMcpServers,
+      bootstrapPath,
+    });
+
+    expect(result.filesWritten).toContain("BOOTSTRAP.md");
+    await expect(readFile(join(out, "BOOTSTRAP.md"), "utf8")).resolves.toContain(
+      "reviewed replacement",
     );
   });
 

@@ -425,15 +425,27 @@ export async function exportClawAgent(
     contents.push(avatar.sidecar);
   }
   let pendingPackageBootstrap: Buffer | undefined;
-  if (!authorBootstrap && record.install.bootstrap && record.bootstrapState === "pending") {
-    pendingPackageBootstrap = await workspace.readBytes("BOOTSTRAP.md", {
-      maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-    });
-    const contentDigest = `sha256:${createHash("sha256").update(pendingPackageBootstrap).digest("hex")}`;
-    if (contentDigest !== record.install.bootstrap.contentDigest) {
+  if (record.bootstrapState === "pending" && !authorBootstrap) {
+    try {
+      pendingPackageBootstrap = await workspace.readBytes("BOOTSTRAP.md", {
+        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      });
+    } catch (error) {
       throw new ClawExportError(
         "bootstrap_drifted",
-        "Cannot export BOOTSTRAP.md because it changed during ownership inspection.",
+        `Cannot export the package bootstrap because BOOTSTRAP.md changed after inspection: ${(error as Error).message}`,
+      );
+    }
+    const contentDigest = `sha256:${createHash("sha256")
+      .update(pendingPackageBootstrap)
+      .digest("hex")}`;
+    if (
+      !record.install.bootstrap?.contentDigest ||
+      contentDigest !== record.install.bootstrap.contentDigest
+    ) {
+      throw new ClawExportError(
+        "bootstrap_drifted",
+        "Cannot export the package bootstrap because BOOTSTRAP.md changed after inspection.",
       );
     }
   }
