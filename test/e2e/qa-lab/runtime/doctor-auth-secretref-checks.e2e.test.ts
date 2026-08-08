@@ -28,7 +28,7 @@ function outputOf(result: { stderr: string; stdout: string }): string {
 }
 
 function normalizedOutputOf(result: { stderr: string; stdout: string }): string {
-  return stripAnsiSequences(outputOf(result)).replace(/\s+/g, " ").trim();
+  return stripAnsiSequences(outputOf(result)).replaceAll("│", " ").replace(/\s+/g, " ").trim();
 }
 
 async function writeConfig(config: OpenClawConfig): Promise<void> {
