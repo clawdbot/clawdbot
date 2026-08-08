@@ -44,6 +44,8 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     #if DEBUG
     private var testControlChannelConnected: Bool?
     private var testUsageLoad: (() async throws -> GatewayUsageSummary)?
+    private var testUsageLoadDidFinish: (@MainActor () -> Void)?
+    private var testUsageRetryDidExhaust: (@MainActor () -> Void)?
     #endif
 
     func install(into statusItem: NSStatusItem) {
@@ -789,6 +791,9 @@ extension MenuSessionsInjector {
     }
 
     private func loadUsageSummaryOnce() async {
+        #if DEBUG
+        defer { self.testUsageLoadDidFinish?() }
+        #endif
         do {
             let summary = try await self.loadUsageSummary()
             self.cachedUsageSummary = summary
@@ -809,7 +814,12 @@ extension MenuSessionsInjector {
     }
 
     private func scheduleUsageRetry() {
-        guard self.usageRetryAttempts < self.usageRetryLimit else { return }
+        guard self.usageRetryAttempts < self.usageRetryLimit else {
+            #if DEBUG
+            self.testUsageRetryDidExhaust?()
+            #endif
+            return
+        }
         self.usageRetryAttempts += 1
         let interval = self.usageRetryIntervalSeconds
         self.usageRetryTask = Task { [weak self] in
@@ -1340,6 +1350,14 @@ extension MenuSessionsInjector {
 
     func setTestingUsageLoader(_ load: (() async throws -> GatewayUsageSummary)?) {
         self.testUsageLoad = load
+    }
+
+    func setTestingUsageLoadDidFinish(_ didFinish: (@MainActor () -> Void)?) {
+        self.testUsageLoadDidFinish = didFinish
+    }
+
+    func setTestingUsageRetryDidExhaust(_ didExhaust: (@MainActor () -> Void)?) {
+        self.testUsageRetryDidExhaust = didExhaust
     }
 
     func setTestingUsageRetryInterval(_ seconds: TimeInterval) {

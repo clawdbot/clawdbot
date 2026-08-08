@@ -5,7 +5,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
  * This module decides when CLI-backed sessions need context compaction, chooses
  * native harness or context-engine compaction, and records resulting session state.
  */
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
@@ -188,9 +188,7 @@ function getSessionBranchMessages(sessionManager: SessionManagerLike): AgentMess
 }
 
 function resolveSessionTokenSnapshot(sessionEntry: SessionEntry | undefined): number | undefined {
-  return resolvePositiveInteger(
-    sessionEntry?.totalTokensFresh === false ? undefined : sessionEntry?.totalTokens,
-  );
+  return resolvePositiveInteger(resolveFreshSessionTotalTokens(sessionEntry));
 }
 
 function isNativeHarnessCompactionSession(

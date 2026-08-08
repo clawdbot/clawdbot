@@ -9,6 +9,8 @@ export function parseArgs(argv: unknown): {
   packageSha256: string;
   packageSpec: string;
   packageUrl: string;
+  pluginRegistryOutputDir: string;
+  requiredPluginPackagesJson: string;
   source: string;
   trustedSourceId: string;
   trustedSourcePolicy: string;

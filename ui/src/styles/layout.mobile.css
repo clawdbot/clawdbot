@@ -148,18 +148,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
 }
 
-.shell--mobile-nav .board-session-surface__reopen {
-  top: auto;
-  right: 12px;
-  bottom: 8px;
-  left: auto;
-  transform: none;
-}
-
-.shell--mobile-nav .board-session-surface__reopen span {
-  writing-mode: horizontal-tb;
-}
-
 .shell--mobile-nav .sidebar-resizer {
   display: none;
 }

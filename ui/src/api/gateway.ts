@@ -55,8 +55,6 @@ import {
 } from "./gateway-browser-auth.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 
-export { hasStoredGatewayAuth } from "./gateway-browser-auth.ts";
-
 export type GatewayEventFrame = EventFrame;
 
 type GatewayErrorInfo = ErrorShape;

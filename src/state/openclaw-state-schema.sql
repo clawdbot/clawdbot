@@ -2153,6 +2153,12 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
   origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
   independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
+  extension_id TEXT,
+  extension_format TEXT,
+  extension_detected_format TEXT,
+  extension_mapped_json TEXT,
+  extension_unavailable_json TEXT,
+  extension_adapter_identity TEXT,
   installed_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)

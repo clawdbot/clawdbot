@@ -229,6 +229,7 @@ export async function trimSqliteTranscriptForManualCompact(
       delete nextEntry.outputTokens;
       delete nextEntry.totalTokens;
       delete nextEntry.totalTokensFresh;
+      delete nextEntry.totalTokensVersion;
       nextEntry.updatedAt = options.nowMs ?? Date.now();
       // The transcript rewrite and token invalidation describe one generation.
       // Keep them in this transaction so either both become visible or neither does.

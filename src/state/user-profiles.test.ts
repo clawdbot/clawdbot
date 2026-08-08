@@ -15,6 +15,7 @@ import {
   ensureProfileForTailscaleIdentity,
   formatUserProfileAvatarEtag,
   getProfileAvatar,
+  getUserProfileDisplay,
   linkEmail,
   listProfiles,
   resolveUserProfileId,
@@ -463,10 +464,13 @@ describe("user profiles", () => {
 
     expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
     const first = getProfileAvatar(profile.id, options);
+    const firstDisplay = getUserProfileDisplay(profile.id, options);
     expect(setAvatar(profile.id, new Uint8Array([2]), "image/png", options).ok).toBe(true);
     const second = getProfileAvatar(profile.id, options);
+    const secondDisplay = getUserProfileDisplay(profile.id, options);
 
     expect(first?.updatedAt).toBe(second?.updatedAt);
+    expect(firstDisplay.avatarRevision).not.toBe(secondDisplay.avatarRevision);
     expect(formatUserProfileAvatarEtag(first?.sha256 ?? "", first?.mime ?? "image/png")).not.toBe(
       formatUserProfileAvatarEtag(second?.sha256 ?? "", second?.mime ?? "image/png"),
     );
@@ -479,9 +483,12 @@ describe("user profiles", () => {
 
     expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
     const png = getProfileAvatar(profile.id, options);
+    const pngDisplay = getUserProfileDisplay(profile.id, options);
     expect(setAvatar(profile.id, bytes, "image/webp", options).ok).toBe(true);
     const webp = getProfileAvatar(profile.id, options);
+    const webpDisplay = getUserProfileDisplay(profile.id, options);
 
+    expect(pngDisplay.avatarRevision).not.toBe(webpDisplay.avatarRevision);
     expect(formatUserProfileAvatarEtag(png?.sha256 ?? "", png?.mime ?? "image/png")).not.toBe(
       formatUserProfileAvatarEtag(webp?.sha256 ?? "", webp?.mime ?? "image/png"),
     );

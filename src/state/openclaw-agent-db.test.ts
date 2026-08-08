@@ -29,6 +29,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
+  createOpenClawAgentDatabasePathMatcher,
   isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -1946,6 +1947,59 @@ describe("openclaw agent database", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "reuses successful identities only within one path matcher",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const realDir = path.join(stateDir, "cached-real");
+      const aliasDir = path.join(stateDir, "cached-alias");
+      const otherDir = path.join(stateDir, "cached-other");
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.mkdirSync(otherDir);
+      fs.symlinkSync(realDir, aliasDir, "dir");
+      const realPath = path.join(realDir, "worker.sqlite");
+      const aliasPath = path.join(aliasDir, "worker.sqlite");
+      fs.writeFileSync(realPath, "live");
+
+      const realpathNative = vi.spyOn(fs.realpathSync, "native");
+      try {
+        const matchesPath = createOpenClawAgentDatabasePathMatcher();
+        expect(matchesPath(realPath, aliasPath)).toBe(true);
+        expect(matchesPath(aliasPath, realPath)).toBe(true);
+        const resolvedLocators = realpathNative.mock.calls.flatMap(([pathname]) =>
+          pathname === realPath || pathname === aliasPath ? [pathname] : [],
+        );
+        expect(resolvedLocators.toSorted()).toEqual([aliasPath, realPath].toSorted());
+      } finally {
+        realpathNative.mockRestore();
+      }
+
+      fs.unlinkSync(aliasDir);
+      fs.symlinkSync(otherDir, aliasDir, "dir");
+      expect(createOpenClawAgentDatabasePathMatcher()(realPath, aliasPath)).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "retries path resolution failures within one matcher",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const loopPath = path.join(stateDir, "loop.sqlite");
+      fs.symlinkSync("loop.sqlite", loopPath);
+      expect(() => isSameOpenClawAgentDatabasePath(loopPath, loopPath)).toThrow(
+        expect.objectContaining({ code: "ELOOP" }),
+      );
+      const matchesPath = createOpenClawAgentDatabasePathMatcher();
+      expect(() => matchesPath(loopPath, loopPath)).toThrow(
+        expect.objectContaining({ code: "ELOOP" }),
+      );
+
+      fs.unlinkSync(loopPath);
+      fs.writeFileSync(loopPath, "recovered");
+      expect(matchesPath(loopPath, loopPath)).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "resolves registered owners through symlinked database paths",
     () => {
       const stateDir = fs.realpathSync(createTempStateDir());
@@ -3187,6 +3241,62 @@ describe("openclaw agent database", () => {
     expect(
       repaired.db.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
     ).toEqual({ main_key: "main" });
+  });
+
+  it("installs same-version session additions before maintenance index repair", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    try {
+      drifted
+        .prepare(
+          `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          "agent:worker-1:maintenance",
+          "maintenance-session",
+          JSON.stringify({ sessionId: "maintenance-session", updatedAt: 1000 }),
+          1000,
+        );
+      drifted.exec(`
+        DROP TRIGGER session_nodes_entry_valid_after_insert;
+        DROP TRIGGER session_nodes_entry_valid_after_entry_update;
+        DROP TRIGGER session_nodes_entry_valid_after_identity_update;
+        DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+        DROP TABLE session_key_contract;
+        ALTER TABLE session_nodes DROP COLUMN entry_valid;
+      `);
+    } finally {
+      drifted.close();
+    }
+
+    migrateOpenClawAgentDatabaseForMaintenance({
+      agentId: "worker-1",
+      pathname: databasePath,
+    });
+
+    const repaired = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        repaired
+          .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+          .get("agent:worker-1:maintenance"),
+      ).toEqual({ entry_valid: 1 });
+      expect(
+        repaired.prepare("SELECT main_key FROM session_key_contract WHERE id = 1").get(),
+      ).toEqual({ main_key: "main" });
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(repaired, {
+          agentId: "worker-1",
+          pathname: databasePath,
+        }),
+      ).not.toThrow();
+    } finally {
+      repaired.close();
+    }
   });
 
   it("rejects a missing current-schema table instead of recreating it empty", () => {

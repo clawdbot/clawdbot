@@ -154,10 +154,7 @@ export function renderSessionLeadingState(
     const sessionState = renderSessionState(session);
     return {
       running,
-      leadingIndicator:
-        sessionState !== nothing
-          ? sessionState
-          : html`<span class="sidebar-session-indicator__dot" aria-hidden="true"></span>`,
+      leadingIndicator: sessionState,
       trailingIndicator,
     };
   }

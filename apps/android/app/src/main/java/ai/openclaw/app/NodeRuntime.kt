@@ -1245,6 +1245,7 @@ class NodeRuntime private constructor(
   val usageRefreshing: StateFlow<Boolean> = _usageRefreshing.asStateFlow()
   private val _usageErrorText = MutableStateFlow<NativeText?>(null)
   val usageErrorText: StateFlow<String?> = _usageErrorText.resolveOptionalNativeText()
+  private val usageRefreshGuard = LatestGatewayRefreshGuard()
   private var usageIncompleteRetryJob: Job? = null
   private val _skillsSummary = MutableStateFlow(GatewaySkillsSummary(skills = emptyList()))
   val skillsSummary: StateFlow<GatewaySkillsSummary> = _skillsSummary.asStateFlow()
@@ -1326,6 +1327,8 @@ class NodeRuntime private constructor(
   @Volatile internal var clawHubSkillInstallBeforeClaimObserverForTests: (() -> Unit)? = null
 
   @Volatile internal var usageIncompleteRetryDelayMsForTests: Long? = null
+
+  @Volatile internal var usageRefreshPublishObserverForTests: ((refreshGeneration: Long, current: Boolean) -> Unit)? = null
   private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
   val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
   private val _channelsRefreshing = MutableStateFlow(false)
@@ -1638,6 +1641,7 @@ class NodeRuntime private constructor(
       pendingCronRunRegistry.clear { _pendingCronRunJobIds.value = it }
     }
     usageIncompleteRetryJob?.cancel()
+    usageRefreshGuard.invalidate()
     _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
     _usageRefreshing.value = false
     _usageErrorText.value = null
@@ -6172,28 +6176,65 @@ class NodeRuntime private constructor(
     // chain must not keep polling beside it.
     usageIncompleteRetryJob?.cancel()
     val gatewayScope = captureGatewayDataScope() ?: return
-    if (refreshUsageOnceFromGateway() && _usageSummary.value.refreshing) {
-      scheduleIncompleteUsageRetry(gatewayScope)
+    val refreshGeneration = usageRefreshGuard.begin()
+    if (refreshUsageOnceFromGateway(gatewayScope, refreshGeneration) && _usageSummary.value.refreshing) {
+      scheduleIncompleteUsageRetry(gatewayScope, refreshGeneration)
     }
   }
 
-  private suspend fun refreshUsageOnceFromGateway(): Boolean =
-    refreshGatewaySummary(
-      summary = _usageSummary,
-      refreshing = _usageRefreshing,
-      errorText = _usageErrorText,
-      disconnectedSummary = GatewayUsageSummary(updatedAtMs = null, providers = emptyList()),
-      failureText = nativeText("Could not load usage."),
-    ) { gatewayScope ->
-      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "usage.status", "{}")).asObjectOrNull()
-      GatewayUsageSummary(
-        updatedAtMs = root.long("updatedAt"),
-        providers = parseUsageProviders(root?.get("providers") as? JsonArray),
-        refreshing = root.boolean("refreshing"),
-      )
-    }
+  private fun publishUsageRefresh(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    publish: () -> Unit,
+  ): Boolean {
+    var refreshCurrent = false
+    val scopeCurrent =
+      publishGatewayData(gatewayScope) {
+        refreshCurrent = usageRefreshGuard.publishIfCurrent(refreshGeneration, publish)
+      }
+    usageRefreshPublishObserverForTests?.invoke(refreshGeneration, scopeCurrent && refreshCurrent)
+    return scopeCurrent && refreshCurrent
+  }
 
-  private fun scheduleIncompleteUsageRetry(gatewayScope: GatewayDataScope) {
+  private suspend fun refreshUsageOnceFromGateway(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+  ): Boolean {
+    publishUsageRefresh(gatewayScope, refreshGeneration) {
+      _usageRefreshing.value = true
+      _usageErrorText.value = null
+    }
+    if (!operatorConnected) {
+      return publishUsageRefresh(gatewayScope, refreshGeneration) {
+        _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
+        _usageRefreshing.value = false
+      }
+    }
+    return try {
+      val root = json.parseToJsonElement(requestGatewayData(gatewayScope, "usage.status", "{}")).asObjectOrNull()
+      val nextSummary =
+        GatewayUsageSummary(
+          updatedAtMs = root.long("updatedAt"),
+          providers = parseUsageProviders(root?.get("providers") as? JsonArray),
+          refreshing = root.boolean("refreshing"),
+        )
+      publishUsageRefresh(gatewayScope, refreshGeneration) { _usageSummary.value = nextSummary }
+    } catch (_: Throwable) {
+      publishUsageRefresh(gatewayScope, refreshGeneration) {
+        // The provider rows remain useful after a transient failure, but the cold-cache
+        // marker belongs to this completed cycle and must not leave the UI spinning.
+        _usageSummary.value = _usageSummary.value.copy(refreshing = false)
+        _usageErrorText.value = nativeText("Could not load usage.")
+      }
+    } finally {
+      publishUsageRefresh(gatewayScope, refreshGeneration) { _usageRefreshing.value = false }
+    }
+  }
+
+  private fun scheduleIncompleteUsageRetry(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+  ) {
     // usage.status answers a cold cache with an empty refreshing=true placeholder
     // while the gateway fetches provider usage in the background. Bounded refetch
     // fills the panel in; a failure or gateway switch ends the chain. Mirrors
@@ -6204,7 +6245,7 @@ class NodeRuntime private constructor(
         repeat(USAGE_INCOMPLETE_RETRY_LIMIT) {
           delay(usageIncompleteRetryDelayMsForTests ?: USAGE_INCOMPLETE_RETRY_DELAY_MS)
           if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
-          if (!refreshUsageOnceFromGateway()) return@launch
+          if (!refreshUsageOnceFromGateway(gatewayScope, refreshGeneration)) return@launch
           if (!_usageSummary.value.refreshing) return@launch
         }
       }

@@ -672,6 +672,7 @@ describe("checkUpdateStatus", () => {
       await commitGit(sourceRoot, "feature change");
       await runGit(sourceRoot, "switch", "main");
       await commitGit(sourceRoot, "main change");
+      const mainSha = await runGit(sourceRoot, "rev-parse", "main");
 
       const cloneDivergedHistory = async (name: string, depth?: number) => {
         const cloneRoot = path.join(base, name);
@@ -713,23 +714,40 @@ describe("checkUpdateStatus", () => {
           fetchGit: false,
           timeoutMs: 5000,
         });
-        return { ahead: status.git?.ahead, behind: status.git?.behind };
+        return {
+          ahead: status.git?.ahead,
+          behind: status.git?.behind,
+          upstreamSha: status.git?.upstreamSha,
+        };
       };
 
       const fullRoot = await cloneDivergedHistory("full");
-      await expect(readDivergence(fullRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
+      await expect(readDivergence(fullRoot)).resolves.toEqual({
+        ahead: 1,
+        behind: 1,
+        upstreamSha: mainSha,
+      });
       await runGit(fullRoot, "remote", "rename", "--", "origin", "-dash");
       expect(await runGit(fullRoot, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("-dash/main");
-      await expect(readDivergence(fullRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
+      await expect(readDivergence(fullRoot)).resolves.toEqual({
+        ahead: 1,
+        behind: 1,
+        upstreamSha: mainSha,
+      });
 
       const truncatedRoot = await cloneDivergedHistory("shallow-depth-1", 1);
       await expect(readDivergence(truncatedRoot)).resolves.toEqual({
         ahead: null,
         behind: null,
+        upstreamSha: mainSha,
       });
 
       const comparableRoot = await cloneDivergedHistory("shallow-depth-2", 2);
-      await expect(readDivergence(comparableRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
+      await expect(readDivergence(comparableRoot)).resolves.toEqual({
+        ahead: 1,
+        behind: 1,
+        upstreamSha: mainSha,
+      });
     });
   });
 

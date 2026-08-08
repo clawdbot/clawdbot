@@ -1436,7 +1436,8 @@ public struct Snapshot: Codable, Sendable {
     public let statedir: String?
     public let sessiondefaults: [String: AnyCodable]?
     public let authmode: AnyCodable?
-    public let updateavailable: [String: AnyCodable]?
+    public let updateavailable: UpdateAvailable?
+    public let updateschedule: UpdateScheduleState?
 
     public init(
         presence: [PresenceEntry],
@@ -1448,7 +1449,8 @@ public struct Snapshot: Codable, Sendable {
         statedir: String? = nil,
         sessiondefaults: [String: AnyCodable]? = nil,
         authmode: AnyCodable? = nil,
-        updateavailable: [String: AnyCodable]? = nil)
+        updateavailable: UpdateAvailable? = nil,
+        updateschedule: UpdateScheduleState? = nil)
     {
         self.presence = presence
         self.health = health
@@ -1460,6 +1462,7 @@ public struct Snapshot: Codable, Sendable {
         self.sessiondefaults = sessiondefaults
         self.authmode = authmode
         self.updateavailable = updateavailable
+        self.updateschedule = updateschedule
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1473,6 +1476,7 @@ public struct Snapshot: Codable, Sendable {
         case sessiondefaults = "sessionDefaults"
         case authmode = "authMode"
         case updateavailable = "updateAvailable"
+        case updateschedule = "updateSchedule"
     }
 }
 
@@ -4818,6 +4822,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
     public let reason: AnyCodable
     public let tokensbefore: Int?
     public let tokensafter: Int?
+    public let tokensVersion: Double?
     public let summary: String?
     public let firstkeptentryid: String?
     public let precompaction: [String: AnyCodable]
@@ -4831,6 +4836,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
         reason: AnyCodable,
         tokensbefore: Int? = nil,
         tokensafter: Int? = nil,
+        tokensVersion: Double? = nil,
         summary: String? = nil,
         firstkeptentryid: String? = nil,
         precompaction: [String: AnyCodable],
@@ -4843,6 +4849,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
         self.reason = reason
         self.tokensbefore = tokensbefore
         self.tokensafter = tokensafter
+        self.tokensVersion = tokensVersion
         self.summary = summary
         self.firstkeptentryid = firstkeptentryid
         self.precompaction = precompaction
@@ -4857,6 +4864,7 @@ public struct SessionCompactionCheckpoint: Codable, Sendable {
         case reason
         case tokensbefore = "tokensBefore"
         case tokensafter = "tokensAfter"
+        case tokensVersion
         case summary
         case firstkeptentryid = "firstKeptEntryId"
         case precompaction = "preCompaction"
@@ -7783,6 +7791,38 @@ public struct SessionsPatchParams: Codable, Sendable {
         case inheritedtooldeny = "inheritedToolDeny"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
+    }
+}
+
+public struct SessionsArchiveManyParams: Codable, Sendable {
+    public let targets: [[String: AnyCodable]]
+    public let archived: Bool
+
+    public init(
+        targets: [[String: AnyCodable]],
+        archived: Bool)
+    {
+        self.targets = targets
+        self.archived = archived
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case targets
+        case archived
+    }
+}
+
+public struct SessionsArchiveManyResult: Codable, Sendable {
+    public let outcomes: [AnyCodable]
+
+    public init(
+        outcomes: [AnyCodable])
+    {
+        self.outcomes = outcomes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case outcomes
     }
 }
 
@@ -17435,6 +17475,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let systemprovenancereceipt: String?
     public let suppresscommandinterpretation: Bool?
     public let expectedleafentryid: AnyCodable?
+    public let expectedrunid: String?
     public let expectedsessionroutingcontract: String?
     public let idempotencykey: String
 
@@ -17460,6 +17501,7 @@ public struct ChatSendParams: Codable, Sendable {
         systemprovenancereceipt: String? = nil,
         suppresscommandinterpretation: Bool? = nil,
         expectedleafentryid: AnyCodable? = nil,
+        expectedrunid: String? = nil,
         expectedsessionroutingcontract: String? = nil,
         idempotencykey: String)
     {
@@ -17484,6 +17526,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.systemprovenancereceipt = systemprovenancereceipt
         self.suppresscommandinterpretation = suppresscommandinterpretation
         self.expectedleafentryid = expectedleafentryid
+        self.expectedrunid = expectedrunid
         self.expectedsessionroutingcontract = expectedsessionroutingcontract
         self.idempotencykey = idempotencykey
     }
@@ -17509,6 +17552,7 @@ public struct ChatSendParams: Codable, Sendable {
         systemprovenancereceipt: String? = nil,
         suppresscommandinterpretation: Bool? = nil,
         expectedleafentryid: AnyCodable? = nil,
+        expectedrunid: String? = nil,
         expectedsessionroutingcontract: String? = nil,
         idempotencykey: String)
     {
@@ -17534,6 +17578,7 @@ public struct ChatSendParams: Codable, Sendable {
             systemprovenancereceipt: systemprovenancereceipt,
             suppresscommandinterpretation: suppresscommandinterpretation,
             expectedleafentryid: expectedleafentryid,
+            expectedrunid: expectedrunid,
             expectedsessionroutingcontract: expectedsessionroutingcontract,
             idempotencykey: idempotencykey)
     }
@@ -17560,6 +17605,7 @@ public struct ChatSendParams: Codable, Sendable {
         case systemprovenancereceipt = "systemProvenanceReceipt"
         case suppresscommandinterpretation = "suppressCommandInterpretation"
         case expectedleafentryid = "expectedLeafEntryId"
+        case expectedrunid = "expectedRunId"
         case expectedsessionroutingcontract = "expectedSessionRoutingContract"
         case idempotencykey = "idempotencyKey"
     }
@@ -17856,6 +17902,120 @@ public struct ChatErrorEvent: Codable, Sendable {
 }
 
 public struct UpdateStatusParams: Codable, Sendable {}
+
+public struct UpdateStatusResult: Codable, Sendable {
+    public let sentinel: AnyCodable
+    public let updateavailable: AnyCodable
+    public let schedule: UpdateScheduleState?
+
+    public init(
+        sentinel: AnyCodable,
+        updateavailable: AnyCodable,
+        schedule: UpdateScheduleState? = nil)
+    {
+        self.sentinel = sentinel
+        self.updateavailable = updateavailable
+        self.schedule = schedule
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sentinel
+        case updateavailable = "updateAvailable"
+        case schedule
+    }
+}
+
+public struct UpdateAvailable: Codable, Sendable {
+    public let currentversion: String
+    public let latestversion: String
+    public let channel: String
+    public let currentsha: String?
+    public let upstreamref: String?
+    public let upstreamsha: String?
+    public let commitsbehind: Int?
+    public let commits: [[String: AnyCodable]]?
+
+    public init(
+        currentversion: String,
+        latestversion: String,
+        channel: String,
+        currentsha: String? = nil,
+        upstreamref: String? = nil,
+        upstreamsha: String? = nil,
+        commitsbehind: Int? = nil,
+        commits: [[String: AnyCodable]]? = nil)
+    {
+        self.currentversion = currentversion
+        self.latestversion = latestversion
+        self.channel = channel
+        self.currentsha = currentsha
+        self.upstreamref = upstreamref
+        self.upstreamsha = upstreamsha
+        self.commitsbehind = commitsbehind
+        self.commits = commits
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case currentversion = "currentVersion"
+        case latestversion = "latestVersion"
+        case channel
+        case currentsha = "currentSha"
+        case upstreamref = "upstreamRef"
+        case upstreamsha = "upstreamSha"
+        case commitsbehind = "commitsBehind"
+        case commits
+    }
+}
+
+public struct UpdateScheduleState: Codable, Sendable {
+    public let channel: String
+    public let autoenabled: Bool
+    public let install: [String: AnyCodable]?
+    public let target: AnyCodable?
+    public let campaign: [String: AnyCodable]?
+
+    public init(
+        channel: String,
+        autoenabled: Bool,
+        install: [String: AnyCodable]? = nil,
+        target: AnyCodable? = nil,
+        campaign: [String: AnyCodable]? = nil)
+    {
+        self.channel = channel
+        self.autoenabled = autoenabled
+        self.install = install
+        self.target = target
+        self.campaign = campaign
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case autoenabled = "autoEnabled"
+        case install
+        case target
+        case campaign
+    }
+}
+
+public struct UpdateHoldParams: Codable, Sendable {}
+
+public struct UpdateHoldResult: Codable, Sendable {
+    public let ok: Bool
+    public let schedule: UpdateScheduleState?
+
+    public init(
+        ok: Bool,
+        schedule: UpdateScheduleState? = nil)
+    {
+        self.ok = ok
+        self.schedule = schedule
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case schedule
+    }
+}
 
 public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?

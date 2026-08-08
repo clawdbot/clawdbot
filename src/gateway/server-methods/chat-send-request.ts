@@ -54,6 +54,7 @@ type ChatSendRequestParams = {
   systemProvenanceReceipt?: string;
   suppressCommandInterpretation?: boolean;
   expectedLeafEntryId?: string | null;
+  expectedRunId?: string;
   expectedSessionRoutingContract?: string;
   idempotencyKey: string;
 };
@@ -78,7 +79,7 @@ export type NormalizedChatSendRequest = {
 
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: string };
 
 /** Validate and normalize the wire request before session or lifecycle work begins. */
 export function normalizeChatSendRequest(params: {

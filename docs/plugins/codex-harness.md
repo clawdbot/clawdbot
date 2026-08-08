@@ -66,10 +66,10 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.146.1`. The plugin ships and manages `@openai/codex`
-  `0.146.1` by default, so a `codex` command on `PATH` does not affect normal
+- Codex app-server `0.147.0`. The plugin ships and manages `@openai/codex`
+  `0.147.0` by default, so a `codex` command on `PATH` does not affect normal
   startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.146.1` version.
+  report the same exact stable `0.147.0` version.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -276,13 +276,22 @@ backends.
 Codex subscription and direct OpenAI API traffic are separate contracts. The
 live ChatGPT/Codex catalog commonly exposes a `272000` token model window,
 while OpenAI documents a `1050000` token Platform API window and `128000`
-maximum output for GPT-5.5 and GPT-5.6. Reserving the full output allowance
-leaves a derived `922000` token input budget. Requests above `272000` input
-tokens use OpenAI's higher long-context pricing.
+maximum output for GPT-5.5 and GPT-5.6. Both runtime translations use the same
+safe arithmetic:
+
+```text
+1050000 total - 128000 maximum output = 922000 safe active input
+automatic compaction threshold = 700000 active tokens
+```
+
+The native Codex translation is not a Responses parameter set. Codex owns the
+native thread's context and compaction, so do not add
+`responsesServerCompaction` or `responsesCompactThreshold` to a Codex-backed
+model.
 
 Start from a complete Codex model catalog compatible with the installed Codex
-version. For each direct GPT-5.5 or GPT-5.6 entry that should use long context,
-preserve the rest of the descriptor and set:
+version. For the exact `gpt-5.6-sol` entry, preserve the rest of the descriptor
+and set:
 
 ```json
 {
@@ -293,7 +302,7 @@ preserve the rest of the descriptor and set:
 ```
 
 Codex applies its normal 95% effective-window reserve to the `922000` catalog
-value, so it reports about `875900` usable tokens. Compacting at `700000`
+value, so it reports exactly `875900` usable tokens. Compacting at `700000`
 leaves `175900` tokens before that effective guard and `222000` before the
 provider-safe input allowance. This larger margin is deliberate: Codex checks
 already-recorded context before adding the next user message and context
@@ -305,7 +314,7 @@ read the API key from a system keychain or secret manager while the normal
 ChatGPT login remains available for connectors:
 
 ```toml
-model = "gpt-5.6-terra"
+model = "gpt-5.6-sol"
 model_provider = "openai_api_direct"
 model_context_window = 922000
 model_auto_compact_token_limit = 700000
@@ -327,8 +336,10 @@ refresh_interval_ms = 300000
 The auth helper must print only the key to stdout. Do not put it in TOML.
 
 For the OpenClaw Codex app-server harness, keep the default agent-scoped Codex
-home and let OpenClaw inject an `openai` API-key profile. Pass the catalog and
-context limits as native Codex app-server arguments:
+home and let OpenClaw inject an `openai` API-key profile. Create the profile by
+the normal OpenAI API-key auth flow, put its actual id first in
+`auth.order.openai`, and pass the catalog and context limits as native Codex
+app-server arguments:
 
 ```json5
 {
@@ -363,30 +374,56 @@ context limits as native Codex app-server arguments:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.6-terra",
+      model: { primary: "openai/gpt-5.6-sol" },
       models: {
-        "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
+        "openai/gpt-5.6-sol": {
+          agentRuntime: { id: "codex" },
+          params: { fastMode: true },
+        },
       },
     },
   },
 }
 ```
 
-Replace `openai:api-key` with the actual API-key profile id if needed. The
+Replace `openai:api-key` with the actual API-key profile id. The
 agent-scoped app-server receives only that prepared key; the operator's native
 `~/.codex` ChatGPT login, plugins, connectors, and thread store remain
 untouched. Use the injected agent-scoped API-key path above for this route
 rather than relying on `homeScope: "user"` to provide the intended credential.
 
+The model catalog, `model_context_window`, total-scope automatic compaction
+limit, exact `openai/gpt-5.6-sol` route, and API-key profile order form one
+configuration unit. Apply them together. OpenClaw can keep embedded and native
+long-context choices at the same time only when their model refs or agent
+configurations are distinguishable; one model entry cannot carry both
+runtime-owned compaction strategies.
+
 After changing the catalog or app-server arguments, restart the Gateway and
-start a fresh chat. Existing native threads preserve their recorded provider
-and model settings. Verify the runtime with `/status` and `/codex status`, then
-send a harmless direct API turn before starting a long session.
+native Codex app-server, then start a fresh chat. Run `/model default -s` when
+an existing session has a model or runtime override. Existing native threads
+preserve their recorded provider and model settings. Verify the runtime with
+`/status` and `/codex status`, then send a harmless direct API turn before
+starting a long session.
+
+A process-owned isolated Gateway and app-server run verified this exact
+`openai/gpt-5.6-sol` API-key configuration. Codex reported an effective window
+of `875900`. Active context grew from `197032` to `377386`, `561957`, and
+`750745` tokens without manual compaction; the next small turn triggered
+automatic compaction to `75980` active tokens, with a minimum after-compaction
+snapshot of `68375`. Compaction took `2810` ms and persisted a count of one. A
+durable marker survived compaction and restart, a deterministic long response
+produced `5442` output tokens, every call reported `serviceTier: priority`, and
+the full suite took `401.37` seconds. These timings are observations, not
+service-level guarantees.
 
 <Warning>
-Long context is deliberately opt-in. OpenAI bills the entire request at 2×
-input and 1.5× output rates once input exceeds `272000` tokens. The API remains
-authoritative for access, actual limits, and billing. See
+Long context is deliberately opt-in. Once input exceeds `272000` tokens,
+OpenAI bills the entire request at 2× input and cache rates and 1.5× output
+rates. Fast/Priority adds another 2× tier, so long-context Fast traffic is 4×
+short-context Standard input-side pricing and 3× short-context Standard output
+pricing. The API remains authoritative for access, actual limits, and billing.
+See
 [OpenAI model limits](https://developers.openai.com/api/docs/models/compare) and
 [API pricing](https://developers.openai.com/api/docs/pricing).
 </Warning>
@@ -1181,7 +1218,7 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.146.1`. Older or
+**The app-server is rejected:** use exactly stable Codex `0.147.0`. Older or
 newer versions, prereleases, build-suffixed versions, and unversioned servers
 are rejected because OpenClaw validates generated schemas and runtime contracts
 against the Codex version it ships. Update or remove custom, remote, or desktop
@@ -1202,8 +1239,17 @@ for Gateway pressure, and inspect host or container memory for the Codex child.
 
 The bundled Codex has no heap or RSS limit and no configurable idle-unload
 delay. After the last client unsubscribes, an inactive thread can remain loaded
-for up to 30 minutes. On constrained hosts, reduce native Codex subagent fan-out
-before increasing the Gateway heap:
+for up to 30 minutes. OpenClaw independently keeps up to 64 idle conversation
+threads subscribed on each Codex app-server for 30 minutes after their last
+activity. This preserves warm sessions and session-scoped approvals when several
+conversations alternate. Active turns and parents with unfinished native
+subagents are protected from idle eviction; session reset or deletion releases
+its own thread immediately. Idle-limit eviction unsubscribes the least recently
+used conversation, after which Codex applies its separate unloading delay and a
+later resumed session can require approvals again.
+
+On constrained hosts, reduce native Codex subagent fan-out before increasing the
+Gateway heap:
 
 ```json5
 {

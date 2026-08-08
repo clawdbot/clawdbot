@@ -1,6 +1,9 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -87,6 +90,68 @@ class UsageStatusRuntimeTest {
     Thread.sleep(250)
 
     assertEquals(1, calls.get())
+  }
+
+  @Test
+  fun incompleteUsageFailureStopsAutomaticRetryAndManualRefreshRecovers() {
+    val runtime = createTestRuntime()
+    seedConnectedRuntime(runtime)
+    runtime.usageIncompleteRetryDelayMsForTests = 10L
+    val calls = AtomicInteger()
+    runtime.gatewayDataRequestOverrideForTests = { _, _, _ ->
+      when (calls.incrementAndGet()) {
+        1 ->
+          """{"updatedAt":1,"providers":[{"displayName":"Claude","plan":"Pro","windows":[]}],"refreshing":true}"""
+        2 -> error("usage unavailable")
+        else ->
+          """{"updatedAt":2,"providers":[{"displayName":"Claude","plan":"Pro","windows":[]}],"refreshing":false}"""
+      }
+    }
+
+    runtime.refreshUsage()
+    waitUntil { runtime.usageErrorText.value != null }
+    Thread.sleep(100)
+
+    assertEquals(2, calls.get())
+    assertFalse(runtime.usageSummary.value.refreshing)
+    assertEquals("Claude", runtime.usageSummary.value.providers.single().displayName)
+
+    runtime.refreshUsage()
+    waitUntil { calls.get() == 3 && runtime.usageErrorText.value == null }
+    assertFalse(runtime.usageSummary.value.refreshing)
+  }
+
+  @Test
+  fun replacementRefreshOwnsUsageStateWithinTheSameGatewayScope() {
+    val runtime = createTestRuntime()
+    seedConnectedRuntime(runtime)
+    val firstStarted = CompletableDeferred<Unit>()
+    val releaseFirst = CompletableDeferred<Unit>()
+    val stalePublishAttempted = CompletableDeferred<Unit>()
+    val calls = AtomicInteger()
+    runtime.usageRefreshPublishObserverForTests = { _, current ->
+      if (!current) stalePublishAttempted.complete(Unit)
+    }
+    runtime.gatewayDataRequestOverrideForTests = { _, _, _ ->
+      if (calls.incrementAndGet() == 1) {
+        firstStarted.complete(Unit)
+        releaseFirst.await()
+        """{"updatedAt":1,"providers":[],"refreshing":true}"""
+      } else {
+        """{"updatedAt":2,"providers":[{"displayName":"Claude","plan":"Pro","windows":[]}],"refreshing":false}"""
+      }
+    }
+
+    runtime.refreshUsage()
+    runBlocking { withTimeout(2_000) { firstStarted.await() } }
+    runtime.refreshUsage()
+    waitUntil { runtime.usageSummary.value.providers.isNotEmpty() }
+    releaseFirst.complete(Unit)
+    runBlocking { withTimeout(2_000) { stalePublishAttempted.await() } }
+
+    assertEquals(2, calls.get())
+    assertEquals(2L, runtime.usageSummary.value.updatedAtMs)
+    assertFalse(runtime.usageSummary.value.refreshing)
   }
 
   private fun createTestRuntime(): NodeRuntime {

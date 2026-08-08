@@ -21,6 +21,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
@@ -42,11 +43,7 @@ async function cancelUnreadResponseBody(response: Response): Promise<void> {
 }
 
 function isOfflineModeEnabled(): boolean {
-  const value = process.env.OPENCLAW_OFFLINE;
-  if (!value) {
-    return false;
-  }
-  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+  return isTruthyEnvValue(process.env.OPENCLAW_OFFLINE);
 }
 
 interface ToolConfig {

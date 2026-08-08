@@ -140,7 +140,7 @@ pr_meta_json() {
   if [ "$actual_file_count" -ne "$expected_file_count" ]; then
     if ! files=$(
       set -o pipefail
-      gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+      gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
         jq -cs '
           add
           | map({

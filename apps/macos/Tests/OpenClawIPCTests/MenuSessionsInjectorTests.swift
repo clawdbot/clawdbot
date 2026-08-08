@@ -179,7 +179,9 @@ struct MenuSessionsInjectorTests {
     @Test func `cold incomplete usage payload refetches until the refresh lands`() async {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
-        injector.setTestingUsageRetryInterval(0.01)
+        injector.setTestingUsageRetryInterval(0)
+        let events = UsageLoadEvents()
+        injector.setTestingUsageLoadDidFinish { events.finished() }
 
         var calls = 0
         injector.setTestingUsageLoader {
@@ -204,8 +206,7 @@ struct MenuSessionsInjectorTests {
         #expect(injector.testingCachedUsageSummary?.refreshing == true)
         #expect(injector.testingUsageCacheUpdatedAt == nil)
 
-        let completed = await Self.waitUntil { injector.testingCachedUsageSummary?.refreshing != true }
-        #expect(completed)
+        #expect(await events.waitFor(count: 2))
         #expect(calls == 2)
         #expect(injector.testingCachedUsageSummary?.providers.count == 1)
         #expect(injector.testingUsageCacheUpdatedAt != nil)
@@ -214,7 +215,10 @@ struct MenuSessionsInjectorTests {
     @Test func `incomplete usage refetch stays bounded when the refresh never lands`() async {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
-        injector.setTestingUsageRetryInterval(0.01)
+        injector.setTestingUsageRetryInterval(0)
+        let events = UsageLoadEvents()
+        injector.setTestingUsageLoadDidFinish { events.finished() }
+        injector.setTestingUsageRetryDidExhaust { events.retryExhausted() }
 
         var calls = 0
         injector.setTestingUsageLoader {
@@ -223,24 +227,11 @@ struct MenuSessionsInjectorTests {
         }
 
         await injector.refreshUsageCacheForTesting(force: true)
-        let exhausted = await Self.waitUntil { calls >= 4 }
-        #expect(exhausted)
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await events.waitFor(count: 4))
+        #expect(await events.waitForRetryExhaustion())
         #expect(calls == 4)
         #expect(injector.testingUsageCacheUpdatedAt == nil)
         #expect(injector.testingCachedUsageSummary?.refreshing == true)
-    }
-
-    private static func waitUntil(
-        timeout: TimeInterval = 2,
-        _ condition: @MainActor () -> Bool) async -> Bool
-    {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return true }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        return condition()
     }
 
     @Test func `status text keeps useful error detail`() {
@@ -303,5 +294,69 @@ struct MenuSessionsInjectorTests {
             permissions: nil,
             paired: paired,
             connected: connected)
+    }
+}
+
+@MainActor
+private final class UsageLoadEvents {
+    private struct Snapshot: Sendable {
+        let completed: Int
+        let exhausted: Bool
+    }
+
+    private var completed = 0
+    private var exhausted = false
+    private let stream: AsyncStream<Snapshot>
+    private let continuation: AsyncStream<Snapshot>.Continuation
+
+    init() {
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: Snapshot.self,
+            bufferingPolicy: .bufferingNewest(1))
+        self.stream = stream
+        self.continuation = continuation
+    }
+
+    func finished() {
+        self.completed += 1
+        self.emitSnapshot()
+    }
+
+    func retryExhausted() {
+        self.exhausted = true
+        self.emitSnapshot()
+    }
+
+    func waitFor(count: Int) async -> Bool {
+        if self.completed >= count { return true }
+        return await self.waitForEvent { $0.completed >= count }
+    }
+
+    func waitForRetryExhaustion() async -> Bool {
+        if self.exhausted { return true }
+        return await self.waitForEvent { $0.exhausted }
+    }
+
+    private func emitSnapshot() {
+        self.continuation.yield(Snapshot(completed: self.completed, exhausted: self.exhausted))
+    }
+
+    private func waitForEvent(_ matches: @escaping @Sendable (Snapshot) -> Bool) async -> Bool {
+        let stream = self.stream
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await snapshot in stream where matches(snapshot) {
+                    return true
+                }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
     }
 }

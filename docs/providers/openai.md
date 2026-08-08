@@ -484,12 +484,26 @@ for the full example.
 
     For direct API-key GPT-5.5 and GPT-5.6, OpenAI documents a `1050000`
     token provider window and `128000` maximum output tokens. Reserving the
-    full output allowance leaves `922000` tokens for input. This is a derived
-    operating budget, not a separate provider-published input limit. See the
-    official [model comparison](https://developers.openai.com/api/docs/models/compare)
+    full output allowance gives the shared safe input budget used by both
+    runtime recipes below:
+
+    ```text
+    1050000 total - 128000 maximum output = 922000 safe active input
+    automatic compaction threshold = 700000 active tokens
+    ```
+
+    `922000` is a derived operating budget, not a separate provider-published
+    input limit. The two runtimes translate that budget differently: embedded
+    OpenClaw sends Responses compaction controls, while native Codex owns its
+    catalog window and automatic compaction. See the official
+    [model comparison](https://developers.openai.com/api/docs/models/compare)
     and [GPT-5.5 model page](https://developers.openai.com/api/docs/models/gpt-5.5).
-    The following example opts one Terra model into that allowance and asks
-    OpenAI to compact at `700000` active tokens:
+
+    #### Embedded OpenClaw translation
+
+    This example pins the exact Sol model to the embedded OpenClaw runtime,
+    enables priority processing through fast mode, and asks OpenAI Responses
+    to compact at `700000` active tokens:
 
     ```json5
     {
@@ -498,8 +512,8 @@ for the full example.
           openai: {
             models: [
               {
-                id: "gpt-5.6-terra",
-                name: "GPT-5.6 Terra",
+                id: "gpt-5.6-sol",
+                name: "GPT-5.6 Sol",
                 contextWindow: 1050000,
                 contextTokens: 922000,
                 maxTokens: 128000,
@@ -510,11 +524,12 @@ for the full example.
       },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-terra" },
+          model: { primary: "openai/gpt-5.6-sol" },
           models: {
-            "openai/gpt-5.6-terra": {
+            "openai/gpt-5.6-sol": {
               agentRuntime: { id: "openclaw" },
               params: {
+                fastMode: true,
                 responsesServerCompaction: true,
                 responsesCompactThreshold: 700000,
               },
@@ -525,18 +540,72 @@ for the full example.
     }
     ```
 
-    `agentRuntime.id: "openclaw"` is intentional in this example. It proves the
-    embedded OpenClaw Responses path is using the model metadata and server-side
-    compaction settings above. A native Codex harness thread owns its context
-    budget in Codex config instead; see
+    OpenAI Responses automatic compaction emits an encrypted `compaction`
+    output item. A stateless client carries the newest item into the next
+    request and may drop every earlier input item. OpenClaw persists that item
+    opaquely, fences reuse by route, session, and auth, replays it, prunes the
+    replaced prefix, carries it through worker transcript commits, and removes
+    it from display and diagnostics. Never print, log, or expose the encrypted
+    content.
+
+    A process-owned isolated-Gateway run verified this exact
+    `openai/gpt-5.6-sol` configuration. Dense turns reached `295098`, `586562`,
+    and `863664` prompt tokens. Turn three emitted and persisted a first-class
+    server compaction item; the next request replayed that exact opaque item,
+    pruned its prefix, and used `9602` prompt tokens. A deterministic long
+    response produced `5480` output tokens, durable markers survived compaction
+    and Gateway restart, restart latency was `12081` ms, every call reported
+    `serviceTier: priority`, and the full suite took `220.03` seconds. These
+    timings are observations, not service-level guarantees.
+
+    #### Native Codex translation
+
+    Keep the same OpenClaw model selection, but make Codex the explicit runtime
+    and do not add Responses compaction params to this model entry:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": {
+              agentRuntime: { id: "codex" },
+              params: { fastMode: true },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Codex must receive `922000` for both `context_window` and
+    `max_context_window`, `700000` for `auto_compact_token_limit`, and matching
+    app-server overrides with `model_auto_compact_token_limit_scope=total`.
+    Codex then applies its 95% effective-window reserve, yielding `875900`
+    active tokens. Configure an ordered OpenAI API-key profile and keep the
+    default isolated agent-scoped Codex home. The complete catalog, app-server,
+    auth, and restart recipe is in
     [Codex harness long context](/plugins/codex-harness#direct-api-long-context).
+
+    These examples are two explicit runtime choices, not one auto-selecting
+    configuration. The model-scoped `agentRuntime` and runtime-owned compaction
+    settings must change together. OpenClaw can retain both choices only when
+    their model refs or agent configurations are distinguishable; otherwise,
+    switch the model runtime and its matching config as one atomic change. Then
+    restart the Gateway and native Codex app-server, run `/model default -s`,
+    and start a fresh chat. Existing native Codex threads retain the provider
+    and model recorded when they were created.
 
     <Warning>
     OpenAI applies higher long-context pricing once a GPT-5.5 or GPT-5.6
     request exceeds `272000` input tokens: the whole qualifying request is
-    billed at 2× input and 1.5× output rates. Large prompts are resent or
-    compacted across turns, so an opt-in session can cost substantially more
-    than the default even when the visible reply is short. See
+    billed at 2× input and cache rates and 1.5× output rates. Fast/Priority is
+    another 2× tier. Combined long-context Fast traffic is therefore 4×
+    short-context Standard input-side pricing and 3× short-context Standard
+    output pricing. Large prompts are resent or compacted across turns, so an
+    opt-in session can cost substantially more than the default even when the
+    visible reply is short. See
     [OpenAI API pricing](https://developers.openai.com/api/docs/pricing). The API
     remains authoritative for account access, actual limits, and billing.
     </Warning>
@@ -1344,6 +1413,14 @@ Codex-compatible.
     This applies to the built-in OpenClaw runtime path and to OpenAI provider
     hooks used by embedded runs. The native Codex app-server harness manages
     its own context through Codex and is not affected by this setting.
+
+    OpenAI emits the compacted state as an encrypted `compaction` output item.
+    Keep that item opaque. For stateless continuation, carry the newest item
+    forward and drop the earlier input prefix it replaces. OpenClaw does this
+    automatically: it persists and replays the item only for the matching
+    route, session, and auth identity, preserves it across worker transcript
+    commits, and filters it from user-visible history and diagnostics. Never
+    display or log the encrypted content.
 
     <Tabs>
       <Tab title="Enable explicitly">

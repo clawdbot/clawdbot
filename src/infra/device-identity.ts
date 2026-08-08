@@ -125,11 +125,14 @@ function withDeviceIdentityCoordinator<T>(
 }
 
 function loadOrCreateDeviceIdentityOwned(options: DeviceIdentityStoreOptions): DeviceIdentity {
-  assertNoPendingLegacyIdentity(options);
-  const existing = readStoredDeviceIdentity(options);
+  const { databasePath } = resolveDeviceIdentityStore(options);
+  // A downgrade can recreate retired JSON after SQLite migration. Once this profile has
+  // a canonical row, keep it authoritative and leave the retired source for Doctor.
+  const existing = pathMayExist(databasePath) ? readStoredDeviceIdentity(options) : null;
   if (existing) {
     return toDeviceIdentity(existing);
   }
+  assertNoPendingLegacyIdentity(options);
 
   // Generate outside the write transaction. The transaction rereads the row
   // before inserting so concurrent runtimes converge on one authoritative key.
@@ -154,7 +157,6 @@ export function loadOrCreateProcessDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity {
   return withDeviceIdentityCoordinator(options, (resolved, resolvedOptions) => {
-    assertNoPendingLegacyIdentity(resolvedOptions);
     const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
     const cached = processDeviceIdentities.get(cacheKey);
     if (cached) {
@@ -172,9 +174,12 @@ export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity | null {
   return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) => {
-    assertNoPendingLegacyIdentity(resolvedOptions);
     const stored = readStoredDeviceIdentityReadOnly(resolvedOptions);
-    return stored ? toDeviceIdentity(stored) : null;
+    if (stored) {
+      return toDeviceIdentity(stored);
+    }
+    assertNoPendingLegacyIdentity(resolvedOptions);
+    return null;
   });
 }
 

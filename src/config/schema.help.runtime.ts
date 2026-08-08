@@ -34,7 +34,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.mcpArgs":
     "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, "existing-session" for Chrome DevTools MCP attachment, or "extension" for the authenticated Chrome extension relay.',
   "browser.profiles.*.executablePath":
     "Per-profile browser executable path for locally launched managed browser profiles. Overrides browser.executablePath and accepts paths starting with ~ for the OS home directory.",
   "browser.profiles.*.headless":
@@ -51,6 +51,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
   "browser.tabCleanup.enabled":
     "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+  "browser.extensionRelay":
+    "Chrome extension relay authentication compatibility settings. Keep the legacy window only while older paired extensions or external CDP clients still need it.",
+  "browser.extensionRelay.allowLegacyAuth":
+    "Temporarily accepts legacy Bearer, Basic, and token-subprotocol relay authentication. Default: true for one migration window. Set false after every extension and external CDP client uses Browser Relay Authentication v2.",
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":

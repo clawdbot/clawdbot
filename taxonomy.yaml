@@ -1533,6 +1533,12 @@ surfaces:
           - name: Managed worktrees
             coverageIds: [agent-runtime.managed-worktrees-lifecycle]
             description: Managed worktree create with ignored-file provisioning and repository setup hooks, dirty-removal snapshots, snapshot restore, and manual-owner gc retention.
+          - name: "Managed worktrees — Session owner"
+            coverageIds: [agent-runtime.managed-worktrees-session-lifecycle]
+            description: Session worktree creation through sessions.create, persisted session worktree metadata, gc owner protection while the session is live, session-delete snapshot removal, and worktreePreserved reporting for locked checkouts.
+          - name: "Managed worktrees — Workboard owner"
+            coverageIds: [agent-runtime.managed-worktrees-workboard-lifecycle]
+            description: Workboard card workspace materialization as wb-<card-id> worktrees, card workspace writeback, and run-end lossless removal.
         docs:
           - docs/concepts/agent-loop.md
           - docs/cli/agent.md

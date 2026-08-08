@@ -39,6 +39,7 @@ describe("sessionsCommand", () => {
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "test:opus",
       },
     });
@@ -157,6 +158,7 @@ describe("sessionsCommand", () => {
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "test:opus",
       },
       "agent:main:quietchat:group:demo": {

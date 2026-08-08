@@ -2001,7 +2001,9 @@ describe("runCopilotAttempt", () => {
         });
       },
     });
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    const attempt = runCopilotAttempt(makeParams({ taskSuggestionDeliveryMode: "gateway" }), {
+      pool: makeFakePool(sdk),
+    });
 
     await vi.waitFor(() => {
       expect(requireSession(sdk).sendAndWait).toHaveBeenCalledTimes(1);
@@ -2016,22 +2018,29 @@ describe("runCopilotAttempt", () => {
             },
           ) => Promise<void>;
           supportsTranscriptCommitWait?: boolean;
+          taskSuggestionDeliveryMode?: "gateway";
         }
       | undefined;
     expect(handle?.supportsTranscriptCommitWait).toBe(true);
+    expect(handle?.taskSuggestionDeliveryMode).toBe("gateway");
 
-    await handle?.queueMessage("change course", {
-      deliveryTimeoutMs: 1_000,
-      waitForTranscriptCommit: true,
-    });
-
-    expect(requireSession(sdk).send).toHaveBeenCalledWith({ prompt: "change course" });
-    expect(transcriptRuntimeMock.appendStrict).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventId: "steered-user",
-        message: expect.objectContaining({ role: "user", content: "change course" }),
+    expect(
+      queueAgentHarnessMessage("session-1", "change course", {
+        deliveryTimeoutMs: 1_000,
+        taskSuggestionDeliveryMode: "gateway",
+        waitForTranscriptCommit: true,
       }),
-    );
+    ).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(requireSession(sdk).send).toHaveBeenCalledWith({ prompt: "change course" });
+      expect(transcriptRuntimeMock.appendStrict).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventId: "steered-user",
+          message: expect.objectContaining({ role: "user", content: "change course" }),
+        }),
+      );
+    });
 
     initialTurn.resolve(makeAssistantMessageEvent("done"));
     await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });

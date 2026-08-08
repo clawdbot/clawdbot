@@ -33,47 +33,53 @@ export function registerCopilotActiveRun(params: {
       embeddedAgentLog.warn("failed to cancel copilot gateway question during shutdown", { error });
     });
   };
+  const queueMessage = async (text: string, options?: CopilotQueueMessageOptions) => {
+    if (
+      options?.isInboundUserMessage === true &&
+      (await claimPendingAgentQuestionAnswer({
+        sessionKey: params.input.sessionKey ?? params.input.sessionId,
+        text,
+        persist: options.userTurnTranscriptRecorder
+          ? async () => {
+              await options.userTurnTranscriptRecorder?.persistApproved();
+            }
+          : undefined,
+      }))
+    ) {
+      return undefined;
+    }
+    if (params.isSettled() || params.isAborted()) {
+      throw new Error("Copilot steering is unavailable after the active run ended");
+    }
+    if (!params.canAcceptSteering()) {
+      throw new Error("Copilot steering is unavailable before initial user validation");
+    }
+    const messageId = await params.session.send({ prompt: text });
+    if (options?.waitForTranscriptCommit === true) {
+      try {
+        await waitForPersistenceReceipt(
+          params.transcriptJournal.waitForSdkUserPersisted(messageId),
+          options.deliveryTimeoutMs,
+        );
+      } catch (error) {
+        return {
+          transcriptCommit: "unconfirmed" as const,
+          errorMessage:
+            error instanceof Error
+              ? error.message
+              : "Copilot accepted steering but its transcript receipt was not confirmed",
+        };
+      }
+    }
+    return undefined;
+  };
   const activeRunHandle = {
     kind: "embedded" as const,
-    queueMessage: async (text: string, options?: CopilotQueueMessageOptions) => {
-      if (
-        options?.isInboundUserMessage === true &&
-        (await claimPendingAgentQuestionAnswer({
-          sessionKey: params.input.sessionKey ?? params.input.sessionId,
-          text,
-          persist: options.userTurnTranscriptRecorder
-            ? async () => {
-                await options.userTurnTranscriptRecorder?.persistApproved();
-              }
-            : undefined,
-        }))
-      ) {
-        return undefined;
-      }
-      if (params.isSettled() || params.isAborted()) {
-        throw new Error("Copilot steering is unavailable after the active run ended");
-      }
-      if (!params.canAcceptSteering()) {
-        throw new Error("Copilot steering is unavailable before initial user validation");
-      }
-      const messageId = await params.session.send({ prompt: text });
-      if (options?.waitForTranscriptCommit === true) {
-        try {
-          await waitForPersistenceReceipt(
-            params.transcriptJournal.waitForSdkUserPersisted(messageId),
-            options.deliveryTimeoutMs,
-          );
-        } catch (error) {
-          return {
-            transcriptCommit: "unconfirmed" as const,
-            errorMessage:
-              error instanceof Error
-                ? error.message
-                : "Copilot accepted steering but its transcript receipt was not confirmed",
-          };
-        }
-      }
-      return undefined;
+    runId: params.input.runId,
+    queueMessage,
+    messageInjection: {
+      isAvailable: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
+      queueMessage,
     },
     isStreaming: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
     isAborted: params.isAborted,
@@ -82,6 +88,7 @@ export function registerCopilotActiveRun(params: {
     // receipt resolves only after that exact SDK event reaches canonical history.
     supportsTranscriptCommitWait: true,
     sourceReplyDeliveryMode: params.input.sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.input.taskSuggestionDeliveryMode,
     cancel: () => {
       cancelGatewayQuestionBestEffort("run-cancel");
       params.userInputBridge.cancelPending();
@@ -99,6 +106,7 @@ export function registerCopilotActiveRun(params: {
     params.input.sessionKey,
     params.input.sessionFile,
   );
+  params.input.replyOperation?.attachBackend(activeRunHandle);
   return activeRunHandle;
 }
 

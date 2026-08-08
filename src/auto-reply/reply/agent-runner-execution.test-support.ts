@@ -361,6 +361,9 @@ export type FallbackRunnerParams = {
 };
 
 export type EmbeddedAgentParams = {
+  runId: string;
+  sessionId?: string;
+  sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
   lifecycleGeneration?: string;

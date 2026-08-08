@@ -38,6 +38,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadLegacySessionStore,
@@ -354,13 +355,7 @@ function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
   );
 }
 
-function tryResolveRealPath(targetPath: string): string | null {
-  try {
-    return fs.realpathSync(targetPath);
-  } catch {
-    return null;
-  }
-}
+const tryResolveRealPath = safeRealpathSync;
 
 function resolvePathThroughExistingAncestor(
   targetPath: string,

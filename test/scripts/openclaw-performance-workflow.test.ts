@@ -412,7 +412,14 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain(
       'catalog_refresh_config=\'    "models": { "catalogRefresh": { "enabled": false } },\'',
     );
+    expect(run).toContain('"agents": { "defaults": { "heartbeat": { "every": "0m" } } },');
     expect(run).toContain('"update": { "checkOnStart": false },');
+    expect(run).toContain('"browser": { "enabled": false },');
+    expect(run).toContain('"memory-core": { "config": { "dreaming": { "enabled": false } } }');
+    expect(run).toContain('cp "$gateway_config" "$gateway_readiness_config"');
+    expect(run.indexOf('"agents":')).toBeLessThan(
+      run.indexOf('cp "$gateway_config" "$gateway_readiness_config"'),
+    );
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {

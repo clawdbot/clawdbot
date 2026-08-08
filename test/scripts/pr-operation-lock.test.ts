@@ -172,7 +172,10 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
 function installPrCliFixture(repoDir: string) {
   const files = [
     "scripts/pr",
+    "scripts/watch-pr-ci.mjs",
     "scripts/lib/plain-gh.sh",
+    "scripts/lib/plain-gh.mjs",
+    "scripts/lib/direct-run.mjs",
     "scripts/pr-lib/worktree.sh",
     "scripts/pr-lib/operation-lock.sh",
     "scripts/pr-lib/process-group-runner.mjs",

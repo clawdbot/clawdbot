@@ -70,7 +70,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
-    lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
+    latestUsage: terminalAssistant?.usage as UsageLike | undefined,
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
   const resolvedModelRef = resolveReportedModelRef({

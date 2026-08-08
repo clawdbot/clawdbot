@@ -45,7 +45,8 @@ describe("detectChangedScope Windows routing", () => {
 
   it("routes Windows SQLite path tests to Windows", () => {
     for (const testPath of [
-      "src/infra/update-managed-service-handoff.test.ts",
+      "src/infra/update-managed-service-handoff-command.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
       "src/state/openclaw-database-paths.windows.test.ts",
     ]) {
       expect(detectChangedScope([testPath]), testPath).toMatchObject({
