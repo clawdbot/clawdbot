@@ -189,6 +189,7 @@ export function loadCodexBundleMcpThreadConfig(
   const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const serverOverrides = params.toolOverrides?.mcpServers;

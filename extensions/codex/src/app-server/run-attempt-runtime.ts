@@ -25,6 +25,14 @@ import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-co
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
+function resolveCodexAttemptBundleManifestRegistry(
+  preparedModelRuntime: EmbeddedRunAttemptParams["preparedModelRuntime"],
+) {
+  const metadataSnapshot = preparedModelRuntime?.metadataSnapshot;
+  // Scoped snapshots are partial views and cannot replace complete bundle discovery.
+  return metadataSnapshot?.pluginIds === undefined ? metadataSnapshot?.manifestRegistry : undefined;
+}
+
 export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnection) {
   const {
     params,
@@ -144,12 +152,16 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     agentId: sessionAgentId,
     toolOverrides: params.toolOverrides,
   });
+  const bundleManifestRegistry = resolveCodexAttemptBundleManifestRegistry(
+    params.preparedModelRuntime,
+  );
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
+    manifestRegistry: bundleManifestRegistry,
     toolOverrides: codexMcpToolOverrides,
   });
   const authenticatedScheduledMode =
@@ -244,6 +256,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
+    bundleManifestRegistry,
     authenticatedScheduledMode,
     ownsScheduledConfiguredMcpSurface,
     canResolveScheduledConfiguredMcpCreatorAuthority:

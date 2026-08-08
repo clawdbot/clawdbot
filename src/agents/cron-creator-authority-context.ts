@@ -1,19 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { CronCreatorToolAuthoritySnapshot, CronToolOptions } from "./tools/cron-tool.types.js";
+import {
+  createCronCreatorAuthorityRunScope,
+  mintCronCreatorAuthorityGrant,
+  revokeCronCreatorAuthorityRunScope,
+  type CronCreatorAuthorityRunScope,
+} from "../gateway/cron-creator-authority-grant.js";
+import type {
+  CronCreatorToolAuthorityMaterialization,
+  CronToolOptions,
+} from "./tools/cron-tool.types.js";
 
 type CronCreatorAuthorityResolver = NonNullable<CronToolOptions["resolveCreatorToolAuthority"]>;
 
-type CronCreatorAuthorityScope = {
-  active: boolean;
-  runId: string;
-};
-
 type CronCreatorAuthorityResolverScope = {
-  resolve: CronCreatorAuthorityResolver;
+  resolve: (options?: { signal?: AbortSignal }) => Promise<CronCreatorToolAuthorityMaterialization>;
   runId: string;
 };
 
-const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityScope>();
+const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();
 const activeCronCreatorAuthorityResolver =
   new AsyncLocalStorage<CronCreatorAuthorityResolverScope>();
 
@@ -24,35 +28,36 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return "then" in value && typeof value.then === "function";
 }
 
-class CronCreatorAuthorityExpiredError extends Error {
-  readonly status = 403;
-
-  constructor() {
-    super(
-      "Configured MCP cron authority is no longer active for this run. Retry the automation mutation from the active local operator turn.",
-    );
-    this.name = "CronCreatorAuthorityExpiredError";
-  }
-}
-
 /** Keeps fresh cron reauthorization within one admitted Gateway agent run. */
-export function runWithCronCreatorAuthority<T>(runId: string, run: () => T): T {
+export function runWithCronCreatorAuthority<T>(
+  runId: string,
+  run: () => T,
+  signal?: AbortSignal,
+): T {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
     return run();
   }
-  const scope: CronCreatorAuthorityScope = { active: true, runId: normalizedRunId };
+  const scope = createCronCreatorAuthorityRunScope(normalizedRunId);
+  const revoke = () => revokeCronCreatorAuthorityRunScope(scope);
+  signal?.addEventListener("abort", revoke, { once: true });
+  if (signal?.aborted) {
+    revoke();
+  }
   try {
     const result = activeCronCreatorAuthority.run(scope, run);
     if (isPromiseLike(result)) {
       return Promise.resolve(result).finally(() => {
-        scope.active = false;
+        signal?.removeEventListener("abort", revoke);
+        revoke();
       }) as T;
     }
-    scope.active = false;
+    signal?.removeEventListener("abort", revoke);
+    revoke();
     return result;
   } catch (error) {
-    scope.active = false;
+    signal?.removeEventListener("abort", revoke);
+    revoke();
     throw error;
   }
 }
@@ -60,7 +65,7 @@ export function runWithCronCreatorAuthority<T>(runId: string, run: () => T): T {
 /** Carries a bundled-Codex resolver through synchronous core tool construction. */
 export function runWithCronCreatorAuthorityResolver<T>(params: {
   runId: string;
-  resolve: () => Promise<CronCreatorToolAuthoritySnapshot>;
+  resolve: (options?: { signal?: AbortSignal }) => Promise<CronCreatorToolAuthorityMaterialization>;
   run: () => T;
 }): T {
   return activeCronCreatorAuthorityResolver.run(
@@ -84,12 +89,25 @@ export function bindActiveCronCreatorAuthorityResolver(
   ) {
     return undefined;
   }
-  return async () => {
+  return async (options) => {
     // Tool callbacks can run on async resources created outside the ALS scope,
     // so retain the exact scope object and revoke it when the run settles.
+    const operationSignal = options?.signal;
+    authority.signal.throwIfAborted();
+    operationSignal?.throwIfAborted();
+    const signal = operationSignal
+      ? AbortSignal.any([authority.signal, operationSignal])
+      : authority.signal;
+    const snapshot = await resolver.resolve({ signal });
+    authority.signal.throwIfAborted();
+    operationSignal?.throwIfAborted();
     if (!authority.active) {
-      throw new CronCreatorAuthorityExpiredError();
+      authority.signal.throwIfAborted();
     }
-    return await resolver.resolve();
+    return Object.freeze({
+      tools: snapshot.tools,
+      provenance: snapshot.provenance,
+      grant: mintCronCreatorAuthorityGrant(authority, operationSignal),
+    });
   };
 }

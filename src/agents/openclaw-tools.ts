@@ -139,6 +139,7 @@ export function createOpenClawTools(
     cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
     cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
     resolveCronCreatorToolAuthority?: CronToolOptions["resolveCreatorToolAuthority"];
+    cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
     /** Trusted normalized conversation kind for the active inbound turn. */
@@ -499,10 +500,9 @@ export function createOpenClawTools(
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
             creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
+            creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             runId: options?.runId,
-            ...(options?.cronSelfRemoveOnlyJobId
-              ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
-              : {}),
+            selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,

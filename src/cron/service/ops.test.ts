@@ -23,6 +23,7 @@ import {
   removeAgentJobsTransactional,
   removeStaleJobFamily,
   update,
+  updateWithPrecondition,
 } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
@@ -36,6 +37,74 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 });
 
 describe("scheduled tool policy provenance", () => {
+  it("consumes add authority only after candidate validation and immediately before mutation", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const commitGuard = vi.fn();
+    const invalid = {
+      name: "invalid",
+      enabled: true,
+      schedule: { kind: "cron" as const, expr: "0 0 30 2 *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+    };
+
+    await expect(add(state, invalid, { commitGuard })).rejects.toThrow(/no upcoming run time/);
+    expect(commitGuard).not.toHaveBeenCalled();
+    expect(state.store?.jobs).toEqual([]);
+
+    const valid = { ...invalid, schedule: { kind: "cron" as const, expr: "0 0 * * *" } };
+    commitGuard.mockImplementation(() => {
+      expect(state.store?.jobs).toEqual([]);
+    });
+    await add(state, valid, { commitGuard });
+    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(state.store?.jobs).toHaveLength(1);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("preserves update authority across a failed precondition and consumes at mutation", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const job = await add(state, {
+      name: "original",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    const commitGuard = vi.fn(() => {
+      expect(state.store?.jobs[0]?.name).toBe("original");
+    });
+
+    await expect(
+      updateWithPrecondition(
+        state,
+        job.id,
+        { name: "updated" },
+        () => {
+          throw new Error("revision conflict");
+        },
+        { commitGuard },
+      ),
+    ).rejects.toThrow("revision conflict");
+    expect(commitGuard).not.toHaveBeenCalled();
+    expect(state.store?.jobs[0]?.name).toBe("original");
+
+    await updateWithPrecondition(state, job.id, { name: "updated" }, () => undefined, {
+      commitGuard,
+    });
+    expect(commitGuard).toHaveBeenCalledOnce();
+    expect(state.store?.jobs[0]?.name).toBe("updated");
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("stores final-surface provenance privately and never synthesizes it from the default marker", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });

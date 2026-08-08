@@ -35,15 +35,15 @@ import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
 import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
-  resolveGatewayCronCreatorAuthorityAdmission,
-  type GatewayCronCreatorAuthorityAdmission,
-} from "./agent-run-local-operator-authority.js";
-import {
   isConfirmedAcpManualSpawnTaskOwner,
   registerPluginSubagentRunFromGateway,
   resolveGatewayAgentTaskTrackingMode,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
+import {
+  resolveGatewayCronCreatorAuthorityAdmission,
+  type GatewayCronCreatorAuthorityAdmission,
+} from "./cron-creator-authority-admission.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type PreparedAgentRunDispatch = {

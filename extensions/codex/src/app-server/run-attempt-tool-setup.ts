@@ -27,10 +27,15 @@ import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 
+function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
+  return signal?.aborted === true && error === signal.reason;
+}
+
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
     connection,
     bundleMcpThreadConfig,
+    bundleManifestRegistry,
     runtimeParams,
     effectiveRuntimeModelId,
     nativeToolSurfaceEnabled,
@@ -132,7 +137,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       }>
     | undefined;
   let resolveCreatorAuthorityImpl:
-    | (() => Promise<{
+    | ((options?: { signal?: AbortSignal }) => Promise<{
         tools: readonly (string | { name: string; pluginId?: string })[];
         provenance: { version: 1; source: "final-executable-surface" };
       }>)
@@ -150,6 +155,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     sessionAgentId,
     pluginConfig,
     profilerEnabled,
+    ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
+    bundleMcpThreadConfig.staticServerNames.length > 0
+      ? {
+          cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
+        }
+      : {}),
     onYieldDetected: () => {
       toolState.yieldDetected = true;
     },
@@ -159,11 +170,27 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     computerContextEpoch,
     ...(canResolveScheduledConfiguredMcpCreatorAuthority
       ? {
-          resolveCronCreatorToolAuthority: () => {
+          resolveCronCreatorToolAuthority: (options?: { signal?: AbortSignal }) => {
             if (!resolveCreatorAuthorityImpl) {
               throw new Error("configured MCP authority resolver was invoked before tool setup");
             }
-            return (creatorAuthorityPromise ??= resolveCreatorAuthorityImpl());
+            options?.signal?.throwIfAborted();
+            if (creatorAuthorityPromise) {
+              return creatorAuthorityPromise;
+            }
+            const pending = resolveCreatorAuthorityImpl(options);
+            creatorAuthorityPromise = pending;
+            void pending.catch((error: unknown) => {
+              // A tool-call timeout does not poison later cron mutations in the
+              // same live turn. Substantive discovery/auth/policy failures stay cached.
+              if (
+                creatorAuthorityPromise === pending &&
+                isAuthorityResolutionOperationAbort(error, options?.signal)
+              ) {
+                creatorAuthorityPromise = undefined;
+              }
+            });
+            return pending;
           },
         }
       : {}),
@@ -247,6 +274,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         workspaceDir: effectiveWorkspace,
         agentDir: policyContext.agentDir,
         cfg: params.config,
+        manifestRegistry: bundleManifestRegistry,
         reservedToolNames,
         toolsAllow: params.toolsAllow,
         toolOverrides: codexMcpToolOverrides,
@@ -270,6 +298,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           workspaceDir: effectiveWorkspace,
           agentDir: policyContext.agentDir,
           cfg: params.config,
+          manifestRegistry: bundleManifestRegistry,
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,
@@ -344,7 +373,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolBridge.availableTools,
     );
     if (canResolveScheduledConfiguredMcpCreatorAuthority) {
-      resolveCreatorAuthorityImpl = async () => {
+      resolveCreatorAuthorityImpl = async (options) => {
+        options?.signal?.throwIfAborted();
         if (!toolBridge) {
           throw new Error("configured MCP authority resolver lost the active tool bridge");
         }
@@ -354,6 +384,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           workspaceDir: effectiveWorkspace,
           agentDir: policyContext.agentDir,
           cfg: params.config,
+          manifestRegistry: bundleManifestRegistry,
           reservedToolNames: toolBridge.availableTools.map((tool) => tool.name),
           toolsAllow: params.toolsAllow,
           toolOverrides: codexMcpToolOverrides,
@@ -365,6 +396,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           retireSessionRuntimeAfterDispose: true,
         });
         try {
+          options?.signal?.throwIfAborted();
           if (materialized.diagnosticNotice) {
             throw new Error(
               `${materialized.diagnosticNotice} Sign in to the affected MCP server, then retry the automation mutation to reauthorize it. No automation changes were saved.`,
@@ -385,6 +417,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           if (!captureRef.value) {
             throw new Error("configured MCP authority snapshot did not produce provenance");
           }
+          options?.signal?.throwIfAborted();
           return Object.freeze({
             tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
             provenance: Object.freeze(captureRef.value),

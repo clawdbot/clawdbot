@@ -103,6 +103,7 @@ import {
   type CronCreatorToolAllowlistEntry,
   type CronToolsAllowCaptureRef,
 } from "./tools/cron-tool.js";
+import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
@@ -314,6 +315,8 @@ type OpenClawCodingToolsOptions = {
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** Mutable proof that the cron cap reached the final executable surface. */
   cronCreatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
+  /** Visible fail-closed reason for queued Codex configured-MCP cron mutations. */
+  cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -783,6 +786,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: bindActiveCronCreatorAuthorityResolver(options?.runId),
+            cronCreatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             currentChannelId: options?.currentChannelId,
             currentChatType: options?.chatType,
             currentMessagingTarget: options?.currentMessagingTarget,

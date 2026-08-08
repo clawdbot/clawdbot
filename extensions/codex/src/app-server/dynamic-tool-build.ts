@@ -101,6 +101,7 @@ type DynamicToolBuildParams = {
   resolveCronCreatorToolAuthority?: Parameters<
     typeof runWithCronCreatorAuthorityResolver
   >[0]["resolve"];
+  cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
   forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
@@ -346,6 +347,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
       allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
       cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
       cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
+      cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
     });
   const allTools = input.resolveCronCreatorToolAuthority
     ? runWithCronCreatorAuthorityResolver({
@@ -451,6 +453,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelId: params.modelId,
     modelApi: params.model.api,
     model: params.model,
+    // Durable registration projects the prepared catalog; it must not activate
+    // a different provider runtime while building the thread-stable schema.
+    allowProviderRuntimePluginLoad: input.ignoreRuntimePlan ? false : undefined,
     onPreNormalizationSchemaDiagnostics: (diagnostics) =>
       preNormalizationDiagnostics.push(...diagnostics),
   });

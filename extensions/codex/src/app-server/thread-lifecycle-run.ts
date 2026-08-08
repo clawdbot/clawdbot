@@ -340,15 +340,16 @@ export async function startOrResumeThread(
           binding.userMcpServersFingerprint !== undefined)) ||
         (params.configuredMcpOwnershipVersion !== 1 &&
           binding.configuredMcpOwnershipVersion === 1));
-    if (configuredMcpOwnershipChanged) {
+    if (configuredMcpOwnershipChanged && binding?.threadId) {
+      const predecessorBinding = binding;
       // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
       // Rotate legacy or ambiguous bindings so no stale native surface can survive the handoff.
-      assertCodexBindingMayBeReplaced(binding, "changing configured MCP ownership");
+      assertCodexBindingMayBeReplaced(predecessorBinding, "changing configured MCP ownership");
       embeddedAgentLog.debug(
         "codex app-server configured MCP ownership changed; starting a new thread",
-        { threadId: binding.threadId },
+        { threadId: predecessorBinding.threadId },
       );
-      replacementPredecessor = binding;
+      replacementPredecessor = predecessorBinding;
       binding = undefined;
       preserveExistingBinding = false;
     }

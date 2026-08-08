@@ -20,11 +20,11 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
-import type { GatewayCronCreatorAuthorityAdmission } from "./agent-run-local-operator-authority.js";
 import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
+import type { GatewayCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -169,7 +169,11 @@ export function dispatchAgentRunFromGateway(params: {
       restoreAdmittedRecovery: params.restoreAdmittedRecovery,
     });
   const agentRun = params.cronCreatorAuthority
-    ? runWithCronCreatorAuthority(params.cronCreatorAuthority.runId, runAgent)
+    ? runWithCronCreatorAuthority(
+        params.cronCreatorAuthority.runId,
+        runAgent,
+        params.abortController.signal,
+      )
     : runAgent();
   void agentRun
     .then(async (result) => {

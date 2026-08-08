@@ -387,6 +387,8 @@ export type CronAddOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   /** Private proof from an authenticated agent-runtime caller. */
   toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
+  commitGuard?: () => void;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
@@ -394,6 +396,8 @@ export type CronUpdateInput = CronJobPatch;
 export type CronUpdateOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   toolsAllowProvenance?: CronJob["toolsAllowProvenance"];
+  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
+  commitGuard?: () => void;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

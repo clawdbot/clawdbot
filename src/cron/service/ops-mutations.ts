@@ -276,6 +276,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
           declarativeFields(nextJob, includeEnabled),
         )
       ) {
+        opts?.commitGuard?.();
         return { ...existing, created: false, updated: false, job: existing };
       }
       const snapshot = snapshotStoreForRollback(state);
@@ -286,6 +287,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
       });
+      opts?.commitGuard?.();
       await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
     }
@@ -299,6 +301,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
+    opts?.commitGuard?.();
     state.store?.jobs.push(job);
 
     // Mutation notifications describe durable state, so publish them only
@@ -374,11 +377,11 @@ export async function updateLoadedJob(params: {
     );
   }
   const now = state.deps.nowMs();
-  await precondition?.(structuredClone(job), now);
-  const nextJob = structuredClone(job);
   const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
     ? await resolveConfiguredChannelsForValidation(state)
     : undefined;
+  await precondition?.(structuredClone(job), now);
+  const nextJob = structuredClone(job);
   applyJobPatch(nextJob, patch, {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
@@ -404,6 +407,7 @@ export async function updateLoadedJob(params: {
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
+  opts?.commitGuard?.();
   await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
   return nextJob;
 }

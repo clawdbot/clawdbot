@@ -53,7 +53,11 @@ import {
   createCronToolSchema,
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
-import { assertNoCronShellExecution, updateCronJobFromAgentTool } from "./cron-tool-write.js";
+import {
+  assertCronCreatorAuthorityResolutionAvailable,
+  assertNoCronShellExecution,
+  updateCronJobFromAgentTool,
+} from "./cron-tool-write.js";
 import type { CronToolDeps, CronToolOptions } from "./cron-tool.types.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
@@ -239,7 +243,8 @@ DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?}: 
 
 Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`,
     parameters: createCronToolSchema(),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, operationSignal) => {
+      operationSignal?.throwIfAborted();
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
@@ -394,11 +399,20 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             ) {
               delete job.enabled;
             }
+            const requiresCreatorAuthority = cronCreateRequiresCreatorAuthority(
+              job,
+              opts?.creatorToolAllowlist,
+            );
+            assertCronCreatorAuthorityResolutionAvailable({
+              required: requiresCreatorAuthority,
+              resolveCreatorToolAuthority: opts?.resolveCreatorToolAuthority,
+              unavailableReason: opts?.creatorAuthorityUnavailableReason,
+            });
             const resolvedAuthority =
-              cronCreateRequiresCreatorAuthority(job, opts?.creatorToolAllowlist) &&
-              opts?.resolveCreatorToolAuthority
-                ? await opts.resolveCreatorToolAuthority()
+              requiresCreatorAuthority && opts?.resolveCreatorToolAuthority
+                ? await opts.resolveCreatorToolAuthority({ signal: operationSignal })
                 : undefined;
+            operationSignal?.throwIfAborted();
             const creatorToolAllowlist = resolvedAuthority?.tools ?? opts?.creatorToolAllowlist;
             const creatorToolAllowlistCaptureRef = resolvedAuthority
               ? { value: resolvedAuthority.provenance }
@@ -496,8 +510,20 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
             }
             const writeCallerIdentity =
               resolvedAuthority && callerIdentity
-                ? { ...callerIdentity, cronToolsAllowCapture: "final-executable-surface" as const }
+                ? {
+                    ...callerIdentity,
+                    cronToolsAllowCapture: "final-executable-surface" as const,
+                    cronCreatorAuthorityGrant: resolvedAuthority.grant,
+                  }
                 : callerIdentity;
+            if (
+              resolvedAuthority &&
+              (!writeCallerIdentity || !("cronCreatorAuthorityGrant" in writeCallerIdentity))
+            ) {
+              throw new Error(
+                "fresh configured MCP cron authority requires an authenticated local agent run",
+              );
+            }
             return jsonResult(
               await withGatewayToolCallerIdentity(
                 writeCallerIdentity,
@@ -557,17 +583,20 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
                 creatorToolAllowlistCaptureRef: opts?.creatorToolAllowlistCaptureRef,
                 resolveCreatorToolAuthority: opts?.resolveCreatorToolAuthority,
                 withCreatorAuthorityProvenance: callerIdentity
-                  ? async (run) =>
+                  ? async (authority, run) =>
                       await withGatewayToolCallerIdentity(
                         {
                           ...callerIdentity,
                           cronToolsAllowCapture: "final-executable-surface",
+                          cronCreatorAuthorityGrant: authority.grant,
                         },
                         run,
                       )
                   : undefined,
                 gatewayOpts,
                 callGateway,
+                operationSignal,
+                creatorAuthorityUnavailableReason: opts?.creatorAuthorityUnavailableReason,
               }),
             );
           }

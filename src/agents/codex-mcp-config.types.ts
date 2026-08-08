@@ -4,6 +4,7 @@ import type { SessionToolOverrides } from "../config/sessions/types.js";
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpDiagnostic } from "../plugins/bundle-mcp.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 /** Codex app-server `mcp_servers` config map. */
 export type CodexMcpServersConfig = Record<string, Record<string, unknown>>;
@@ -29,5 +30,6 @@ export type LoadCodexBundleMcpThreadConfigParams = {
   toolsEnabled?: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 };

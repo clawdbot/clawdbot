@@ -178,10 +178,8 @@ vi.mock("../../talk/client-voice-session.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./chat.js", () => ({
-  chatHandlers: {
-    "chat.send": mocks.chatSend,
-  },
+vi.mock("./chat-send-handler.js", () => ({
+  handleChatSend: mocks.chatSend,
 }));
 
 vi.mock("../sessions-resolve.js", () => ({

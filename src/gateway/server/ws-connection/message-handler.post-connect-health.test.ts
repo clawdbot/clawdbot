@@ -21,7 +21,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { HealthSummary } from "../../health/types.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
-import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/agent-run-local-operator-authority.js";
+import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
