@@ -11,8 +11,6 @@ const profile = process.argv[2];
 const portFile = process.argv[3];
 const artifactManifestFile = process.argv[4];
 const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
-const JSZip = requireFromApp("jszip");
-const tar = requireFromApp("tar");
 const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
 
@@ -211,6 +209,7 @@ const buildClawPackSummary = ({
 });
 
 async function buildNpmPackArtifact(fixture) {
+  const tar = requireFromApp("tar");
   const packRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-fixture-"));
   try {
     const packageDir = path.join(packRoot, "package");
@@ -625,6 +624,7 @@ if (!fixture || !portFile) {
 }
 
 async function main() {
+  const JSZip = requireFromApp("jszip");
   const zip = new JSZip();
   zip.file("package/package.json", `${JSON.stringify(fixture.packageJson, null, 2)}\n`, {
     date: new Date(0),

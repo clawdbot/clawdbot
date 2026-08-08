@@ -6,20 +6,19 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const SCRIPT_PATH = "scripts/e2e/lib/clawhub-fixture-server.cjs";
+const SCRIPT_PATH = path.resolve("scripts/e2e/lib/clawhub-fixture-server.cjs");
 const PACKAGE_NAME = "@openclaw/kitchen-sink";
 const PACKAGE_PATH = `/api/v1/packages/${encodeURIComponent(PACKAGE_NAME)}`;
 const KITCHEN_SINK_VERSION = "0.2.5";
-const tempDirs: string[] = [];
 type FixtureServerChild = ChildProcessByStdio<null, Readable, Readable>;
 const servers: FixtureServerChild[] = [];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(stopServer));
-  cleanupTempDirs(tempDirs);
 });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function collectStream(stream: NodeJS.ReadableStream) {
   let text = "";
@@ -45,11 +44,11 @@ async function stopServer(child: FixtureServerChild) {
   }
 }
 
-async function startFixtureServer(profile: string, args: string[] = []) {
-  const root = makeTempDir(tempDirs, "openclaw-clawhub-fixture-server-");
+async function startFixtureServer(profile: string, args: string[] = [], cwd = process.cwd()) {
+  const root = tempDirs.make("openclaw-clawhub-fixture-server-");
   const portFile = path.join(root, "port");
   const child = spawn(process.execPath, [SCRIPT_PATH, profile, portFile, ...args], {
-    cwd: process.cwd(),
+    cwd,
     env: { ...process.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -80,11 +79,16 @@ async function fetchJson(baseUrl: string, requestPath: string) {
   return response.json();
 }
 
-function runPrepublishAssertion(baseUrl?: string, packageName?: string, version?: string) {
+function runPrepublishAssertion(
+  baseUrl?: string,
+  packageName?: string,
+  version?: string,
+  cwd = process.cwd(),
+) {
   return spawnSync(
     process.execPath,
     [SCRIPT_PATH, "assert-prepublish-requests", baseUrl ?? "", packageName ?? "", version ?? ""],
-    { cwd: process.cwd(), encoding: "utf8", env: { ...process.env } },
+    { cwd, encoding: "utf8", env: { ...process.env } },
   );
 }
 
@@ -141,7 +145,8 @@ describe("ClawHub fixture server", () => {
   });
 
   it("serves exact prepublish tarballs through the ClawHub artifact contract", async () => {
-    const root = makeTempDir(tempDirs, "openclaw-clawhub-prepublish-");
+    const root = tempDirs.make("openclaw-clawhub-prepublish-");
+    const isolatedCwd = tempDirs.make("openclaw-clawhub-isolated-");
     const packageDir = path.join(root, "package");
     const tarball = "openclaw-whatsapp-2026.8.1-beta.1.tgz";
     const tarballPath = path.join(root, tarball);
@@ -166,7 +171,11 @@ describe("ClawHub fixture server", () => {
       })}\n`,
     );
 
-    const { baseUrl } = await startFixtureServer("prepublish-artifacts", [manifestPath]);
+    const { baseUrl } = await startFixtureServer(
+      "prepublish-artifacts",
+      [manifestPath],
+      isolatedCwd,
+    );
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
     const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
@@ -190,7 +199,9 @@ describe("ClawHub fixture server", () => {
       `GET ${whatsappPath}/versions/${version}/security`,
       `GET ${whatsappPath}/versions/${version}/artifact/download`,
     ]);
-    expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version).status).toBe(0);
+    expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, isolatedCwd).status).toBe(
+      0,
+    );
     expect((await fetch(`${baseUrl}${whatsappPath}/versions/0.0.0/artifact`)).status).toBe(404);
     const mismatch = runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version);
     expect(mismatch.status).toBe(1);
