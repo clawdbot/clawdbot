@@ -363,7 +363,6 @@ export const en: TranslationMap = {
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
   updates: {
-    refreshRequired: "Server updated — refresh for full capabilities",
     coalescedRestart:
       "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
     error: "Update error: {error}",
@@ -4657,6 +4656,8 @@ export const en: TranslationMap = {
     sidebar: {
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
+      serverUpdatedTitle: "Server updated",
+      serverUpdatedRefresh: "Refresh for full capabilities",
       threads: "Threads",
       groups: "Groups",
       coding: "Coding",
@@ -5177,9 +5178,14 @@ export const en: TranslationMap = {
       toolUseMany: "{count} tool uses",
       expandTask: "Show details for {title}",
       detailTitle: "Task details",
+      transcriptTitle: "Task transcript",
       backToTasks: "Back to background tasks",
+      backToDetail: "Back to task details",
       detailLoading: "Loading task details…",
       detailFailed: "Could not load task details.",
+      transcriptLoading: "Loading task transcript…",
+      transcriptEmpty: "No transcript messages yet.",
+      transcriptFailed: "Could not load task transcript.",
       prompt: "Prompt",
       output: "Output",
       promptUnavailable: "Prompt unavailable.",
