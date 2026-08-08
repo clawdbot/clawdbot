@@ -90,6 +90,8 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  /** Preserve the lifecycle owner's verdict for polls that captured the running session. */
+  terminalStatus?: Exclude<ProcessStatus, "running">;
   noOutputTimedOut?: boolean;
   exited: boolean;
   /** Process exit observed; backend cleanup still owns the terminal transition. */
@@ -240,13 +242,14 @@ export function markExited(
   session: ProcessSession,
   exitCode: number | null,
   exitSignal: NodeJS.Signals | number | null,
-  status: ProcessStatus,
+  status: Exclude<ProcessStatus, "running">,
   exitReason?: TerminationReason,
   noOutputTimedOut?: boolean,
 ) {
   // Visibility can be cleared before process termination. Keep suspension
   // blocked until the process owner reports the actual terminal transition.
   activeBackgroundExecSessionIds.delete(session.id);
+  session.terminalStatus = status;
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;

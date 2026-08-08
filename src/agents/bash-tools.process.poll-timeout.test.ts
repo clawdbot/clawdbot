@@ -4,7 +4,12 @@
  */
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  getFinishedSession,
+  markExited,
+} from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -137,6 +142,84 @@ test("process poll warns when the session times out while poll is waiting", asyn
     vi.useRealTimers();
   }
 });
+
+test.each([
+  {
+    name: "successful zero exit",
+    exitCode: 0,
+    exitSignal: null,
+    ownerStatus: "completed",
+    exitReason: undefined,
+    expectedExit: "code 0",
+  },
+  {
+    name: "successful nonzero exit",
+    exitCode: 7,
+    exitSignal: null,
+    ownerStatus: "completed",
+    exitReason: undefined,
+    expectedExit: "code 7",
+  },
+  {
+    name: "runtime failure without an exit code",
+    exitCode: null,
+    exitSignal: null,
+    ownerStatus: "failed",
+    exitReason: undefined,
+    expectedExit: "unknown exit code",
+  },
+  {
+    name: "timeout after a clean child exit",
+    exitCode: 0,
+    exitSignal: null,
+    ownerStatus: "failed",
+    exitReason: "overall-timeout",
+    expectedExit: "code 0",
+  },
+  {
+    name: "signal failure without an exit code",
+    exitCode: null,
+    exitSignal: "SIGKILL",
+    ownerStatus: "failed",
+    exitReason: "manual-cancel",
+    expectedExit: "signal SIGKILL",
+  },
+] as const)(
+  "preserves the lifecycle owner's $name when completion races a process poll",
+  async ({ name, exitCode, exitSignal, ownerStatus, exitReason, expectedExit }) => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = `sess-terminal-${name.replaceAll(" ", "-")}`;
+      const { processTool, session } = createProcessSessionHarness(sessionId);
+
+      setTimeout(() => {
+        markExited(session, exitCode, exitSignal, ownerStatus, exitReason);
+      }, 10);
+
+      const pendingPoll = pollSession(processTool, "toolcall-terminal-race", sessionId, 1_000);
+      await vi.advanceTimersByTimeAsync(250);
+      const racedPoll = await pendingPoll;
+      const racedDetails = racedPoll.details as { status?: string; exitCode?: number };
+
+      expect(racedDetails.status).toBe(ownerStatus);
+      expect(racedDetails.exitCode).toBe(exitCode ?? undefined);
+      expect(racedPoll.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(`Process exited with ${expectedExit}.`),
+      });
+      expect(getFinishedSession(sessionId)?.status).toBe(ownerStatus);
+
+      const retainedPoll = await pollSession(processTool, "toolcall-terminal-retained", sessionId);
+      expect(retainedPoll.details).toMatchObject({ status: ownerStatus });
+      expect(retainedPoll.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(`Process exited with ${expectedExit}.`),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 test("process poll clamps long waits to 30 seconds", async () => {
   vi.useFakeTimers();
