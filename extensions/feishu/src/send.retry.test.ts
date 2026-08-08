@@ -176,8 +176,13 @@ describe("requestFeishuApi — opt-in transient retries", () => {
     "ENETUNREACH",
     "ENOTFOUND",
     "EPIPE",
+    "EPROTO",
     "ERR_NETWORK",
+    "ERR_SSL_WRONG_VERSION_NUMBER",
     "ETIMEDOUT",
+    "UND_ERR_BODY_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_SOCKET",
   ])("retries transient network code %s", async (code) => {
     const request = vi
       .fn()

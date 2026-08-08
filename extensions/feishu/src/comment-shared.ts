@@ -1,5 +1,5 @@
 // Feishu plugin module implements comment shared behavior.
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isTransientNetworkError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   isRecord as sharedIsRecord,
   normalizeOptionalString,
@@ -94,28 +94,14 @@ function createFeishuApiError(
   return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
-const FEISHU_SEND_TRANSIENT_ERROR_CODES = new Set([
-  "EAI_AGAIN",
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "EHOSTUNREACH",
-  "ENETDOWN",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "EPIPE",
-  "ERR_NETWORK",
-  "ETIMEDOUT",
-]);
 const FEISHU_MESSAGE_IN_PROGRESS_CODE = 230049;
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
-function isFeishuSendTransientError(error: unknown, seen = new Set<unknown>()): boolean {
-  if (!isRecord(error) || seen.has(error)) {
+function isFeishuSendTransientError(error: unknown): boolean {
+  if (!isRecord(error)) {
     return false;
   }
-  seen.add(error);
 
   const response = isRecord(error.response) ? error.response : undefined;
   const responseData = isRecord(response?.data) ? response.data : undefined;
@@ -130,21 +116,7 @@ function isFeishuSendTransientError(error: unknown, seen = new Set<unknown>()): 
     return true;
   }
 
-  const code = readString(error.code)?.toUpperCase();
-  if (code && FEISHU_SEND_TRANSIENT_ERROR_CODES.has(code)) {
-    return true;
-  }
-
-  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
-  if (
-    message.includes("timeout") ||
-    message.includes("socket hang up") ||
-    message.includes("network error")
-  ) {
-    return true;
-  }
-
-  return isFeishuSendTransientError(error.cause, seen);
+  return readString(error.code)?.toUpperCase() === "ERR_NETWORK" || isTransientNetworkError(error);
 }
 
 function isFeishuMessageInProgressResponse(value: unknown): boolean {
