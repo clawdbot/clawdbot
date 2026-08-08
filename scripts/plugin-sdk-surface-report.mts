@@ -249,7 +249,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared transcript credential-safety prompt for plugin-owned agent harnesses.
       // +3: channel streaming config reader re-exports and session-agent scope resolver.
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
-      4847,
+      // +1: worker desktop endpoint contract for desktop-capable worker leases.
+      4848,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
