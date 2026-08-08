@@ -1,16 +1,18 @@
 // @vitest-environment node
 // Control UI tests cover localized update and recovery status copy.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayHelloOk } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
+import type {
+  ApplicationStatusBanner,
+  PendingUpdateReconciliation,
+} from "./update-overlay-helpers.ts";
 import {
-  formatUpdateCountdown,
+  createUpdateVerificationController,
+  formatUpdateCampaignLabel,
   readUpdateAvailable,
   readUpdateSchedule,
-  resolvePendingUpdateHandoffTimeoutBanner,
-  resolvePostRestartUpdateBanner,
   resolveUpdateStatusBanner,
-  resolveUpdateVerificationBanner,
 } from "./update-overlay-helpers.ts";
 
 const translations: Record<string, string> = {
@@ -27,6 +29,9 @@ const translations: Record<string, string> = {
   "updates.postRestart.default": "Check the gateway logs for the replacement failure.",
   "updates.handoffTimeout":
     "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
+  "updates.campaign.countdown": "Updating in {time}",
+  "updates.campaign.held": "Update held · resumes in {time}",
+  "updates.campaign.waitingForIdle": "Waiting for active work · forced update in {time}",
 };
 
 function installTranslations() {
@@ -37,8 +42,41 @@ function installTranslations() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+async function verifyUpdate(params: {
+  pending: PendingUpdateReconciliation;
+  response: unknown;
+  hello?: GatewayHelloOk | null;
+  advanceToMs?: number;
+}): Promise<ApplicationStatusBanner | null | undefined> {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  let banner: ApplicationStatusBanner | null | undefined;
+  const client = {
+    request: vi.fn(async () => {
+      if (params.advanceToMs !== undefined) {
+        vi.setSystemTime(params.advanceToMs);
+      }
+      return params.response;
+    }),
+  } as unknown as GatewayBrowserClient;
+  const controller = createUpdateVerificationController({
+    getPending: () => params.pending,
+    clearPending: vi.fn(),
+    isCurrent: () => true,
+    getHello: () => params.hello ?? null,
+    publish: vi.fn(),
+    publishBanner: (value) => {
+      banner = value;
+    },
+  });
+
+  await controller.verify(client, 1);
+  return banner;
+}
 
 describe("update schedule hydration", () => {
   it("preserves additive git availability and the hello schedule DTO", () => {
@@ -56,7 +94,8 @@ describe("update schedule hydration", () => {
         id: "campaign-1",
         state: "waiting-for-idle",
         announcedAtMs: 1_000,
-        forceAtMs: 901_000,
+        holdUntilMs: 3_601_000,
+        forceAtMs: 4_501_000,
         updatedAtMs: 2_000,
       },
     } as const;
@@ -70,6 +109,10 @@ describe("update schedule hydration", () => {
           upstreamRef: "origin/main",
           upstreamSha: "b".repeat(40),
           commitsBehind: 3,
+          commits: [
+            { sha: "b0b0b0b", subject: "Improve update scheduling" },
+            { sha: "a0a0a0a", subject: "Tighten update checks" },
+          ],
         },
         updateSchedule,
       },
@@ -80,14 +123,52 @@ describe("update schedule hydration", () => {
       upstreamRef: "origin/main",
       upstreamSha: "b".repeat(40),
       commitsBehind: 3,
+      commits: [
+        { sha: "b0b0b0b", subject: "Improve update scheduling" },
+        { sha: "a0a0a0a", subject: "Tighten update checks" },
+      ],
     });
     expect(readUpdateSchedule(hello)).toEqual(updateSchedule);
   });
 
   it("formats countdown deadlines with a stable minutes-and-seconds shape", () => {
-    expect(formatUpdateCountdown(55_000, 1_000)).toBe("0:54");
-    expect(formatUpdateCountdown(762_000, 1_000)).toBe("12:41");
-    expect(formatUpdateCountdown(500, 1_000)).toBe("0:00");
+    installTranslations();
+    const schedule = {
+      channel: "stable",
+      autoEnabled: true,
+      campaign: {
+        id: "campaign-1",
+        state: "waiting-for-idle",
+        announcedAtMs: 0,
+        forceAtMs: 55_000,
+        updatedAtMs: 0,
+      },
+    } as const;
+
+    expect(formatUpdateCampaignLabel(schedule, 1_000)).toBe(
+      "Waiting for active work · forced update in 0:54",
+    );
+    expect(
+      formatUpdateCampaignLabel(
+        {
+          ...schedule,
+          campaign: { ...schedule.campaign, state: "countdown", applyAtMs: 762_000 },
+        },
+        1_000,
+      ),
+    ).toBe("Updating in 12:41");
+    expect(formatUpdateCampaignLabel(schedule, 56_000)).toBe(
+      "Waiting for active work · forced update in 0:00",
+    );
+    expect(
+      formatUpdateCampaignLabel(
+        {
+          ...schedule,
+          campaign: { ...schedule.campaign, holdUntilMs: 762_000 },
+        },
+        1_000,
+      ),
+    ).toBe("Update held · resumes in 12:41");
   });
 });
 
@@ -117,38 +198,82 @@ describe("update status localization", () => {
     expect(translate).toHaveBeenCalledWith("updates.failureReasons.default", undefined);
   });
 
-  it("localizes restart verification with and without version diagnostics", () => {
+  it("localizes restart verification with and without version diagnostics", async () => {
     installTranslations();
 
-    expect(
-      resolveUpdateVerificationBanner({ expectedVersion: "2.0.0", actualVersion: null }),
-    ).toEqual({
-      tone: "danger",
-      text: "Update installed but running version did not change — restart may have been blocked.",
-    });
-    expect(
-      resolveUpdateVerificationBanner({
-        expectedVersion: "2.0.0",
-        actualVersion: "1.9.0",
+    await expect(
+      verifyUpdate({
+        pending: { kind: "restart", expected: "2.0.0" },
+        response: {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: { after: { version: "1.9.0" } },
+          },
+        },
       }),
-    ).toEqual({
+    ).resolves.toEqual({
       tone: "danger",
       text: "Update installed but running version did not change — restart may have been blocked. Expected v2.0.0, running v1.9.0.",
     });
+    await expect(
+      verifyUpdate({
+        pending: { kind: "restart", expected: "2.0.0" },
+        response: null,
+        advanceToMs: 10_000,
+      }),
+    ).resolves.toEqual({
+      tone: "danger",
+      text: "Update installed but running version did not change — restart may have been blocked.",
+    });
   });
 
-  it("localizes post-restart and handoff timeout guidance", () => {
+  it("localizes post-restart and handoff timeout guidance", async () => {
     installTranslations();
 
-    expect(resolvePostRestartUpdateBanner("restart-unhealthy")).toEqual({
+    await expect(
+      verifyUpdate({
+        pending: { kind: "restart", expected: "2.0.0" },
+        response: {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: { reason: "restart-unhealthy" },
+          },
+        },
+      }),
+    ).resolves.toEqual({
       tone: "danger",
       text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
     });
-    expect(resolvePostRestartUpdateBanner("supervisor-exited")).toEqual({
+    await expect(
+      verifyUpdate({
+        pending: { kind: "restart", expected: "2.0.0" },
+        response: {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: { reason: "supervisor-exited" },
+          },
+        },
+      }),
+    ).resolves.toEqual({
       tone: "danger",
       text: "Update error: supervisor-exited. Check the gateway logs for the replacement failure.",
     });
-    expect(resolvePendingUpdateHandoffTimeoutBanner()).toEqual({
+    await expect(
+      verifyUpdate({
+        pending: { kind: "handoff", expected: null },
+        response: {
+          sentinel: {
+            kind: "update",
+            status: "skipped",
+            stats: { reason: "managed-service-handoff-started" },
+          },
+        },
+        advanceToMs: 35 * 60_000,
+      }),
+    ).resolves.toEqual({
       tone: "danger",
       text: "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
     });

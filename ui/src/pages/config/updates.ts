@@ -20,23 +20,26 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 
-export type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
+type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
 
-export type UpdatesViewProps = {
+type UpdatesViewProps = {
   configObject: Record<string, unknown>;
   gatewayVersion: string | null;
   controlUiCommit: string | null;
   schedule: UpdateScheduleState | null;
+  heldUpdateCampaignId: string | null;
   updateAvailable: UpdateAvailable | null;
   statusBanner: ApplicationStatusBanner | null;
   configBusy: boolean;
   canAdmin: boolean;
   canUpdate: boolean;
+  canHoldUpdate: boolean;
   updateBusy: boolean;
   nowMs?: number;
   onChannelChange: (channel: UpdatesChannel) => void;
   onAutomaticUpdatesChange: (enabled: boolean) => void;
   onUpdateNow: () => void;
+  onHoldUpdate: () => Promise<boolean>;
 };
 
 function readUpdatesSettings(
@@ -128,6 +131,35 @@ function renderScheduleStatus(props: UpdatesViewProps): TemplateResult {
   >`;
 }
 
+function readGitCommits(props: UpdatesViewProps) {
+  const update = props.updateAvailable;
+  const gitUpdate = props.schedule?.target?.kind === "git" || Boolean(update?.currentSha);
+  return gitUpdate ? (update?.commits ?? []) : [];
+}
+
+function renderCommitList(props: UpdatesViewProps) {
+  const commits = readGitCommits(props);
+  if (commits.length === 0) {
+    return nothing;
+  }
+  return renderSettingsRow({
+    title: t("updates.page.commits"),
+    stacked: true,
+    control: html`
+      <div class="updates-commit-list" role="list" aria-label=${t("updates.page.commits")}>
+        ${commits.map(
+          (commit) => html`
+            <div class="updates-commit-list__row" role="listitem">
+              <code title=${commit.sha}>${commit.sha}</code>
+              <span>${commit.subject}</span>
+            </div>
+          `,
+        )}
+      </div>
+    `,
+  });
+}
+
 export function renderUpdates(props: UpdatesViewProps): TemplateResult {
   const settings = readUpdatesSettings(props.configObject, props.schedule);
   const channelOptions: Array<{ value: UpdatesChannel; label: string }> = [
@@ -142,6 +174,17 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
     });
   }
   const automaticUpdatesSupported = settings.channel !== "extended-stable";
+  const campaign = props.schedule?.campaign;
+  const holdActive =
+    campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > (props.nowMs ?? Date.now());
+  const showHold = Boolean(
+    campaign &&
+    campaign.state !== "applying" &&
+    props.canUpdate &&
+    props.canHoldUpdate &&
+    !holdActive &&
+    props.heldUpdateCampaignId !== campaign.id,
+  );
   const policyRows = [
     renderSettingsRow({
       title: t("updates.page.channel"),
@@ -178,8 +221,25 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
           renderSettingsSection({ title: t("updates.page.statusTitle") }, [
             renderSettingsRow({
               title: t("updates.page.scheduleStatus"),
-              control: renderScheduleStatus(props),
+              control: html`
+                <div class="updates-status-control">
+                  ${renderScheduleStatus(props)}
+                  ${showHold
+                    ? html`
+                        <button
+                          type="button"
+                          class="btn btn--sm"
+                          ?disabled=${props.updateBusy}
+                          @click=${() => void props.onHoldUpdate()}
+                        >
+                          ${t("updates.holdOneHour")}
+                        </button>
+                      `
+                    : nothing}
+                </div>
+              `,
             }),
+            renderCommitList(props),
             renderSettingsRow({
               title: t("updates.page.updateNow"),
               description: t("updates.page.updateNowDescription"),

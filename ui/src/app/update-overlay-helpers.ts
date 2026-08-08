@@ -36,7 +36,7 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "doctor-failed": "updates.failureReasons.doctorFailed",
 };
 
-export type UpdateRestartStatusResponse = {
+type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
@@ -60,7 +60,7 @@ export type UpdateRunResponse = {
   restart?: { coalesced?: boolean } | null;
 };
 
-export async function requestUpdateRestartStatus(
+async function requestUpdateRestartStatus(
   client: Pick<GatewayBrowserClient, "request">,
   timeoutMs: number,
 ): Promise<UpdateRestartStatusResponse | null> {
@@ -248,7 +248,7 @@ export function createUpdateCampaignStatusPoller(params: {
   return { stop, sync };
 }
 
-export function resolveUpdateVerificationWindow(
+function resolveUpdateVerificationWindow(
   kind: "handoff" | "restart",
   nowMs = Date.now(),
 ): { deadline: number; pollMs: number } {
@@ -273,6 +273,20 @@ export function readUpdateAvailableValue(update: unknown): UpdateAvailable | nul
   if (!isRecord(update)) {
     return null;
   }
+  const rawCommits = update.commits;
+  const commits =
+    Array.isArray(rawCommits) &&
+    rawCommits.length <= 5 &&
+    rawCommits.every(
+      (commit): commit is { sha: string; subject: string } =>
+        isRecord(commit) &&
+        typeof commit.sha === "string" &&
+        commit.sha.length > 0 &&
+        typeof commit.subject === "string" &&
+        commit.subject.length <= 120,
+    )
+      ? rawCommits.map((commit) => ({ sha: commit.sha, subject: commit.subject }))
+      : undefined;
   return typeof update.currentVersion === "string" &&
     typeof update.latestVersion === "string" &&
     typeof update.channel === "string"
@@ -286,6 +300,7 @@ export function readUpdateAvailableValue(update: unknown): UpdateAvailable | nul
         ...(Number.isInteger(update.commitsBehind) && Number(update.commitsBehind) >= 0
           ? { commitsBehind: Number(update.commitsBehind) }
           : {}),
+        ...(commits ? { commits } : {}),
       }
     : null;
 }
@@ -328,7 +343,9 @@ function readScheduleCampaign(value: unknown): UpdateScheduleState["campaign"] |
     !Number.isInteger(value.updatedAtMs) ||
     Number(value.updatedAtMs) < 0 ||
     (value.applyAtMs !== undefined &&
-      (!Number.isInteger(value.applyAtMs) || Number(value.applyAtMs) < 0))
+      (!Number.isInteger(value.applyAtMs) || Number(value.applyAtMs) < 0)) ||
+    (value.holdUntilMs !== undefined &&
+      (!Number.isInteger(value.holdUntilMs) || Number(value.holdUntilMs) < 0))
   ) {
     return null;
   }
@@ -337,6 +354,7 @@ function readScheduleCampaign(value: unknown): UpdateScheduleState["campaign"] |
     state: value.state,
     announcedAtMs: Number(value.announcedAtMs),
     ...(value.applyAtMs === undefined ? {} : { applyAtMs: Number(value.applyAtMs) }),
+    ...(value.holdUntilMs === undefined ? {} : { holdUntilMs: Number(value.holdUntilMs) }),
     forceAtMs: Number(value.forceAtMs),
     updatedAtMs: Number(value.updatedAtMs),
   };
@@ -380,7 +398,7 @@ export function readUpdateSchedule(hello: GatewayHelloOk | null): UpdateSchedule
   return readUpdateScheduleValue(snapshot.updateSchedule);
 }
 
-export function formatUpdateCountdown(deadlineMs: number, nowMs = Date.now()): string {
+function formatUpdateCountdown(deadlineMs: number, nowMs = Date.now()): string {
   const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
   const minutes = Math.floor(totalSeconds / 60);
   return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
@@ -393,6 +411,11 @@ export function formatUpdateCampaignLabel(
   const campaign = schedule?.campaign;
   if (!campaign) {
     return null;
+  }
+  if (campaign.holdUntilMs !== undefined && campaign.holdUntilMs > nowMs) {
+    return t("updates.campaign.held", {
+      time: formatUpdateCountdown(campaign.holdUntilMs, nowMs),
+    });
   }
   if (campaign.state === "applying") {
     return t("updates.campaign.applying");
@@ -436,7 +459,7 @@ export function resolveUpdateStatusBanner(params: {
   };
 }
 
-export function resolveUpdateVerificationBanner(params: {
+function resolveUpdateVerificationBanner(params: {
   expectedVersion: string;
   actualVersion: string | null;
 }): ApplicationStatusBanner {
@@ -451,7 +474,7 @@ export function resolveUpdateVerificationBanner(params: {
   };
 }
 
-export function resolvePostRestartUpdateBanner(
+function resolvePostRestartUpdateBanner(
   reason: string | null | undefined,
 ): ApplicationStatusBanner {
   const normalizedReason = reason?.trim() || "restart-unhealthy";
@@ -469,7 +492,7 @@ export function resolvePostRestartUpdateBanner(
   };
 }
 
-export function resolvePendingUpdateHandoffTimeoutBanner(): ApplicationStatusBanner {
+function resolvePendingUpdateHandoffTimeoutBanner(): ApplicationStatusBanner {
   return {
     tone: "danger",
     text: t("updates.handoffTimeout"),
@@ -483,7 +506,7 @@ export function resolveUnknownUpdateOutcomeBanner(): ApplicationStatusBanner {
   };
 }
 
-export function resolveAmbiguousUpdateOutcomeBanner(
+function resolveAmbiguousUpdateOutcomeBanner(
   expectedVersion: string | null,
   hello: GatewayHelloOk | null,
 ): ApplicationStatusBanner | null {
