@@ -240,6 +240,7 @@ export class EmbeddedBlockChunker {
       const consumed = this.#emitBreakResult({
         breakResult,
         emit,
+        force,
         reopenPrefix,
         source,
         start,
@@ -270,11 +271,12 @@ export class EmbeddedBlockChunker {
   #emitBreakResult(params: {
     breakResult: BreakResult;
     emit: (chunk: string) => void;
+    force: boolean;
     reopenPrefix: string;
     source: string;
     start: number;
   }): { start: number; reopenFence?: FenceSpan } | null {
-    const { breakResult, emit, reopenPrefix, source, start } = params;
+    const { breakResult, emit, force, reopenPrefix, source, start } = params;
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
       return null;
@@ -285,6 +287,7 @@ export class EmbeddedBlockChunker {
     if (rawChunk.trim().length === 0) {
       if (
         this.#chunking.flushOnParagraph &&
+        !force &&
         hasTrailingParagraphSeparator(source, absoluteBreakIdx) &&
         rawChunk.startsWith("\n")
       ) {

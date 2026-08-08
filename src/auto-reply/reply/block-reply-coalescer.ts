@@ -174,6 +174,11 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
     if (!hasText) {
+      if (bufferText && leadingParagraphSeparatorPattern.test(text)) {
+        // Preserve a forced paragraph tail inside the renderable payload; ordinary
+        // whitespace-only payloads remain suppressed before outbound delivery.
+        bufferText = joinBufferedText(text);
+      }
       return;
     }
 

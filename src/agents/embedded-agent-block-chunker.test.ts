@@ -206,6 +206,15 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toBe("");
   });
 
+  it("force flushes a separator tail after a max-sized chunk", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+
+    chunker.append("abcdefghij\n\n");
+
+    expect(drainChunks(chunker, true)).toEqual(["abcdefghij", "\n\n"]);
+    expect(chunker.bufferedText).toBe("");
+  });
+
   it("does not stall when whitespace after a separator exceeds maxChars", () => {
     const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 6 });
     const input = "\n\n     x";

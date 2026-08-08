@@ -86,6 +86,37 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(delivered).toEqual(["abcdefghij\n\nRest"]);
   });
 
+  it("carries a separator-only final chunk into the preceding delivery", async () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 10,
+      breakPreference: "paragraph",
+      flushOnParagraph: true,
+    });
+    chunker.append("abcdefghij\n\n");
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    const delivered: string[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+      timeoutMs: 5000,
+      coalescing: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+    });
+
+    for (const chunk of chunks) {
+      pipeline.enqueue({ text: chunk });
+    }
+    pipeline.enqueue({ text: " " });
+    await pipeline.flush({ force: true });
+
+    expect(chunks).toEqual(["abcdefghij", "\n\n"]);
+    expect(delivered).toEqual(["abcdefghij\n\n"]);
+  });
+
   it("keeps an un-aborted delivery signal when timeouts are disabled", async () => {
     let deliverySignal: AbortSignal | undefined;
     const pipeline = createBlockReplyPipeline({
