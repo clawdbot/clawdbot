@@ -2159,11 +2159,10 @@ html.openclaw-native-macos
   padding-right: 2px;
 }
 
-/* Resting rows give the title the full sidebar width: the trailing aside
-   overlays the row instead of reserving button width in-flow. It must not
-   intercept clicks on the link tail beneath it — the buttons re-enable
-   their own pointer-events on hover/focus. Child rows keep the in-flow
-   aside because their runtime trail is resting content, not a hover swap. */
+/* The trailing aside overlays the row so action-only rows retain the full
+   resting link width. It must not intercept clicks on the link beneath it —
+   the buttons re-enable their own pointer-events on hover/focus. Child rows
+   keep the in-flow aside because their runtime trail is resting content. */
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
   top: 50%;
@@ -2180,8 +2179,8 @@ html.openclaw-native-macos
   right: 35px;
 }
 
-/* Resting semantic state remains visible, so reserve its overlay slot before
-   the title. Action-only rows still get the full resting width. */
+/* State-bearing rows reserve the larger state/action maximum throughout the
+   swap, while action-only rows reserve controls only when they appear. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):where(
     :has(> .sidebar-recent-session__aside > .session-row-state)
   )
@@ -2189,9 +2188,9 @@ html.openclaw-native-macos
   padding-right: 68px;
 }
 
-/* Desktop hover/focus swaps resting state for actions, so reserve only the
-   action surface while it is visible. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
+.sidebar-recent-session:not(.sidebar-recent-session--child):not(
+    :has(> .sidebar-recent-session__aside > .session-row-state)
+  ):is(:hover, :focus-within)
   > .sidebar-recent-session__link {
   padding-right: 52px;
 }
