@@ -15,6 +15,10 @@ export function historicalV15AgentSchemaSql(): string {
     "  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n",
     "",
   );
+  sql = sql.replace(
+    "  last_activity_at INTEGER,\n  entry_blobs_json TEXT\n",
+    "  last_activity_at INTEGER\n",
+  );
   sql = removeSchemaRange(
     sql,
     "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending",

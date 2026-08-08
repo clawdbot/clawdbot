@@ -24,7 +24,10 @@ import {
 import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engine-turn-outbox-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
-import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
+import {
+  ensureSessionEntryBlobsProjection,
+  ensureSessionEntryValidityProjection,
+} from "./openclaw-agent-db-session-migrations.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
@@ -154,6 +157,11 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
+  // Add the additive entry_blobs_json side column before the core-schema
+  // assertion: AGENT_V14_CORE_SCHEMA_SQL is derived from the current schema and
+  // therefore carries the column, so a pristine v14 database must gain it here
+  // (same additive-before-assert pattern as the entry_valid projection below).
+  ensureSessionEntryBlobsProjection(database);
   ensureSessionEntryValidityProjection(database);
   ensureSessionKeyContractSchemaInTransaction(database);
 

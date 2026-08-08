@@ -1,3 +1,5 @@
+import { mergeSessionEntryBlobs } from "./session-entry-blobs.js";
+
 export function hasValidSqliteSessionEntryIdentity(entry: {
   sessionId?: unknown;
   updatedAt?: unknown;
@@ -12,6 +14,9 @@ export function hasValidSqliteSessionEntryIdentity(entry: {
 export function parseSqliteSessionEntryRecord(row: {
   current_session_id?: string;
   entry_json: string;
+  // When a reader selects the entry_blobs_json side column, the two large fields
+  // are hydrated back; hot bulk list reads omit the column and stay small.
+  entry_blobs_json?: string | null;
   updated_at?: number;
 }): (Record<string, unknown> & { sessionId: string; updatedAt: number }) | null {
   try {
@@ -29,6 +34,7 @@ export function parseSqliteSessionEntryRecord(row: {
     ) {
       return null;
     }
+    mergeSessionEntryBlobs(record, row.entry_blobs_json);
     return record;
   } catch {
     return null;

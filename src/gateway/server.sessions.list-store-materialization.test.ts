@@ -236,7 +236,7 @@ test("startup skips a large session prewarm while request-time listing remains a
   }
 });
 
-test("sessions.list projects out prompt snapshots without changing full entry reads", async () => {
+test("sessions.list and bulk snapshot reads externalize prompt snapshots; per-key reads hydrate them", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
@@ -274,10 +274,23 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     )
     .run("zz-malformed", "malformed", "{", Date.now());
 
+  // v17 perf fix: the two large blobs are externalized to the entry_blobs_json
+  // side column, and the bulk list snapshot only selects entry_json, so even a
+  // full (unprojected) bulk read is blob-free.
   const fullEntries = sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath });
   expect(fullEntries).toHaveLength(1);
-  expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
-  expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
+  expect(fullEntries[0]?.entry.skillsSnapshot).toBeUndefined();
+  expect(fullEntries[0]?.entry.systemPromptReport).toBeUndefined();
+
+  // A per-key read hydrates the externalized blobs back from the side column (its
+  // selectAll path carries entry_blobs_json), proving the round-trip.
+  const hydrated = sessionAccessor.loadSessionEntry({
+    agentId: "main",
+    sessionKey: stored.session_key,
+    storePath,
+  });
+  expect(hydrated?.skillsSnapshot).toBeDefined();
+  expect(hydrated?.systemPromptReport?.source).toBe("run");
 
   const projections: Array<string | undefined> = [];
   const originalReadOnly = sessionAccessor.listSessionEntriesReadOnly;
@@ -311,4 +324,50 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   expect(listEntries).toHaveLength(1);
   expect(listEntries[0]?.entry.skillsSnapshot).toBeUndefined();
   expect(listEntries[0]?.entry.systemPromptReport).toBeUndefined();
+});
+
+test("a per-key read-modify-write keeps the side-column blobs; dropping a field clears it", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+  const storePath = testState.sessionStorePath!;
+  const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+  const database = openOpenClawAgentDatabase({
+    agentId: target.agentId ?? "main",
+    path: target.path,
+  });
+  const stored = database.db
+    .prepare("SELECT session_key, entry_json FROM session_nodes LIMIT 1")
+    .get() as { session_key: string; entry_json: string };
+  const storedEntry = JSON.parse(stored.entry_json) as SessionEntry;
+  const scope = { agentId: "main", sessionKey: stored.session_key, storePath };
+  // Persist an entry carrying both large blobs → they externalize to the side column.
+  await sessionAccessor.replaceSessionEntry(scope, {
+    ...storedEntry,
+    skillsSnapshot: { prompt: "large skill prompt", skills: [{ name: "test" }] },
+    systemPromptReport: {
+      source: "run",
+      generatedAt: 1,
+      systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    },
+  });
+
+  // A per-key read is hydrated, so a metadata-only rewrite carries the blobs
+  // through and the side column survives an update.
+  const hydrated = sessionAccessor.loadSessionEntry(scope)!;
+  expect(hydrated.skillsSnapshot).toBeDefined();
+  await sessionAccessor.replaceSessionEntry(scope, { ...hydrated, label: "renamed" });
+  const afterRename = sessionAccessor.loadSessionEntry(scope);
+  expect(afterRename?.label).toBe("renamed");
+  expect(afterRename?.skillsSnapshot).toBeDefined();
+  expect(afterRename?.systemPromptReport?.source).toBe("run");
+
+  // Intentionally dropping a blob (as sessions.reset does) must clear the side
+  // column, not resurrect the stale value.
+  await sessionAccessor.replaceSessionEntry(scope, { ...afterRename!, skillsSnapshot: undefined });
+  const afterDrop = sessionAccessor.loadSessionEntry(scope);
+  expect(afterDrop?.skillsSnapshot).toBeUndefined();
+  expect(afterDrop?.systemPromptReport?.source).toBe("run");
 });

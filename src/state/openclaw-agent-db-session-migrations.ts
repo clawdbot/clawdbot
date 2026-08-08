@@ -287,6 +287,69 @@ export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void 
 }
 
 /** Adds the validity projection and settles only rows left pending by older writers. */
+const SESSION_ENTRY_BLOB_MIGRATION_FIELDS = ["systemPromptReport", "skillsSnapshot"] as const;
+
+/**
+ * Externalize the two large blobs (systemPromptReport, skillsSnapshot) from
+ * entry_json into the entry_blobs_json side column so the hot bulk list read
+ * parses a small entry_json. Idempotent (a non-null side column stops matching)
+ * and bounded (LIMIT 256 per batch to cap memory on large stores). Must run
+ * before ensureSessionEntryValidityProjection: stripping entry_json trips the
+ * entry_valid invalidation trigger, which that pass then re-settles.
+ */
+export function ensureSessionEntryBlobsProjection(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (!columns) {
+    return;
+  }
+  if (!columns.has("entry_blobs_json")) {
+    db.exec("ALTER TABLE session_nodes ADD COLUMN entry_blobs_json TEXT");
+  }
+  const select = db.prepare(
+    // json_valid guards the json_extract calls: on modern SQLite json_extract
+    // throws on malformed JSON, which would abort the whole migration (blocking
+    // startup) over a single bad row. Malformed rows carry no externalizable blob.
+    `SELECT session_key, entry_json FROM session_nodes
+       WHERE entry_blobs_json IS NULL
+         AND json_valid(entry_json)
+         AND (json_extract(entry_json, '$.systemPromptReport') IS NOT NULL
+           OR json_extract(entry_json, '$.skillsSnapshot') IS NOT NULL)
+       LIMIT 256`,
+  );
+  const update = db.prepare(
+    "UPDATE session_nodes SET entry_blobs_json = ?, entry_json = ? WHERE session_key = ?",
+  );
+  while (true) {
+    // Exhaust the bounded SELECT before mutating its source rows; SQLite does not
+    // define stepping a cursor while the same connection rewrites visible rows.
+    const rows = select.all() as Array<{ session_key: string; entry_json: string }>;
+    if (rows.length === 0) {
+      break;
+    }
+    for (const row of rows) {
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(row.entry_json) as Record<string, unknown>;
+      } catch {
+        // Unreachable given json_valid, but stamp a sentinel so a parser
+        // disagreement can never spin the bounded loop forever.
+        update.run("{}", row.entry_json, row.session_key);
+        continue;
+      }
+      const blobs: Record<string, unknown> = {};
+      const core: Record<string, unknown> = { ...parsed };
+      for (const field of SESSION_ENTRY_BLOB_MIGRATION_FIELDS) {
+        const value = parsed[field];
+        if (value !== undefined && value !== null) {
+          blobs[field] = value;
+        }
+        delete core[field];
+      }
+      update.run(JSON.stringify(blobs), JSON.stringify(core), row.session_key);
+    }
+  }
+}
+
 export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
   const columns = readSqliteTableColumns(db, "session_nodes");
   if (!columns) {

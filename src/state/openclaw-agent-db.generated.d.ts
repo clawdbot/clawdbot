@@ -234,6 +234,7 @@ export interface SessionNodes {
   created_via: string | null;
   current_session_id: string;
   display_name: string | null;
+  entry_blobs_json: string | null;
   entry_json: string;
   entry_valid: Generated<number>;
   fork_source_entry_id: string | null;

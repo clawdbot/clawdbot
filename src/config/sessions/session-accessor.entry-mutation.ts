@@ -38,6 +38,7 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
+import { SESSION_ENTRY_BLOB_FIELDS } from "./session-entry-blobs.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -210,6 +211,14 @@ export function mergeConcurrentReplySessionMetadata(params: {
     Record<keyof SessionEntry, SessionEntry[keyof SessionEntry]>
   >;
   for (const key of collectSessionEntryKeys(currentEntry, preparedEntry, snapshotEntry)) {
+    // The externalized blob fields are authoritatively set by the write path
+    // (hydrated-then-modified, or intentionally cleared by a reset), not
+    // delivery/context metadata. They must never be merged back from the
+    // concurrent current row: the blob-free list snapshot makes them look
+    // "added since snapshot", which would resurrect a reset-dropped snapshot.
+    if ((SESSION_ENTRY_BLOB_FIELDS as readonly string[]).includes(key)) {
+      continue;
+    }
     const currentHasValue = Object.hasOwn(currentEntry, key);
     const snapshotHasValue = Object.hasOwn(snapshotEntry, key);
     const preparedHasValue = Object.hasOwn(preparedEntry, key);

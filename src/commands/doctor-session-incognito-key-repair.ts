@@ -241,12 +241,22 @@ function collectOccupiedSessionKeys(database: DatabaseSync): Set<string> {
   );
   for (const row of executeSqliteQuerySync(
     database,
-    db.selectFrom("session_nodes").select("entry_json"),
+    db.selectFrom("session_nodes").select(["entry_json", "entry_blobs_json"]),
   ).rows) {
     try {
       collectSessionEntryKeyFields(JSON.parse(row.entry_json), keys);
     } catch {
       // Canonical rows are valid JSON; a malformed row is reported by the existing integrity pass.
+    }
+    // systemPromptReport carries a nested sessionKey and is externalized into the
+    // entry_blobs_json side column; walk it too so incognito keys embedded there
+    // are still collected. The blobs object is shaped like a partial entry.
+    if (row.entry_blobs_json) {
+      try {
+        collectSessionEntryKeyFields(JSON.parse(row.entry_blobs_json), keys);
+      } catch {
+        // A malformed side column is surfaced by the existing integrity pass.
+      }
     }
   }
   collect(
@@ -361,21 +371,50 @@ function rewriteSessionEntryJsonReferences(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select(["session_key", "current_session_id", "entry_json", "updated_at"]),
+      .select([
+        "session_key",
+        "current_session_id",
+        "entry_json",
+        "entry_blobs_json",
+        "updated_at",
+      ]),
   ).rows;
   for (const row of rows) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(row.entry_json);
     } catch {
-      continue;
+      parsed = undefined;
     }
-    const rewritten = rewriteSessionEntryKeyFields(parsed, renames);
-    const entryJson = JSON.stringify(rewritten);
-    if (entryJson === row.entry_json) {
-      continue;
+    if (parsed !== undefined) {
+      const entryJson = JSON.stringify(rewriteSessionEntryKeyFields(parsed, renames));
+      if (entryJson !== row.entry_json) {
+        writeValidatedDoctorSessionEntryJson(database, row, entryJson);
+      }
     }
-    writeValidatedDoctorSessionEntryJson(database, row, entryJson);
+    // The externalized systemPromptReport.sessionKey lives in the entry_blobs_json
+    // side column; rewrite it too. Updating only entry_blobs_json does not trip the
+    // entry_valid trigger (which watches entry_json/identity), so no re-settle needed.
+    if (row.entry_blobs_json) {
+      let blobs: unknown;
+      try {
+        blobs = JSON.parse(row.entry_blobs_json);
+      } catch {
+        blobs = undefined;
+      }
+      if (blobs !== undefined) {
+        const entryBlobsJson = JSON.stringify(rewriteSessionEntryKeyFields(blobs, renames));
+        if (entryBlobsJson !== row.entry_blobs_json) {
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("session_nodes")
+              .set({ entry_blobs_json: entryBlobsJson })
+              .where("session_key", "=", row.session_key),
+          );
+        }
+      }
+    }
   }
 }
 

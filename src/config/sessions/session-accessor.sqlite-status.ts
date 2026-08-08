@@ -48,7 +48,8 @@ export function readSqliteSessionEntriesByStatus(
   const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
   let query = db
     .selectFrom("session_nodes")
-    .select(["session_key", "entry_json", "current_session_id", "updated_at"])
+    // hydrate blobs: this read can feed writeSessionEntry, so it carries the full entry.
+    .select(["session_key", "entry_json", "entry_blobs_json", "current_session_id", "updated_at"])
     .where("status", "in", selectedStatuses);
   if (selectedSessionKeys) {
     query = query.where("session_key", "in", selectedSessionKeys);

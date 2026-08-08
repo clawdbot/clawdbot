@@ -37,6 +37,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
+  ensureSessionEntryBlobsProjection,
   ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
@@ -576,6 +577,7 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion === targetVersion) {
+        ensureSessionEntryBlobsProjection(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
@@ -609,6 +611,10 @@ function ensureAgentSchema(
       }
       backfillSessionEntryProvenance(db, previousVersion);
       migrateSessionNodesAndWindows(db, previousVersion);
+      // Externalize the two large blobs before validity re-settles: stripping
+      // entry_json trips the entry_valid invalidation trigger, which the
+      // validity pass below then clears back to valid.
+      ensureSessionEntryBlobsProjection(db);
       ensureSessionEntryValidityProjection(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
       migrateMemoryChunkMetadataSchema(db);

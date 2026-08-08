@@ -4,6 +4,9 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 
 // v16 retires legacy top-level Media* transcript fields. It is a downgrade
 // guard only; the physical schema is unchanged and Doctor owns the data rewrite.
+// The nullable entry_blobs_json side column (systemPromptReport, skillsSnapshot
+// externalized off the hot list read) is added additively via an idempotent ensure
+// path — no version bump — so older binaries keep reading upgraded databases.
 // v15 makes board and session-sharing tables part of the canonical agent schema.
 // v14 = logical session nodes, generation windows, and node-owned artifact FKs.
 // v13 = one durable rewrite watermark per raw session transcript.

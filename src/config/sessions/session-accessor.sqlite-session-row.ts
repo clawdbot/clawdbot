@@ -8,6 +8,7 @@ import {
 } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeSqliteStatus } from "./session-accessor.sqlite-status.js";
+import { splitSessionEntryBlobs } from "./session-entry-blobs.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
@@ -89,6 +90,11 @@ export function bindSqliteSessionNode(params: {
   const canonicalEntry = projectCanonicalSessionEntryShape(
     params.entry as unknown as Record<string, unknown>,
   );
+  // Externalize the two large blobs into the entry_blobs_json side column so the
+  // hot bulk list read parses a small entry_json; per-key reads hydrate them back.
+  const { entry: coreEntry, blobsJson: entryBlobsJson } = splitSessionEntryBlobs(
+    canonicalEntry as unknown as Record<string, unknown>,
+  );
   const actor = params.entry.createdActor;
   const legacyActorId = normalizeSqliteText(
     (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
@@ -96,7 +102,8 @@ export function bindSqliteSessionNode(params: {
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(canonicalEntry),
+    entry_json: JSON.stringify(coreEntry),
+    entry_blobs_json: entryBlobsJson,
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeSqliteStatus(params.entry.status),

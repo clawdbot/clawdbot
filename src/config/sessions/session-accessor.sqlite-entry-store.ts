@@ -245,7 +245,8 @@ export function readSqliteSessionEntryStore(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select(["current_session_id", "entry_json", "session_key", "updated_at"])
+      // hydrate blobs: this store feeds read-modify-write projection/lifecycle paths.
+      .select(["current_session_id", "entry_json", "entry_blobs_json", "session_key", "updated_at"])
       .orderBy("session_key"),
   ).rows;
   const store: Record<string, SessionEntry> = {};
@@ -431,6 +432,7 @@ function clearSqliteSessionEntryPreservingWindows(
   const cleared = {
     current_session_id: params.sessionId,
     entry_json: "{}",
+    entry_blobs_json: null,
     entry_valid: -1,
     updated_at: params.updatedAt,
     status: null,
@@ -602,15 +604,13 @@ export function writeSessionEntry(
   const updatedAt = normalizedEntry.updatedAt;
   // Doctor validated the raw rejected row before entering the transaction and passes its
   // hydrated snapshot explicitly; re-reading it through the runtime parser must stay fail-closed.
-  const canonicalPreviousRow =
-    options.allowStoredAliases && options.previousEntry !== undefined
-      ? undefined
-      : readExactSessionEntryRow(database, sessionKey);
+  const useProvidedPrevious = options.allowStoredAliases && options.previousEntry !== undefined;
+  const canonicalPreviousRow = useProvidedPrevious
+    ? undefined
+    : readExactSessionEntryRow(database, sessionKey);
   const canonicalPreviousEntry =
     canonicalPreviousRow?.entry ??
-    (options.allowStoredAliases && options.previousEntry !== undefined
-      ? (options.previousEntry ?? undefined)
-      : undefined);
+    (useProvidedPrevious ? (options.previousEntry ?? undefined) : undefined);
   const previousEntry =
     options.previousEntry === undefined
       ? canonicalPreviousEntry
@@ -671,6 +671,7 @@ export function writeSessionEntry(
         conflict.column("session_key").doUpdateSet({
           current_session_id: sessionNode.current_session_id,
           entry_json: sessionNode.entry_json,
+          entry_blobs_json: sessionNode.entry_blobs_json,
           entry_valid: sessionNode.entry_valid,
           updated_at: sessionNode.updated_at,
           status: sessionNode.status,

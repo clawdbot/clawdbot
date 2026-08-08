@@ -3,6 +3,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import {
   backfillSessionConversations,
+  ensureSessionEntryBlobsProjection,
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
 
@@ -385,5 +386,84 @@ describe("agent DB conversation migration", () => {
         )
         .get(),
     ).toEqual({ count: 0 });
+  });
+});
+
+describe("session entry blobs projection migration", () => {
+  const databases: Array<{ close: () => void }> = [];
+
+  afterEach(() => {
+    for (const database of databases.splice(0)) {
+      database.close();
+    }
+  });
+
+  function makeSessionNodesDb() {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    databases.push(database);
+    // Intentionally omit entry_blobs_json to exercise the ALTER TABLE arm.
+    database.exec(
+      `CREATE TABLE session_nodes (
+         session_key TEXT PRIMARY KEY,
+         entry_json TEXT NOT NULL
+       );`,
+    );
+    return database;
+  }
+
+  it("externalizes inline blobs, leaves other rows untouched, and is idempotent", () => {
+    const database = makeSessionNodesDb();
+    const insert = database.prepare(
+      "INSERT INTO session_nodes (session_key, entry_json) VALUES (?, ?)",
+    );
+    insert.run(
+      "a",
+      JSON.stringify({
+        sessionId: "s1",
+        model: "m",
+        systemPromptReport: { source: "run", sessionKey: "agent:main:s1" },
+        skillsSnapshot: { prompt: "p", skills: [{ name: "x" }] },
+      }),
+    );
+    insert.run("b", JSON.stringify({ sessionId: "s2", model: "m2" }));
+    // Malformed JSON must be skipped (json_valid guard), not crash the migration.
+    insert.run("c", "{ broken");
+
+    ensureSessionEntryBlobsProjection(database);
+
+    const read = (key: string) =>
+      database
+        .prepare("SELECT entry_json, entry_blobs_json FROM session_nodes WHERE session_key = ?")
+        .get(key) as { entry_json: string; entry_blobs_json: string | null };
+
+    const a = read("a");
+    const aCore = JSON.parse(a.entry_json) as Record<string, unknown>;
+    expect(aCore.systemPromptReport).toBeUndefined();
+    expect(aCore.skillsSnapshot).toBeUndefined();
+    expect(aCore.model).toBe("m");
+    const aBlobs = JSON.parse(a.entry_blobs_json ?? "{}") as {
+      systemPromptReport?: { sessionKey?: string };
+      skillsSnapshot?: { prompt?: string };
+    };
+    expect(aBlobs.systemPromptReport?.sessionKey).toBe("agent:main:s1");
+    expect(aBlobs.skillsSnapshot?.prompt).toBe("p");
+
+    // Blob-less row: no side column written.
+    const b = read("b");
+    expect(b.entry_blobs_json).toBeNull();
+    expect((JSON.parse(b.entry_json) as { model?: string }).model).toBe("m2");
+
+    // Malformed row: skipped, left exactly as-is (no crash, no sentinel churn).
+    const c = read("c");
+    expect(c.entry_blobs_json).toBeNull();
+    expect(c.entry_json).toBe("{ broken");
+
+    // Idempotent: a's side column is now non-null so it no longer matches.
+    ensureSessionEntryBlobsProjection(database);
+    const a2 = read("a");
+    expect(a2.entry_json).toBe(a.entry_json);
+    expect(a2.entry_blobs_json).toBe(a.entry_blobs_json);
+    expect(read("b").entry_blobs_json).toBeNull();
   });
 });
