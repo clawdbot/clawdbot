@@ -635,15 +635,10 @@ export function resolveSessionMutationAuthorization(params: {
           // Resolve the same normalized identity so padded aliases cannot escape the snapshot fence.
           const sessionKey = normalizeOptionalString(targetRef.sessionKey);
           const agentId = normalizeOptionalString(targetRef.agentId);
-          const normalizedTarget = {
-            sessionKey: sessionKey ?? targetRef.sessionKey,
-            ...(agentId ? { agentId } : {}),
-          };
-          const expected = sessionKey
-            ? authorizedTargets.find(
-                (target) => target.sessionKey === sessionKey && target.agentId === agentId,
-              )
-            : undefined;
+          const normalizedTarget = { sessionKey: sessionKey ?? targetRef.sessionKey, agentId };
+          const expected = authorizedTargets.find(
+            (target) => target.sessionKey === sessionKey && target.agentId === agentId,
+          );
           assertTargetCurrent(normalizedTarget, expected, params.context.getRuntimeConfig());
         },
       };
