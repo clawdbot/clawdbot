@@ -139,6 +139,11 @@ export type PluginRuntime = PluginRuntimeCore & {
      * transcript. `deleteSession` also stops a run, but it removes the session
      * entry, so the next message starts a fresh session and prior history
      * becomes unreachable.
+     *
+     * This is a full Stop for the session, not a run-scoped cancel: the
+     * session's queued followup and lane work is cleared too, so nothing
+     * promotes itself once the active run ends. Queue clearing is scoped to
+     * this session's own keys.
      */
     abortSession: (params: SubagentAbortSessionParams) => Promise<void>;
   };

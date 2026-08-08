@@ -510,9 +510,17 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       // Deliberately no runId: the session is what was authorized. Forwarding a
       // caller-supplied run id under the synthetic admin client would let a
       // plugin pair its own key with another plugin's run and cancel that.
+      //
+      // clearQueued is REQUIRED, not an optimisation. A bare `sessions.abort`
+      // deliberately preserves the followup and lane queues, which is right for
+      // a run-scoped cancel but wrong for the Stop this method advertises:
+      // cancelling the active run would let queued followup work promote itself
+      // immediately, so the user presses Stop, watches the run end, and sees the
+      // session start talking again. Clearing is scoped to this session's keys
+      // (see clearSessionQueues), so it cannot reach another plugin's queues.
       await dispatchGatewayMethodInProcess(
         "sessions.abort",
-        { key: params.sessionKey },
+        { key: params.sessionKey, clearQueued: true },
         pluginOwnedAbortOptions,
       );
     },
