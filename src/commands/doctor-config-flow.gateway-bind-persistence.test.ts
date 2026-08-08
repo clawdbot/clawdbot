@@ -7,8 +7,8 @@ import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import { migrateLegacyConfig } from "./doctor/shared/legacy-config-migrate.js";
 
 describe("Doctor gateway bind persistence", () => {
   afterEach(() => {
@@ -30,12 +30,14 @@ describe("Doctor gateway bind persistence", () => {
       };
       const options: DoctorOptions = { nonInteractive: true, repair: true };
       const prompter = createDoctorPrompter({ runtime, options });
-      const configResult = await loadAndMaybeMigrateDoctorConfig({
-        options,
-        confirm: (params) => prompter.confirm(params),
-        runtime,
-        prompter,
+      const migration = migrateLegacyConfig({
+        gateway: { mode: "local", bind: legacyBind },
       });
+      if (!migration.config) {
+        throw new Error(`Expected ${legacyBind} to require migration`);
+      }
+      expect(migration.config.gateway?.bind).toBe(canonicalBind);
+      const configResult = { cfg: migration.config, shouldWriteConfig: true };
       const ctx: DoctorHealthFlowContext = {
         runtime,
         options,
@@ -43,15 +45,9 @@ describe("Doctor gateway bind persistence", () => {
         configResult,
         cfg: configResult.cfg,
         cfgForPersistence: structuredClone(configResult.cfg),
-        sourceConfigValid: configResult.sourceConfigValid ?? true,
+        sourceConfigValid: true,
         configPath,
         stateDirExistedAtStart: true,
-        ...(configResult.runWithPluginMetadataSnapshot
-          ? { runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot }
-          : {}),
-        ...(configResult.invalidatePluginMetadataSnapshot
-          ? { invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot }
-          : {}),
       };
 
       await runInitialConfigWriteHealth(ctx);
