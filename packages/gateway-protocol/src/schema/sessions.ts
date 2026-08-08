@@ -17,6 +17,7 @@ export {
   SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionRow,
+  type SessionRunStatus,
   type SessionToolOverrides,
 } from "./sessions-row.js";
 

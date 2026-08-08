@@ -836,4 +836,67 @@ describe("gateway probe endpoints", () => {
       },
     });
   });
+
+  it("sends Content-Length on HEAD probe responses matching the GET body", async () => {
+    await withGatewayServer({
+      prefix: "probe-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const get = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/healthz" }), get.res);
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/healthz", method: "HEAD" }),
+          head.res,
+        );
+
+        const expectedLength = String(Buffer.byteLength(get.getBody()));
+        expect(get.res.statusCode).toBe(200);
+        expect(head.res.statusCode).toBe(200);
+        expect(head.getBody()).toBe("");
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", expectedLength);
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD responses for unclaimed paths", async () => {
+    await withGatewayServer({
+      prefix: "catch-all-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-such-route", method: "HEAD" }),
+          head.res,
+        );
+
+        expect(head.res.statusCode).toBe(404);
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", "9");
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD responses while the plugin runtime starts", async () => {
+    await withGatewayServer({
+      prefix: "plugin-starting-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      overrides: { isStartupPluginRuntimeReady: () => false },
+      run: async (server) => {
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-such-route", method: "HEAD" }),
+          head.res,
+        );
+
+        expect(head.res.statusCode).toBe(503);
+        expect(head.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength("Plugin runtime is starting")),
+        );
+      },
+    });
+  });
 });

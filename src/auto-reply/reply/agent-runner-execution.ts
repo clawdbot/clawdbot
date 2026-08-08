@@ -25,11 +25,7 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import {
-  AgentRunAttributionCollisionError,
-  clearAgentRunContext,
-  registerAgentRunContext,
-} from "../../infra/agent-run-registry.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -46,14 +42,12 @@ import {
   markOverloadRetryUnsafeToReplay,
   type OverloadRetryState,
 } from "./agent-runner-error-handler.js";
-import { admitAutoReplyExecutionAttribution } from "./agent-runner-execution-identity.js";
 import type {
   AgentTurnExecutionResult,
   AgentTurnInternalResult,
   AgentTurnParams,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
@@ -156,11 +150,9 @@ async function executeAgentTurnInternalWithRetryState(
       params.sessionCtx.Surface ??
       params.sessionCtx.Provider,
   );
-  let lifecycleGeneration =
-    params.attribution?.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
+  let lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
-      ...(params.attribution ? { attribution: params.attribution } : {}),
       sessionKey: params.sessionKey,
       ...(params.followupRun.run.sessionId ? { sessionId: params.followupRun.run.sessionId } : {}),
       agentId: params.followupRun.run.agentId,
@@ -501,81 +493,11 @@ async function executeAgentTurnInternal(
   }
 }
 
-function resolveAgentTurnRunId(params: AgentTurnParams): string {
-  const attributedRunId = params.attribution?.runId;
-  const requestedRunId = params.opts?.runId;
-  if (attributedRunId && requestedRunId && attributedRunId !== requestedRunId) {
-    throw new TypeError("Agent turn attribution disagrees with opts.runId");
-  }
-  return attributedRunId ?? requestedRunId ?? crypto.randomUUID();
-}
-
-function tryAdmitAgentTurnExecutionAttribution(
-  params: Parameters<typeof admitAutoReplyExecutionAttribution>[0],
-):
-  | { kind: "admitted"; attribution: ReturnType<typeof admitAutoReplyExecutionAttribution> }
-  | { kind: "collision" } {
-  try {
-    return { kind: "admitted", attribution: admitAutoReplyExecutionAttribution(params) };
-  } catch (error) {
-    if (error instanceof AgentRunAttributionCollisionError) {
-      return { kind: "collision" };
-    }
-    throw error;
-  }
-}
-
 /** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
-  const runId = resolveAgentTurnRunId(params);
-  const baseExecutionParams =
-    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
-  const attributionAdmission = tryAdmitAgentTurnExecutionAttribution({
-    attribution: baseExecutionParams.attribution,
-    config: resolveQueuedReplyRuntimeConfig(baseExecutionParams.followupRun.run.config),
-    lifecycleGeneration,
-    runId,
-    context: {
-      accountId:
-        baseExecutionParams.followupRun.originatingAccountId ??
-        baseExecutionParams.sessionCtx.AccountId,
-      agentId: baseExecutionParams.followupRun.run.agentId,
-      chatId:
-        baseExecutionParams.sessionCtx.ChatId ?? baseExecutionParams.sessionCtx.NativeChannelId,
-      channel:
-        baseExecutionParams.followupRun.originatingChannel ??
-        baseExecutionParams.sessionCtx.Surface ??
-        baseExecutionParams.sessionCtx.Provider,
-      inputProvenance: baseExecutionParams.sessionCtx.InputProvenance,
-      isHeartbeat: baseExecutionParams.isHeartbeat,
-      messageId:
-        baseExecutionParams.sessionCtx.MessageSidFull ?? baseExecutionParams.sessionCtx.MessageSid,
-      senderId: baseExecutionParams.sessionCtx.SenderId,
-      senderIsBot: baseExecutionParams.sessionCtx.SenderIsBot,
-      senderLabel:
-        baseExecutionParams.sessionCtx.SenderName ?? baseExecutionParams.sessionCtx.SenderUsername,
-      sessionId: baseExecutionParams.followupRun.run.sessionId,
-      sessionKey: baseExecutionParams.sessionKey,
-      threadId:
-        baseExecutionParams.followupRun.originatingThreadId ??
-        baseExecutionParams.sessionCtx.MessageThreadId,
-    },
-  });
-  if (attributionAdmission.kind === "collision") {
-    return {
-      runId,
-      outcome: {
-        kind: "rejected",
-        payload: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true },
-      },
-    };
-  }
-  const attribution = attributionAdmission.attribution;
+  const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
-    baseExecutionParams.attribution === attribution
-      ? baseExecutionParams
-      : { ...baseExecutionParams, attribution };
+    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   // Gateway writes require exact view identity against this bare session runtime;
   // requester-scoped and combined runtimes cannot cross the App view boundary.
   const runtime = executionParams.isHeartbeat
@@ -608,6 +530,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     terminalOutcomeCommitted = true;
     executionParams.replyOperation?.freezeAbort();
   };
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   try {
     const internal = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
       try {
@@ -670,7 +593,6 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
       },
     };
   } catch (error) {
-    clearAgentRunContext(runId, lifecycleGeneration);
     if (
       isReplyOperationRestartAbort(executionParams.replyOperation) ||
       isAgentRunRestartAbortReason(error)

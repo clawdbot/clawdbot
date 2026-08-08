@@ -272,11 +272,13 @@ if (args[0] === "workflow" && args[1] === "run") {
     console.error(env.MOCK_GH_DISPATCH_ERROR);
     process.exit(1);
   }
-  console.log("Created workflow_dispatch event.");
+  console.log(env.MOCK_GH_DISPATCH_OUTPUT);
 } else if (args[0] === "api" && args.some((value) => value.includes("/commits/"))) {
   console.log(env.MOCK_GH_CURRENT_SHA);
 } else if (args[0] === "api" && args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs"))) {
   console.log(env.MOCK_GH_MATCHES);
+} else if (args[0] === "api" && args.some((value) => value.includes("/actions/workflows/"))) {
+  console.log(env.MOCK_GH_WORKFLOW_ID);
 } else if (args[0] === "api" && args.some((value) => value.includes("/jobs?"))) {
   if (env.MOCK_GH_JOBS_ERROR) {
     console.error(env.MOCK_GH_JOBS_ERROR);
@@ -290,9 +292,15 @@ if (args[0] === "workflow" && args[1] === "run") {
   }
   console.log(JSON.stringify({
     conclusion,
+    display_title: env.MOCK_GH_RUN_TITLE,
+    event: env.MOCK_GH_RUN_EVENT,
+    head_branch: env.MOCK_GH_RUN_HEAD_BRANCH,
     head_sha: env.MOCK_GH_CHILD_SHA,
     html_url: url,
+    id: Number(env.MOCK_GH_RUN_ID),
+    path: env.MOCK_GH_RUN_PATH,
     status: nextStatus(),
+    workflow_id: Number(env.MOCK_GH_RUN_WORKFLOW_ID),
   }));
 } else if (args[0] === "run" && args[1] === "view") {
   const field = args[args.indexOf("--json") + 1];
@@ -390,10 +398,21 @@ if (args[0] === "workflow" && args[1] === "run") {
       MOCK_GH_CHILD_SHA: parentSha,
       MOCK_GH_CONCLUSION: "success",
       MOCK_GH_CURRENT_SHA: parentSha,
+      MOCK_GH_DISPATCH_OUTPUT: "Created workflow_dispatch event.",
       MOCK_GH_JOBS: JSON.stringify(defaultJobs),
       MOCK_GH_MATCHES: "[101]",
+      MOCK_GH_RUN_EVENT: "workflow_dispatch",
+      MOCK_GH_RUN_HEAD_BRANCH:
+        overrides.MOCK_GH_RUN_HEAD_BRANCH ??
+        overrides.CHILD_WORKFLOW_REF ??
+        stepEnv.CHILD_WORKFLOW_REF,
+      MOCK_GH_RUN_ID: "101",
+      MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
+      MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
+      MOCK_GH_RUN_WORKFLOW_ID: "789",
       MOCK_GH_STATUSES: '["completed"]',
       MOCK_GH_STATUS_POLLS: statusPath,
+      MOCK_GH_WORKFLOW_ID: "789",
       PATH: `${workdir}:${process.env.PATH}`,
       ...overrides,
     },
@@ -1807,7 +1826,7 @@ describe("package acceptance workflow", () => {
       expect(script.match(/gh workflow run/gu)).toHaveLength(1);
       expect(script).not.toContain("gh_with_retry workflow run");
       expectTextToIncludeAll(script, [
-        "A failed dispatch POST can still create a run. Never retry it",
+        "The dispatch POST is one-shot",
         'encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF"',
         'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
         '"$current_workflow_sha" != "$PARENT_WORKFLOW_SHA"',
@@ -1816,6 +1835,8 @@ describe("package acceptance workflow", () => {
         "dispatch_status=$?",
         'if [[ "$dispatch_status" -ne 0 && ! "$dispatch_output" =~ $GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ]]',
         "dispatch failed with non-ambiguous status ${dispatch_status}; refusing adoption polling.",
+        'sed -nE "s#^https://github[.]com/${GITHUB_REPOSITORY}/actions/runs/([0-9]+)\\$#\\1#p"',
+        'validate_child_run "$run_id"',
         'DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF"',
         ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
         "Multiple runs matched ${dispatch_run_name}; refusing to guess.",
@@ -1909,6 +1930,76 @@ describe("package acceptance workflow", () => {
   });
 
   it.each(FULL_RELEASE_CHILD_DISPATCHES)(
+    "adopts and validates the run URL returned for $jobName without listing runs",
+    (child) => {
+      const { calls, result } = runFullReleaseChildDispatch(child, {
+        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      });
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+      expect(
+        calls.filter(({ args }) =>
+          args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
+        ),
+      ).toHaveLength(0);
+      expect(
+        calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/101"))),
+      ).toBe(true);
+      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+    },
+  );
+
+  it("recovers by exact name when a successful dispatch returns no run URL", () => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(
+      calls.filter(({ args }) =>
+        args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ["workflow", { MOCK_GH_RUN_WORKFLOW_ID: "790" }],
+    ["title", { MOCK_GH_RUN_TITLE: "Unrelated workflow run" }],
+    ["head branch", { MOCK_GH_RUN_HEAD_BRANCH: "other" }],
+    ["event", { MOCK_GH_RUN_EVENT: "push" }],
+  ] as const)("refuses a returned run URL with the wrong %s", (_label, overrides) => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      ...overrides,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to adopt unvalidated ci.yml run 101");
+    expect(
+      calls.some(({ args }) =>
+        args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs")),
+      ),
+    ).toBe(false);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+  });
+
+  it("refuses a nonnumeric exact-name candidate without cancellation ownership", () => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "",
+      MOCK_GH_MATCHES: '["not-a-run-id"]',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to adopt invalid ci.yml run ID not-a-run-id");
+    expect(
+      calls.some(({ args }) => args.some((value) => value.endsWith("/actions/runs/not-a-run-id"))),
+    ).toBe(false);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+  });
+
+  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
     "rejects moved workflow refs before dispatching $jobName",
     (child) => {
       const { calls, result } = runFullReleaseChildDispatch(child, {
@@ -1980,14 +2071,15 @@ describe("package acceptance workflow", () => {
   );
 
   it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "cancels exactly the adopted $jobName child when its workflow SHA differs",
+    "cancels exactly the identified $jobName child when its workflow SHA differs",
     (child) => {
       const { calls, result } = runFullReleaseChildDispatch(child, {
         MOCK_GH_CHILD_SHA: "c".repeat(40),
+        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
       });
 
       expect(result.status).toBe(1);
-      expect(result.stdout).toContain("expected parent workflow SHA");
+      expect(result.stderr).toContain("expected parent workflow SHA");
       expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toEqual([
         expect.objectContaining({ args: ["run", "cancel", "101"] }),
       ]);

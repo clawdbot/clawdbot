@@ -5106,7 +5106,7 @@ describe("chat model controls", () => {
     );
 
     expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
-      "1.1M context",
+      "1M context",
     );
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
@@ -6073,7 +6073,7 @@ describe("right-click Reply", () => {
     expect(onCopy).toHaveBeenCalledOnce();
   });
 
-  it("confirms Hide from the context menu before hiding the message locally", () => {
+  it("confirms Hide before hiding every member of an aggregate activity row", () => {
     const storedValues = new Map<string, string>();
     vi.stubGlobal("localStorage", {
       clear: () => storedValues.clear(),
@@ -6090,7 +6090,8 @@ describe("right-click Reply", () => {
       { sessionKey: "context-hide-test", onRequestUpdate },
       { groupClass: "chat-group assistant" },
     );
-    group.dataset.chatRowKey = "group:assistant:persisted";
+    group.dataset.chatRowKey = "group:tool:first";
+    group.dataset.chatRowKeys = JSON.stringify(["group:tool:first", "group:tool:second"]);
 
     dispatchContextMenu(bubble);
     document.querySelector<HTMLButtonElement>('[aria-label="Hide message"]')!.click();
@@ -6098,7 +6099,7 @@ describe("right-click Reply", () => {
     document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
 
     expect(storedValues.get("openclaw:deleted:context-hide-test")).toBe(
-      JSON.stringify(["group:assistant:persisted"]),
+      JSON.stringify(["group:tool:first", "group:tool:second"]),
     );
     expect(onRequestUpdate).toHaveBeenCalledOnce();
   });

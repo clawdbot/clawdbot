@@ -5,6 +5,7 @@ export {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
   createChannelSecretTargetRegistryEntries,
+  createSimpleChannelSecretContract,
   getChannelRecord,
   getChannelSurface,
   hasConfiguredSecretInputValue,

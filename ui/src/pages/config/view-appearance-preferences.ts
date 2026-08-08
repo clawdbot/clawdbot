@@ -24,6 +24,7 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { languageLabel, renderLanguageSelect } from "./language-select.ts";
 import { renderSessionObserverSettings } from "./session-observer-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
@@ -416,16 +417,11 @@ export function renderLobsterPetSection(props: ConfigProps) {
                     class="btn btn--sm lobsterdex__open"
                     href=${props.lobsterdexHref}
                     @click=${(event: MouseEvent) => {
-                      if (
-                        event.button === 0 &&
-                        !event.metaKey &&
-                        !event.ctrlKey &&
-                        !event.shiftKey &&
-                        !event.altKey
-                      ) {
-                        event.preventDefault();
-                        props.onOpenLobsterdex?.();
+                      if (!shouldHandleNavigationClick(event)) {
+                        return;
                       }
+                      event.preventDefault();
+                      props.onOpenLobsterdex?.();
                     }}
                     >${t("quickSettings.appearance.lobsterdexOpen")}</a
                   >`

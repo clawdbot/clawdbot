@@ -29,6 +29,7 @@ export function buildTurnStartParams(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
+    clearInheritedServiceTier?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -62,9 +63,13 @@ export function buildTurnStartParams(
     ...(modelSelection
       ? { model: modelSelection.model, personality: CODEX_NATIVE_PERSONALITY_NONE }
       : {}),
+    // Codex distinguishes an omitted native default from explicitly clearing
+    // an OpenClaw-owned priority override left on this exact warm session.
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
-      : {}),
+      : options.clearInheritedServiceTier
+        ? { serviceTier: null }
+        : {}),
     ...(modelSelection
       ? {
           effort: resolveReasoningEffort(

@@ -177,7 +177,7 @@ describe("OpenClaw profile reader", () => {
     });
   });
 
-  it("fails closed for a retired metadata profile pointer", async () => {
+  it("fails closed for an escaping metadata profile pointer", async () => {
     const root = tempDirs.make("openclaw-claw-profile-pointer-");
     const path = join(root, "openclaw.claw.json");
     await writeFile(
@@ -197,11 +197,115 @@ describe("OpenClaw profile reader", () => {
       ok: false,
       diagnostics: [
         expect.objectContaining({
-          code: "legacy_openclaw_profile_pointer",
+          code: "invalid_openclaw_profile_path",
           path: "$.metadata.openclaw.config",
         }),
       ],
     });
+  });
+
+  it("still reads the deprecated metadata profile pointer with a warning", async () => {
+    const root = tempDirs.make("openclaw-claw-profile-legacy-pointer-");
+    await mkdir(join(root, "profiles"));
+    const path = join(root, "openclaw.claw.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "triage" },
+        metadata: { "openclaw.config": "profiles/triage.openclaw.yml" },
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "profiles", "triage.openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(path);
+
+    expect(result).toMatchObject({
+      ok: true,
+      openClawProfile: { schemaVersion: 1, agent: { tools: { profile: "coding" } } },
+    });
+    if (!result.ok) {
+      throw new Error("expected the deprecated pointer to keep resolving");
+    }
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warning",
+        code: "deprecated_openclaw_profile_pointer",
+        path: "$.metadata.openclaw.config",
+      }),
+    );
+    expect(result.diagnostics.some((entry) => entry.level === "error")).toBe(false);
+  });
+
+  it("accepts a deprecated pointer that already targets the conventional profile", async () => {
+    const root = tempDirs.make("openclaw-claw-profile-legacy-conventional-");
+    await mkdir(join(root, "profiles"));
+    const path = join(root, "openclaw.claw.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "triage" },
+        metadata: { "openclaw.config": "profiles/openclaw.yml" },
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(path);
+
+    expect(result).toMatchObject({ ok: true, openClawProfile: { schemaVersion: 1 } });
+  });
+
+  it("fails closed when a deprecated pointer diverges from the conventional profile", async () => {
+    const root = tempDirs.make("openclaw-claw-profile-conflict-");
+    await mkdir(join(root, "profiles"));
+    const path = join(root, "openclaw.claw.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "triage" },
+        metadata: { "openclaw.config": "profiles/other.openclaw.yml" },
+      }),
+      "utf8",
+    );
+    await writeFile(join(root, "profiles", "openclaw.yml"), "schemaVersion: 1\n", "utf8");
+    await writeFile(join(root, "profiles", "other.openclaw.yml"), "schemaVersion: 1\n", "utf8");
+
+    const result = await readClawManifestFile(path);
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        expect.objectContaining({
+          code: "conflicting_openclaw_profile_pointer",
+          path: "$.metadata.openclaw.config",
+        }),
+      ],
+    });
+  });
+
+  it("keeps the shipped pointer-based fixtures resolvable", async () => {
+    const result = await readClawManifestFile("src/claws/fixtures/incident-response.claw.json");
+
+    expect(result).toMatchObject({
+      ok: true,
+      openClawProfile: { schemaVersion: 1, agent: { tools: { deny: ["exec", "browser"] } } },
+    });
+    if (!result.ok) {
+      throw new Error("expected the shipped fixture to remain valid");
+    }
+    expect(result.diagnostics.some((entry) => entry.level === "error")).toBe(false);
   });
 
   it("does not inspect profiles owned by other harnesses", async () => {

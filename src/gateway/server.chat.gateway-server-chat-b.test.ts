@@ -4990,8 +4990,8 @@ describe("gateway server chat", () => {
           ws,
           "chat.send",
           makeChatSendParams({
-            message: "steer this turn",
-            queueMode: "steer",
+            message: "follow up this turn",
+            queueMode: "followup",
             idempotencyKey: "idem-queue-mode-override",
           }),
         );
@@ -5001,7 +5001,7 @@ describe("gateway server chat", () => {
           expect(spy.mock.calls.length).toBeGreaterThan(0);
         }, FAST_WAIT_OPTS);
 
-        expect(capturedOpts).toMatchObject({ queueModeOverride: "steer" });
+        expect(capturedOpts).toMatchObject({ queueModeOverride: "followup" });
       },
       {
         headers: { origin: `http://127.0.0.1:${harness.port}` },

@@ -110,11 +110,6 @@ export interface ApnsRegistrations {
   updated_at_ms: number;
 }
 
-export interface AuditEventSourceAdoptions {
-  adopted_source_id: string;
-  legacy_source_id: string;
-}
-
 export interface AuditEvents {
   account_ref: string | null;
   action: string;
@@ -314,6 +309,12 @@ export interface ClawMcpServerRefs {
 export interface ClawPackageRefs {
   agent_id: string;
   claw_name: string;
+  extension_adapter_identity: string | null;
+  extension_detected_format: string | null;
+  extension_format: string | null;
+  extension_id: string | null;
+  extension_mapped_json: string | null;
+  extension_unavailable_json: string | null;
   independent_owner: number;
   installed_at_ms: number;
   origin: string;
@@ -1571,7 +1572,6 @@ export interface DB {
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
-  audit_event_source_adoptions: AuditEventSourceAdoptions;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;

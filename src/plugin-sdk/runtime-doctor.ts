@@ -1,9 +1,13 @@
 /**
  * Runtime SDK subpath for plugin doctor migrations, compat checks, and uninstall helpers.
  */
+import fs from "node:fs/promises";
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
+import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
@@ -291,5 +295,106 @@ export function defineKeyMoveMigration(params: {
     hasLegacy,
     normalize: ({ entry, pathPrefix, changes }) =>
       normalizeScopes(entry, params.scope ?? [], pathPrefix, changes),
+  };
+}
+
+/** Defines a single-file legacy JSON import into one keyed plugin-state namespace. */
+export function defineLegacyJsonStateMigration<TSource>(params: {
+  id: string;
+  label: string;
+  resolvePath: (stateDir: string) => string;
+  parse: (value: unknown) => TSource | null;
+  namespace: string;
+  maxEntries: number;
+  overflowPolicy?: OpenKeyedStoreOptions["overflowPolicy"];
+  archiveLabel?: string;
+  capacityPrecheck?: {
+    warning: (stats: { available: number; missing: number }) => string;
+  };
+  describeEntries: (
+    source: TSource,
+    context: { filePath: string; namespace: string },
+  ) => {
+    preview: string[];
+    change: (stats: { imported: number; alreadyPresent: number }) => string | null;
+  };
+  toRows: (source: TSource) => readonly { key: string; value: unknown }[];
+}): PluginDoctorStateMigration {
+  const readSource = async (filePath: string): Promise<TSource | null> => {
+    try {
+      return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+    } catch {
+      return null;
+    }
+  };
+  const describe = (source: TSource, filePath: string) =>
+    params.describeEntries(source, { filePath, namespace: params.namespace });
+
+  return {
+    id: params.id,
+    label: params.label,
+    async detectLegacyState({ stateDir }) {
+      const filePath = params.resolvePath(stateDir);
+      const source = await readSource(filePath);
+      if (!source) {
+        return null;
+      }
+      const rows = params.toRows(source);
+      if (rows.length === 0) {
+        return null;
+      }
+      const description = describe(source, filePath);
+      return { preview: description.preview };
+    },
+    async migrateLegacyState({ stateDir, context }) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const filePath = params.resolvePath(stateDir);
+      const source = await readSource(filePath);
+      if (!source) {
+        return { changes, warnings };
+      }
+      const rows = params.toRows(source);
+      if (rows.length === 0) {
+        return { changes, warnings };
+      }
+      const description = describe(source, filePath);
+      const store = context.openPluginStateKeyedStore<unknown>({
+        namespace: params.namespace,
+        maxEntries: params.maxEntries,
+        ...(params.overflowPolicy ? { overflowPolicy: params.overflowPolicy } : {}),
+      });
+      if (params.capacityPrecheck) {
+        const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
+        const missingKeys = new Set(
+          rows.map((row) => row.key).filter((key) => !existingKeys.has(key)),
+        );
+        const available = params.maxEntries - existingKeys.size;
+        if (missingKeys.size > available) {
+          warnings.push(params.capacityPrecheck.warning({ available, missing: missingKeys.size }));
+          return { changes, warnings };
+        }
+      }
+      let imported = 0;
+      for (const row of rows) {
+        if (await store.registerIfAbsent(row.key, row.value)) {
+          imported++;
+        }
+      }
+      const change = description.change({
+        imported,
+        alreadyPresent: rows.length - imported,
+      });
+      if (change) {
+        changes.push(change);
+      }
+      await archiveLegacyStateSource({
+        filePath,
+        label: params.archiveLabel ?? params.label,
+        changes,
+        warnings,
+      });
+      return { changes, warnings };
+    },
   };
 }

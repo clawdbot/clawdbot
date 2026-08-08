@@ -633,16 +633,15 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const pending = deferred<unknown>();
     const request = vi.fn(() => pending.promise);
     const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
+    const context = contextWithClient(client, { connected: true });
     const page = createPage("openclaw-debug-page", context) as TestPage & {
-      connected: boolean;
       debugStatus: unknown;
       diagnosticsTask: { run: () => Promise<void>; status: TaskStatus };
     };
+    page.debugStatus = { seeded: true };
     document.body.append(page);
     await page.updateComplete;
-    (context.gateway.snapshot as ApplicationGatewaySnapshot).phase = "connected";
-    page.connected = true;
+    page.debugStatus = null;
 
     const load = page.diagnosticsTask.run();
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));

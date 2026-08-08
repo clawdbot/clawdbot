@@ -145,17 +145,27 @@ describe("runCodexAppServerAttempt steering", () => {
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
+    params.taskSuggestionDeliveryMode = "gateway";
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
     await waitForMethod("turn/start");
 
+    await vi.waitFor(() => {
+      expect(
+        activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+          (call) => call[0] === params.sessionId,
+        )?.[1],
+      ).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
+    }, fastWait);
+
     // This public queue returns immediate eligibility; the handle's delivery
     // promise stays pending until the matching item/completed notification below.
     await waitAndQueueActiveRunMessage(params.sessionId, "steer this active turn", {
       debounceMs: 0,
       isInboundUserMessage: true,
+      taskSuggestionDeliveryMode: "gateway",
       waitForTranscriptCommit: true,
     });
     await vi.waitFor(

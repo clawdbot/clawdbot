@@ -1,7 +1,7 @@
 import { ContextProvider } from "@lit/context";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
-import { hasStoredGatewayAuth, type GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
@@ -76,10 +76,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private onboarding = resolveOnboardingMode(globalThis.location?.search ?? "");
 
   private readonly terminalOnly = isTerminalOnlyView();
-  // Fixed at page load: whether this browser held credentials (token,
-  // password, or stored device token) before the first connect attempt.
-  // Later manual gate submissions are covered by loginGatePinned instead.
-  private initialAuthPresent = false;
   private runtime: ApplicationRuntime | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
@@ -118,7 +114,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
       preloadOptionalElement(this, APPROVAL_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
-    this.initialAuthPresent = hasStoredGatewayAuth(context.gateway.connection);
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
     // Context identity changes only across a full app-tree connection epoch;
     // descendants reconnect and rebuild their controller-owned state afterward.
@@ -228,19 +223,15 @@ export class OpenClawApp extends OpenClawLightDomElement {
           : nothing}
       `;
     }
-    // Transport drops after an established session keep the shell mounted
-    // (offline presentation + client auto-retry); the login gate is reserved for
-    // credential-less first connects, credential rejections, and manual gate
-    // submissions. A first connect backed by stored credentials paints the
-    // connecting splash instead of flashing the login gate; the gate returns
-    // the moment the attempt fails (lastError set on every close).
+    // In the normal Control UI document, the Gateway lifecycle owns unresolved
+    // first-connect state across every auth mode. Failures publish lastError
+    // before the gate returns; reconnects keep the shell mounted, and
+    // loginGatePinned protects manual submissions.
     const initialConnectPending =
-      this.initialAuthPresent &&
-      !gatewayConnected &&
-      gatewaySnapshot.phase !== "reconnecting" &&
+      runtime.documentMode === null &&
+      gatewaySnapshot.phase === "connecting" &&
       !this.loginGatePinned &&
-      gatewaySnapshot.lastError === null &&
-      gatewaySnapshot.client !== null;
+      gatewaySnapshot.lastError === null;
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>

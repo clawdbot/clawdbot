@@ -115,7 +115,8 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
+        reason:
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
       },
     ]);
   });
@@ -306,7 +307,8 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
+        reason:
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
       },
     ]);
   });
@@ -327,7 +329,8 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
+        reason:
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
       },
     ]);
   });
@@ -353,7 +356,8 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
+        reason:
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
       },
     ]);
   });

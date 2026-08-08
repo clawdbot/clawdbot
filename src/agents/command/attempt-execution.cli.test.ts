@@ -406,9 +406,6 @@ vi.mock("../model-runtime-aliases.js", async () => {
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
-vi.mock("../embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: runEmbeddedAgentMock,
-}));
 
 vi.mock("../session-write-lock.js", async () => {
   const actual = await vi.importActual<typeof import("../session-write-lock.js")>(

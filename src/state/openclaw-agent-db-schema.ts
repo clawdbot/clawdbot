@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   ensureMemoryChunkProvenance,
   ensureMemoryRecallMetadataSchema,
@@ -356,9 +357,7 @@ function migratedChatType(value: unknown): "direct" | "group" | "channel" | null
   return null;
 }
 
-function migratedStatus(
-  value: unknown,
-): "running" | "done" | "failed" | "killed" | "timeout" | null {
+function migratedStatus(value: unknown): SessionRunStatus | null {
   if (
     value === "running" ||
     value === "done" ||
