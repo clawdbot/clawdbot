@@ -399,7 +399,7 @@ export abstract class AgentSessionBase {
         if (event.message.role === "assistant") {
           this.lastAssistantEntryId = entryId;
         }
-        if (event.message.role === "user") {
+        if (event.message.role === "user" && this.steering.isTracked(event.message)) {
           const persistedEntry = this.sessionManager.getEntry(entryId);
           if (persistedEntry?.type !== "message" || persistedEntry.message.role !== "user") {
             throw new Error(`persisted steering message ${entryId} could not be identified`);

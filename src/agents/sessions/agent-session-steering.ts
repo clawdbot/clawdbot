@@ -66,6 +66,10 @@ export class AgentSessionSteering {
     return true;
   }
 
+  isTracked(message: AgentMessage): boolean {
+    return this.byMessage.has(message);
+  }
+
   resolve(message: AgentMessage, committedPrompt: string): void {
     this.settle(message, { committedPrompt });
   }

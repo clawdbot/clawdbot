@@ -106,13 +106,11 @@ describe("AgentSessionSteering", () => {
         throw new Error("expected an admitted steering message");
       }
 
-      const handleAgentEvent = (
-        session as unknown as {
-          handleAgentEvent(event: unknown): Promise<void>;
-        }
-      ).handleAgentEvent;
-      await handleAgentEvent({ type: "message_start", message });
-      await handleAgentEvent({ type: "message_end", message });
+      const sessionWithEvents = session as unknown as {
+        handleAgentEvent(event: unknown): Promise<void>;
+      };
+      await sessionWithEvents.handleAgentEvent({ type: "message_start", message });
+      await sessionWithEvents.handleAgentEvent({ type: "message_end", message });
 
       await expect(receipt.committed).resolves.toBe("expanded and sanitized prompt");
       expect(sessionManager.getLeafEntry()).toMatchObject({
@@ -140,18 +138,38 @@ describe("AgentSessionSteering", () => {
         throw new Error("expected an admitted steering message");
       }
 
-      const handleAgentEvent = (
-        session as unknown as {
-          handleAgentEvent(event: unknown): Promise<void>;
-        }
-      ).handleAgentEvent;
-      await handleAgentEvent({ type: "message_start", message });
-      await expect(handleAgentEvent({ type: "message_end", message })).rejects.toThrow(
+      const sessionWithEvents = session as unknown as {
+        handleAgentEvent(event: unknown): Promise<void>;
+      };
+      await sessionWithEvents.handleAgentEvent({ type: "message_start", message });
+      await expect(
+        sessionWithEvents.handleAgentEvent({ type: "message_end", message }),
+      ).rejects.toThrow(
         "persisted steering message missing-persisted-entry could not be identified",
       );
       await expect(receipt.committed).rejects.toThrow(
         "persisted steering message missing-persisted-entry could not be identified",
       );
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("bypasses steering settlement for an untracked persistence-suppressed user message", async () => {
+    const { session, sessionManager } = await createTestSession();
+    vi.spyOn(sessionManager, "appendMessage").mockReturnValue(undefined as never);
+    const ordinaryMessage = userMessage("ordinary message", "agent:sender:main");
+    const sessionWithEvents = session as unknown as {
+      steering: AgentSessionSteering;
+      handleAgentEvent(event: unknown): Promise<void>;
+    };
+    const resolve = vi.spyOn(sessionWithEvents.steering, "resolve");
+    try {
+      await sessionWithEvents.handleAgentEvent({ type: "message_start", message: ordinaryMessage });
+      await expect(
+        sessionWithEvents.handleAgentEvent({ type: "message_end", message: ordinaryMessage }),
+      ).resolves.toBeUndefined();
+      expect(resolve).not.toHaveBeenCalled();
     } finally {
       session.dispose();
     }

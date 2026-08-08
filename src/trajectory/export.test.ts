@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
@@ -1392,7 +1393,11 @@ describe("exportTrajectoryBundle", () => {
 
     const transcript = await loadTranscriptEvents(transcriptScope);
     const transcriptUser = transcript.find(
-      (entry) => entry.type === "message" && entry.message.role === "user",
+      (entry) =>
+        isRecord(entry) &&
+        entry.type === "message" &&
+        isRecord(entry.message) &&
+        entry.message.role === "user",
     );
     const sqlitePrompt = (await loadSqliteTrajectoryRuntimeEvents(transcriptScope)).find(
       (event) => event.type === "prompt.submitted",

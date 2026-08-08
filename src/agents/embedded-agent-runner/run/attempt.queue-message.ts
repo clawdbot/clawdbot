@@ -78,7 +78,7 @@ function waitForStage<T>(
     signal?.addEventListener("abort", onAbort, { once: true });
     void stage.then(
       (value) => finish({ value }),
-      (error) => finish({ error }),
+      (error: unknown) => finish({ error }),
     );
   });
 }
