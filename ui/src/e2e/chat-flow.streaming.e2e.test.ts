@@ -52,17 +52,33 @@ suite.define(() => {
         requireRecord(sendRequest.params).idempotencyKey,
         "chat send idempotency key",
       );
-      await gateway.emitChatFinal({
+      const mediaText =
+        "Here is the narrated update.\n" +
+        "MEDIA:https://example.com/voice.ogg\n" +
+        "MEDIA:https://example.com/clip.mp4";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: mediaText,
+        message: {
+          content: [{ text: mediaText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
         runId,
-        text:
-          "Here is the narrated update.\n" +
-          "MEDIA:https://example.com/voice.ogg\n" +
-          "MEDIA:https://example.com/clip.mp4",
+        sessionKey: "main",
+        state: "delta",
       });
 
       const thread = page.locator(".chat-thread");
-      const growMedia = async (selector: "audio" | "video", height: number) => {
-        const media = thread.locator(selector);
+      const activeStream = thread.locator(".chat-bubble.streaming");
+      await activeStream.waitFor({ state: "visible", timeout: 10_000 });
+      const stopGenerating = page.getByRole("button", { name: "Stop generating" });
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+      const growMedia = async (
+        selector: "audio" | "video",
+        height: number,
+        presentation: "active" | "committed" = "active",
+      ) => {
+        const media = (presentation === "active" ? activeStream : thread).locator(selector);
         await media.waitFor({ state: "attached", timeout: 10_000 });
         await waitForChatScrollIdle(page);
         const scrollHeightBefore = await thread.evaluate((element) => element.scrollHeight);
@@ -94,12 +110,14 @@ suite.define(() => {
       };
 
       await growMedia("audio", 320);
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
       expect(await page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
 
       await growMedia("video", 480);
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
@@ -124,6 +142,7 @@ suite.define(() => {
       const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
 
       await growMedia("audio", 720);
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
@@ -148,6 +167,16 @@ suite.define(() => {
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
       await scrollToLatest.waitFor({ state: "detached", timeout: 10_000 });
+      await stopGenerating.waitFor({ state: "visible", timeout: 10_000 });
+
+      await gateway.emitChatFinal({ runId, text: mediaText });
+      await activeStream.waitFor({ state: "detached", timeout: 10_000 });
+      await stopGenerating.waitFor({ state: "detached", timeout: 10_000 });
+      await growMedia("video", 800, "committed");
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      expect(await scrollToLatest.count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

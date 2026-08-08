@@ -3057,6 +3057,41 @@ describe("grouped chat rendering", () => {
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
   });
 
+  it("notifies when streamed audio and video attachment metadata loads", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
+    const onAssistantAttachmentLoaded = vi.fn();
+
+    render(
+      renderStreamGroup(
+        [
+          {
+            kind: "stream",
+            key: "stream:media:live",
+            text:
+              "Streaming audio and video\n" +
+              "MEDIA:https://example.com/voice.ogg\n" +
+              "MEDIA:https://example.com/clip.mp4",
+            startedAt: 1,
+            isStreaming: true,
+          },
+        ],
+        { onAssistantAttachmentLoaded },
+      ),
+      container,
+    );
+
+    const audioPlayer = await requireAudioPlayer(container);
+    expectElement(audioPlayer, "audio", HTMLAudioElement).dispatchEvent(
+      new Event("loadedmetadata", { bubbles: true }),
+    );
+    expectElement(container, "video", HTMLVideoElement).dispatchEvent(
+      new Event("loadedmetadata", { bubbles: true }),
+    );
+
+    expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
+  });
+
   it("checks local assistant audio against server metadata while preview roots load", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
