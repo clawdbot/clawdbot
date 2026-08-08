@@ -134,7 +134,7 @@ function writeSimpleSessionFile(
 
 async function exportRuntimeArtifacts(
   runtimeEvents: readonly TrajectoryEvent[],
-): Promise<Record<string, unknown>> {
+): Promise<Record<string, unknown> | undefined> {
   const tmpDir = makeTempDir();
   const sessionFile = path.join(tmpDir, "session.jsonl");
   const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
@@ -152,10 +152,10 @@ async function exportRuntimeArtifacts(
     workspaceDir: tmpDir,
     runtimeFile,
   });
-  return JSON.parse(fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8")) as Record<
-    string,
-    unknown
-  >;
+  const artifactsFile = path.join(outputDir, "artifacts.json");
+  return fs.existsSync(artifactsFile)
+    ? (JSON.parse(fs.readFileSync(artifactsFile, "utf8")) as Record<string, unknown>)
+    : undefined;
 }
 
 function writeToolCallOnlySessionFile(sessionFile: string): void {
@@ -647,15 +647,16 @@ describe("exportTrajectoryBundle", () => {
       ]),
     },
     {
-      name: "distinct run ids with a delayed older artifact",
+      name: "distinct run ids with a delayed older terminal after newer completion",
       runtimeEvents: runtimeAttemptEvents([
         ["session.started", "old-run"],
         ["model.completed", "old-run", staleCompletion],
+        ["trace.artifacts", "old-run", staleArtifacts],
         ["session.ended", "old-run", { status: "error" }],
         ["session.started", "new-run"],
         ["model.completed", "new-run", currentCompletion],
-        ["trace.artifacts", "old-run", staleArtifacts],
         ["session.ended", "new-run", { status: "success" }],
+        ["session.ended", "old-run", { status: "error" }],
       ]),
     },
   ])("scopes artifacts to $name", async ({ runtimeEvents }) => {
@@ -678,6 +679,20 @@ describe("exportTrajectoryBundle", () => {
     expect(artifacts).toMatchObject({ finalStatus: "interrupted" });
     expect(artifacts).not.toHaveProperty("stopReason");
     expect(artifacts).not.toHaveProperty("usage");
+  });
+
+  it("omits artifacts when the newest attempt has only started", async () => {
+    const artifacts = await exportRuntimeArtifacts(
+      runtimeAttemptEvents([
+        ["session.started", "old-run"],
+        ["model.completed", "old-run", staleCompletion],
+        ["trace.artifacts", "old-run", staleArtifacts],
+        ["session.ended", "old-run", { status: "error" }],
+        ["session.started", "new-run"],
+      ]),
+    );
+
+    expect(artifacts).toBeUndefined();
   });
 
   it("preserves numeric transcript timestamps", async () => {

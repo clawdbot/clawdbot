@@ -1,6 +1,9 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
-import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import {
+  classifyAgentRunTerminalOutcome,
+  projectAgentRunAttemptTerminal,
+} from "../../agent-run-terminal-outcome.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -24,20 +27,27 @@ export function finalizeEmbeddedAttempt(
 ): EmbeddedRunAttemptResult {
   const { result, trajectoryRecorder } = params;
   const terminalState = projectAgentRunAttemptTerminal(result.terminal);
+  // Yield ends before message_end, so lastAssistant owns completion; the
+  // completed attempt snapshot may belong to an earlier model cycle.
   const completionAssistant =
-    result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant;
-  const completionStopReason = resolveEmbeddedRunAttemptTerminalOutcome({
+    result.yieldDetected === true
+      ? result.lastAssistant
+      : (result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant);
+  const completionOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
     attempt: result,
     assistant: completionAssistant,
-  }).stopReason;
+  });
+  const completionClassification = classifyAgentRunTerminalOutcome(completionOutcome);
+  const completionStopReason = completionOutcome.stopReason;
   const terminalAssistantTexts = resolveTerminalAssistantTexts({
     assistantTexts: result.assistantTexts,
     lastAssistantStopReason: completionStopReason,
     lastAssistantVisibleText: resolveFinalAssistantVisibleText(completionAssistant),
   });
   const terminal = resolveAttemptTrajectoryTerminal({
-    failed: terminalState.failed,
-    interrupted: terminalState.interrupted,
+    failed: completionClassification === "failure",
+    interrupted:
+      completionClassification === "timeout" || completionClassification === "cancellation",
     assistantTexts: terminalAssistantTexts,
     toolMetas: result.toolMetas,
     didSendViaMessagingTool: result.didSendViaMessagingTool,

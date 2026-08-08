@@ -3,7 +3,17 @@ import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 describe("finalizeEmbeddedAttempt trajectory capture", () => {
-  it.each([
+  const cases: Array<{
+    name: string;
+    terminal: EmbeddedRunAttemptResult["terminal"];
+    assistantTexts?: string[];
+    lastStopReason?: string;
+    currentStopReason: string;
+    completedStopReason?: string;
+    yieldDetected?: boolean;
+    expectedStopReason?: string;
+    expectedFinalStatus: "success" | "error" | "interrupted";
+  }> = [
     {
       name: "prefers the completed assistant for normal completion",
       terminal: { kind: "ok" },
@@ -34,8 +44,9 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       expectedFinalStatus: "interrupted",
     },
     {
-      name: "publishes the current provider assistant error",
+      name: "classifies a provider error with partial text as an error",
       terminal: { kind: "ok" },
+      assistantTexts: ["partial provider output"],
       currentStopReason: "error",
       expectedStopReason: "error",
       expectedFinalStatus: "error",
@@ -47,12 +58,27 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       expectedStopReason: undefined,
       expectedFinalStatus: "error",
     },
-  ])(
+    {
+      name: "uses the yielded assistant instead of an earlier completed cycle",
+      terminal: { kind: "ok" },
+      lastStopReason: "aborted",
+      currentStopReason: "length",
+      completedStopReason: "stop",
+      yieldDetected: true,
+      expectedStopReason: "aborted",
+      expectedFinalStatus: "interrupted",
+    },
+  ];
+
+  it.each(cases)(
     "$name",
     ({
       terminal,
+      assistantTexts,
+      lastStopReason,
       currentStopReason,
       completedStopReason,
+      yieldDetected,
       expectedStopReason,
       expectedFinalStatus,
     }) => {
@@ -64,7 +90,7 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       });
       const result = {
         terminal,
-        assistantTexts: [],
+        assistantTexts: assistantTexts ?? [],
         toolMetas: [],
         didSendViaMessagingTool: false,
         didSendDeterministicApprovalPrompt: false,
@@ -73,7 +99,7 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
         messagingToolSentTargets: [],
         acceptedSessionSpawns: [],
         clientToolCalls: [],
-        lastAssistant: assistant("toolUse"),
+        lastAssistant: assistant(lastStopReason ?? "toolUse"),
         currentAttemptAssistant: assistant(currentStopReason, "current attempt fallback"),
         ...(completedStopReason
           ? {
@@ -83,6 +109,7 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
               ),
             }
           : {}),
+        yieldDetected,
         messagesSnapshot: [
           {
             role: "user",

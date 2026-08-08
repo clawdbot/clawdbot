@@ -313,13 +313,17 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       const lastAssistant = event.messages
         .toReversed()
         .find((message): message is AssistantMessage => message.role === "assistant");
+      const terminal = {
+        startedAt,
+        endedAt: Date.now(),
+        ...(lastAssistant ? { stopReason: lastAssistant.stopReason } : {}),
+      };
       if (lastAssistant?.stopReason === "error") {
         terminalLiveEvent = {
           kind: "lifecycle",
           payload: {
             phase: "error",
-            startedAt,
-            endedAt: Date.now(),
+            ...terminal,
             error: lastAssistant.errorMessage ?? "Worker inference failed.",
             fallbackExhaustedFailure: true,
           },
@@ -329,16 +333,14 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           kind: "lifecycle",
           payload: {
             phase: "end",
-            startedAt,
-            endedAt: Date.now(),
-            stopReason: "aborted",
+            ...terminal,
             aborted: true,
           },
         };
       } else {
         terminalLiveEvent = {
           kind: "lifecycle",
-          payload: { phase: "end", startedAt, endedAt: Date.now() },
+          payload: { phase: "end", ...terminal },
         };
       }
     }

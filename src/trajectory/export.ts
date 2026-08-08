@@ -1079,22 +1079,16 @@ function buildArtifactsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
 }): JsonRecord | undefined {
-  const terminalTypes = new Set(["trace.artifacts", "model.completed", "session.ended"]);
-  const anchorIndex = params.runtimeEvents.findLastIndex((event) => terminalTypes.has(event.type));
-  if (anchorIndex < 0) {
-    return undefined;
-  }
-  const anchor = params.runtimeEvents[anchorIndex]!;
-  const cohortStart = params.runtimeEvents
-    .slice(0, anchorIndex)
-    .findLastIndex(
-      (event) =>
-        event.type === "session.started" &&
-        (anchor.runId === undefined || event.runId === anchor.runId),
-    );
+  const cohortStart = params.runtimeEvents.findLastIndex(
+    (event) => event.type === "session.started",
+  );
+  const cohortStartEvent = params.runtimeEvents[cohortStart];
+  // The newest start owns the attempt cohort; delayed older terminals cannot move it backward.
   const cohort = params.runtimeEvents
-    .slice(cohortStart < 0 ? 0 : cohortStart, anchorIndex + 1)
-    .filter((event) => anchor.runId === undefined || event.runId === anchor.runId);
+    .slice(Math.max(0, cohortStart))
+    .filter(
+      (event) => cohortStartEvent?.runId === undefined || event.runId === cohortStartEvent.runId,
+    );
   const runtimeArtifacts = resolveLatestRuntimeEventData(cohort, "trace.artifacts");
   const runtimeCompletion = resolveLatestRuntimeEventData(cohort, "model.completed");
   const runtimeEnd = resolveLatestRuntimeEventData(cohort, "session.ended");
