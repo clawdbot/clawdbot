@@ -767,9 +767,8 @@ describe("session history HTTP endpoints", () => {
           "Current Ada",
           "second attributed history turn",
         );
-        const inlineEvent = await inlineEventPromise;
-        expect(inlineEvent.event).toBe("message");
-        const inlineMessage = requireRecord(inlineEvent.data, "inline history SSE payload").message;
+        const refreshEvent = await inlineEventPromise;
+        expect(refreshEvent.event).toBe("history");
         const newSecondExpected = {
           role: "user",
           content: "second attributed history turn",
@@ -782,17 +781,27 @@ describe("session history HTTP endpoints", () => {
             senderProfileAvatarUrl: newAvatarUrl,
           },
         };
-        expect(attributedHistoryMessageProjection(inlineMessage)).toEqual(newSecondExpected);
-
-        const refreshedRest = await readSessionHistoryBody(harness.port, sessionKey);
-        expect(refreshedRest.messages).toHaveLength(2);
-        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[0])).toEqual({
+        const newFirstExpected = {
           ...oldExpected,
           __openclaw: {
             ...oldExpected["__openclaw"],
             senderProfileAvatarUrl: newAvatarUrl,
           },
-        });
+        };
+        const refreshedSse = refreshEvent.data as SessionHistoryBody;
+        expect(refreshedSse.messages).toHaveLength(2);
+        expect(attributedHistoryMessageProjection(refreshedSse.messages?.[0])).toEqual(
+          newFirstExpected,
+        );
+        expect(attributedHistoryMessageProjection(refreshedSse.messages?.[1])).toEqual(
+          newSecondExpected,
+        );
+
+        const refreshedRest = await readSessionHistoryBody(harness.port, sessionKey);
+        expect(refreshedRest.messages).toHaveLength(2);
+        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[0])).toEqual(
+          newFirstExpected,
+        );
         expect(attributedHistoryMessageProjection(refreshedRest.messages?.[1])).toEqual(
           newSecondExpected,
         );

@@ -24,6 +24,7 @@ import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
+  getUserProfileDisplay,
 } from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
@@ -63,6 +64,10 @@ type AuthenticatedNodePairingAdmission = {
   authenticated: { nodeId: string; publicKey: string; token: string };
   identity: NodePairingIdentity;
   generation?: NodePairingGeneration;
+};
+
+type AuthenticatedUserProfileDisplay = NonNullable<GatewayWsClient["authenticatedUserProfile"]> & {
+  avatarRevision: string;
 };
 
 function isReleasedVersion(version: string): boolean {
@@ -195,17 +200,19 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
-  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
+  let authenticatedUserProfile: AuthenticatedUserProfileDisplay | undefined;
   if (authenticatedUserId) {
     try {
       const profile = authResult.tailscaleIdentity
         ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
         : ensureProfileForEmail(authenticatedUserId);
+      const display = getUserProfileDisplay(profile.id);
       // User edits become visible after reconnect; detached provider-avatar adoption refreshes below.
       authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        hasAvatar: profile.avatarMime !== null,
+        profileId: display.id,
+        displayName: display.displayName,
+        avatarRevision: display.avatarRevision,
+        hasAvatar: display.hasAvatar,
         updatedAt: profile.updatedAt,
       };
     } catch (error) {
@@ -476,7 +483,7 @@ export async function attachAuthenticatedGatewayConnect(
       // viewers refetch instead of reusing a stale route response.
       avatarUrl: formatUserProfileAvatarPath(
         authenticatedUserProfile.profileId,
-        authenticatedUserProfile.updatedAt,
+        authenticatedUserProfile.avatarRevision,
       ),
     };
   };
@@ -584,10 +591,12 @@ export async function attachAuthenticatedGatewayConnect(
         if (!updated.avatarMime) {
           return;
         }
+        const display = getUserProfileDisplay(updated.id);
         authenticatedUserProfile = {
-          profileId: updated.id,
-          displayName: updated.displayName,
-          hasAvatar: true,
+          profileId: display.id,
+          displayName: display.displayName,
+          avatarRevision: display.avatarRevision,
+          hasAvatar: display.hasAvatar,
           updatedAt: updated.updatedAt,
         };
         nextClient.authenticatedUserProfile = authenticatedUserProfile;
