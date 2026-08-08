@@ -1,4 +1,5 @@
 /** Gateway health auth diagnostic helpers for reachable-but-unauthenticated probes. */
+import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 
 type GatewayProbeReachabilityEvidence = NonNullable<DaemonStatus["rpc"]>;
@@ -26,10 +27,11 @@ export function gatewayProbeResultSawGateway(status: GatewayProbeReachabilityEvi
   if (server?.version || server?.connId) {
     return true;
   }
-  // Older probes may only expose close/error text for auth failures; treat known gateway
-  // close reasons as reachability evidence so health can explain missing credentials.
-  return /\bgateway closed \(\d+\):|\bpairing required\b|\bdevice identity required\b/i.test(
-    status.error ?? "",
+  return (
+    classifyGatewayConnectFailure({
+      details: status.connectErrorDetails,
+      message: status.error,
+    }).kind !== "unreachable"
   );
 }
 

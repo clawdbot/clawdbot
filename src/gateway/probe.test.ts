@@ -646,6 +646,7 @@ describe("probeGateway", () => {
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
     gatewayClientState.socketOpened = true;
+    gatewayClientState.close = { code: 1008, reason: "connect failed" };
 
     const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
@@ -654,8 +655,9 @@ describe("probeGateway", () => {
     expectProbeResultFields(result, {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
-      close: { code: 1008, reason: "pairing required" },
+      close: { code: 1008, reason: "connect failed" },
     });
+    expectProbeAuthFields(result, { capability: "pairing_pending" });
     expect(result.connectLatencyMs).not.toBeNull();
   });
 

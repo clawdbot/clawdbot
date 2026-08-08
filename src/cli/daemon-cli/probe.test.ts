@@ -85,6 +85,27 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("preserves structured connect failure details for status consumers", async () => {
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "connect failed",
+      close: { code: 1008, reason: "connect failed" },
+      connectErrorDetails: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
+      auth: pairingPendingAuth,
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      connectErrorDetails: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
+    });
+  });
+
   it("preserves gateway server version from the connect probe", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();

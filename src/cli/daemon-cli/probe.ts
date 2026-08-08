@@ -136,6 +136,9 @@ export async function probeGatewayStatus(opts: {
       auth,
       ...serverSummary,
       ...(version != null ? { version } : {}),
+      ...(probeDetails?.connectErrorDetails != null
+        ? { connectErrorDetails: probeDetails.connectErrorDetails }
+        : {}),
       // Probe failure text can echo the credential-bearing target URL (close
       // reasons, transport errors); status renderers print it verbatim.
       error: redactSensitiveUrlLikeString(resolveProbeFailureMessage(result)),

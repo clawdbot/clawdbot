@@ -4,6 +4,7 @@ import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
+  classifyGatewayConnectFailure,
   describePairingConnectRequirement,
   formatConnectErrorMessage,
   formatConnectPairingRequiredMessage,
@@ -64,6 +65,89 @@ describe("readConnectErrorRecoveryAdvice", () => {
         recommendedNextStep: "retry_with_magic",
       }),
     ).toEqual({ canRetryWithDeviceToken: true, recommendedNextStep: undefined });
+  });
+});
+
+describe("classifyGatewayConnectFailure", () => {
+  it.each([
+    {
+      name: "structured pairing upgrade",
+      input: {
+        details: { code: "PAIRING_REQUIRED", reason: "scope-upgrade", requestId: "req-123" },
+        message: "connect failed",
+      },
+      kind: "pairing-required",
+      message: "scope upgrade pending approval (requestId: req-123)",
+      remediation: "openclaw devices approve --latest",
+    },
+    {
+      name: "structured device identity requirement",
+      input: { details: { code: "DEVICE_IDENTITY_REQUIRED" }, message: "connect failed" },
+      kind: "device-identity-required",
+      message: "connect failed",
+      remediation: undefined,
+    },
+    {
+      name: "structured scope mismatch",
+      input: { details: { code: "AUTH_SCOPE_MISMATCH" }, message: "scope rejected" },
+      kind: "scope-mismatch",
+      message: "scope rejected",
+      remediation: "openclaw devices list",
+    },
+    {
+      name: "shared token mismatch",
+      input: { details: { code: "AUTH_TOKEN_MISMATCH" }, message: "gateway token mismatch" },
+      kind: "auth-rejected",
+      message: "gateway token mismatch",
+      remediation: "gateway.remote.token",
+    },
+    {
+      name: "device token mismatch",
+      input: {
+        details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+        message: "device token mismatch",
+      },
+      kind: "auth-rejected",
+      message: "device token mismatch",
+      remediation: "openclaw devices rotate --device <deviceId> --role operator",
+    },
+    {
+      name: "other structured auth rejection",
+      input: { details: { code: "AUTH_PASSWORD_MISMATCH" }, message: "password mismatch" },
+      kind: "auth-rejected",
+      message: "password mismatch",
+      remediation: undefined,
+    },
+    {
+      name: "legacy pairing reason",
+      input: { reason: "gateway closed (1008): pairing required" },
+      kind: "pairing-required",
+      message: "gateway closed (1008): pairing required",
+      remediation: "openclaw devices approve --latest",
+    },
+    {
+      name: "legacy gateway close",
+      input: { message: "gateway closed (1008): auth failed" },
+      kind: "gateway-rejected",
+      message: "gateway closed (1008): auth failed",
+      remediation: undefined,
+    },
+    {
+      name: "unreachable endpoint",
+      input: { message: "connect ECONNREFUSED 127.0.0.1:18789" },
+      kind: "unreachable",
+      message: "connect ECONNREFUSED 127.0.0.1:18789",
+      remediation: undefined,
+    },
+  ])("classifies $name", ({ input, kind, message, remediation }) => {
+    const result = classifyGatewayConnectFailure(input);
+    expect(result.kind).toBe(kind);
+    expect(result.userMessage).toBe(message);
+    if (remediation) {
+      expect(result.remediation).toContain(remediation);
+    } else {
+      expect(result.remediation).toBeUndefined();
+    }
   });
 });
 

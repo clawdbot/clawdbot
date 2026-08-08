@@ -302,6 +302,38 @@ describe("ensureGatewayReadyForOperation", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it("uses structured connect details when the daemon error text is generic", async () => {
+    const status = createStatus({
+      service: {
+        label: "systemd user",
+        loaded: true,
+        loadedText: "enabled",
+        notLoadedText: "disabled",
+        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
+        runtime: { status: "running" },
+      },
+      port: { port: 18789, status: "busy", listeners: [], hints: [] },
+      rpc: {
+        ok: false,
+        error: "connect failed",
+        connectErrorDetails: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
+        url: "ws://127.0.0.1:18789",
+      },
+    });
+    const confirm = vi.fn();
+
+    const result = await ensureGatewayReadyForOperation({
+      runtime,
+      operation: "open the dashboard",
+      readyWhenReachable: true,
+      interactive: true,
+      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
+    });
+
+    expect(result).toMatchObject({ ready: true, recovered: false });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("still treats a timeout on the target port as not ready", async () => {
     const status = createStatus({
       service: {
