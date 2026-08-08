@@ -187,7 +187,9 @@ function parseRecoveryEntry(value: unknown): RecoveryEntry | undefined {
 }
 
 function latestRecoveryEntry(sessionManager: SessionManager): RecoveryEntry | undefined {
-  for (const entry of sessionManager.getEntries().toReversed()) {
+  const entries =
+    typeof sessionManager.getEntries === "function" ? sessionManager.getEntries() : [];
+  for (const entry of entries.toReversed()) {
     if (entry.type === "custom" && entry.customType === CUSTOM_TYPE) {
       const recovery = parseRecoveryEntry(entry.data);
       if (recovery) {

@@ -37,7 +37,7 @@ export class ToolArgumentValidationError extends Error {
     readonly evidence: ToolArgumentValidationEvidence,
   ) {
     super(
-      `Tool arguments failed schema validation for "${boundedValidationString(toolName)}". Correct the arguments and try once more.`,
+      `Validation failed for tool "${boundedValidationString(toolName)}": arguments failed schema validation. Correct the arguments and try once more.`,
     );
     this.name = "ToolArgumentValidationError";
   }

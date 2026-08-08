@@ -1560,8 +1560,8 @@ export async function handleToolExecutionEnd(
     } catch (error) {
       ctx.log.warn(`onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`);
     }
-    emitAgentEvent({
-      runId,
+    const toolErrorSummary = createToolValidationErrorSummary(toolName);
+    const rejectionResultEvent = {
       stream: "tool",
       data: {
         phase: "result",
@@ -1569,12 +1569,12 @@ export async function handleToolExecutionEnd(
         toolCallId,
         isError: true,
         result: sanitizedResult,
-        ...(createToolValidationErrorSummary(toolName)
-          ? { toolErrorSummary: createToolValidationErrorSummary(toolName) }
-          : {}),
+        ...(toolErrorSummary ? { toolErrorSummary } : {}),
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
-    });
+    } as const;
+    emitAgentEvent({ runId, ...rejectionResultEvent });
+    emitAgentEventCallbackBestEffort(ctx, rejectionResultEvent);
     await emitToolResultOutput({
       ctx,
       toolName,
