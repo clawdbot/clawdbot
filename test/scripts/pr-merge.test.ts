@@ -286,7 +286,7 @@ describePosix("scripts/pr merge-run", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.calls).toContain(`plain pr merge 123 --squash --match-head-commit ${headSha}`);
-    expect(result.calls).toContain(`scripts/watch-pr-ci.mjs 123 ${headSha}`);
+    expect(result.calls).toContain(`scripts/watch-pr-ci.mjs 123 ${headSha} --completion ci-run`);
     expect(result.calls).toContain("plain pr checks 123 --required --json name,bucket,state");
     expect(result.calls).toContain("path pr view 123 --json state,isDraft");
     expect(result.calls).not.toContain("--required --watch");

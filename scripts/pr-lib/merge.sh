@@ -134,7 +134,10 @@ merge_verify() {
   fi
 
   mark_pr_operation_side_effects_started
-  node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" >.local/merge-checks-watch.log 2>&1 || true
+  # Wait only for the attached CI workflow here. The direct required-check
+  # query below remains the merge authority, so optional contexts cannot stall it.
+  node "$script_parent_dir/watch-pr-ci.mjs" "$pr" "$PREP_HEAD_SHA" \
+    --completion ci-run >.local/merge-checks-watch.log 2>&1 || true
   local checks_json
   local checks_err_file
   local checks_exit_status
