@@ -34,7 +34,7 @@ describe("config backup rotation", () => {
         return (JSON.parse(raw) as { version: number }).version;
       };
       const { existsSync } = await import("node:fs");
-      const manualBackupPath = `${configPath}.bak.20260807-164400`;
+      const manualBackupPath = `${configPath}.bak.20260808`;
       const manualBackupContent = JSON.stringify({ version: "manual" });
 
       await writeVersion(0);
