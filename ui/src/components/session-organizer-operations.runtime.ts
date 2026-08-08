@@ -1,4 +1,5 @@
 import type { ReactiveControllerHost } from "lit";
+import type { SessionsArchiveManyResult } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import {
@@ -218,22 +219,11 @@ async function archiveSessionsWithUndo(
   if (rows.length === 0) {
     return;
   }
-  const archived: Array<{ session: SidebarRecentSession; pinned: boolean }> = [];
-  for (const session of rows) {
-    const result = await patchSession(host, session, { archived: true }, scope, {
-      deferListRefresh: true,
-    });
-    if (result === "stale") {
-      return;
-    }
-    if (result === "completed") {
-      archived.push({ session, pinned: session.pinned });
-    }
-  }
-  const refreshed = await refreshSessionsAfterBatch(host, scope, rows);
-  if (archived.length === 0 || refreshed === "stale") {
+  const archivedRows = await archiveSessionRows(host, rows, true, scope);
+  if (!archivedRows || archivedRows.length === 0) {
     return;
   }
+  const archived = archivedRows.map((session) => ({ session, pinned: session.pinned }));
   showToast({
     message:
       archived.length === 1
@@ -249,26 +239,83 @@ async function restoreArchivedSessions(
   archived: readonly { session: SidebarRecentSession; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
 ) {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  const restored = await archiveSessionRows(
+    host,
+    archived.map((entry) => entry.session),
+    false,
+    scope,
+    true,
+  );
+  if (!restored) {
     return;
   }
   for (const { session, pinned } of archived) {
-    const result = await patchSession(
-      host,
-      session,
-      { archived: false, ...(pinned ? { pinned: true } : {}) },
-      scope,
-      { deferListRefresh: true },
-    );
+    if (!pinned || !restored.includes(session)) {
+      continue;
+    }
+    const result = await patchSession(host, session, { pinned: true }, scope, {
+      deferListRefresh: true,
+    });
     if (result === "stale") {
       return;
     }
+  }
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
   }
   await refreshSessionsAfterBatch(
     host,
     scope,
     archived.map((entry) => entry.session),
   );
+}
+
+async function archiveSessionRows(
+  host: SessionOrganizerControllerHost,
+  rows: readonly SidebarRecentSession[],
+  archived: boolean,
+  scope: SidebarSessionMutationScope,
+  deferListRefresh = false,
+): Promise<SidebarRecentSession[] | null> {
+  const targets = rows.map((row) => ({ key: row.key, agentId: sessionRowAgentId(row, scope) }));
+  let result;
+  try {
+    result = await scope.client.request<SessionsArchiveManyResult>("sessions.archiveMany", {
+      targets,
+      archived,
+    });
+    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return null;
+    }
+    if (!deferListRefresh) {
+      const refreshResult = await refreshSessionsAfterBatch(host, scope, rows);
+      if (refreshResult === "stale") {
+        return null;
+      }
+    }
+  } catch (error) {
+    host.sessionData.publishSessionMutationError(scope, error);
+    return null;
+  }
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return null;
+  }
+  const errors: string[] = [];
+  const successful = result.outcomes.flatMap((outcome, index) => {
+    if (!outcome.ok) {
+      errors.push(`${outcome.key}: ${outcome.error.message}`);
+      return [];
+    }
+    const row = rows[index];
+    if (row?.pinned && archived) {
+      host.pruneSidebarSessionEntry(row.key);
+    }
+    return row ? [row] : [];
+  });
+  if (errors.length > 0) {
+    host.sessionData.publishSessionMutationError(scope, errors.join("; "));
+  }
+  return successful;
 }
 
 /** One confirm and one preserved-worktrees alert for the whole selection. */
@@ -360,7 +407,7 @@ export async function runBatchSessionAction(
       break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
-        await patchSessions(host, rows, { archived: false }, scope);
+        await archiveSessionRows(host, rows, false, scope);
       } else {
         await archiveSessionsWithUndo(
           host,

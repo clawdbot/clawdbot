@@ -551,6 +551,38 @@ export const SessionsPatchParamsSchema = closedObject({
 });
 export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 
+export const SessionsArchiveManyTargetSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  expectedSessionId: Type.Optional(NonEmptyString),
+  expectedLifecycleRevision: Type.Optional(NonEmptyString),
+});
+export const SessionsArchiveManyParamsSchema = closedObject({
+  targets: Type.Array(SessionsArchiveManyTargetSchema, { minItems: 1, maxItems: 100 }),
+  archived: Type.Boolean(),
+});
+export type SessionsArchiveManyParams = Static<typeof SessionsArchiveManyParamsSchema>;
+const SessionsArchiveManyOutcomeIdentitySchema = {
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+};
+export const SessionsArchiveManyResultSchema = closedObject({
+  outcomes: Type.Array(
+    Type.Union([
+      closedObject({
+        ok: Type.Literal(true),
+        ...SessionsArchiveManyOutcomeIdentitySchema,
+      }),
+      closedObject({
+        ok: Type.Literal(false),
+        ...SessionsArchiveManyOutcomeIdentitySchema,
+        error: ErrorShapeSchema,
+      }),
+    ]),
+  ),
+});
+export type SessionsArchiveManyResult = Static<typeof SessionsArchiveManyResultSchema>;
+
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = closedObject({
   key: NonEmptyString,

@@ -88,8 +88,19 @@ describe("AppSidebar multi-select", () => {
   }
 
   async function mountMultiSelect() {
-    const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", KEYS);
+    const gateway = createGateway({
+      request: (method, params) => {
+        if (method !== "sessions.archiveMany") {
+          return Promise.reject(new Error(`unexpected request: ${method}`));
+        }
+        const request = params as {
+          targets: Array<{ key: string; agentId?: string }>;
+          archived: boolean;
+        };
+        return harness.archiveMany(request.targets, request.archived);
+      },
+    } as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     sidebar.connected = true;
     await sidebar.updateComplete;
@@ -174,21 +185,15 @@ describe("AppSidebar multi-select", () => {
     expect(menu.querySelector('[data-shortcut="r"]')).toBeNull();
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    // Each row defers its canonical list refresh; the batch pays one refresh at
-    // the end instead of a full sessions.list round trip per archived row.
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      1,
-      "agent:main:a",
-      { archived: true },
-      { agentId: "main", deferListRefresh: true },
+    await waitForFast(() => expect(harness.archiveMany).toHaveBeenCalledOnce());
+    expect(harness.archiveMany).toHaveBeenCalledWith(
+      [
+        { key: "agent:main:a", agentId: "main" },
+        { key: "agent:main:b", agentId: "main" },
+      ],
+      true,
     );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      2,
-      "agent:main:b",
-      { archived: true },
-      { agentId: "main", deferListRefresh: true },
-    );
+    expect(harness.patch).not.toHaveBeenCalled();
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });

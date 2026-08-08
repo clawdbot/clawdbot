@@ -159,6 +159,7 @@ const defaultControlUiFeatureMethods = [
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",
+  "sessions.archiveMany",
   "sessions.branches.switch",
   "sessions.compact",
   "sessions.compaction.branch",
@@ -1083,6 +1084,21 @@ function installControlUiMockGateway(
     sessionPatches.set(params.key, patch);
   }
 
+  function recordSessionsArchiveMany(params: unknown, response: unknown): void {
+    if (!scenario.sessionArchiveFiltering || !isRecord(params) || !Array.isArray(params.targets)) {
+      return;
+    }
+    const outcomes =
+      isRecord(response) && Array.isArray(response.outcomes) ? response.outcomes : [];
+    for (const [index, target] of params.targets.entries()) {
+      const outcome = outcomes[index];
+      if (!isRecord(target) || !isRecord(outcome) || outcome.ok !== true) {
+        continue;
+      }
+      recordSessionPatch({ key: target.key, archived: params.archived });
+    }
+  }
+
   function recordMaterializedSession(params: unknown, response: unknown): void {
     if (!isRecord(response)) {
       return;
@@ -1356,6 +1372,9 @@ function installControlUiMockGateway(
       if (method === "sessions.create" || method === "sessions.catalog.continue") {
         recordMaterializedSession(params, configuredValue);
       }
+      if (method === "sessions.archiveMany") {
+        recordSessionsArchiveMany(params, configuredValue);
+      }
       return method === "sessions.list"
         ? applySessionPatches(configuredValue, params)
         : configuredValue;
@@ -1531,6 +1550,20 @@ function installControlUiMockGateway(
           },
           params,
         );
+      case "sessions.archiveMany": {
+        const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
+        const result = {
+          outcomes: targets.map((target) => ({
+            ok: true,
+            key: isRecord(target) && typeof target.key === "string" ? target.key : "unknown",
+            ...(isRecord(target) && typeof target.agentId === "string"
+              ? { agentId: target.agentId }
+              : {}),
+          })),
+        };
+        recordSessionsArchiveMany(params, result);
+        return result;
+      }
       case "sessions.groups.list":
         return groupsPayload();
       case "sessions.groups.put": {
