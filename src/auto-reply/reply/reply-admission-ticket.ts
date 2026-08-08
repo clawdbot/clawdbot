@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringifiedEntries } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 
 export const REPLY_ADMISSION_TICKET = Symbol("openclaw.replyAdmissionTicket");
@@ -14,15 +14,9 @@ const tails = resolveGlobalMap<string, Promise<void>>(Symbol.for("openclaw.reply
 
 /** Briefly orders queue publication across a command's source and target sessions. */
 export function reserveReplyAdmissionTicket(
-  sessionKeys: Iterable<string | undefined>,
+  sessionKeys: ReadonlyArray<string | undefined>,
 ): ReplyAdmissionTicket | undefined {
-  const keys = [
-    ...new Set(
-      [...sessionKeys]
-        .map(normalizeOptionalString)
-        .filter((key): key is string => typeof key === "string"),
-    ),
-  ].sort();
+  const keys = [...new Set(normalizeStringifiedEntries(sessionKeys))].sort();
   if (keys.length === 0) {
     return undefined;
   }
