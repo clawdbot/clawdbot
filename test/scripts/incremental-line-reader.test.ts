@@ -32,6 +32,19 @@ describe("scripts/e2e/lib/incremental-line-reader.mjs", () => {
     });
   });
 
+  it("preserves UTF-8 characters split across polls", () => {
+    withTempLog((logPath) => {
+      const reader = createIncrementalLineReader(logPath);
+      const encoded = Buffer.from("😀\n", "utf8");
+
+      writeFileSync(logPath, encoded.subarray(0, 2));
+      expect(reader.readLines()).toEqual({ lines: [], reset: false });
+
+      appendFileSync(logPath, encoded.subarray(2));
+      expect(reader.readLines()).toEqual({ lines: ["😀"], reset: false });
+    });
+  });
+
   it("resets when an existing log is rewritten without changing size", () => {
     withTempLog((logPath) => {
       writeFileSync(logPath, "first\n", "utf8");

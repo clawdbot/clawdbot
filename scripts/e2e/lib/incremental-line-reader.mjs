@@ -1,20 +1,7 @@
 // Incremental line reader for streaming E2E logs.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-
-function readSlice(filePath, start, length) {
-  if (length <= 0) {
-    return "";
-  }
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
-}
+import { StringDecoder } from "node:string_decoder";
 
 function readBufferSlice(filePath, start, length) {
   if (length <= 0) {
@@ -55,6 +42,7 @@ export function createIncrementalLineReader(filePath, options = {}) {
   let contentFingerprint;
   let offset = 0;
   let pending = "";
+  let decoder = new StringDecoder("utf8");
 
   return {
     readLines() {
@@ -76,6 +64,7 @@ export function createIncrementalLineReader(filePath, options = {}) {
       ) {
         offset = 0;
         pending = "";
+        decoder = new StringDecoder("utf8");
         reset = true;
       }
       fileIdentity = nextFileIdentity;
@@ -85,6 +74,7 @@ export function createIncrementalLineReader(filePath, options = {}) {
         if (contentFingerprint !== nextContentFingerprint) {
           offset = 0;
           pending = "";
+          decoder = new StringDecoder("utf8");
           reset = true;
         } else {
           contentFingerprint = nextContentFingerprint;
@@ -95,6 +85,7 @@ export function createIncrementalLineReader(filePath, options = {}) {
       if (stats.size < offset) {
         offset = 0;
         pending = "";
+        decoder = new StringDecoder("utf8");
         reset = true;
       }
       if (stats.size === offset) {
@@ -107,28 +98,31 @@ export function createIncrementalLineReader(filePath, options = {}) {
       if (start === 0 && stats.size > maxReadBytes) {
         start = stats.size - maxReadBytes;
         pending = "";
+        decoder = new StringDecoder("utf8");
         clamped = true;
       } else if (stats.size - start > maxReadBytes) {
         start = stats.size - maxReadBytes;
         pending = "";
+        decoder = new StringDecoder("utf8");
         clamped = true;
       }
       if (clamped && start > 0) {
-        discardFirstLine = readSlice(filePath, start - 1, 1) !== "\n";
+        discardFirstLine = readBufferSlice(filePath, start - 1, 1)[0] !== 0x0a;
       }
 
-      const text = readSlice(filePath, start, stats.size - start);
+      const buffer = readBufferSlice(filePath, start, stats.size - start);
       offset = stats.size;
       contentFingerprint = readTailFingerprint(filePath, stats, maxReadBytes);
-      if (!text) {
+      if (buffer.byteLength === 0) {
         return { lines: [], reset };
       }
 
-      let chunk = pending + text;
+      let chunk = pending + decoder.write(buffer);
       if (discardFirstLine) {
         const newlineIndex = chunk.indexOf("\n");
         if (newlineIndex === -1) {
           pending = "";
+          decoder = new StringDecoder("utf8");
           return { lines: [], reset };
         }
         chunk = chunk.slice(newlineIndex + 1);
