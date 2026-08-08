@@ -10,6 +10,7 @@ import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
@@ -53,7 +54,7 @@ export {
   legacyStateFileExists,
 } from "../plugins/doctor-state-migration-fs.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
-export { definePluginDoctorMigrationFromPlans } from "../plugins/doctor-state-migration-plan-adapter.js";
+export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 
 type KeyMoveValue = { value: unknown };
